@@ -214,6 +214,7 @@ pub fn handle_lifecycle_turn_end(
                 ended_at: state.ended_at.clone(),
                 last_event_at: interaction_now.clone(),
                 updated_at: interaction_now.clone(),
+                ..Default::default()
             })
             .unwrap_or(InteractionSession {
                 session_id: session_id.clone(),
@@ -228,6 +229,7 @@ pub fn handle_lifecycle_turn_end(
                 ended_at: None,
                 last_event_at: interaction_now.clone(),
                 updated_at: interaction_now.clone(),
+                ..Default::default()
             });
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -265,6 +267,7 @@ pub fn handle_lifecycle_turn_end(
             files_modified: all_files.clone(),
             checkpoint_id: None,
             updated_at: interaction_now.clone(),
+            ..Default::default()
         };
         if let Err(err) = spool.record_turn(&turn) {
             eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
@@ -288,6 +291,7 @@ pub fn handle_lifecycle_turn_end(
                 "transcript_fragment": transcript_fragment,
                 "token_usage": token_meta,
             }),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool turn_end event: {err}");
         }

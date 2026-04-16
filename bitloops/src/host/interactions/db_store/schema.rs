@@ -6,6 +6,11 @@ pub(super) const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT '',
+    actor_id TEXT NOT NULL DEFAULT '',
+    actor_name TEXT NOT NULL DEFAULT '',
+    actor_email TEXT NOT NULL DEFAULT '',
+    actor_source TEXT NOT NULL DEFAULT '',
     agent_type TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
     first_prompt TEXT NOT NULL DEFAULT '',
@@ -26,6 +31,11 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     turn_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT '',
+    actor_id TEXT NOT NULL DEFAULT '',
+    actor_name TEXT NOT NULL DEFAULT '',
+    actor_email TEXT NOT NULL DEFAULT '',
+    actor_source TEXT NOT NULL DEFAULT '',
     turn_number INTEGER NOT NULL DEFAULT 0,
     prompt TEXT NOT NULL DEFAULT '',
     agent_type TEXT NOT NULL DEFAULT '',
@@ -60,10 +70,19 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     session_id TEXT NOT NULL,
     turn_id TEXT,
     repo_id TEXT NOT NULL,
+    branch TEXT NOT NULL DEFAULT '',
+    actor_id TEXT NOT NULL DEFAULT '',
+    actor_name TEXT NOT NULL DEFAULT '',
+    actor_email TEXT NOT NULL DEFAULT '',
+    actor_source TEXT NOT NULL DEFAULT '',
     event_type TEXT NOT NULL,
     event_time TEXT NOT NULL,
     agent_type TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
+    tool_use_id TEXT NOT NULL DEFAULT '',
+    tool_kind TEXT NOT NULL DEFAULT '',
+    task_description TEXT NOT NULL DEFAULT '',
+    subagent_id TEXT NOT NULL DEFAULT '',
     payload TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (repo_id, event_id)
 );
@@ -73,6 +92,86 @@ ON interaction_events (repo_id, event_time, event_id);
 
 CREATE INDEX IF NOT EXISTS interaction_events_session_idx
 ON interaction_events (repo_id, session_id, event_time, event_id);
+
+CREATE INDEX IF NOT EXISTS interaction_events_tool_use_idx
+ON interaction_events (repo_id, tool_use_id, event_time, event_id);
+
+CREATE TABLE IF NOT EXISTS interaction_tool_uses (
+    tool_use_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    turn_id TEXT NOT NULL DEFAULT '',
+    tool_kind TEXT NOT NULL DEFAULT '',
+    task_description TEXT NOT NULL DEFAULT '',
+    subagent_id TEXT NOT NULL DEFAULT '',
+    transcript_path TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    ended_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, tool_use_id)
+);
+
+CREATE INDEX IF NOT EXISTS interaction_tool_uses_session_idx
+ON interaction_tool_uses (repo_id, session_id, turn_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS interaction_session_search_documents (
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    prompt_text TEXT NOT NULL DEFAULT '',
+    summary_text TEXT NOT NULL DEFAULT '',
+    transcript_text TEXT NOT NULL DEFAULT '',
+    tool_text TEXT NOT NULL DEFAULT '',
+    paths_text TEXT NOT NULL DEFAULT '',
+    combined_text TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, session_id)
+);
+
+CREATE INDEX IF NOT EXISTS interaction_session_search_documents_time_idx
+ON interaction_session_search_documents (repo_id, started_at, updated_at);
+
+CREATE TABLE IF NOT EXISTS interaction_turn_search_documents (
+    turn_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    prompt_text TEXT NOT NULL DEFAULT '',
+    summary_text TEXT NOT NULL DEFAULT '',
+    transcript_text TEXT NOT NULL DEFAULT '',
+    tool_text TEXT NOT NULL DEFAULT '',
+    paths_text TEXT NOT NULL DEFAULT '',
+    combined_text TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, turn_id)
+);
+
+CREATE INDEX IF NOT EXISTS interaction_turn_search_documents_session_idx
+ON interaction_turn_search_documents (repo_id, session_id, started_at, updated_at);
+
+CREATE TABLE IF NOT EXISTS interaction_session_search_terms (
+    repo_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    field TEXT NOT NULL,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repo_id, session_id, term, field)
+);
+
+CREATE INDEX IF NOT EXISTS interaction_session_search_terms_lookup_idx
+ON interaction_session_search_terms (repo_id, term, field, session_id);
+
+CREATE TABLE IF NOT EXISTS interaction_turn_search_terms (
+    repo_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    field TEXT NOT NULL,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repo_id, turn_id, term, field)
+);
+
+CREATE INDEX IF NOT EXISTS interaction_turn_search_terms_lookup_idx
+ON interaction_turn_search_terms (repo_id, term, field, turn_id);
 
 CREATE TABLE IF NOT EXISTS interaction_spool_queue (
     mutation_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +196,26 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
             (
                 "repo_id",
                 "ALTER TABLE interaction_sessions ADD COLUMN repo_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "branch",
+                "ALTER TABLE interaction_sessions ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_id",
+                "ALTER TABLE interaction_sessions ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_name",
+                "ALTER TABLE interaction_sessions ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_email",
+                "ALTER TABLE interaction_sessions ADD COLUMN actor_email TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_source",
+                "ALTER TABLE interaction_sessions ADD COLUMN actor_source TEXT NOT NULL DEFAULT ''",
             ),
             (
                 "agent_type",
@@ -151,6 +270,26 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
             (
                 "repo_id",
                 "ALTER TABLE interaction_turns ADD COLUMN repo_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "branch",
+                "ALTER TABLE interaction_turns ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_id",
+                "ALTER TABLE interaction_turns ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_name",
+                "ALTER TABLE interaction_turns ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_email",
+                "ALTER TABLE interaction_turns ADD COLUMN actor_email TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_source",
+                "ALTER TABLE interaction_turns ADD COLUMN actor_source TEXT NOT NULL DEFAULT ''",
             ),
             (
                 "turn_number",
@@ -251,6 +390,26 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
                 "ALTER TABLE interaction_events ADD COLUMN repo_id TEXT NOT NULL DEFAULT ''",
             ),
             (
+                "branch",
+                "ALTER TABLE interaction_events ADD COLUMN branch TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_id",
+                "ALTER TABLE interaction_events ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_name",
+                "ALTER TABLE interaction_events ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_email",
+                "ALTER TABLE interaction_events ADD COLUMN actor_email TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "actor_source",
+                "ALTER TABLE interaction_events ADD COLUMN actor_source TEXT NOT NULL DEFAULT ''",
+            ),
+            (
                 "event_type",
                 "ALTER TABLE interaction_events ADD COLUMN event_type TEXT NOT NULL DEFAULT ''",
             ),
@@ -267,11 +426,101 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
                 "ALTER TABLE interaction_events ADD COLUMN model TEXT NOT NULL DEFAULT ''",
             ),
             (
+                "tool_use_id",
+                "ALTER TABLE interaction_events ADD COLUMN tool_use_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "tool_kind",
+                "ALTER TABLE interaction_events ADD COLUMN tool_kind TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "task_description",
+                "ALTER TABLE interaction_events ADD COLUMN task_description TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "subagent_id",
+                "ALTER TABLE interaction_events ADD COLUMN subagent_id TEXT NOT NULL DEFAULT ''",
+            ),
+            (
                 "payload",
                 "ALTER TABLE interaction_events ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'",
             ),
         ],
+    )?;
+    conn.execute_batch(
+        r#"
+CREATE INDEX IF NOT EXISTS interaction_events_tool_use_idx
+ON interaction_events (repo_id, tool_use_id, event_time, event_id);
+CREATE TABLE IF NOT EXISTS interaction_tool_uses (
+    tool_use_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    turn_id TEXT NOT NULL DEFAULT '',
+    tool_kind TEXT NOT NULL DEFAULT '',
+    task_description TEXT NOT NULL DEFAULT '',
+    subagent_id TEXT NOT NULL DEFAULT '',
+    transcript_path TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    ended_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, tool_use_id)
+);
+CREATE INDEX IF NOT EXISTS interaction_tool_uses_session_idx
+ON interaction_tool_uses (repo_id, session_id, turn_id, updated_at);
+CREATE TABLE IF NOT EXISTS interaction_session_search_documents (
+    session_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    prompt_text TEXT NOT NULL DEFAULT '',
+    summary_text TEXT NOT NULL DEFAULT '',
+    transcript_text TEXT NOT NULL DEFAULT '',
+    tool_text TEXT NOT NULL DEFAULT '',
+    paths_text TEXT NOT NULL DEFAULT '',
+    combined_text TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, session_id)
+);
+CREATE INDEX IF NOT EXISTS interaction_session_search_documents_time_idx
+ON interaction_session_search_documents (repo_id, started_at, updated_at);
+CREATE TABLE IF NOT EXISTS interaction_turn_search_documents (
+    turn_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    prompt_text TEXT NOT NULL DEFAULT '',
+    summary_text TEXT NOT NULL DEFAULT '',
+    transcript_text TEXT NOT NULL DEFAULT '',
+    tool_text TEXT NOT NULL DEFAULT '',
+    paths_text TEXT NOT NULL DEFAULT '',
+    combined_text TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS interaction_turn_search_documents_session_idx
+ON interaction_turn_search_documents (repo_id, session_id, started_at, updated_at);
+CREATE TABLE IF NOT EXISTS interaction_session_search_terms (
+    repo_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    field TEXT NOT NULL,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repo_id, session_id, term, field)
+);
+CREATE INDEX IF NOT EXISTS interaction_session_search_terms_lookup_idx
+ON interaction_session_search_terms (repo_id, term, field, session_id);
+CREATE TABLE IF NOT EXISTS interaction_turn_search_terms (
+    repo_id TEXT NOT NULL,
+    turn_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    field TEXT NOT NULL,
+    occurrences INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repo_id, turn_id, term, field)
+);
+CREATE INDEX IF NOT EXISTS interaction_turn_search_terms_lookup_idx
+ON interaction_turn_search_terms (repo_id, term, field, turn_id);
+"#,
     )
+    .context("creating interaction search projection tables")
 }
 
 fn ensure_table_columns(

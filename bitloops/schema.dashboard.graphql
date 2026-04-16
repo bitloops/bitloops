@@ -86,6 +86,171 @@ type DashboardFetchBundleResult {
 	checksumVerified: Boolean!
 }
 
+type DashboardInteractionActor {
+	id: String
+	name: String
+	email: String
+	source: String
+}
+
+type DashboardInteractionActorBucket {
+	actorId: String!
+	actorName: String!
+	actorEmail: String!
+	actorSource: String!
+	sessionCount: Int!
+	turnCount: Int!
+}
+
+type DashboardInteractionAgentBucket {
+	key: String!
+	sessionCount: Int!
+	turnCount: Int!
+}
+
+type DashboardInteractionCommitAuthor {
+	checkpointId: String!
+	commitSha: String!
+	name: String
+	email: String
+	committedAt: String
+}
+
+type DashboardInteractionCommitAuthorBucket {
+	authorName: String!
+	authorEmail: String!
+	checkpointCount: Int!
+	sessionCount: Int!
+	turnCount: Int!
+}
+
+type DashboardInteractionEvent {
+	eventId: String!
+	sessionId: String!
+	turnId: String
+	branch: String
+	actor: DashboardInteractionActor
+	eventType: String!
+	eventTime: String!
+	agentType: String!
+	model: String
+	toolUseId: String
+	toolKind: String
+	taskDescription: String
+	subagentId: String
+	payload: JSON
+}
+
+input DashboardInteractionFilterInput {
+	since: String
+	until: String
+	actor: String
+	actorId: String
+	actorEmail: String
+	commitAuthor: String
+	commitAuthorEmail: String
+	agent: String
+	model: String
+	branch: String
+	sessionId: String
+	turnId: String
+	checkpointId: String
+	toolUseId: String
+	toolKind: String
+	hasCheckpoint: Boolean
+	path: String
+}
+
+type DashboardInteractionKpis {
+	totalSessions: Int!
+	totalTurns: Int!
+	totalCheckpoints: Int!
+	totalToolUses: Int!
+	totalActors: Int!
+	totalAgents: Int!
+	inputTokens: Int!
+	outputTokens: Int!
+	cacheCreationTokens: Int!
+	cacheReadTokens: Int!
+	apiCallCount: Int!
+}
+
+input DashboardInteractionSearchInput {
+	filter: DashboardInteractionFilterInput
+	query: String!
+	limit: Int
+}
+
+type DashboardInteractionSession {
+	sessionId: String!
+	branch: String
+	actor: DashboardInteractionActor
+	agentType: String!
+	model: String
+	firstPrompt: String
+	startedAt: String!
+	endedAt: String
+	lastEventAt: String
+	turnCount: Int!
+	checkpointCount: Int!
+	tokenUsage: DashboardTokenUsage
+	filePaths: [String!]!
+	toolUses: [DashboardInteractionToolUse!]!
+	linkedCheckpoints: [DashboardInteractionCommitAuthor!]!
+	latestCommitAuthor: DashboardInteractionCommitAuthor
+}
+
+type DashboardInteractionSessionDetail {
+	summary: DashboardInteractionSession!
+	turns: [DashboardInteractionTurn!]!
+	rawEvents: [DashboardInteractionEvent!]!
+}
+
+type DashboardInteractionSessionSearchHit {
+	session: DashboardInteractionSession!
+	score: Int!
+	matchedFields: [String!]!
+}
+
+type DashboardInteractionToolUse {
+	toolUseId: String!
+	sessionId: String!
+	turnId: String
+	toolKind: String
+	taskDescription: String
+	subagentId: String
+	transcriptPath: String
+	startedAt: String
+	endedAt: String
+}
+
+type DashboardInteractionTurn {
+	turnId: String!
+	sessionId: String!
+	branch: String
+	actor: DashboardInteractionActor
+	turnNumber: Int!
+	prompt: String
+	summary: String
+	agentType: String!
+	model: String
+	startedAt: String!
+	endedAt: String
+	tokenUsage: DashboardTokenUsage
+	filesModified: [String!]!
+	checkpointId: String
+	toolUses: [DashboardInteractionToolUse!]!
+	linkedCheckpoints: [DashboardInteractionCommitAuthor!]!
+	latestCommitAuthor: DashboardInteractionCommitAuthor
+}
+
+type DashboardInteractionTurnSearchHit {
+	turn: DashboardInteractionTurn!
+	session: DashboardInteractionSession!
+	score: Int!
+	matchedFields: [String!]!
+}
+
 type DashboardKpis {
 	totalCommits: Int!
 	totalCheckpoints: Int!
@@ -114,6 +279,14 @@ type DashboardQueryRoot {
 	users(repoId: String, branch: String!, from: String, to: String, agent: String): [DashboardUser!]!
 	agents(repoId: String, branch: String!, from: String, to: String, user: String): [DashboardAgent!]!
 	checkpoint(repoId: String, checkpointId: String!): DashboardCheckpointDetail!
+	interactionKpis(repoId: String, filter: DashboardInteractionFilterInput): DashboardInteractionKpis!
+	interactionSessions(repoId: String, filter: DashboardInteractionFilterInput, limit: Int, offset: Int): [DashboardInteractionSession!]!
+	interactionSession(sessionId: String!, repoId: String): DashboardInteractionSessionDetail!
+	interactionActors(repoId: String, filter: DashboardInteractionFilterInput): [DashboardInteractionActorBucket!]!
+	interactionCommitAuthors(repoId: String, filter: DashboardInteractionFilterInput): [DashboardInteractionCommitAuthorBucket!]!
+	interactionAgents(repoId: String, filter: DashboardInteractionFilterInput): [DashboardInteractionAgentBucket!]!
+	searchInteractionSessions(repoId: String, input: DashboardInteractionSearchInput!): [DashboardInteractionSessionSearchHit!]!
+	searchInteractionTurns(repoId: String, input: DashboardInteractionSearchInput!): [DashboardInteractionTurnSearchHit!]!
 	checkBundleVersion: DashboardBundleVersion!
 }
 
@@ -152,6 +325,11 @@ type HealthStatus {
 	events: HealthBackendStatus!
 	blob: HealthBackendStatus!
 }
+
+"""
+A scalar that can represent any JSON value.
+"""
+scalar JSON
 
 """
 Directs the executor to include this field or fragment only when the `if` argument is true.

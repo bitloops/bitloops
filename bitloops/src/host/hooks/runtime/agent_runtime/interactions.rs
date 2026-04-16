@@ -6,6 +6,7 @@ use crate::host::checkpoints::lifecycle::interaction::{
 };
 use crate::host::checkpoints::session::state::SessionState;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
+use crate::host::checkpoints::strategy::manual_commit::current_branch_name;
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::transcript_fragment::read_transcript_fragment_from_path;
@@ -53,6 +54,26 @@ fn interaction_event_id() -> String {
     Uuid::new_v4().simple().to_string()
 }
 
+fn interaction_branch(repo_root: &Path) -> String {
+    current_branch_name(repo_root)
+}
+
+fn interaction_actor_identity() -> (String, String, String, String) {
+    let Some(session) = crate::daemon::load_workos_session_details_cached()
+        .ok()
+        .flatten()
+    else {
+        return (String::new(), String::new(), String::new(), String::new());
+    };
+    let actor_name = session.display_label();
+    (
+        session.user_id.unwrap_or_default(),
+        actor_name,
+        session.user_email.unwrap_or_default(),
+        "workos".to_string(),
+    )
+}
+
 fn read_transcript_fragment(transcript_path: &str, start_offset: i64) -> (String, Option<i64>) {
     read_transcript_fragment_from_path(transcript_path, start_offset)
 }
@@ -97,10 +118,17 @@ pub(super) fn record_session_start_interaction(
         let Some(repo_root) = repo_root else {
             return;
         };
+        let branch = interaction_branch(repo_root);
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let model = resolve_interaction_model(model_hint, &state.transcript_path);
         let session = InteractionSession {
             session_id: state.session_id.clone(),
             repo_id: spool.repo_id().to_string(),
+            branch: branch.clone(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             agent_type: interaction_agent_type(Some(state), profile),
             model: model.clone(),
             first_prompt: state.first_prompt.clone(),
@@ -120,6 +148,11 @@ pub(super) fn record_session_start_interaction(
             session_id: state.session_id.clone(),
             turn_id: None,
             repo_id: spool.repo_id().to_string(),
+            branch,
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::SessionStart,
             event_time,
             agent_type: session.agent_type.clone(),
@@ -130,6 +163,7 @@ pub(super) fn record_session_start_interaction(
                 "worktree_path": session.worktree_path,
                 "worktree_id": session.worktree_id,
             }),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool session_start event: {err}");
         }
@@ -153,10 +187,17 @@ pub(super) fn record_turn_start_interaction(
         let Some(repo_root) = repo_root else {
             return;
         };
+        let branch = interaction_branch(repo_root);
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let model = resolve_interaction_model(model_hint, &state.transcript_path);
         let session = InteractionSession {
             session_id: state.session_id.clone(),
             repo_id: spool.repo_id().to_string(),
+            branch: branch.clone(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             agent_type: interaction_agent_type(Some(state), Some(profile)),
             model: model.clone(),
             first_prompt: state.first_prompt.clone(),
@@ -176,6 +217,11 @@ pub(super) fn record_turn_start_interaction(
             turn_id: state.turn_id.clone(),
             session_id: state.session_id.clone(),
             repo_id: spool.repo_id().to_string(),
+            branch: branch.clone(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             turn_number,
             prompt: prompt.clone(),
             agent_type: session.agent_type.clone(),
@@ -193,6 +239,11 @@ pub(super) fn record_turn_start_interaction(
             session_id: state.session_id.clone(),
             turn_id: Some(state.turn_id.clone()),
             repo_id: spool.repo_id().to_string(),
+            branch,
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::TurnStart,
             event_time,
             agent_type: session.agent_type.clone(),
@@ -201,6 +252,7 @@ pub(super) fn record_turn_start_interaction(
                 "prompt": turn.prompt,
                 "turn_number": turn_number,
             }),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool turn_start event: {err}");
         }
@@ -244,6 +296,8 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
         let Some(repo_root) = repo_root else {
             return;
         };
+        let branch = interaction_branch(repo_root);
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let agent_type = interaction_agent_type(state, Some(profile));
         let transcript_path = if transcript_path.trim().is_empty() {
             state
@@ -256,6 +310,11 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
         let session = InteractionSession {
             session_id: session_id.to_string(),
             repo_id: spool.repo_id().to_string(),
+            branch: branch.clone(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             agent_type: agent_type.clone(),
             model: model.clone(),
             first_prompt: state
@@ -288,6 +347,11 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             turn_id: turn_id.clone(),
             session_id: session_id.to_string(),
             repo_id: spool.repo_id().to_string(),
+            branch: branch.clone(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             turn_number: state.map_or(1, |state| state.pending.step_count + 1),
             prompt: prompt.clone(),
             agent_type: agent_type.clone(),
@@ -323,6 +387,11 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             session_id: session_id.to_string(),
             turn_id: Some(turn_id),
             repo_id: spool.repo_id().to_string(),
+            branch,
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::TurnEnd,
             event_time,
             agent_type,
@@ -335,6 +404,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
                 "transcript_fragment": transcript_fragment,
                 "token_usage": token_usage,
             }),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool turn_end event: {err}");
         }
@@ -357,6 +427,8 @@ pub(super) fn record_session_end_interaction(
         let Some(repo_root) = repo_root else {
             return;
         };
+        let branch = interaction_branch(repo_root);
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let transcript_path = if transcript_path.trim().is_empty() {
             state
                 .map(|state| state.transcript_path.as_str())
@@ -368,6 +440,11 @@ pub(super) fn record_session_end_interaction(
         let session = InteractionSession {
             session_id: session_id.to_string(),
             repo_id: spool.repo_id().to_string(),
+            branch: branch.clone(),
+            actor_id: actor_id.clone(),
+            actor_name: actor_name.clone(),
+            actor_email: actor_email.clone(),
+            actor_source: actor_source.clone(),
             agent_type: interaction_agent_type(state, profile),
             model: model.clone(),
             first_prompt: state
@@ -395,11 +472,17 @@ pub(super) fn record_session_end_interaction(
             session_id: session_id.to_string(),
             turn_id: None,
             repo_id: spool.repo_id().to_string(),
+            branch,
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type: InteractionEventType::SessionEnd,
             event_time: ended_at,
             agent_type: session.agent_type.clone(),
             model,
             payload: serde_json::Value::Object(Default::default()),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool session_end event: {err}");
         }
@@ -417,10 +500,35 @@ pub(super) fn record_subagent_interaction_event(
 ) {
     let event_time = now_rfc3339();
     with_interaction_spool(repo_root, |spool| {
+        let Some(repo_root) = repo_root else {
+            return;
+        };
+        let branch = interaction_branch(repo_root);
+        let (actor_id, actor_name, actor_email, actor_source) = interaction_actor_identity();
         let transcript_path = state
             .map(|state| state.transcript_path.as_str())
             .unwrap_or_default();
         let model = resolve_interaction_model(model_hint, transcript_path);
+        let tool_use_id = payload
+            .get("tool_use_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let tool_kind = payload
+            .get("subagent_type")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let task_description = payload
+            .get("task_description")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let subagent_id = payload
+            .get("subagent_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
         if let Err(err) = spool.record_event(&InteractionEvent {
             event_id: interaction_event_id(),
             session_id: session_id.to_string(),
@@ -428,10 +536,19 @@ pub(super) fn record_subagent_interaction_event(
                 .filter(|state| !state.turn_id.trim().is_empty())
                 .map(|state| state.turn_id.clone()),
             repo_id: spool.repo_id().to_string(),
+            branch,
+            actor_id,
+            actor_name,
+            actor_email,
+            actor_source,
             event_type,
             event_time,
             agent_type: interaction_agent_type(state, Some(profile)),
             model,
+            tool_use_id,
+            tool_kind,
+            task_description,
+            subagent_id,
             payload,
         }) {
             eprintln!("[bitloops] Warning: failed to spool {event_type} event: {err}");
