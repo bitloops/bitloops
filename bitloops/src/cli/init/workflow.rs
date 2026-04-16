@@ -5,9 +5,14 @@ use anyhow::{Context, Result, bail};
 
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
-use crate::cli::embeddings::{enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings};
+use crate::cli::embeddings::{
+    EmbeddingsRuntime, enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings,
+    install_or_configure_platform_embeddings,
+};
 use crate::cli::inference::{
-    configure_local_summary_generation, prepare_local_summary_generation_plan,
+    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
+    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
+    prepare_local_summary_generation_plan,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -20,8 +25,8 @@ use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_i
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
-    detect_or_select_agent, ensure_repo_local_policy_excluded, maybe_install_default_daemon,
-    normalize_cli_exclusions, normalize_exclude_from_paths, should_configure_summaries_during_init,
+    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_local_policy_excluded,
+    maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
     should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
 };
 
@@ -148,22 +153,66 @@ pub(super) async fn run_for_project_root(
         input,
     )?;
     if should_install_embeddings {
-        if args.install_default_daemon {
+        if args.embeddings_runtime == EmbeddingsRuntime::Platform {
+            let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "`bitloops init --embeddings-runtime platform` requires `--embeddings-gateway-url`"
+                )
+            })?;
+            for line in install_or_configure_platform_embeddings(
+                project_root,
+                gateway_url,
+                &args.embeddings_api_key_env,
+            )? {
+                writeln!(out, "{line}")?;
+            }
+        } else if args.install_default_daemon {
             queued_embeddings_bootstrap =
                 Some(enqueue_embeddings_bootstrap_during_init(project_root, out).await?);
         } else {
             install_embeddings_during_init(project_root, out)?;
         }
     }
-    if should_configure_summaries_during_init(
-        project_root,
-        args.install_default_daemon,
-        out,
-        input,
-    )? {
-        if args.install_default_daemon {
-            prepared_summary_setup = Some(
-                prepare_local_summary_generation_plan(
+    match choose_summary_setup_during_init(project_root, args.install_default_daemon, out, input)
+        .await?
+    {
+        SummarySetupSelection::Cloud => {
+            crate::cli::login::ensure_logged_in().await?;
+            let gateway_url_override = platform_summary_gateway_url_override();
+            if args.install_default_daemon {
+                prepared_summary_setup = Some(prepare_cloud_summary_generation_plan(
+                    gateway_url_override.as_deref(),
+                ));
+            } else {
+                let message = configure_cloud_summary_generation(
+                    project_root,
+                    gateway_url_override.as_deref(),
+                )
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+                writeln!(out, "{message}")?;
+            }
+        }
+        SummarySetupSelection::Local => {
+            if args.install_default_daemon {
+                prepared_summary_setup = Some(
+                    prepare_local_summary_generation_plan(
+                        out,
+                        input,
+                        telemetry_consent::can_prompt_interactively(),
+                    )
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
+                        )
+                    })?,
+                );
+            } else {
+                configure_local_summary_generation(
+                    project_root,
                     out,
                     input,
                     telemetry_consent::can_prompt_interactively(),
@@ -172,21 +221,10 @@ pub(super) async fn run_for_project_root(
                     anyhow::anyhow!(
                         "Bitloops init completed, but semantic summary setup failed: {err:#}"
                     )
-                })?,
-            );
-        } else {
-            configure_local_summary_generation(
-                project_root,
-                out,
-                input,
-                telemetry_consent::can_prompt_interactively(),
-            )
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "Bitloops init completed, but semantic summary setup failed: {err:#}"
-                )
-            })?;
+                })?;
+            }
         }
+        SummarySetupSelection::Skip => {}
     }
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
@@ -329,17 +367,9 @@ async fn enqueue_embeddings_bootstrap_during_init(
     project_root: &Path,
     out: &mut dyn Write,
 ) -> Result<QueuedEmbeddingsBootstrapTask> {
-    writeln!(out, "Queueing embeddings bootstrap in the daemon...")?;
     let (scope, queued) =
         enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
             .await?;
-    let phase = queued
-        .task
-        .embeddings_bootstrap_progress()
-        .map(|progress| progress.phase.as_str())
-        .unwrap_or("queued");
-    writeln!(out, "Embeddings bootstrap task: {}", queued.task.task_id)?;
-    writeln!(out, "Embeddings bootstrap phase: {phase}")?;
     out.flush()?;
     Ok(QueuedEmbeddingsBootstrapTask {
         scope,

@@ -126,7 +126,7 @@ embedding_mode = "deterministic"
 code_embeddings = "alpha"
 summary_embeddings = "alpha"
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -135,7 +135,7 @@ request_timeout_secs = 5
 [inference.profiles.alpha]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "sync-test-model"
 "#
         ),
@@ -1103,7 +1103,8 @@ async fn sync_populates_current_semantic_tables_with_current_embeddings_and_clon
 }
 
 #[tokio::test]
-async fn sync_rehydrates_semantic_clone_tables_for_unchanged_repo() {
+async fn sync_rehydrates_current_semantic_clone_tables_for_unchanged_repo_without_rebuilding_historical_tables()
+ {
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config(repo.path());
     let cfg = sync_test_cfg_for_repo(repo.path());
@@ -1194,13 +1195,13 @@ async fn sync_rehydrates_semantic_clone_tables_for_unchanged_repo() {
     assert_eq!(result.paths_added, 0);
     assert_eq!(result.paths_changed, 0);
     assert!(result.paths_unchanged > 0);
-    assert!(
-        historical_code_embedding_rows > 0,
-        "unchanged sync should repopulate historical code embeddings"
+    assert_eq!(
+        historical_code_embedding_rows, 0,
+        "unchanged sync should not repopulate historical code embeddings"
     );
-    assert!(
-        historical_summary_embedding_rows > 0,
-        "unchanged sync should repopulate historical summary embeddings"
+    assert_eq!(
+        historical_summary_embedding_rows, 0,
+        "unchanged sync should not repopulate historical summary embeddings"
     );
     assert!(
         current_code_embedding_rows > 0,

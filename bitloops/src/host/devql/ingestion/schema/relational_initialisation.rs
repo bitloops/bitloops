@@ -92,6 +92,12 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     crate::capability_packs::semantic_clones::init_sqlite_semantic_embeddings_schema(sqlite_path)
         .await
         .context("creating SQLite semantic embedding tables")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_schema_sql(),
+    )
+    .await
+    .context("creating SQLite semantic clone tables")?;
     Ok(())
 }
 

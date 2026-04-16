@@ -11,8 +11,9 @@ use crate::config::{
     resolve_daemon_config_path_for_repo,
 };
 use crate::host::inference::{
-    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_EMBEDDINGS_RUNTIME_ID, EmbeddingInputType,
-    InferenceGateway, LocalInferenceGateway,
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID,
+    BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, EmbeddingInputType, InferenceGateway,
+    LocalInferenceGateway,
 };
 
 use super::managed::{
@@ -26,6 +27,9 @@ const LOCAL_PULL_TIMEOUT_SECS: u64 = 300;
 pub(crate) enum EmbeddingsInstallState {
     NotConfigured,
     ConfiguredLocal {
+        profile_name: String,
+    },
+    ConfiguredPlatform {
         profile_name: String,
     },
     ConfiguredNonLocal {
@@ -61,8 +65,19 @@ pub(crate) fn inspect_embeddings_install_state(repo_root: &Path) -> EmbeddingsIn
         .profiles
         .get(&profile_name)
         .map(|profile| profile.driver.clone());
-    if kind.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER) {
+    let runtime = capability
+        .inference
+        .profiles
+        .get(&profile_name)
+        .and_then(|profile| profile.runtime.clone());
+    if kind.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER)
+        && runtime.as_deref() == Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
+    {
         EmbeddingsInstallState::ConfiguredLocal { profile_name }
+    } else if kind.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER)
+        && runtime.as_deref() == Some(BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID)
+    {
+        EmbeddingsInstallState::ConfiguredPlatform { profile_name }
     } else {
         EmbeddingsInstallState::ConfiguredNonLocal { profile_name, kind }
     }
@@ -229,28 +244,34 @@ pub(crate) fn doctor_profile(
 
     match profile.driver.as_str() {
         BITLOOPS_EMBEDDINGS_IPC_DRIVER => {
-            let cache_dir = local_profile_cache_dir(profile)?;
-            lines.push(format!("Cache directory: {}", cache_dir.display()));
-            lines.push(format!(
-                "Cache status: {}",
-                if cache_dir.exists() {
-                    "present"
-                } else {
-                    "missing"
-                }
-            ));
             if let Some(runtime_name) = profile.runtime.as_deref() {
                 let runtime = capability.inference.runtimes.get(runtime_name);
                 lines.push(format!("Runtime: {runtime_name}"));
+                if runtime_name == BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID {
+                    let cache_dir = local_profile_cache_dir(profile)?;
+                    lines.push(format!("Cache directory: {}", cache_dir.display()));
+                    lines.push(format!(
+                        "Cache status: {}",
+                        if cache_dir.exists() {
+                            "present"
+                        } else {
+                            "missing"
+                        }
+                    ));
+                } else {
+                    lines.push("Cache directory: not applicable".to_string());
+                }
                 if let Some(runtime) = runtime {
                     lines.push(format!("Runtime command: {}", runtime.command));
-                    match managed_runtime_version_for_command(&runtime.command) {
-                        Ok(Some(version)) => {
-                            lines.push(format!("Managed runtime version: {version}"));
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            lines.push(format!("Managed runtime metadata warning: {err}"));
+                    if runtime_name == BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID {
+                        match managed_runtime_version_for_command(&runtime.command) {
+                            Ok(Some(version)) => {
+                                lines.push(format!("Managed runtime version: {version}"));
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                lines.push(format!("Managed runtime metadata warning: {err}"));
+                            }
                         }
                     }
                 }
@@ -357,6 +378,11 @@ fn ensure_local_profile(profile: &EmbeddingProfileConfig, profile_name: &str) ->
             "embedding profile `{profile_name}` is not a `{BITLOOPS_EMBEDDINGS_IPC_DRIVER}` profile"
         );
     }
+    if profile.runtime.as_deref() != Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID) {
+        bail!(
+            "embedding profile `{profile_name}` is not configured for the local embeddings runtime"
+        );
+    }
     Ok(())
 }
 
@@ -367,8 +393,8 @@ fn local_profile_cache_dir(profile: &EmbeddingProfileConfig) -> Result<PathBuf> 
 
     dirs::cache_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
-        .map(|dir| dir.join("bitloops-embeddings"))
-        .context("resolving bitloops-embeddings cache directory")
+        .map(|dir| dir.join("bitloops-local-embeddings"))
+        .context("resolving bitloops-local-embeddings cache directory")
 }
 
 pub(crate) fn embedding_capability_for_config_path(
@@ -411,7 +437,7 @@ fn should_install_managed_runtime_for_profile(
     let profile = resolve_profile(capability, profile_name)?;
     if profile.task != InferenceTask::Embeddings
         || profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER
-        || profile.runtime.as_deref() != Some(BITLOOPS_EMBEDDINGS_RUNTIME_ID)
+        || profile.runtime.as_deref() != Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
     {
         return Ok(false);
     }

@@ -26,6 +26,7 @@ fn semantic_clone_schema_includes_clone_edge_table() {
     assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges"));
     assert!(pg.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges_current"));
     assert!(sqlite.contains("CREATE TABLE IF NOT EXISTS symbol_clone_edges_current"));
+    assert!(pg.contains("PRIMARY KEY (repo_id, source_artefact_id, target_artefact_id)"));
     assert!(pg.contains("PRIMARY KEY (repo_id, source_symbol_id, target_symbol_id)"));
 }
 

@@ -113,6 +113,8 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::Clean(args) => Some(clean_action(args)),
         crate::cli::Commands::Reset(args) => Some(reset_action(args)),
         crate::cli::Commands::Init(args) => Some(init_action(args)),
+        crate::cli::Commands::Login(args) => Some(login_action(args)),
+        crate::cli::Commands::Logout(_args) => Some(logout_action()),
         crate::cli::Commands::Enable(args) => Some(enable_action(args)),
         crate::cli::Commands::Disable(args) => Some(disable_action(args)),
         crate::cli::Commands::Uninstall(args) => Some(uninstall_action(args)),
@@ -221,6 +223,23 @@ fn daemon_logs_action(
     insert_flags(&mut props, flags);
     insert_optional_count_property(&mut props, "tail_lines", args.tail);
     new_action("bitloops daemon logs", props)
+}
+
+fn login_action(
+    args: &crate::cli::login::LoginArgs,
+) -> crate::telemetry::analytics::ActionDescriptor {
+    let mut props = HashMap::new();
+    if matches!(
+        args.command,
+        Some(crate::cli::login::LoginCommand::Status(_))
+    ) {
+        insert_string_property(&mut props, "subcommand", "status");
+    }
+    new_action("bitloops login", props)
+}
+
+fn logout_action() -> crate::telemetry::analytics::ActionDescriptor {
+    new_action("bitloops logout", HashMap::new())
 }
 
 fn daemon_enrichments_action(

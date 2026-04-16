@@ -3,7 +3,6 @@ use reqwest::blocking::Client;
 use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,8 +18,9 @@ use crate::config::{
 
 use super::super::profiles::{embedding_capability_for_config_path, pull_profile_with_config_path};
 use super::archive::{
-    ManagedEmbeddingsArchiveKind, extract_managed_embeddings_bundle_entries, sha256_hex,
-    write_file_atomically,
+    ManagedEmbeddingsArchiveKind, ManagedEmbeddingsBundleEntry,
+    extract_managed_embeddings_bundle_entries, extract_managed_embeddings_bundle_entries_from_file,
+    sha256_hex, write_file_atomically,
 };
 use super::config::{
     MANAGED_EMBEDDINGS_VERSION_OVERRIDE_ENV, ManagedEmbeddingsInstallMetadata,
@@ -29,6 +29,7 @@ use super::config::{
     managed_embeddings_bundle_is_complete, reset_managed_embeddings_install_dir,
     rewrite_managed_runtime_command_if_eligible, save_managed_embeddings_install_metadata,
 };
+use super::download::download_release_asset_to_temp_file;
 
 const MANAGED_EMBEDDINGS_RELEASES_API_BASE: &str =
     "https://api.github.com/repos/bitloops/bitloops-embeddings";
@@ -138,12 +139,12 @@ fn format_managed_embeddings_runtime_lines(
 ) -> Vec<String> {
     let mut lines = vec![if outcome.install.freshly_installed {
         format!(
-            "Installed managed standalone `bitloops-embeddings` runtime {}.",
+            "Installed managed standalone `bitloops-local-embeddings` runtime {}.",
             outcome.install.version
         )
     } else {
         format!(
-            "Managed standalone `bitloops-embeddings` runtime {} already installed.",
+            "Managed standalone `bitloops-local-embeddings` runtime {} already installed.",
             outcome.install.version
         )
     }];
@@ -296,6 +297,7 @@ fn load_managed_embeddings_install_metadata_for_install()
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn install_managed_embeddings_binary_from_release_bytes(
     version: &str,
     asset_name: &str,
@@ -306,7 +308,7 @@ pub(crate) fn install_managed_embeddings_binary_from_release_bytes(
     let actual_digest = sha256_hex(archive_bytes);
     if actual_digest != expected_digest {
         bail!(
-            "managed bitloops-embeddings asset digest mismatch for `{asset_name}`: expected {expected_digest}, got {actual_digest}"
+            "managed bitloops-local-embeddings asset digest mismatch for `{asset_name}`: expected {expected_digest}, got {actual_digest}"
         );
     }
 
@@ -314,25 +316,9 @@ pub(crate) fn install_managed_embeddings_binary_from_release_bytes(
     let bundle_entries =
         extract_managed_embeddings_bundle_entries(archive_bytes, archive_kind, binary_name)
             .with_context(|| {
-                format!("extracting managed bitloops-embeddings bundle from `{asset_name}`")
+                format!("extracting managed bitloops-local-embeddings bundle from `{asset_name}`")
             })?;
-    reset_managed_embeddings_install_dir()?;
-    let binary_path = managed_embeddings_binary_path()?;
-    let install_dir = managed_embeddings_binary_dir()?;
-    for entry in bundle_entries {
-        let output_path = install_dir.join(&entry.relative_path);
-        write_file_atomically(&output_path, &entry.bytes, entry.executable)?;
-    }
-    save_managed_embeddings_install_metadata(&ManagedEmbeddingsInstallMetadata {
-        version: version.to_string(),
-        binary_path: binary_path.clone(),
-    })?;
-
-    Ok(ManagedEmbeddingsBinaryInstallOutcome {
-        version: version.to_string(),
-        binary_path,
-        freshly_installed: true,
-    })
+    install_managed_embeddings_bundle_entries(version, bundle_entries)
 }
 
 pub(crate) fn managed_embeddings_asset_spec_for(
@@ -367,12 +353,12 @@ pub(crate) fn managed_embeddings_asset_spec_for(
             "zip",
         ),
         _ => {
-            bail!("managed bitloops-embeddings install is not supported on {os}/{arch}")
+            bail!("managed bitloops-local-embeddings install is not supported on {os}/{arch}")
         }
     };
 
     Ok(ManagedEmbeddingsAssetSpec {
-        asset_name: format!("bitloops-embeddings-{version}-{target_triple}.{extension}"),
+        asset_name: format!("bitloops-local-embeddings-{version}-{target_triple}.{extension}"),
         archive_kind,
     })
 }
@@ -434,7 +420,7 @@ where
         .find(|asset| asset.name == asset_spec.asset_name)
         .ok_or_else(|| {
             anyhow!(
-                "managed bitloops-embeddings release `{}` did not contain asset `{}`",
+                "managed bitloops-local-embeddings release `{}` did not contain asset `{}`",
                 release.tag_name,
                 asset_spec.asset_name
             )
@@ -447,8 +433,13 @@ where
         message: Some(format!("Downloading `{}`", asset.name)),
         ..Default::default()
     })?;
-    let archive_bytes =
-        download_managed_embeddings_asset(&asset.browser_download_url, |downloaded, total| {
+    let client = managed_embeddings_http_client()?;
+    let download = download_release_asset_to_temp_file(
+        &client,
+        &asset.browser_download_url,
+        MANAGED_EMBEDDINGS_USER_AGENT,
+        "managed bitloops-local-embeddings asset",
+        |downloaded, total| {
             report(crate::daemon::EmbeddingsBootstrapProgress {
                 phase: crate::daemon::EmbeddingsBootstrapPhase::DownloadingRuntime,
                 asset_name: Some(asset.name.clone()),
@@ -457,23 +448,37 @@ where
                 version: Some(release.tag_name.clone()),
                 message: Some(format!("Downloading `{}`", asset.name)),
             })
-        })?;
+        },
+    )?;
+    if download.sha256_hex != expected_digest {
+        bail!(
+            "managed bitloops-local-embeddings asset digest mismatch for `{}`: expected {}, got {}",
+            asset.name,
+            expected_digest,
+            download.sha256_hex
+        );
+    }
     report(crate::daemon::EmbeddingsBootstrapProgress {
         phase: crate::daemon::EmbeddingsBootstrapPhase::ExtractingRuntime,
         asset_name: Some(asset.name.clone()),
-        bytes_downloaded: archive_bytes.len() as u64,
-        bytes_total: Some(archive_bytes.len() as u64),
+        bytes_downloaded: download.bytes_downloaded,
+        bytes_total: Some(download.bytes_downloaded),
         version: Some(release.tag_name.clone()),
         message: Some(format!("Extracting `{}`", asset.name)),
     })?;
-
-    install_managed_embeddings_binary_from_release_bytes(
-        &release.tag_name,
-        &asset.name,
+    let bundle_entries = extract_managed_embeddings_bundle_entries_from_file(
+        download.path(),
         asset_spec.archive_kind,
-        &expected_digest,
-        archive_bytes.as_ref(),
+        managed_embeddings_binary_name(),
     )
+    .with_context(|| {
+        format!(
+            "extracting managed bitloops-local-embeddings bundle from `{}`",
+            asset.name
+        )
+    })?;
+
+    install_managed_embeddings_bundle_entries(&release.tag_name, bundle_entries)
 }
 
 fn fetch_managed_embeddings_release(
@@ -489,59 +494,51 @@ fn fetch_managed_embeddings_release(
         .header(ACCEPT, "application/vnd.github+json")
         .header(USER_AGENT, MANAGED_EMBEDDINGS_USER_AGENT)
         .send()
-        .context("fetching managed bitloops-embeddings release metadata")?
+        .context("fetching managed bitloops-local-embeddings release metadata")?
         .error_for_status()
-        .context("fetching managed bitloops-embeddings release metadata")?
+        .context("fetching managed bitloops-local-embeddings release metadata")?
         .json::<GitHubReleasePayload>()
-        .context("parsing managed bitloops-embeddings release metadata")
-}
-
-fn download_managed_embeddings_asset(
-    url: &str,
-    mut progress: impl FnMut(u64, Option<u64>) -> Result<()>,
-) -> Result<Vec<u8>> {
-    let mut response = managed_embeddings_http_client()?
-        .get(url)
-        .header(ACCEPT, "application/octet-stream")
-        .header(USER_AGENT, MANAGED_EMBEDDINGS_USER_AGENT)
-        .send()
-        .with_context(|| format!("downloading managed bitloops-embeddings asset from {url}"))?
-        .error_for_status()
-        .with_context(|| format!("downloading managed bitloops-embeddings asset from {url}"))?;
-    let total = response.content_length();
-    let mut bytes = Vec::new();
-    let mut downloaded = 0_u64;
-    let mut chunk = [0_u8; 64 * 1024];
-    progress(downloaded, total)?;
-    loop {
-        let read = response
-            .read(&mut chunk)
-            .context("reading managed bitloops-embeddings asset bytes")?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-        downloaded = downloaded.saturating_add(read as u64);
-        progress(downloaded, total)?;
-    }
-    Ok(bytes)
+        .context("parsing managed bitloops-local-embeddings release metadata")
 }
 
 fn managed_embeddings_http_client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(MANAGED_EMBEDDINGS_HTTP_TIMEOUT_SECS))
         .build()
-        .context("building managed bitloops-embeddings HTTP client")
+        .context("building managed bitloops-local-embeddings HTTP client")
+}
+
+fn install_managed_embeddings_bundle_entries(
+    version: &str,
+    bundle_entries: Vec<ManagedEmbeddingsBundleEntry>,
+) -> Result<ManagedEmbeddingsBinaryInstallOutcome> {
+    reset_managed_embeddings_install_dir()?;
+    let binary_path = managed_embeddings_binary_path()?;
+    let install_dir = managed_embeddings_binary_dir()?;
+    for entry in bundle_entries {
+        let output_path = install_dir.join(&entry.relative_path);
+        write_file_atomically(&output_path, &entry.bytes, entry.executable)?;
+    }
+    save_managed_embeddings_install_metadata(&ManagedEmbeddingsInstallMetadata {
+        version: version.to_string(),
+        binary_path: binary_path.clone(),
+    })?;
+
+    Ok(ManagedEmbeddingsBinaryInstallOutcome {
+        version: version.to_string(),
+        binary_path,
+        freshly_installed: true,
+    })
 }
 
 fn parse_sha256_digest(digest: Option<&str>) -> Result<String> {
     let digest = digest
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .context("managed bitloops-embeddings release asset is missing a digest")?;
+        .context("managed bitloops-local-embeddings release asset is missing a digest")?;
     let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
     if digest.len() != 64 || !digest.chars().all(|char| char.is_ascii_hexdigit()) {
-        bail!("managed bitloops-embeddings release asset digest is malformed");
+        bail!("managed bitloops-local-embeddings release asset digest is malformed");
     }
     Ok(digest.to_ascii_lowercase())
 }
@@ -576,7 +573,7 @@ mod tests {
         let repo = TempDir::new().expect("tempdir");
         let _guard = enter_process_state(
             Some(repo.path()),
-            &[("BITLOOPS_EMBEDDINGS_VERSION_OVERRIDE", None)],
+            &[("BITLOOPS_LOCAL_EMBEDDINGS_VERSION_OVERRIDE", None)],
         );
 
         assert_eq!(
@@ -590,7 +587,7 @@ mod tests {
         let repo = TempDir::new().expect("tempdir");
         let _guard = enter_process_state(
             Some(repo.path()),
-            &[("BITLOOPS_EMBEDDINGS_VERSION_OVERRIDE", Some("v1.2.3"))],
+            &[("BITLOOPS_LOCAL_EMBEDDINGS_VERSION_OVERRIDE", Some("v1.2.3"))],
         );
 
         assert_eq!(

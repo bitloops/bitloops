@@ -12,8 +12,8 @@ use crate::config::{
 use super::embeddings::BitloopsEmbeddingsIpcService;
 use super::text_generation::BitloopsInferenceTextGenerationService;
 use super::{
-    BITLOOPS_EMBEDDINGS_IPC_DRIVER, EmbeddingService, InferenceGateway, ResolvedInferenceSlot,
-    TextGenerationService,
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER, EmbeddingService,
+    InferenceGateway, ResolvedInferenceSlot, TextGenerationService,
 };
 
 pub struct EmptyInferenceGateway;
@@ -180,10 +180,11 @@ impl LocalInferenceGateway {
             .max_output_tokens
             .filter(|value| *value > 0)
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
-        if profile
-            .base_url
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
+        if profile.driver != BITLOOPS_PLATFORM_CHAT_DRIVER
+            && profile
+                .base_url
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
         {
             bail!("profile `{profile_name}` requires a base_url");
         }

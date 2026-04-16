@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use std::env;
 use std::path::Path;
 use std::path::PathBuf;
@@ -15,7 +15,15 @@ use crate::daemon::DevqlTaskSource;
 use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
 use crate::host::devql::{DevqlConfig, resolve_repo_identity};
 
+use super::managed::install_or_configure_platform_embeddings;
 use super::profiles::{clear_cache_for_profile, doctor_profile};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum EmbeddingsRuntime {
+    #[default]
+    Local,
+    Platform,
+}
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct EmbeddingsArgs {
@@ -35,8 +43,17 @@ pub enum EmbeddingsCommand {
     ClearCache(EmbeddingsClearCacheArgs),
 }
 
-#[derive(Args, Debug, Clone, Default)]
-pub struct EmbeddingsInstallArgs {}
+#[derive(Args, Debug, Clone)]
+pub struct EmbeddingsInstallArgs {
+    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
+    pub runtime: EmbeddingsRuntime,
+
+    #[arg(long)]
+    pub gateway_url: Option<String>,
+
+    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
+    pub api_key_env: String,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct EmbeddingsPullArgs {
@@ -73,26 +90,45 @@ pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
     let capability = resolve_embedding_capability_config_for_repo(&repo_root);
 
     match command {
-        EmbeddingsCommand::Install(_args) => {
-            activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_install")
-                .context("activating semantic clones embedding mailboxes for embeddings install")?;
-            let (scope, queued) =
-                enqueue_embeddings_bootstrap_task(&repo_root, None, DevqlTaskSource::ManualCli)
-                    .await?;
-            if let Some(task) = crate::cli::devql::graphql::watch_task_id_via_graphql(
-                &scope,
-                &queued.task.task_id,
-                false,
-            )
-            .await?
-            {
-                println!(
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                );
+        EmbeddingsCommand::Install(args) => match args.runtime {
+            EmbeddingsRuntime::Local => {
+                activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_install").context(
+                    "activating semantic clones embedding mailboxes for embeddings install",
+                )?;
+                let (scope, queued) =
+                    enqueue_embeddings_bootstrap_task(&repo_root, None, DevqlTaskSource::ManualCli)
+                        .await?;
+                if let Some(task) = crate::cli::devql::graphql::watch_task_id_via_graphql(
+                    &scope,
+                    &queued.task.task_id,
+                    false,
+                )
+                .await?
+                {
+                    println!(
+                        "{}",
+                        crate::cli::devql::format_task_completion_summary(&task)
+                    );
+                }
+                Ok(())
             }
-            Ok(())
-        }
+            EmbeddingsRuntime::Platform => {
+                let gateway_url = args.gateway_url.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "`bitloops embeddings install --runtime platform` requires `--gateway-url`"
+                    )
+                })?;
+                let lines = install_or_configure_platform_embeddings(
+                    &repo_root,
+                    gateway_url,
+                    &args.api_key_env,
+                )?;
+                for line in lines {
+                    println!("{line}");
+                }
+                Ok(())
+            }
+        },
         EmbeddingsCommand::Pull(args) => {
             activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_pull")
                 .context("activating semantic clones embedding mailboxes for embeddings pull")?;

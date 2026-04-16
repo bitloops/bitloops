@@ -6,8 +6,12 @@ use clap::Args;
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
 
-use crate::cli::embeddings::{EmbeddingsInstallState, inspect_embeddings_install_state};
-use crate::cli::inference::summary_generation_configured;
+use crate::cli::embeddings::{
+    EmbeddingsInstallState, EmbeddingsRuntime, inspect_embeddings_install_state,
+};
+use crate::cli::inference::{
+    SummarySetupSelection, prompt_summary_setup_selection, summary_generation_configured,
+};
 use crate::cli::telemetry_consent;
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment};
 use crate::devql_transport::SlimCliRepoScope;
@@ -96,6 +100,18 @@ pub struct InitArgs {
     /// Load additional exclusion globs from files under the repo-policy root (repeatable).
     #[arg(long = "exclude-from")]
     pub exclude_from: Vec<String>,
+
+    /// Select which embeddings runtime to configure when embeddings are installed during init.
+    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
+    pub embeddings_runtime: EmbeddingsRuntime,
+
+    /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
+    #[arg(long)]
+    pub embeddings_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token.
+    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
+    pub embeddings_api_key_env: String,
 }
 
 pub async fn run(args: InitArgs) -> Result<()> {
@@ -195,46 +211,27 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
     }
 }
 
-fn should_configure_summaries_during_init(
+pub(super) async fn choose_summary_setup_during_init(
     repo_root: &Path,
     install_default_daemon: bool,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-) -> Result<bool> {
+) -> Result<SummarySetupSelection> {
     if summary_generation_configured(repo_root) {
-        return Ok(false);
+        return Ok(SummarySetupSelection::Skip);
     }
 
-    if !telemetry_consent::can_prompt_interactively() {
-        return Ok(install_default_daemon);
-    }
+    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
+        .await?
+        .is_some();
 
-    prompt_install_summaries(out, input)
-}
-
-fn prompt_install_summaries(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
-    writeln!(out)?;
-    writeln!(out, "Configure local semantic summaries as well?")?;
-    writeln!(
+    prompt_summary_setup_selection(
         out,
-        "Bitloops will install `bitloops-inference` and try to bind summaries to a local Ollama model."
-    )?;
-
-    loop {
-        writeln!(out, "Configure semantic summaries now? (Y/n)")?;
-        write!(out, "> ")?;
-        out.flush()?;
-
-        let mut line = String::new();
-        input
-            .read_line(&mut line)
-            .context("reading init semantic summary install prompt response")?;
-        match line.trim().to_ascii_lowercase().as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => writeln!(out, "Please answer yes or no.")?,
-        }
-    }
+        input,
+        telemetry_consent::can_prompt_interactively(),
+        install_default_daemon,
+        cloud_logged_in,
+    )
 }
 
 fn should_run_initial_sync(

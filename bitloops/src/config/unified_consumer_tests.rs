@@ -94,8 +94,8 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
         })),
         inference: Some(json!({
             "runtimes": {
-                "bitloops_embeddings": {
-                    "command": "bitloops-embeddings",
+                "bitloops_local_embeddings": {
+                    "command": "bitloops-local-embeddings",
                     "args": ["--verbose"]
                 },
                 "bitloops_inference": {
@@ -106,14 +106,14 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
                 "local_code": {
                     "task": "embeddings",
                     "driver": "bitloops_embeddings_ipc",
-                    "runtime": "bitloops_embeddings",
+                    "runtime": "bitloops_local_embeddings",
                     "model": "bge-m3",
                     "cache_dir": ".cache/embeddings"
                 },
                 "local_summary": {
                     "task": "embeddings",
                     "driver": "bitloops_embeddings_ipc",
-                    "runtime": "bitloops_embeddings",
+                    "runtime": "bitloops_local_embeddings",
                     "model": "bge-m3"
                 },
                 "summary_llm": {
@@ -153,7 +153,7 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     assert_eq!(
         inference
             .runtimes
-            .get("bitloops_embeddings")
+            .get("bitloops_local_embeddings")
             .expect("runtime")
             .args,
         vec!["--verbose".to_string()]
@@ -161,7 +161,10 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     let code_profile = inference.profiles.get("local_code").expect("code profile");
     assert_eq!(code_profile.task, InferenceTask::Embeddings);
     assert_eq!(code_profile.driver, "bitloops_embeddings_ipc");
-    assert_eq!(code_profile.runtime.as_deref(), Some("bitloops_embeddings"));
+    assert_eq!(
+        code_profile.runtime.as_deref(),
+        Some("bitloops_local_embeddings")
+    );
     assert_eq!(code_profile.model.as_deref(), Some("bge-m3"));
     assert_eq!(
         code_profile.cache_dir.as_deref(),

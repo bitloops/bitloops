@@ -278,7 +278,7 @@ fn write_runtime_only_daemon_config(command: &str, args: &[String]) {
 [runtime]
 local_dev = false
 
-[inference.runtimes.bitloops_embeddings]
+[inference.runtimes.bitloops_local_embeddings]
 command = {command:?}
 args = [{runtime_args}]
 startup_timeout_secs = 5
@@ -1272,7 +1272,7 @@ supported = ["claude-code"]
             ("BITLOOPS_TEST_TTY", Some("1")),
         ],
         || {
-            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
+            write_runtime_only_daemon_config("bitloops-local-embeddings", &[]);
 
             with_global_graphql_executor_hook(
                 |_runtime_root, _query, _variables| {
@@ -1307,6 +1307,11 @@ supported = ["claude-code"]
                                             telemetry: None,
                                             no_telemetry: false,
                                             install_embeddings: false,
+                                            embeddings_runtime:
+                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                         },
                                         &mut out,
                                         &mut input,
@@ -1356,7 +1361,7 @@ supported = ["claude-code"]
             }
         }),
         || {
-            write_runtime_only_daemon_config("bitloops-embeddings", &[]);
+            write_runtime_only_daemon_config("bitloops-local-embeddings", &[]);
 
             with_managed_embeddings_install_hook(
                 move |repo_root| {
@@ -1381,6 +1386,11 @@ supported = ["claude-code"]
                                     telemetry: None,
                                     no_telemetry: false,
                                     install_embeddings: true,
+                                    embeddings_runtime:
+                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
                                 },
                                 &mut out,
                                 &mut input,
@@ -1463,6 +1473,11 @@ model = "text-embedding-3-large"
                                 telemetry: None,
                                 no_telemetry: false,
                                 install_embeddings: false,
+                                embeddings_runtime:
+                                    crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                embeddings_gateway_url: None,
+                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                    .to_string(),
                             },
                             &mut out,
                             &mut input,
@@ -1490,6 +1505,9 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
+            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_gateway_url: None,
+            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
         })
         .unwrap_err();
 
@@ -1521,6 +1539,9 @@ enabled = false
             telemetry: Some(false),
             no_telemetry: false,
             install_embeddings: false,
+            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_gateway_url: None,
+            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
         })
         .unwrap_err();
 
@@ -1559,6 +1580,9 @@ supported = ["cursor", "gemini"]
                     telemetry: Some(false),
                     no_telemetry: false,
                     install_embeddings: false,
+                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
                 &mut out,
                 &mut input,
@@ -1595,6 +1619,9 @@ fn run_enable_with_legacy_agent_flag_returns_guidance_error() {
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
+            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_gateway_url: None,
+            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
         })
         .unwrap_err();
 
@@ -1703,6 +1730,9 @@ fn enable_does_not_create_shared_repo_policy_file() {
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
+            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_gateway_url: None,
+            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -1725,6 +1755,9 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
+            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_gateway_url: None,
+            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -1765,6 +1798,9 @@ supported = ["claude-code"]
                 telemetry: None,
                 no_telemetry: false,
                 install_embeddings: false,
+                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             })
             .unwrap_err();
 
@@ -1816,6 +1852,9 @@ supported = ["claude-code"]
                         telemetry: Some(false),
                         no_telemetry: false,
                         install_embeddings: false,
+                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     })
                     .expect("enable should succeed");
 

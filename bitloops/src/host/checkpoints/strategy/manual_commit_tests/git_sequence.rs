@@ -3,7 +3,7 @@ use super::*;
 #[test]
 pub(crate) fn files_overlap_with_content_modified_file() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("test.txt"), "original content").unwrap();
     git_ok(dir.path(), &["add", "test.txt"]);
@@ -33,7 +33,7 @@ pub(crate) fn files_overlap_with_content_modified_file() {
 #[test]
 pub(crate) fn files_overlap_with_content_new_file_content_match() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-420";
     create_shadow_branch_with_content(
@@ -63,7 +63,7 @@ pub(crate) fn files_overlap_with_content_new_file_content_match() {
 #[test]
 pub(crate) fn files_overlap_with_content_new_file_content_mismatch() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-421";
     create_shadow_branch_with_content(
@@ -93,7 +93,7 @@ pub(crate) fn files_overlap_with_content_new_file_content_mismatch() {
 #[test]
 pub(crate) fn files_overlap_with_content_file_not_in_commit() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-422";
     create_shadow_branch_with_content(
@@ -130,7 +130,7 @@ pub(crate) fn files_overlap_with_content_file_not_in_commit() {
 #[test]
 pub(crate) fn files_overlap_with_content_deleted_file() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("to_delete.txt"), "content to delete").unwrap();
     git_ok(dir.path(), &["add", "to_delete.txt"]);
@@ -155,7 +155,7 @@ pub(crate) fn files_overlap_with_content_deleted_file() {
 #[test]
 pub(crate) fn files_overlap_with_content_no_shadow_branch() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("test.txt"), "content").unwrap();
     git_ok(dir.path(), &["add", "test.txt"]);
@@ -174,7 +174,7 @@ pub(crate) fn files_overlap_with_content_no_shadow_branch() {
 #[test]
 pub(crate) fn files_with_remaining_agent_changes_file_not_committed() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-425";
     create_shadow_branch_with_content(
@@ -203,7 +203,7 @@ pub(crate) fn files_with_remaining_agent_changes_file_not_committed() {
 #[test]
 pub(crate) fn files_with_remaining_agent_changes_fully_committed() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-426";
     create_shadow_branch_with_content(
@@ -232,7 +232,7 @@ pub(crate) fn files_with_remaining_agent_changes_fully_committed() {
 #[test]
 pub(crate) fn files_with_remaining_agent_changes_partial_commit() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-427";
     create_shadow_branch_with_content(
@@ -261,7 +261,7 @@ pub(crate) fn files_with_remaining_agent_changes_partial_commit() {
 #[test]
 pub(crate) fn files_with_remaining_agent_changes_no_shadow_branch() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("test.txt"), "content").unwrap();
     git_ok(dir.path(), &["add", "test.txt"]);
@@ -283,7 +283,7 @@ pub(crate) fn files_with_remaining_agent_changes_no_shadow_branch() {
 #[test]
 pub(crate) fn staged_files_overlap_with_content_modified_file() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("test.txt"), "base").unwrap();
     git_ok(dir.path(), &["add", "test.txt"]);
@@ -308,7 +308,7 @@ pub(crate) fn staged_files_overlap_with_content_modified_file() {
 #[test]
 pub(crate) fn staged_files_overlap_with_content_new_file_content_match() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-430";
     create_shadow_branch_with_content(
@@ -333,7 +333,7 @@ pub(crate) fn staged_files_overlap_with_content_new_file_content_match() {
 #[test]
 pub(crate) fn staged_files_overlap_with_content_new_file_content_mismatch() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-431";
     create_shadow_branch_with_content(
@@ -358,7 +358,7 @@ pub(crate) fn staged_files_overlap_with_content_new_file_content_mismatch() {
 #[test]
 pub(crate) fn staged_files_overlap_with_content_no_overlap() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     let shadow_branch = "bitloops-shadow-432";
     create_shadow_branch_with_content(
@@ -383,7 +383,7 @@ pub(crate) fn staged_files_overlap_with_content_no_overlap() {
 #[test]
 pub(crate) fn staged_files_overlap_with_content_deleted_file() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
 
     fs::write(dir.path().join("to_delete.txt"), "original content").unwrap();
     git_ok(dir.path(), &["add", "to_delete.txt"]);
@@ -525,7 +525,7 @@ pub(crate) fn test_trim_line() {
 #[test]
 pub(crate) fn is_git_sequence_operation_no_operation() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     assert!(
         !is_git_sequence_operation(dir.path()),
         "clean repository should not be in sequence operation"
@@ -535,7 +535,7 @@ pub(crate) fn is_git_sequence_operation_no_operation() {
 #[test]
 pub(crate) fn is_git_sequence_operation_rebase_merge() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     fs::create_dir_all(dir.path().join(".git").join("rebase-merge")).unwrap();
     assert!(
         is_git_sequence_operation(dir.path()),
@@ -546,7 +546,7 @@ pub(crate) fn is_git_sequence_operation_rebase_merge() {
 #[test]
 pub(crate) fn is_git_sequence_operation_rebase_apply() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     fs::create_dir_all(dir.path().join(".git").join("rebase-apply")).unwrap();
     assert!(
         is_git_sequence_operation(dir.path()),
@@ -557,7 +557,7 @@ pub(crate) fn is_git_sequence_operation_rebase_apply() {
 #[test]
 pub(crate) fn is_git_sequence_operation_cherry_pick() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     fs::write(dir.path().join(".git").join("CHERRY_PICK_HEAD"), "abc123").unwrap();
     assert!(
         is_git_sequence_operation(dir.path()),
@@ -568,7 +568,7 @@ pub(crate) fn is_git_sequence_operation_cherry_pick() {
 #[test]
 pub(crate) fn is_git_sequence_operation_revert() {
     let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
+    setup_git_repo_with_checkpoint_backends(&dir);
     fs::write(dir.path().join(".git").join("REVERT_HEAD"), "abc123").unwrap();
     assert!(
         is_git_sequence_operation(dir.path()),

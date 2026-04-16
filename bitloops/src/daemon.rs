@@ -24,6 +24,8 @@ use tokio::sync::Mutex;
 use crate::api::{self, DashboardReadyHook, DashboardRuntimeOptions, DashboardServerConfig};
 use crate::devql_transport::{SlimCliRepoScope, attach_slim_cli_scope_headers};
 
+#[path = "daemon/auth.rs"]
+mod auth;
 #[path = "daemon/capability_events.rs"]
 mod capability_events;
 #[path = "daemon/config.rs"]
@@ -61,6 +63,12 @@ mod types;
 #[path = "daemon/tests.rs"]
 mod tests;
 
+pub(crate) use self::auth::PersistedWorkosAuthSessionState;
+pub(crate) use self::auth::{PLATFORM_GATEWAY_TOKEN_ENV, platform_gateway_bearer_token};
+pub use self::auth::{
+    WorkosDeviceLoginStart, WorkosLoginStart, WorkosSessionDetails, complete_workos_device_login,
+    logout_workos_session, prepare_workos_device_login, resolve_workos_session_status,
+};
 pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
@@ -79,9 +87,9 @@ pub use self::types::{
     EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
     EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, EnrichmentQueueMode,
     EnrichmentQueueState, EnrichmentQueueStatus, FailedEmbeddingJobSummary, IngestTaskSpec,
-    InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, RepoTaskControlState,
-    ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState, SupervisorServiceMetadata,
-    SyncTaskMode, SyncTaskSpec,
+    InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, PostCommitSnapshotSpec,
+    RepoTaskControlState, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
+    SupervisorServiceMetadata, SyncTaskMode, SyncTaskSpec,
 };
 pub(crate) use self::types::{
     ENRICHMENT_STATE_FILE_NAME, SUPERVISOR_RUNTIME_STATE_FILE_NAME, SYNC_STATE_FILE_NAME,
@@ -340,19 +348,36 @@ pub fn enqueue_sync_for_config(
     source: DevqlTaskSource,
     mode: crate::host::devql::SyncMode,
 ) -> Result<DevqlTaskEnqueueResult> {
+    enqueue_sync_for_config_with_snapshot(cfg, source, mode, None)
+}
+
+pub fn enqueue_sync_for_config_with_snapshot(
+    cfg: &crate::host::devql::DevqlConfig,
+    source: DevqlTaskSource,
+    mode: crate::host::devql::SyncMode,
+    post_commit_snapshot: Option<PostCommitSnapshotSpec>,
+) -> Result<DevqlTaskEnqueueResult> {
     enqueue_task_for_config(
         cfg,
         source,
-        DevqlTaskSpec::Sync(SyncTaskSpec {
-            mode: match mode {
-                crate::host::devql::SyncMode::Auto => SyncTaskMode::Auto,
-                crate::host::devql::SyncMode::Full => SyncTaskMode::Full,
-                crate::host::devql::SyncMode::Paths(paths) => SyncTaskMode::Paths { paths },
-                crate::host::devql::SyncMode::Repair => SyncTaskMode::Repair,
-                crate::host::devql::SyncMode::Validate => SyncTaskMode::Validate,
-            },
-        }),
+        DevqlTaskSpec::Sync(build_sync_task_spec(mode, post_commit_snapshot)),
     )
+}
+
+fn build_sync_task_spec(
+    mode: crate::host::devql::SyncMode,
+    post_commit_snapshot: Option<PostCommitSnapshotSpec>,
+) -> SyncTaskSpec {
+    SyncTaskSpec {
+        mode: match mode {
+            crate::host::devql::SyncMode::Auto => SyncTaskMode::Auto,
+            crate::host::devql::SyncMode::Full => SyncTaskMode::Full,
+            crate::host::devql::SyncMode::Paths(paths) => SyncTaskMode::Paths { paths },
+            crate::host::devql::SyncMode::Repair => SyncTaskMode::Repair,
+            crate::host::devql::SyncMode::Validate => SyncTaskMode::Validate,
+        },
+        post_commit_snapshot,
+    }
 }
 
 pub fn enqueue_ingest_for_config(

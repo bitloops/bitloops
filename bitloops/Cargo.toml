@@ -1,6 +1,6 @@
 [package]
 name = "bitloops"
-version = "0.0.14"
+version = "0.0.15"
 edition = "2024"
 autotests = false
 
@@ -190,6 +190,7 @@ dirs = "6"
 futures-util = "0.3"
 libc = "0.2"
 hnsw_rs = "0.3.4"
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "vendored"] }
 
 [dev-dependencies]
 cucumber = "0.22.1"

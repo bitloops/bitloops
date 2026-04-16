@@ -333,7 +333,7 @@ fn config_with_fake_runtime(world: &mut DevqlBddWorld, base: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "{base}\n\n[inference.runtimes.bitloops_embeddings]\ncommand = {command:?}\nargs = [{runtime_args}]\nstartup_timeout_secs = 5\nrequest_timeout_secs = 5\n"
+        "{base}\n\n[inference.runtimes.bitloops_local_embeddings]\ncommand = {command:?}\nargs = [{runtime_args}]\nstartup_timeout_secs = 5\nrequest_timeout_secs = 5\n"
     )
 }
 
@@ -527,7 +527,7 @@ summary_embeddings = "local"
 [inference.profiles.local]
 task = "embeddings"
 driver = "bitloops_embeddings_ipc"
-runtime = "bitloops_embeddings"
+runtime = "bitloops_local_embeddings"
 model = "bdd-test-model""#,
         );
         write_daemon_config(world, &config);
