@@ -23,6 +23,30 @@ pub enum Suite {
     Quickstart,
 }
 
+impl Suite {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Suite::Smoke => "smoke",
+            Suite::Devql => "devql-capabilities",
+            Suite::DevqlIngest => "devql-ingest",
+            Suite::DevqlSync => "devql-sync",
+            Suite::Onboarding => "onboarding",
+            Suite::Quickstart => "quickstart",
+        }
+    }
+
+    pub fn rerun_alias(&self) -> &'static str {
+        match self {
+            Suite::Smoke => "cargo qat-smoke",
+            Suite::Devql => "cargo qat-devql-capabilities",
+            Suite::DevqlIngest => "cargo qat-devql-ingest",
+            Suite::DevqlSync => "cargo qat-devql-sync",
+            Suite::Onboarding => "cargo qat-onboarding",
+            Suite::Quickstart => "cargo qat-quickstart",
+        }
+    }
+}
+
 const CUCUMBER_FILTER_TAGS_ENV: &str = "CUCUMBER_FILTER_TAGS";
 
 pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
@@ -30,6 +54,7 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     let runs_root = resolve_runs_root()?;
     let suite_root = create_suite_root(&runs_root)?;
     let feature_path = suite_feature_path(&suite);
+    let feature_path_display = feature_path.display().to_string();
 
     fs::write(
         runs_root.join(".last-run"),
@@ -41,10 +66,16 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     let execution_binary = resolve_execution_binary(&suite, &binary_path, &suite_binary_snapshot);
 
     println!(
-        "Running Bitloops QAT features from {}",
-        feature_path.display()
+        "[QAT suite start] {} | rerun: {} | features: {}",
+        suite.id(),
+        suite.rerun_alias(),
+        feature_path_display
     );
-    println!("Artifacts will be written to {}", suite_root.display());
+    println!(
+        "[QAT suite artifacts] {} | {}",
+        suite.id(),
+        suite_root.display()
+    );
 
     let config = Arc::new(QatRunConfig {
         binary_path: execution_binary,
@@ -81,25 +112,37 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
         parse_cucumber_tags_filter(env::var(CUCUMBER_FILTER_TAGS_ENV).ok().as_deref())?
     {
         cucumber
-            .filter_run(feature_path, move |feature, rule, scenario| {
+            .filter_run(feature_path.clone(), move |feature, rule, scenario| {
                 scenario_matches_tags_filter(feature, rule, scenario, &tags_filter)
             })
             .await
     } else {
-        cucumber.run(feature_path).await
+        cucumber.run(feature_path.clone()).await
     };
 
     if result.execution_has_failed() || result.parsing_errors() != 0 {
+        eprintln!(
+            "[QAT suite fail] {} | rerun: {} | artifacts: {}",
+            suite.id(),
+            suite.rerun_alias(),
+            suite_root.display()
+        );
         bail!(
-            "bitloops qat reported failures (parsing_errors={}, skipped_steps={})\nartifacts: {}",
+            "QAT suite `{}` failed\nrerun: {}\nfeatures: {}\nparsing_errors={}\nskipped_steps={}\nartifacts: {}",
+            suite.id(),
+            suite.rerun_alias(),
+            feature_path_display,
             result.parsing_errors(),
             result.skipped_steps(),
             suite_root.display()
         );
     }
 
-    println!("Bitloops QAT completed successfully.");
-    println!("Artifacts: {}", suite_root.display());
+    println!(
+        "[QAT suite pass] {} | artifacts: {}",
+        suite.id(),
+        suite_root.display()
+    );
     Ok(())
 }
 

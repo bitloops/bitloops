@@ -46,11 +46,27 @@ where
     );
 
     combine_bundle_results(vec![
-        BundleResult::from_result("onboarding", onboarding),
-        BundleResult::from_result("smoke", smoke),
-        BundleResult::from_result("devql-sync", devql_sync),
-        BundleResult::from_result("devql-capabilities", devql_capabilities),
-        BundleResult::from_result("devql-ingest", devql_ingest),
+        BundleResult::from_result(
+            Suite::Onboarding.id(),
+            Suite::Onboarding.rerun_alias(),
+            onboarding,
+        ),
+        BundleResult::from_result(Suite::Smoke.id(), Suite::Smoke.rerun_alias(), smoke),
+        BundleResult::from_result(
+            Suite::DevqlSync.id(),
+            Suite::DevqlSync.rerun_alias(),
+            devql_sync,
+        ),
+        BundleResult::from_result(
+            Suite::Devql.id(),
+            Suite::Devql.rerun_alias(),
+            devql_capabilities,
+        ),
+        BundleResult::from_result(
+            Suite::DevqlIngest.id(),
+            Suite::DevqlIngest.rerun_alias(),
+            devql_ingest,
+        ),
     ])
 }
 
@@ -83,10 +99,26 @@ where
     );
 
     combine_bundle_results(vec![
-        BundleResult::from_result("onboarding", onboarding),
-        BundleResult::from_result("smoke", smoke),
-        BundleResult::from_result("devql-sync", devql_sync),
-        BundleResult::from_result("devql-capabilities", devql_capabilities),
-        BundleResult::from_result("devql-ingest", devql_ingest),
+        BundleResult::from_result(
+            Suite::Onboarding.id(),
+            Suite::Onboarding.rerun_alias(),
+            onboarding,
+        ),
+        BundleResult::from_result(Suite::Smoke.id(), Suite::Smoke.rerun_alias(), smoke),
+        BundleResult::from_result(
+            Suite::DevqlSync.id(),
+            Suite::DevqlSync.rerun_alias(),
+            devql_sync,
+        ),
+        BundleResult::from_result(
+            Suite::Devql.id(),
+            Suite::Devql.rerun_alias(),
+            devql_capabilities,
+        ),
+        BundleResult::from_result(
+            Suite::DevqlIngest.id(),
+            Suite::DevqlIngest.rerun_alias(),
+            devql_ingest,
+        ),
     ])
 }
