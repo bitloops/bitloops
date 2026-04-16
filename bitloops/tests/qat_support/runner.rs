@@ -3,13 +3,14 @@ use super::steps;
 use super::world::{QatRunConfig, QatWorld};
 use anyhow::{Context, Result, bail};
 use cucumber::{
-    World as _, gherkin, gherkin::tagexpr::TagOperation, tag::Ext as _, writer::Stats as _,
+    World as _, event::ScenarioFinished, gherkin, gherkin::tagexpr::TagOperation, tag::Ext as _,
+    writer::Stats as _,
 };
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -47,6 +48,90 @@ impl Suite {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FailedScenario {
+    name: String,
+    location: Option<String>,
+}
+
+fn failed_scenario_from_event(
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+    event: &ScenarioFinished,
+) -> Option<FailedScenario> {
+    match event {
+        ScenarioFinished::BeforeHookFailed(_) | ScenarioFinished::StepFailed(_, _, _) => {
+            Some(FailedScenario {
+                name: scenario.name.clone(),
+                location: failed_scenario_location(feature, scenario),
+            })
+        }
+        ScenarioFinished::StepPassed | ScenarioFinished::StepSkipped => None,
+    }
+}
+
+fn failed_scenario_location(
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+) -> Option<String> {
+    feature.path.as_ref().map(|path| {
+        if scenario.position.line == 0 {
+            path.display().to_string()
+        } else {
+            format!("{}:{}", path.display(), scenario.position.line)
+        }
+    })
+}
+
+fn format_failed_scenarios(failed_scenarios: &[FailedScenario]) -> Option<String> {
+    let mut unique = Vec::new();
+    for scenario in failed_scenarios {
+        if !unique.contains(scenario) {
+            unique.push(scenario.clone());
+        }
+    }
+
+    if unique.is_empty() {
+        return None;
+    }
+
+    let mut summary = String::from("failed_scenarios:");
+    for scenario in unique {
+        summary.push_str("\n- ");
+        summary.push_str(&scenario.name);
+        if let Some(location) = scenario.location {
+            summary.push_str(" (");
+            summary.push_str(&location);
+            summary.push(')');
+        }
+    }
+    Some(summary)
+}
+
+fn build_suite_failure_message(
+    suite: &Suite,
+    feature_path: &Path,
+    parsing_errors: usize,
+    skipped_steps: usize,
+    suite_root: &Path,
+    failed_scenarios: &[FailedScenario],
+) -> String {
+    let mut message = format!(
+        "QAT suite `{}` failed\nrerun: {}\nfeatures: {}\nparsing_errors={}\nskipped_steps={}\nartifacts: {}",
+        suite.id(),
+        suite.rerun_alias(),
+        feature_path.display(),
+        parsing_errors,
+        skipped_steps,
+        suite_root.display()
+    );
+    if let Some(summary) = format_failed_scenarios(failed_scenarios) {
+        message.push('\n');
+        message.push_str(&summary);
+    }
+    message
+}
+
 const CUCUMBER_FILTER_TAGS_ENV: &str = "CUCUMBER_FILTER_TAGS";
 
 pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
@@ -81,8 +166,10 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
         binary_path: execution_binary,
         suite_root: suite_root.clone(),
     });
+    let failed_scenarios = Arc::new(Mutex::new(Vec::<FailedScenario>::new()));
 
     let before_config = Arc::clone(&config);
+    let failed_scenarios_for_after = Arc::clone(&failed_scenarios);
     let cucumber = QatWorld::cucumber()
         .steps(steps::collection())
         .max_concurrent_scenarios(max_concurrent)
@@ -93,8 +180,16 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
                 world.prepare(config, &scenario.name, slug);
             })
         })
-        .after(|_, _, scenario, _, world| {
+        .after(move |feature, _, scenario, event, world| {
+            let failed_scenarios = Arc::clone(&failed_scenarios_for_after);
             Box::pin(async move {
+                if let Some(failed_scenario) = failed_scenario_from_event(feature, scenario, &event)
+                {
+                    failed_scenarios
+                        .lock()
+                        .expect("failed cucumber scenario list lock")
+                        .push(failed_scenario);
+                }
                 if let Some(world) = world
                     && let Err(err) = stop_daemon_for_scenario(world)
                 {
@@ -120,6 +215,11 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
         cucumber.run(feature_path.clone()).await
     };
 
+    let failed_scenarios = failed_scenarios
+        .lock()
+        .expect("failed cucumber scenario list lock")
+        .clone();
+
     if result.execution_has_failed() || result.parsing_errors() != 0 {
         eprintln!(
             "[QAT suite fail] {} | rerun: {} | artifacts: {}",
@@ -128,13 +228,15 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
             suite_root.display()
         );
         bail!(
-            "QAT suite `{}` failed\nrerun: {}\nfeatures: {}\nparsing_errors={}\nskipped_steps={}\nartifacts: {}",
-            suite.id(),
-            suite.rerun_alias(),
-            feature_path_display,
-            result.parsing_errors(),
-            result.skipped_steps(),
-            suite_root.display()
+            "{}",
+            build_suite_failure_message(
+                &suite,
+                &feature_path,
+                result.parsing_errors(),
+                result.skipped_steps(),
+                &suite_root,
+                &failed_scenarios,
+            )
         );
     }
 

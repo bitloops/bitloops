@@ -1,4 +1,5 @@
 use super::*;
+use cucumber::event::{ScenarioFinished, StepError};
 use cucumber::gherkin::{Feature, LineCol, Rule, Scenario, Span};
 
 #[test]
@@ -113,4 +114,118 @@ fn scenario_matches_tags_filter_merges_feature_rule_and_scenario_tags() {
         &scenario,
         &filter
     ));
+}
+
+#[test]
+fn failed_scenario_from_event_captures_failed_scenario_location() {
+    let feature = Feature {
+        keyword: "Feature".to_string(),
+        name: "feature".to_string(),
+        description: None,
+        background: None,
+        scenarios: Vec::new(),
+        rules: Vec::new(),
+        tags: Vec::new(),
+        span: Span::default(),
+        position: LineCol::default(),
+        path: Some(PathBuf::from(
+            "qat/features/devql-sync/sync_workspace.feature",
+        )),
+    };
+    let scenario = Scenario {
+        keyword: "Scenario".to_string(),
+        name: "Sync removes artefacts for deleted source files".to_string(),
+        description: None,
+        steps: Vec::new(),
+        examples: Vec::new(),
+        tags: Vec::new(),
+        span: Span::default(),
+        position: LineCol { line: 94, col: 5 },
+    };
+
+    let failed = failed_scenario_from_event(
+        &feature,
+        &scenario,
+        &ScenarioFinished::StepFailed(None, None, StepError::NotFound),
+    )
+    .expect("failed scenario should be captured");
+
+    assert_eq!(
+        failed,
+        FailedScenario {
+            name: "Sync removes artefacts for deleted source files".to_string(),
+            location: Some("qat/features/devql-sync/sync_workspace.feature:94".to_string()),
+        }
+    );
+}
+
+#[test]
+fn failed_scenario_from_event_ignores_passing_scenarios() {
+    let feature = Feature {
+        keyword: "Feature".to_string(),
+        name: "feature".to_string(),
+        description: None,
+        background: None,
+        scenarios: Vec::new(),
+        rules: Vec::new(),
+        tags: Vec::new(),
+        span: Span::default(),
+        position: LineCol::default(),
+        path: Some(PathBuf::from(
+            "qat/features/devql-sync/sync_workspace.feature",
+        )),
+    };
+    let scenario = Scenario {
+        keyword: "Scenario".to_string(),
+        name: "Sync removes artefacts for deleted source files".to_string(),
+        description: None,
+        steps: Vec::new(),
+        examples: Vec::new(),
+        tags: Vec::new(),
+        span: Span::default(),
+        position: LineCol { line: 94, col: 5 },
+    };
+
+    assert!(
+        failed_scenario_from_event(&feature, &scenario, &ScenarioFinished::StepPassed).is_none(),
+        "passing scenarios should not appear in the failure summary"
+    );
+}
+
+#[test]
+fn build_suite_failure_message_lists_failed_scenarios() {
+    let message = build_suite_failure_message(
+        &Suite::DevqlSync,
+        Path::new("qat/features/devql-sync/sync_workspace.feature"),
+        0,
+        0,
+        Path::new("/tmp/qat-run"),
+        &[
+            FailedScenario {
+                name: "Sync removes artefacts for deleted source files".to_string(),
+                location: Some("qat/features/devql-sync/sync_workspace.feature:94".to_string()),
+            },
+            FailedScenario {
+                name: "Sync catches up after daemon downtime with accumulated changes".to_string(),
+                location: Some("qat/features/devql-sync/sync_workspace.feature:145".to_string()),
+            },
+        ],
+    );
+
+    assert!(
+        message.contains("failed_scenarios:"),
+        "suite failure message should include a failed_scenarios section: {message}"
+    );
+    assert!(
+        message.contains(
+            "- Sync removes artefacts for deleted source files (qat/features/devql-sync/sync_workspace.feature:94)"
+        ),
+        "suite failure message should list the first failed scenario: {message}"
+    );
+    assert!(
+        message.contains(
+            "- Sync catches up after daemon downtime with accumulated changes (qat/features/devql-sync/sync_workspace.feature:145)"
+        ),
+        "suite failure message should list the second failed scenario: {message}"
+    );
 }
