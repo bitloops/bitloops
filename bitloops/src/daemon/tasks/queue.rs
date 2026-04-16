@@ -222,7 +222,7 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
     }
 
     let mut selected = selected.into_values().collect::<Vec<_>>();
-    selected.sort_by(|(_, left), (_, right)| left.cmp(right));
+    selected.sort_by_key(|(_, key)| *key);
     selected.into_iter().map(|(index, _)| index).collect()
 }
 
@@ -311,7 +311,7 @@ pub(super) fn prune_terminal_tasks(tasks: &mut Vec<DevqlTaskRecord>) {
         })
         .cloned()
         .collect::<Vec<_>>();
-    terminal.sort_by(|left, right| right.updated_at_unix.cmp(&left.updated_at_unix));
+    terminal.sort_by_key(|task| std::cmp::Reverse(task.updated_at_unix));
     terminal.truncate(MAX_TERMINAL_TASKS);
 
     let terminal_ids = terminal
