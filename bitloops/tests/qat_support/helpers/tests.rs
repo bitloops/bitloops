@@ -420,6 +420,46 @@ fn build_commit_without_hooks_command_disables_post_commit_refresh() {
 }
 
 #[test]
+fn build_init_commit_without_post_commit_refresh_command_disables_post_commit_refresh() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let command = build_init_commit_without_post_commit_refresh_command(&world);
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let disable_refresh = command
+        .get_envs()
+        .find_map(|(key, value)| {
+            if key == OsStr::new("BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH") {
+                value.map(|v| v.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        .expect("init commit without post-commit refresh should disable post-commit refresh");
+
+    assert_eq!(args, vec!["commit", "-m", "chore: initial commit"]);
+    assert_eq!(disable_refresh, "1");
+}
+
+#[test]
 fn build_bitloops_command_applies_daemon_hardening_env() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");

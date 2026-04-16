@@ -84,7 +84,7 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I add a new source file in bitloops
-    And I run InitCommit for bitloops
+    And I run InitCommit without post-commit refresh for bitloops
     And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops

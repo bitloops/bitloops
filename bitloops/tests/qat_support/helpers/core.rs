@@ -316,6 +316,36 @@ pub fn run_init_commit_for_repo(world: &mut QatWorld, repo_name: &str) -> Result
     Ok(())
 }
 
+pub fn run_init_commit_without_post_commit_refresh_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    if repo_has_head(world)? {
+        append_world_log(
+            world,
+            "InitCommit without post-commit refresh skipped because HEAD already exists.\n",
+        )?;
+        return Ok(());
+    }
+
+    let readme_path = world.repo_dir().join("README.md");
+    fs::write(
+        &readme_path,
+        format!("# {repo_name}\n\nInitial repo for Bitloops foundation tests.\n"),
+    )
+    .with_context(|| format!("writing {}", readme_path.display()))?;
+    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
+    let output = run_command_capture(
+        world,
+        "git commit initial (no post-commit refresh)",
+        build_init_commit_without_post_commit_refresh_command(world),
+    )?;
+    ensure_success(&output, "git commit initial (no post-commit refresh)")?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
 pub fn run_init_commit_with_relative_day_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
@@ -2553,6 +2583,15 @@ fn build_commit_without_hooks_command(world: &QatWorld, allow_empty: bool) -> Co
         args.insert(1, "--allow-empty");
     }
     build_git_command(world, &args, &disable_refresh_env)
+}
+
+fn build_init_commit_without_post_commit_refresh_command(world: &QatWorld) -> Command {
+    let disable_refresh_env = post_commit_devql_refresh_disabled_env();
+    build_git_command(
+        world,
+        &["commit", "-m", "chore: initial commit"],
+        &disable_refresh_env,
+    )
 }
 
 fn write_and_commit_rust_file(

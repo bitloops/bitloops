@@ -28,6 +28,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run InitCommit without post-commit refresh for (\S+)$"),
+            step_fn(given_init_commit_without_post_commit_refresh),
+        )
+        .given(
+            None,
             regex(r"^I ran InitCommit yesterday for (\S+)$"),
             step_fn(given_init_commit_yesterday),
         )

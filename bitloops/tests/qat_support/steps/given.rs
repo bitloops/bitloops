@@ -44,6 +44,19 @@ pub(super) fn given_init_commit(
     })
 }
 
+pub(super) fn given_init_commit_without_post_commit_refresh(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run InitCommit without post-commit refresh",
+            helpers::run_init_commit_without_post_commit_refresh_for_repo(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_init_commit_yesterday(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
