@@ -3,13 +3,17 @@ use async_graphql::{ComplexObject, Context, ID, Result, SimpleObject};
 use crate::graphql::{
     DevqlGraphqlContext, ResolverScope, backend_error, bad_cursor_error, bad_user_input_error,
 };
-use crate::host::interactions::types::InteractionEventType;
 
-use super::interaction::{InteractionEventObject, InteractionSessionObject, InteractionTurnObject};
+use super::interaction::{
+    InteractionFilterInput, InteractionSearchInputObject, InteractionSessionSearchHitObject,
+    InteractionTurnSearchHitObject,
+};
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
-    ConnectionPagination, DateTimeScalar, FileContext, KnowledgeItemConnection, KnowledgeItemEdge,
+    ConnectionPagination, DateTimeScalar, FileContext, InteractionEventConnection,
+    InteractionEventEdge, InteractionSessionConnection, InteractionSessionEdge,
+    InteractionTurnConnection, InteractionTurnEdge, KnowledgeItemConnection, KnowledgeItemEdge,
     KnowledgeProvider, Project, TelemetryEventConnection, TelemetryEventEdge, TemporalScope,
     paginate_items,
 };
@@ -419,70 +423,126 @@ impl Repository {
     async fn interaction_sessions(
         &self,
         ctx: &Context<'_>,
-        agent: Option<String>,
+        filter: Option<InteractionFilterInput>,
         first: Option<i32>,
-    ) -> Result<Vec<InteractionSessionObject>> {
-        ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_interaction_sessions(&self.scope, agent.as_deref(), first)
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<InteractionSessionConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let sessions = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_sessions(&self.scope, filter.as_ref())
             .await
-            .map_err(|err| backend_error(format!("failed to query interaction sessions: {err:#}")))
+            .map_err(|err| {
+                backend_error(format!("failed to query interaction sessions: {err:#}"))
+            })?;
+        let page = paginate_items(&sessions, &pagination, |session| session.cursor())?;
+        Ok(InteractionSessionConnection::new(
+            page.items
+                .into_iter()
+                .map(InteractionSessionEdge::new)
+                .collect(),
+            page.page_info,
+            page.total_count,
+        ))
     }
 
     #[graphql(name = "interactionTurns")]
     async fn interaction_turns(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "sessionId")] session_id: String,
+        filter: Option<InteractionFilterInput>,
         first: Option<i32>,
-    ) -> Result<Vec<InteractionTurnObject>> {
-        let session_id = session_id.trim();
-        if session_id.is_empty() {
-            return Err(bad_user_input_error("sessionId must not be empty"));
-        }
-        ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_interaction_turns(&self.scope, session_id, first)
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<InteractionTurnConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let turns = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_turns(&self.scope, filter.as_ref())
             .await
-            .map_err(|err| {
-                backend_error(format!(
-                    "failed to query interaction turns for session `{session_id}`: {err:#}"
-                ))
-            })
+            .map_err(|err| backend_error(format!("failed to query interaction turns: {err:#}")))?;
+        let page = paginate_items(&turns, &pagination, |turn| turn.cursor())?;
+        Ok(InteractionTurnConnection::new(
+            page.items
+                .into_iter()
+                .map(InteractionTurnEdge::new)
+                .collect(),
+            page.page_info,
+            page.total_count,
+        ))
     }
 
     #[graphql(name = "interactionEvents")]
     async fn interaction_events(
         &self,
         ctx: &Context<'_>,
-        #[graphql(name = "sessionId")] session_id: Option<String>,
-        #[graphql(name = "turnId")] turn_id: Option<String>,
-        #[graphql(name = "type")] event_type: Option<String>,
-        since: Option<String>,
+        filter: Option<InteractionFilterInput>,
         first: Option<i32>,
-    ) -> Result<Vec<InteractionEventObject>> {
-        validate_interaction_event_type_filter(event_type.as_deref())?;
-        ctx.data_unchecked::<DevqlGraphqlContext>()
-            .list_interaction_events(
-                &self.scope,
-                session_id.as_deref(),
-                turn_id.as_deref(),
-                event_type.as_deref(),
-                since.as_deref(),
-                first,
-            )
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<InteractionEventConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let events = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_interaction_events(&self.scope, filter.as_ref())
             .await
-            .map_err(|err| backend_error(format!("failed to query interaction events: {err:#}")))
+            .map_err(|err| backend_error(format!("failed to query interaction events: {err:#}")))?;
+        let page = paginate_items(&events, &pagination, |event| event.cursor())?;
+        Ok(InteractionEventConnection::new(
+            page.items
+                .into_iter()
+                .map(InteractionEventEdge::new)
+                .collect(),
+            page.page_info,
+            page.total_count,
+        ))
     }
-}
 
-fn validate_interaction_event_type_filter(event_type: Option<&str>) -> Result<()> {
-    if let Some(value) = event_type.map(str::trim).filter(|value| !value.is_empty())
-        && InteractionEventType::parse(value).is_none()
-    {
-        return Err(bad_user_input_error(format!(
-            "invalid interaction event type `{value}`"
-        )));
+    #[graphql(name = "searchInteractionSessions")]
+    async fn search_interaction_sessions(
+        &self,
+        ctx: &Context<'_>,
+        input: InteractionSearchInputObject,
+    ) -> Result<Vec<InteractionSessionSearchHitObject>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .search_interaction_sessions(&self.scope, &input)
+            .await
+            .map_err(|err| backend_error(format!("failed to search interaction sessions: {err:#}")))
     }
-    Ok(())
+
+    #[graphql(name = "searchInteractionTurns")]
+    async fn search_interaction_turns(
+        &self,
+        ctx: &Context<'_>,
+        input: InteractionSearchInputObject,
+    ) -> Result<Vec<InteractionTurnSearchHitObject>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .search_interaction_turns(&self.scope, &input)
+            .await
+            .map_err(|err| backend_error(format!("failed to search interaction turns: {err:#}")))
+    }
 }
 
 #[cfg(test)]
@@ -490,19 +550,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn invalid_interaction_event_type_filter_is_bad_user_input() {
-        let err = validate_interaction_event_type_filter(Some("not_real")).unwrap_err();
-        assert!(
-            format!("{err:?}").contains("BAD_USER_INPUT"),
-            "expected BAD_USER_INPUT, got: {err:?}"
-        );
-        assert_eq!(err.message, "invalid interaction event type `not_real`");
-    }
-
-    #[test]
-    fn known_interaction_event_type_filter_is_allowed() {
-        validate_interaction_event_type_filter(Some("turn_end")).expect("valid filter");
-        validate_interaction_event_type_filter(Some("  ")).expect("blank filter");
-        validate_interaction_event_type_filter(None).expect("missing filter");
+    fn repository_new_builds_expected_id() {
+        let repository = Repository::new("demo", "local", "org");
+        assert_eq!(repository.id.as_str(), "repo://local/org/demo");
     }
 }

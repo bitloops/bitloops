@@ -3,8 +3,9 @@ use async_graphql::{Result, SimpleObject};
 use crate::graphql::{bad_cursor_error, bad_user_input_error};
 
 use super::{
-    Artefact, ChatEntry, Checkpoint, CloneSummary, Commit, DependencyEdge, KnowledgeItem,
-    KnowledgeRelation, KnowledgeVersion, SemanticClone, TelemetryEvent,
+    Artefact, ChatEntry, Checkpoint, CloneSummary, Commit, DependencyEdge, InteractionEventObject,
+    InteractionSessionObject, InteractionTurnObject, KnowledgeItem, KnowledgeRelation,
+    KnowledgeVersion, SemanticClone, TelemetryEvent,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -194,6 +195,100 @@ pub struct TelemetryEventConnection {
 
 impl TelemetryEventConnection {
     pub fn new(edges: Vec<TelemetryEventEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct InteractionSessionEdge {
+    pub node: InteractionSessionObject,
+    pub cursor: String,
+}
+
+impl InteractionSessionEdge {
+    pub fn new(node: InteractionSessionObject) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct InteractionSessionConnection {
+    pub edges: Vec<InteractionSessionEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl InteractionSessionConnection {
+    pub fn new(
+        edges: Vec<InteractionSessionEdge>,
+        page_info: PageInfo,
+        total_count: usize,
+    ) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct InteractionTurnEdge {
+    pub node: InteractionTurnObject,
+    pub cursor: String,
+}
+
+impl InteractionTurnEdge {
+    pub fn new(node: InteractionTurnObject) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct InteractionTurnConnection {
+    pub edges: Vec<InteractionTurnEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl InteractionTurnConnection {
+    pub fn new(edges: Vec<InteractionTurnEdge>, page_info: PageInfo, total_count: usize) -> Self {
+        Self {
+            edges,
+            page_info,
+            total_count: total_count.try_into().unwrap_or(i32::MAX),
+        }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct InteractionEventEdge {
+    pub node: InteractionEventObject,
+    pub cursor: String,
+}
+
+impl InteractionEventEdge {
+    pub fn new(node: InteractionEventObject) -> Self {
+        let cursor = node.cursor();
+        Self { node, cursor }
+    }
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct InteractionEventConnection {
+    pub edges: Vec<InteractionEventEdge>,
+    pub page_info: PageInfo,
+    pub total_count: i32,
+}
+
+impl InteractionEventConnection {
+    pub fn new(edges: Vec<InteractionEventEdge>, page_info: PageInfo, total_count: usize) -> Self {
         Self {
             edges,
             page_info,

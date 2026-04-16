@@ -84,6 +84,11 @@ pub(super) fn session_from_row(row: &Value) -> Result<InteractionSession> {
     Ok(InteractionSession {
         session_id: required_string(row, "session_id")?,
         repo_id: required_string(row, "repo_id")?,
+        branch: optional_string(row, "branch"),
+        actor_id: optional_string(row, "actor_id"),
+        actor_name: optional_string(row, "actor_name"),
+        actor_email: optional_string(row, "actor_email"),
+        actor_source: optional_string(row, "actor_source"),
         agent_type: optional_string(row, "agent_type"),
         model: optional_string(row, "model"),
         first_prompt: optional_string(row, "first_prompt"),
@@ -116,6 +121,11 @@ pub(super) fn turn_from_row(row: &Value) -> Result<InteractionTurn> {
         turn_id: required_string(row, "turn_id")?,
         session_id: required_string(row, "session_id")?,
         repo_id: required_string(row, "repo_id")?,
+        branch: optional_string(row, "branch"),
+        actor_id: optional_string(row, "actor_id"),
+        actor_name: optional_string(row, "actor_name"),
+        actor_email: optional_string(row, "actor_email"),
+        actor_source: optional_string(row, "actor_source"),
         turn_number: row
             .get("turn_number")
             .and_then(Value::as_u64)
@@ -176,11 +186,20 @@ pub(super) fn event_from_row(row: &Value) -> Result<InteractionEvent> {
         session_id: required_string(row, "session_id")?,
         turn_id: empty_to_none(optional_string(row, "turn_id")),
         repo_id: required_string(row, "repo_id")?,
+        branch: optional_string(row, "branch"),
+        actor_id: optional_string(row, "actor_id"),
+        actor_name: optional_string(row, "actor_name"),
+        actor_email: optional_string(row, "actor_email"),
+        actor_source: optional_string(row, "actor_source"),
         event_type: InteractionEventType::parse(&event_type_raw)
             .ok_or_else(|| anyhow!("unknown interaction event type `{event_type_raw}`"))?,
         event_time: required_string(row, "event_time")?,
         agent_type: optional_string(row, "agent_type"),
         model: optional_string(row, "model"),
+        tool_use_id: optional_string(row, "tool_use_id"),
+        tool_kind: optional_string(row, "tool_kind"),
+        task_description: optional_string(row, "task_description"),
+        subagent_id: optional_string(row, "subagent_id"),
         payload,
     })
 }

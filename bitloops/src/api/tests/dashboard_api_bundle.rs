@@ -109,6 +109,14 @@ async fn dashboard_sdl_route_returns_schema_text() {
     assert!(body.contains("health: HealthStatus!"));
     assert!(body.contains("repositories: [DashboardRepository!]!"));
     assert!(body.contains("kpis("));
+    assert!(body.contains("interactionKpis("));
+    assert!(body.contains("interactionSessions("));
+    assert!(body.contains("interactionSession("));
+    assert!(body.contains("interactionActors("));
+    assert!(body.contains("interactionCommitAuthors("));
+    assert!(body.contains("interactionAgents("));
+    assert!(body.contains("searchInteractionSessions("));
+    assert!(body.contains("searchInteractionTurns("));
     assert!(body.contains("fetchBundle: DashboardFetchBundleResult!"));
     assert!(!body.contains("postgres:"));
     assert!(!body.contains("clickhouse:"));
@@ -121,6 +129,188 @@ fn checked_in_dashboard_schema_file_matches_runtime_sdl() {
     let actual =
         fs::read_to_string(&schema_path).expect("read checked-in schema.dashboard.graphql");
     assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn dashboard_interaction_queries_return_session_detail_buckets_and_search_hits() {
+    let repo = seed_dashboard_repo();
+    let app = dashboard_app(
+        repo.path(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+
+    let (status, payload) = request_dashboard_graphql(
+        app,
+        r#"
+        {
+          interactionKpis(filter: { actorEmail: "alice@example.com" }) {
+            totalSessions
+            totalTurns
+            totalCheckpoints
+            totalToolUses
+            totalActors
+            totalAgents
+            inputTokens
+            outputTokens
+          }
+          interactionSessions(filter: { branch: "main", hasCheckpoint: true }) {
+            sessionId
+            branch
+            actor {
+              email
+            }
+            agentType
+            model
+            turnCount
+            checkpointCount
+            tokenUsage {
+              inputTokens
+              outputTokens
+            }
+            toolUses {
+              toolKind
+              taskDescription
+            }
+            latestCommitAuthor {
+              checkpointId
+              email
+            }
+          }
+          interactionActors {
+            actorEmail
+            sessionCount
+            turnCount
+          }
+          interactionCommitAuthors {
+            authorEmail
+            checkpointCount
+            sessionCount
+            turnCount
+          }
+          interactionAgents {
+            key
+            sessionCount
+            turnCount
+          }
+          interactionSession(sessionId: "session-1") {
+            summary {
+              sessionId
+              checkpointCount
+              toolUses {
+                toolKind
+              }
+            }
+            turns {
+              turnId
+              checkpointId
+              summary
+              toolUses {
+                toolKind
+              }
+            }
+            rawEvents {
+              eventType
+              toolKind
+              toolUseId
+              actor {
+                email
+              }
+            }
+          }
+          searchInteractionSessions(input: { query: "dashboard" }) {
+            score
+            matchedFields
+            session {
+              sessionId
+              checkpointCount
+            }
+          }
+          searchInteractionTurns(input: { query: "dashboard" }) {
+            score
+            matchedFields
+            turn {
+              turnId
+              sessionId
+            }
+            session {
+              sessionId
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        payload["data"]["interactionKpis"]["totalSessions"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["data"]["interactionKpis"]["totalTurns"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["data"]["interactionKpis"]["totalCheckpoints"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["data"]["interactionKpis"]["totalToolUses"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        payload["data"]["interactionSessions"][0]["sessionId"],
+        "session-1"
+    );
+    assert_eq!(
+        payload["data"]["interactionSessions"][0]["actor"]["email"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        payload["data"]["interactionSessions"][0]["toolUses"][0]["toolKind"],
+        "edit"
+    );
+    assert_eq!(
+        payload["data"]["interactionActors"][0]["actorEmail"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        payload["data"]["interactionCommitAuthors"][0]["authorEmail"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        payload["data"]["interactionAgents"][0]["key"],
+        "claude-code"
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["summary"]["sessionId"],
+        "session-1"
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["turns"][0]["turnId"],
+        "turn-1"
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["turns"][0]["checkpointId"],
+        "aabbccddeeff"
+    );
+    assert_eq!(
+        payload["data"]["interactionSession"]["rawEvents"][0]["actor"]["email"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        payload["data"]["searchInteractionSessions"][0]["session"]["sessionId"],
+        "session-1"
+    );
+    assert_eq!(
+        payload["data"]["searchInteractionTurns"][0]["turn"]["turnId"],
+        "turn-1"
+    );
+    assert_eq!(
+        payload["data"]["searchInteractionTurns"][0]["session"]["sessionId"],
+        "session-1"
+    );
 }
 
 #[tokio::test]

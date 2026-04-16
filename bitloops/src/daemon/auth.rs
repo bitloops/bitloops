@@ -11,6 +11,7 @@ mod types;
 #[path = "auth/tests.rs"]
 mod tests;
 
+pub(crate) use session::load_workos_session_details_cached;
 pub(crate) use session::platform_gateway_bearer_token;
 pub use session::{
     complete_workos_device_login, logout_workos_session, prepare_workos_device_login,

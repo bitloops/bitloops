@@ -86,6 +86,7 @@ pub fn handle_lifecycle_compaction(
                     agent_type: state.agent_type.clone(),
                     model,
                     payload: serde_json::Value::Object(Default::default()),
+                    ..Default::default()
                 })
             {
                 eprintln!("[bitloops] Warning: failed to spool compaction event: {err}");
@@ -112,6 +113,7 @@ pub fn handle_lifecycle_compaction(
             agent_type: String::new(),
             model: resolve_interaction_model(&event.model, &event.session_ref),
             payload: serde_json::Value::Object(Default::default()),
+            ..Default::default()
         })
     {
         eprintln!("[bitloops] Warning: failed to spool compaction event: {err}");
@@ -186,6 +188,7 @@ pub fn handle_lifecycle_session_end(
                 ended_at: Some(ended_at.clone()),
                 last_event_at: ended_at.clone(),
                 updated_at: ended_at.clone(),
+                ..Default::default()
             })
             .unwrap_or(InteractionSession {
                 session_id: session_id.clone(),
@@ -209,6 +212,7 @@ pub fn handle_lifecycle_session_end(
             agent_type: session.agent_type.clone(),
             model,
             payload: serde_json::Value::Object(Default::default()),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool session_end event: {err}");
         }
@@ -250,6 +254,7 @@ pub fn handle_lifecycle_subagent_start(
                     "subagent_id": event.subagent_id,
                     "tool_use_id": event.tool_use_id,
                 }),
+                ..Default::default()
             }) {
                 eprintln!("[bitloops] Warning: failed to spool subagent_start event: {err}");
             }
@@ -291,9 +296,17 @@ pub fn handle_lifecycle_subagent_end(
                 agent_type: String::new(),
                 model: resolve_interaction_model(&event.model, &event.session_ref),
                 payload: serde_json::json!({
-                    "subagent_id": event.subagent_id,
                     "tool_use_id": event.tool_use_id,
+                    "subagent_id": event.subagent_id,
+                    "subagent_type": subagent_type,
+                    "task_description": task_description,
+                    "subagent_transcript_path": subagent_transcript_path,
                 }),
+                tool_use_id: event.tool_use_id.clone(),
+                tool_kind: subagent_type.clone(),
+                task_description: task_description.clone(),
+                subagent_id: event.subagent_id.clone(),
+                ..Default::default()
             }) {
                 eprintln!("[bitloops] Warning: failed to spool subagent_end event: {err}");
             }

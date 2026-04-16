@@ -13,12 +13,20 @@ use super::dashboard_params::{parse_commit_checkpoint_filter, parse_dashboard_co
 use super::dashboard_service::{
     check_dashboard_bundle_version, fetch_dashboard_bundle, load_dashboard_agents,
     load_dashboard_branches, load_dashboard_checkpoint, load_dashboard_commits,
-    load_dashboard_health, load_dashboard_kpis, load_dashboard_repositories, load_dashboard_users,
+    load_dashboard_health, load_dashboard_interaction_actors, load_dashboard_interaction_agents,
+    load_dashboard_interaction_commit_authors, load_dashboard_interaction_kpis,
+    load_dashboard_interaction_session, load_dashboard_interaction_sessions, load_dashboard_kpis,
+    load_dashboard_repositories, load_dashboard_users, search_dashboard_interaction_sessions,
+    search_dashboard_interaction_turns,
 };
 use super::dashboard_types::{
     DashboardAgent, DashboardBranchSummary, DashboardBundleVersion, DashboardCheckpointDetail,
-    DashboardCommitRow, DashboardFetchBundleResult, DashboardKpis, DashboardRepository,
-    DashboardUser,
+    DashboardCommitRow, DashboardFetchBundleResult, DashboardInteractionActorBucket,
+    DashboardInteractionAgentBucket, DashboardInteractionCommitAuthorBucket,
+    DashboardInteractionFilterInput, DashboardInteractionKpis, DashboardInteractionSearchInput,
+    DashboardInteractionSession, DashboardInteractionSessionDetail,
+    DashboardInteractionSessionSearchHit, DashboardInteractionTurnSearchHit, DashboardKpis,
+    DashboardRepository, DashboardUser,
 };
 use crate::graphql::{
     GraphqlActionTelemetry, HealthStatus, MAX_DEVQL_QUERY_COMPLEXITY, MAX_DEVQL_QUERY_DEPTH,
@@ -155,6 +163,122 @@ impl DashboardQueryRoot {
         )
         .await
         .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "interactionKpis")]
+    async fn interaction_kpis(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+        filter: Option<DashboardInteractionFilterInput>,
+    ) -> Result<DashboardInteractionKpis> {
+        load_dashboard_interaction_kpis(ctx.data_unchecked::<DashboardState>(), repo_id, filter)
+            .await
+            .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "interactionSessions")]
+    async fn interaction_sessions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+        filter: Option<DashboardInteractionFilterInput>,
+        limit: Option<i32>,
+        offset: Option<i32>,
+    ) -> Result<Vec<DashboardInteractionSession>> {
+        load_dashboard_interaction_sessions(
+            ctx.data_unchecked::<DashboardState>(),
+            repo_id,
+            filter,
+            limit,
+            offset,
+        )
+        .await
+        .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "interactionSession")]
+    async fn interaction_session(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "sessionId")] session_id: String,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+    ) -> Result<DashboardInteractionSessionDetail> {
+        load_dashboard_interaction_session(
+            ctx.data_unchecked::<DashboardState>(),
+            repo_id,
+            session_id,
+        )
+        .await
+        .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "interactionActors")]
+    async fn interaction_actors(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+        filter: Option<DashboardInteractionFilterInput>,
+    ) -> Result<Vec<DashboardInteractionActorBucket>> {
+        load_dashboard_interaction_actors(ctx.data_unchecked::<DashboardState>(), repo_id, filter)
+            .await
+            .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "interactionCommitAuthors")]
+    async fn interaction_commit_authors(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+        filter: Option<DashboardInteractionFilterInput>,
+    ) -> Result<Vec<DashboardInteractionCommitAuthorBucket>> {
+        load_dashboard_interaction_commit_authors(
+            ctx.data_unchecked::<DashboardState>(),
+            repo_id,
+            filter,
+        )
+        .await
+        .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "interactionAgents")]
+    async fn interaction_agents(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+        filter: Option<DashboardInteractionFilterInput>,
+    ) -> Result<Vec<DashboardInteractionAgentBucket>> {
+        load_dashboard_interaction_agents(ctx.data_unchecked::<DashboardState>(), repo_id, filter)
+            .await
+            .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "searchInteractionSessions")]
+    async fn search_interaction_sessions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+        input: DashboardInteractionSearchInput,
+    ) -> Result<Vec<DashboardInteractionSessionSearchHit>> {
+        search_dashboard_interaction_sessions(
+            ctx.data_unchecked::<DashboardState>(),
+            repo_id,
+            input,
+        )
+        .await
+        .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "searchInteractionTurns")]
+    async fn search_interaction_turns(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: Option<String>,
+        input: DashboardInteractionSearchInput,
+    ) -> Result<Vec<DashboardInteractionTurnSearchHit>> {
+        search_dashboard_interaction_turns(ctx.data_unchecked::<DashboardState>(), repo_id, input)
+            .await
+            .map_err(map_dashboard_error)
     }
 
     #[graphql(name = "checkBundleVersion")]

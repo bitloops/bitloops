@@ -44,16 +44,22 @@ impl DuckDbInteractionRepository {
         ensure_current_schema(&conn)?;
         let sql = format!(
             "INSERT OR REPLACE INTO interaction_sessions (
-                session_id, repo_id, agent_type, model, first_prompt,
-                transcript_path, worktree_path, worktree_id, started_at,
-                ended_at, last_event_at, updated_at
+                session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
+                agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
+                started_at, ended_at, last_event_at, updated_at
              ) VALUES (
-                '{session_id}', '{repo_id}', '{agent_type}', '{model}', '{first_prompt}',
+                '{session_id}', '{repo_id}', '{branch}', '{actor_id}', '{actor_name}',
+                '{actor_email}', '{actor_source}', '{agent_type}', '{model}', '{first_prompt}',
                 '{transcript_path}', '{worktree_path}', '{worktree_id}', '{started_at}',
                 {ended_at}, '{last_event_at}', '{updated_at}'
              )",
             session_id = esc_pg(&session.session_id),
             repo_id = esc_pg(&self.repo_id),
+            branch = esc_pg(&session.branch),
+            actor_id = esc_pg(&session.actor_id),
+            actor_name = esc_pg(&session.actor_name),
+            actor_email = esc_pg(&session.actor_email),
+            actor_source = esc_pg(&session.actor_source),
             agent_type = esc_pg(&session.agent_type),
             model = esc_pg(&session.model),
             first_prompt = esc_pg(&session.first_prompt),
@@ -79,14 +85,15 @@ impl DuckDbInteractionRepository {
             serde_json::to_string(&turn.files_modified).context("serialising files_modified")?;
         let sql = format!(
             "INSERT OR REPLACE INTO interaction_turns (
-                turn_id, session_id, repo_id, turn_number, prompt,
-                agent_type, model, started_at, ended_at, has_token_usage,
-                input_tokens, cache_creation_tokens, cache_read_tokens,
-                output_tokens, api_call_count, summary, prompt_count,
-                transcript_offset_start, transcript_offset_end, transcript_fragment,
-                files_modified, checkpoint_id, updated_at
+                turn_id, session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                actor_source, turn_number, prompt, agent_type, model, started_at, ended_at,
+                has_token_usage, input_tokens, cache_creation_tokens, cache_read_tokens,
+                output_tokens, api_call_count, summary, prompt_count, transcript_offset_start,
+                transcript_offset_end, transcript_fragment, files_modified, checkpoint_id,
+                updated_at
              ) VALUES (
-                '{turn_id}', '{session_id}', '{repo_id}', {turn_number}, '{prompt}',
+                '{turn_id}', '{session_id}', '{repo_id}', '{branch}', '{actor_id}',
+                '{actor_name}', '{actor_email}', '{actor_source}', {turn_number}, '{prompt}',
                 '{agent_type}', '{model}', '{started_at}', {ended_at}, {has_token_usage},
                 {input_tokens}, {cache_creation_tokens}, {cache_read_tokens},
                 {output_tokens}, {api_call_count}, '{summary}', {prompt_count},
@@ -96,6 +103,11 @@ impl DuckDbInteractionRepository {
             turn_id = esc_pg(&turn.turn_id),
             session_id = esc_pg(&turn.session_id),
             repo_id = esc_pg(&self.repo_id),
+            branch = esc_pg(&turn.branch),
+            actor_id = esc_pg(&turn.actor_id),
+            actor_name = esc_pg(&turn.actor_name),
+            actor_email = esc_pg(&turn.actor_email),
+            actor_source = esc_pg(&turn.actor_source),
             turn_number = turn.turn_number,
             prompt = esc_pg(&turn.prompt),
             agent_type = esc_pg(&turn.agent_type),
@@ -129,20 +141,32 @@ impl DuckDbInteractionRepository {
         let payload = serde_json::to_string(&event.payload).context("serialising event payload")?;
         let sql = format!(
             "INSERT OR IGNORE INTO interaction_events (
-                event_id, event_time, repo_id, session_id, turn_id,
-                event_type, agent_type, model, payload
+                event_id, event_time, repo_id, session_id, turn_id, branch, actor_id,
+                actor_name, actor_email, actor_source, event_type, agent_type, model,
+                tool_use_id, tool_kind, task_description, subagent_id, payload
              ) VALUES (
                 '{event_id}', '{event_time}', '{repo_id}', '{session_id}', '{turn_id}',
-                '{event_type}', '{agent_type}', '{model}', '{payload}'
+                '{branch}', '{actor_id}', '{actor_name}', '{actor_email}', '{actor_source}',
+                '{event_type}', '{agent_type}', '{model}', '{tool_use_id}', '{tool_kind}',
+                '{task_description}', '{subagent_id}', '{payload}'
              )",
             event_id = esc_pg(&event.event_id),
             event_time = esc_pg(&event.event_time),
             repo_id = esc_pg(&self.repo_id),
             session_id = esc_pg(&event.session_id),
             turn_id = esc_pg(event.turn_id.as_deref().unwrap_or("")),
+            branch = esc_pg(&event.branch),
+            actor_id = esc_pg(&event.actor_id),
+            actor_name = esc_pg(&event.actor_name),
+            actor_email = esc_pg(&event.actor_email),
+            actor_source = esc_pg(&event.actor_source),
             event_type = esc_pg(event.event_type.as_str()),
             agent_type = esc_pg(&event.agent_type),
             model = esc_pg(&event.model),
+            tool_use_id = esc_pg(&event.tool_use_id),
+            tool_kind = esc_pg(&event.tool_kind),
+            task_description = esc_pg(&event.task_description),
+            subagent_id = esc_pg(&event.subagent_id),
             payload = esc_pg(&payload),
         );
         conn.execute_batch(&sql)
@@ -187,9 +211,9 @@ impl DuckDbInteractionRepository {
         let conn = self.open_or_create()?;
         ensure_current_schema(&conn)?;
         let mut sql = format!(
-            "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                    transcript_path, worktree_path, worktree_id, started_at,
-                    ended_at, last_event_at, updated_at
+            "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
+                    agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
+                    started_at, ended_at, last_event_at, updated_at
              FROM interaction_sessions
              WHERE repo_id = '{repo_id}'",
             repo_id = esc_pg(&self.repo_id),
@@ -212,9 +236,9 @@ impl DuckDbInteractionRepository {
         let conn = self.open_or_create()?;
         ensure_current_schema(&conn)?;
         let sql = format!(
-            "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                    transcript_path, worktree_path, worktree_id, started_at,
-                    ended_at, last_event_at, updated_at
+            "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
+                    agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
+                    started_at, ended_at, last_event_at, updated_at
              FROM interaction_sessions
              WHERE repo_id = '{repo_id}' AND session_id = '{session_id}'
              LIMIT 1",
@@ -235,9 +259,9 @@ impl DuckDbInteractionRepository {
         let conn = self.open_or_create()?;
         ensure_current_schema(&conn)?;
         let sql = format!(
-            "SELECT turn_id, session_id, repo_id, turn_number, prompt,
-                    agent_type, model, started_at, ended_at, has_token_usage,
-                    input_tokens, cache_creation_tokens, cache_read_tokens,
+            "SELECT turn_id, session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                    actor_source, turn_number, prompt, agent_type, model, started_at, ended_at,
+                    has_token_usage, input_tokens, cache_creation_tokens, cache_read_tokens,
                     output_tokens, api_call_count, summary, prompt_count,
                     transcript_offset_start, transcript_offset_end, transcript_fragment,
                     files_modified, checkpoint_id, updated_at
@@ -259,9 +283,9 @@ impl DuckDbInteractionRepository {
         let conn = self.open_or_create()?;
         ensure_current_schema(&conn)?;
         let sql = format!(
-            "SELECT turn_id, session_id, repo_id, turn_number, prompt,
-                    agent_type, model, started_at, ended_at, has_token_usage,
-                    input_tokens, cache_creation_tokens, cache_read_tokens,
+            "SELECT turn_id, session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                    actor_source, turn_number, prompt, agent_type, model, started_at, ended_at,
+                    has_token_usage, input_tokens, cache_creation_tokens, cache_read_tokens,
                     output_tokens, api_call_count, summary, prompt_count,
                     transcript_offset_start, transcript_offset_end, transcript_fragment,
                     files_modified, checkpoint_id, updated_at
@@ -284,8 +308,9 @@ impl DuckDbInteractionRepository {
         let conn = self.open_or_create()?;
         ensure_current_schema(&conn)?;
         let mut sql = format!(
-            "SELECT event_id, session_id, turn_id, repo_id, event_type,
-                    event_time, agent_type, model, payload
+            "SELECT event_id, session_id, turn_id, repo_id, branch, actor_id, actor_name,
+                    actor_email, actor_source, event_type, event_time, agent_type, model,
+                    tool_use_id, tool_kind, task_description, subagent_id, payload
              FROM interaction_events
              WHERE repo_id = '{repo_id}'",
             repo_id = esc_pg(&self.repo_id),
@@ -305,6 +330,11 @@ const INTERACTION_SESSIONS_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
     session_id VARCHAR,
     repo_id VARCHAR,
+    branch VARCHAR,
+    actor_id VARCHAR,
+    actor_name VARCHAR,
+    actor_email VARCHAR,
+    actor_source VARCHAR,
     agent_type VARCHAR,
     model VARCHAR,
     first_prompt VARCHAR,
@@ -324,6 +354,11 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     turn_id VARCHAR,
     session_id VARCHAR,
     repo_id VARCHAR,
+    branch VARCHAR,
+    actor_id VARCHAR,
+    actor_name VARCHAR,
+    actor_email VARCHAR,
+    actor_source VARCHAR,
     turn_number INTEGER,
     prompt VARCHAR,
     agent_type VARCHAR,
@@ -355,9 +390,18 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     repo_id VARCHAR,
     session_id VARCHAR,
     turn_id VARCHAR,
+    branch VARCHAR,
+    actor_id VARCHAR,
+    actor_name VARCHAR,
+    actor_email VARCHAR,
+    actor_source VARCHAR,
     event_type VARCHAR,
     agent_type VARCHAR,
     model VARCHAR,
+    tool_use_id VARCHAR,
+    tool_kind VARCHAR,
+    task_description VARCHAR,
+    subagent_id VARCHAR,
     payload VARCHAR
 )
 "#;
@@ -392,10 +436,128 @@ fn ensure_current_schema(conn: &duckdb::Connection) -> Result<()> {
         .context("creating DuckDB interaction_turns table")?;
     conn.execute_batch(INTERACTION_EVENTS_TABLE_SQL)
         .context("creating DuckDB interaction_events table")?;
+    ensure_promoted_columns(conn)?;
     ensure_turn_columns(conn)?;
     ensure_repo_scoped_primary_key(conn, "interaction_sessions", &["repo_id", "session_id"])?;
     ensure_repo_scoped_primary_key(conn, "interaction_turns", &["repo_id", "turn_id"])?;
     ensure_interaction_indexes(conn)?;
+    Ok(())
+}
+
+fn ensure_promoted_columns(conn: &duckdb::Connection) -> Result<()> {
+    let missing = [
+        (
+            "interaction_sessions",
+            "branch",
+            "ALTER TABLE interaction_sessions ADD COLUMN branch VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_sessions",
+            "actor_id",
+            "ALTER TABLE interaction_sessions ADD COLUMN actor_id VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_sessions",
+            "actor_name",
+            "ALTER TABLE interaction_sessions ADD COLUMN actor_name VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_sessions",
+            "actor_email",
+            "ALTER TABLE interaction_sessions ADD COLUMN actor_email VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_sessions",
+            "actor_source",
+            "ALTER TABLE interaction_sessions ADD COLUMN actor_source VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_turns",
+            "branch",
+            "ALTER TABLE interaction_turns ADD COLUMN branch VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_turns",
+            "actor_id",
+            "ALTER TABLE interaction_turns ADD COLUMN actor_id VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_turns",
+            "actor_name",
+            "ALTER TABLE interaction_turns ADD COLUMN actor_name VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_turns",
+            "actor_email",
+            "ALTER TABLE interaction_turns ADD COLUMN actor_email VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_turns",
+            "actor_source",
+            "ALTER TABLE interaction_turns ADD COLUMN actor_source VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "branch",
+            "ALTER TABLE interaction_events ADD COLUMN branch VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "actor_id",
+            "ALTER TABLE interaction_events ADD COLUMN actor_id VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "actor_name",
+            "ALTER TABLE interaction_events ADD COLUMN actor_name VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "actor_email",
+            "ALTER TABLE interaction_events ADD COLUMN actor_email VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "actor_source",
+            "ALTER TABLE interaction_events ADD COLUMN actor_source VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "tool_use_id",
+            "ALTER TABLE interaction_events ADD COLUMN tool_use_id VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "tool_kind",
+            "ALTER TABLE interaction_events ADD COLUMN tool_kind VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "task_description",
+            "ALTER TABLE interaction_events ADD COLUMN task_description VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "subagent_id",
+            "ALTER TABLE interaction_events ADD COLUMN subagent_id VARCHAR DEFAULT ''",
+        ),
+    ];
+    for (table, column, alter_sql) in missing {
+        let exists: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM information_schema.columns \
+                     WHERE table_name = '{table}' AND column_name = '{column}'"
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("checking DuckDB interaction column {table}.{column}"))?;
+        if exists == 0 {
+            conn.execute_batch(alter_sql)
+                .with_context(|| format!("adding DuckDB interaction column {table}.{column}"))?;
+        }
+    }
     Ok(())
 }
 
@@ -607,71 +769,81 @@ fn append_event_filter_sql(sql: &mut String, filter: &InteractionEventFilter) {
 }
 
 fn map_session_row(row: &duckdb::Row<'_>) -> duckdb::Result<InteractionSession> {
-    let ended_at: Option<String> = row.get(9)?;
+    let ended_at: Option<String> = row.get(14)?;
     Ok(InteractionSession {
         session_id: row.get(0)?,
         repo_id: row.get(1)?,
-        agent_type: row.get(2)?,
-        model: row.get(3)?,
-        first_prompt: row.get(4)?,
-        transcript_path: row.get(5)?,
-        worktree_path: row.get(6)?,
-        worktree_id: row.get(7)?,
-        started_at: row.get(8)?,
+        branch: row.get(2)?,
+        actor_id: row.get(3)?,
+        actor_name: row.get(4)?,
+        actor_email: row.get(5)?,
+        actor_source: row.get(6)?,
+        agent_type: row.get(7)?,
+        model: row.get(8)?,
+        first_prompt: row.get(9)?,
+        transcript_path: row.get(10)?,
+        worktree_path: row.get(11)?,
+        worktree_id: row.get(12)?,
+        started_at: row.get(13)?,
         ended_at: ended_at.filter(|value| !value.trim().is_empty()),
-        last_event_at: row.get(10)?,
-        updated_at: row.get(11)?,
+        last_event_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 
 fn map_turn_row(row: &duckdb::Row<'_>) -> duckdb::Result<InteractionTurn> {
-    let files_modified_raw: String = row.get(20)?;
+    let files_modified_raw: String = row.get(25)?;
     let files_modified =
         serde_json::from_str::<Vec<String>>(&files_modified_raw).map_err(|err| {
-            duckdb::Error::FromSqlConversionFailure(20, duckdb::types::Type::Text, Box::new(err))
+            duckdb::Error::FromSqlConversionFailure(25, duckdb::types::Type::Text, Box::new(err))
         })?;
-    let checkpoint_id: String = row.get(21)?;
-    let has_token_usage: i32 = row.get(9)?;
+    let checkpoint_id: String = row.get(26)?;
+    let has_token_usage: i32 = row.get(14)?;
     Ok(InteractionTurn {
         turn_id: row.get(0)?,
         session_id: row.get(1)?,
         repo_id: row.get(2)?,
-        turn_number: u32::try_from(row.get::<_, i32>(3)?).unwrap_or_default(),
-        prompt: row.get(4)?,
-        agent_type: row.get(5)?,
-        model: row.get(6)?,
-        started_at: row.get(7)?,
+        branch: row.get(3)?,
+        actor_id: row.get(4)?,
+        actor_name: row.get(5)?,
+        actor_email: row.get(6)?,
+        actor_source: row.get(7)?,
+        turn_number: u32::try_from(row.get::<_, i32>(8)?).unwrap_or_default(),
+        prompt: row.get(9)?,
+        agent_type: row.get(10)?,
+        model: row.get(11)?,
+        started_at: row.get(12)?,
         ended_at: row
-            .get::<_, Option<String>>(8)?
+            .get::<_, Option<String>>(13)?
             .filter(|value| !value.trim().is_empty()),
         token_usage: (has_token_usage == 1).then(|| TokenUsageMetadata {
-            input_tokens: row.get::<_, i64>(10).unwrap_or_default().max(0) as u64,
-            cache_creation_tokens: row.get::<_, i64>(11).unwrap_or_default().max(0) as u64,
-            cache_read_tokens: row.get::<_, i64>(12).unwrap_or_default().max(0) as u64,
-            output_tokens: row.get::<_, i64>(13).unwrap_or_default().max(0) as u64,
-            api_call_count: row.get::<_, i64>(14).unwrap_or_default().max(0) as u64,
+            input_tokens: row.get::<_, i64>(15).unwrap_or_default().max(0) as u64,
+            cache_creation_tokens: row.get::<_, i64>(16).unwrap_or_default().max(0) as u64,
+            cache_read_tokens: row.get::<_, i64>(17).unwrap_or_default().max(0) as u64,
+            output_tokens: row.get::<_, i64>(18).unwrap_or_default().max(0) as u64,
+            api_call_count: row.get::<_, i64>(19).unwrap_or_default().max(0) as u64,
             subagent_tokens: None,
         }),
-        summary: row.get(15)?,
-        prompt_count: u32::try_from(row.get::<_, i32>(16)?).unwrap_or_default(),
-        transcript_offset_start: row.get(17)?,
-        transcript_offset_end: row.get(18)?,
-        transcript_fragment: row.get(19)?,
+        summary: row.get(20)?,
+        prompt_count: u32::try_from(row.get::<_, i32>(21)?).unwrap_or_default(),
+        transcript_offset_start: row.get(22)?,
+        transcript_offset_end: row.get(23)?,
+        transcript_fragment: row.get(24)?,
         files_modified,
         checkpoint_id: (!checkpoint_id.trim().is_empty()).then_some(checkpoint_id),
-        updated_at: row.get(22)?,
+        updated_at: row.get(27)?,
     })
 }
 
 fn map_event_row(row: &duckdb::Row<'_>) -> duckdb::Result<InteractionEvent> {
-    let event_type_raw: String = row.get(4)?;
-    let payload_raw: String = row.get(8)?;
+    let event_type_raw: String = row.get(9)?;
+    let payload_raw: String = row.get(17)?;
     let payload = serde_json::from_str::<Value>(&payload_raw).map_err(|err| {
-        duckdb::Error::FromSqlConversionFailure(8, duckdb::types::Type::Text, Box::new(err))
+        duckdb::Error::FromSqlConversionFailure(17, duckdb::types::Type::Text, Box::new(err))
     })?;
     let event_type = InteractionEventType::parse(&event_type_raw).ok_or_else(|| {
         duckdb::Error::FromSqlConversionFailure(
-            4,
+            9,
             duckdb::types::Type::Text,
             Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -685,10 +857,19 @@ fn map_event_row(row: &duckdb::Row<'_>) -> duckdb::Result<InteractionEvent> {
         session_id: row.get(1)?,
         turn_id: (!turn_id.trim().is_empty()).then_some(turn_id),
         repo_id: row.get(3)?,
+        branch: row.get(4)?,
+        actor_id: row.get(5)?,
+        actor_name: row.get(6)?,
+        actor_email: row.get(7)?,
+        actor_source: row.get(8)?,
         event_type,
-        event_time: row.get(5)?,
-        agent_type: row.get(6)?,
-        model: row.get(7)?,
+        event_time: row.get(10)?,
+        agent_type: row.get(11)?,
+        model: row.get(12)?,
+        tool_use_id: row.get(13)?,
+        tool_kind: row.get(14)?,
+        task_description: row.get(15)?,
+        subagent_id: row.get(16)?,
         payload,
     })
 }
@@ -754,6 +935,7 @@ mod tests {
             agent_type: "codex".into(),
             model: "gpt-5.4".into(),
             payload: serde_json::json!({"token_usage": {"input_tokens": 11}}),
+            ..Default::default()
         }
     }
 
