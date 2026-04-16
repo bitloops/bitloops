@@ -395,15 +395,13 @@ fn extract_assistant_entries(line: &Line) -> Vec<Entry> {
     let mut entries = Vec::new();
     for block in msg.content {
         match block.r#type.as_str() {
-            CONTENT_TYPE_TEXT => {
-                if !block.text.is_empty() {
-                    entries.push(Entry {
-                        entry_type: EntryType::Assistant,
-                        content: block.text,
-                        tool_name: String::new(),
-                        tool_detail: String::new(),
-                    });
-                }
+            CONTENT_TYPE_TEXT if !block.text.is_empty() => {
+                entries.push(Entry {
+                    entry_type: EntryType::Assistant,
+                    content: block.text,
+                    tool_name: String::new(),
+                    tool_detail: String::new(),
+                });
             }
             CONTENT_TYPE_TOOL_USE => {
                 let input = serde_json::from_value::<ToolInput>(block.input)
@@ -464,15 +462,13 @@ fn build_condensed_transcript_from_gemini(content: &[u8]) -> Result<Vec<Entry>> 
 
     for message in transcript.messages {
         match message.message_type.as_str() {
-            "user" => {
-                if !message.content.is_empty() {
-                    entries.push(Entry {
-                        entry_type: EntryType::User,
-                        content: message.content,
-                        tool_name: String::new(),
-                        tool_detail: String::new(),
-                    });
-                }
+            "user" if !message.content.is_empty() => {
+                entries.push(Entry {
+                    entry_type: EntryType::User,
+                    content: message.content,
+                    tool_name: String::new(),
+                    tool_detail: String::new(),
+                });
             }
             "gemini" => {
                 if !message.content.is_empty() {
@@ -513,15 +509,13 @@ fn build_condensed_transcript_from_opencode(content: &[u8]) -> Vec<Entry> {
         };
 
         match message.role.as_str() {
-            "user" => {
-                if !message.content.is_empty() {
-                    entries.push(Entry {
-                        entry_type: EntryType::User,
-                        content: message.content,
-                        tool_name: String::new(),
-                        tool_detail: String::new(),
-                    });
-                }
+            "user" if !message.content.is_empty() => {
+                entries.push(Entry {
+                    entry_type: EntryType::User,
+                    content: message.content,
+                    tool_name: String::new(),
+                    tool_detail: String::new(),
+                });
             }
             "assistant" => {
                 if !message.content.is_empty() {

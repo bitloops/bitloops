@@ -198,28 +198,26 @@ fn collect_go_nodes_recursive(
                 );
             }
         }
-        "const_spec" | "var_spec" => {
-            if is_module_scope(node) {
-                let language_kind = LanguageKind::go(
-                    GoKind::from_tree_sitter_kind(node.kind()).expect("validated go value kind"),
-                );
-                let mut cursor = node.walk();
-                for name_node in node.children_by_field_name("name", &mut cursor) {
-                    if let Some(name) = trimmed_node_text(name_node, content) {
-                        push_go_artefact(
-                            out,
-                            seen,
-                            node,
-                            content,
-                            GoArtefactDescriptor {
-                                language_kind,
-                                name: name.clone(),
-                                symbol_fqn: format!("{path}::{name}"),
-                                parent_symbol_fqn: None,
-                                modifiers: Vec::new(),
-                            },
-                        );
-                    }
+        "const_spec" | "var_spec" if is_module_scope(node) => {
+            let language_kind = LanguageKind::go(
+                GoKind::from_tree_sitter_kind(node.kind()).expect("validated go value kind"),
+            );
+            let mut cursor = node.walk();
+            for name_node in node.children_by_field_name("name", &mut cursor) {
+                if let Some(name) = trimmed_node_text(name_node, content) {
+                    push_go_artefact(
+                        out,
+                        seen,
+                        node,
+                        content,
+                        GoArtefactDescriptor {
+                            language_kind,
+                            name: name.clone(),
+                            symbol_fqn: format!("{path}::{name}"),
+                            parent_symbol_fqn: None,
+                            modifiers: Vec::new(),
+                        },
+                    );
                 }
             }
         }

@@ -67,7 +67,7 @@ pub fn get_associated_commits(
         }
     }
 
-    collected.sort_by(|a, b| b.0.cmp(&a.0));
+    collected.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     Ok(collected.into_iter().map(|(_, commit)| commit).collect())
 }
 
@@ -120,7 +120,7 @@ pub fn get_associated_commits_from_db(
         }
     }
 
-    collected.sort_by(|a, b| b.0.cmp(&a.0));
+    collected.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     Ok(collected.into_iter().map(|(_, commit)| commit).collect())
 }
 
