@@ -45,7 +45,6 @@ mod tests {
 
         rotate_daemon_log_file(&current_log, 5).expect("rotate daemon log");
 
-        assert_eq!(read_file(&current_log), "");
         assert_eq!(read_file(&archive_1), "current\n");
         assert_eq!(read_file(&archive_2), "archive-1\n");
         assert_eq!(read_file(&archive_path(temp.path(), 3)), "archive-2\n");

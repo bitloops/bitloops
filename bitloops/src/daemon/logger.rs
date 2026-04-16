@@ -350,6 +350,7 @@ mod tests {
         assert_eq!(entry["module"], "bitloops::daemon::tests");
         assert_eq!(entry["file"], "src/daemon/logger.rs");
         assert_eq!(entry["line"], 42);
+        assert!(entry["time"].is_string());
         assert_eq!(entry["process"], "daemon");
         assert_eq!(entry["mode"], "service");
         assert_eq!(entry["config_path"], "/tmp/bitloops/config.toml");
