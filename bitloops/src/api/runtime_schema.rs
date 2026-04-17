@@ -501,8 +501,8 @@ pub(crate) struct RuntimeInitSessionObject {
     pub follow_up_sync_task_id: Option<String>,
     #[graphql(name = "embeddingsBootstrapTaskId")]
     pub embeddings_bootstrap_task_id: Option<String>,
-    #[graphql(name = "summaryBootstrapRunId")]
-    pub summary_bootstrap_run_id: Option<ID>,
+    #[graphql(name = "summaryBootstrapTaskId")]
+    pub summary_bootstrap_task_id: Option<ID>,
     #[graphql(name = "terminalError")]
     pub terminal_error: Option<String>,
     #[graphql(name = "topPipelineLane")]
@@ -765,7 +765,7 @@ impl From<InitRuntimeSessionView> for RuntimeInitSessionObject {
             ingest_task_id: value.ingest_task_id,
             follow_up_sync_task_id: value.follow_up_sync_task_id,
             embeddings_bootstrap_task_id: value.embeddings_bootstrap_task_id,
-            summary_bootstrap_run_id: value.summary_bootstrap_run_id.map(ID::from),
+            summary_bootstrap_task_id: value.summary_bootstrap_task_id.map(ID::from),
             terminal_error: value.terminal_error,
             top_pipeline_lane: value.top_pipeline_lane.into(),
             embeddings_lane: value.embeddings_lane.into(),

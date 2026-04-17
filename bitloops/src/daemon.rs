@@ -76,9 +76,9 @@ pub use self::auth::{
 pub(crate) use self::capability_events::SyncGenerationInput;
 pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub use self::enrichment::EnrichmentControlResult;
+pub(crate) use self::enrichment::EnrichmentControlState as PersistedEnrichmentQueueState;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
-pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
 pub use self::init_runtime::{InitRuntimeCoordinator, InitSessionHandle, RuntimeEventRecord};
 pub(crate) use self::init_runtime::{
     InitRuntimeLaneProgressView, InitRuntimeLaneQueueView, InitRuntimeLaneView,

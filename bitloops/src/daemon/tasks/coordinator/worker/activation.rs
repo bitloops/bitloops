@@ -176,6 +176,7 @@ impl DevqlTaskCoordinator {
             DevqlTaskKind::Sync => self.run_sync_task(task).await,
             DevqlTaskKind::Ingest => self.run_ingest_task(task).await,
             DevqlTaskKind::EmbeddingsBootstrap => self.run_embeddings_bootstrap_task(task).await,
+            DevqlTaskKind::SummaryBootstrap => self.run_summary_bootstrap_task(task).await,
         }
     }
 }

@@ -11,6 +11,7 @@ pub enum TaskKind {
     Sync,
     Ingest,
     EmbeddingsBootstrap,
+    SummaryBootstrap,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -40,6 +41,15 @@ pub struct IngestTaskSpecObject {
 pub struct EmbeddingsBootstrapTaskSpecObject {
     pub config_path: String,
     pub profile_name: String,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "SummaryBootstrapTaskSpec")]
+pub struct SummaryBootstrapTaskSpecObject {
+    pub action: String,
+    pub message: Option<String>,
+    pub model_name: Option<String>,
+    pub gateway_url_override: Option<String>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -83,6 +93,25 @@ pub struct EmbeddingsBootstrapResultObject {
 }
 
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "SummaryBootstrapProgress")]
+pub struct SummaryBootstrapProgressObject {
+    pub phase: String,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: i64,
+    pub bytes_total: Option<i64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "SummaryBootstrapResult")]
+pub struct SummaryBootstrapResultObject {
+    pub outcome_kind: String,
+    pub model_name: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
 #[graphql(name = "Task")]
 pub struct TaskObject {
     pub task_id: String,
@@ -102,12 +131,15 @@ pub struct TaskObject {
     pub sync_spec: Option<SyncTaskSpecObject>,
     pub ingest_spec: Option<IngestTaskSpecObject>,
     pub embeddings_bootstrap_spec: Option<EmbeddingsBootstrapTaskSpecObject>,
+    pub summary_bootstrap_spec: Option<SummaryBootstrapTaskSpecObject>,
     pub sync_progress: Option<SyncTaskProgressObject>,
     pub ingest_progress: Option<super::IngestionProgressEvent>,
     pub embeddings_bootstrap_progress: Option<EmbeddingsBootstrapProgressObject>,
+    pub summary_bootstrap_progress: Option<SummaryBootstrapProgressObject>,
     pub sync_result: Option<SyncResult>,
     pub ingest_result: Option<IngestResult>,
     pub embeddings_bootstrap_result: Option<EmbeddingsBootstrapResultObject>,
+    pub summary_bootstrap_result: Option<SummaryBootstrapResultObject>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -186,6 +218,15 @@ impl From<DevqlTaskRecord> for TaskObject {
                     config_path: spec.config_path.display().to_string(),
                     profile_name: spec.profile_name.clone(),
                 });
+        let summary_bootstrap_spec =
+            value
+                .summary_bootstrap_spec()
+                .map(|spec| SummaryBootstrapTaskSpecObject {
+                    action: summary_bootstrap_action_name(spec.action).to_string(),
+                    message: spec.message.clone(),
+                    model_name: spec.model_name.clone(),
+                    gateway_url_override: spec.gateway_url_override.clone(),
+                });
         let sync_progress = value
             .sync_progress()
             .map(|progress| SyncTaskProgressObject {
@@ -213,6 +254,17 @@ impl From<DevqlTaskRecord> for TaskObject {
                 message: progress.message.clone(),
             }
         });
+        let summary_bootstrap_progress =
+            value
+                .summary_bootstrap_progress()
+                .map(|progress| SummaryBootstrapProgressObject {
+                    phase: progress.phase.to_string(),
+                    asset_name: progress.asset_name.clone(),
+                    bytes_downloaded: progress.bytes_downloaded as i64,
+                    bytes_total: progress.bytes_total.map(|value| value as i64),
+                    version: progress.version.clone(),
+                    message: progress.message.clone(),
+                });
         let sync_result = value.sync_result().cloned().map(Into::into);
         let ingest_result = value.ingest_result().cloned().map(Into::into);
         let embeddings_bootstrap_result =
@@ -233,6 +285,14 @@ impl From<DevqlTaskRecord> for TaskObject {
                     freshly_installed: result.freshly_installed,
                     message: result.message.clone(),
                 });
+        let summary_bootstrap_result =
+            value
+                .summary_bootstrap_result()
+                .map(|result| SummaryBootstrapResultObject {
+                    outcome_kind: result.outcome_kind.clone(),
+                    model_name: result.model_name.clone(),
+                    message: result.message.clone(),
+                });
 
         Self {
             task_id: value.task_id,
@@ -243,6 +303,7 @@ impl From<DevqlTaskRecord> for TaskObject {
                 crate::daemon::DevqlTaskKind::Sync => TaskKind::Sync,
                 crate::daemon::DevqlTaskKind::Ingest => TaskKind::Ingest,
                 crate::daemon::DevqlTaskKind::EmbeddingsBootstrap => TaskKind::EmbeddingsBootstrap,
+                crate::daemon::DevqlTaskKind::SummaryBootstrap => TaskKind::SummaryBootstrap,
             },
             source: value.source.to_string(),
             status: match value.status {
@@ -262,12 +323,15 @@ impl From<DevqlTaskRecord> for TaskObject {
             sync_spec,
             ingest_spec,
             embeddings_bootstrap_spec,
+            summary_bootstrap_spec,
             sync_progress,
             ingest_progress,
             embeddings_bootstrap_progress,
+            summary_bootstrap_progress,
             sync_result,
             ingest_result,
             embeddings_bootstrap_result,
+            summary_bootstrap_result,
         }
     }
 }
@@ -284,6 +348,7 @@ impl From<TaskKind> for crate::daemon::DevqlTaskKind {
             TaskKind::Sync => Self::Sync,
             TaskKind::Ingest => Self::Ingest,
             TaskKind::EmbeddingsBootstrap => Self::EmbeddingsBootstrap,
+            TaskKind::SummaryBootstrap => Self::SummaryBootstrap,
         }
     }
 }
@@ -307,12 +372,24 @@ impl From<DevqlTaskKindCounts> for TaskKindCountsObject {
                 crate::daemon::DevqlTaskKind::Sync => TaskKind::Sync,
                 crate::daemon::DevqlTaskKind::Ingest => TaskKind::Ingest,
                 crate::daemon::DevqlTaskKind::EmbeddingsBootstrap => TaskKind::EmbeddingsBootstrap,
+                crate::daemon::DevqlTaskKind::SummaryBootstrap => TaskKind::SummaryBootstrap,
             },
             queued_tasks: to_graphql_count(value.queued_tasks),
             running_tasks: to_graphql_count(value.running_tasks),
             failed_tasks: to_graphql_count(value.failed_tasks),
             completed_recent_tasks: to_graphql_count(value.completed_recent_tasks),
         }
+    }
+}
+
+fn summary_bootstrap_action_name(action: crate::daemon::SummaryBootstrapAction) -> &'static str {
+    match action {
+        crate::daemon::SummaryBootstrapAction::InstallRuntimeOnly => "install_runtime_only",
+        crate::daemon::SummaryBootstrapAction::InstallRuntimeOnlyPendingProbe => {
+            "install_runtime_only_pending_probe"
+        }
+        crate::daemon::SummaryBootstrapAction::ConfigureLocal => "configure_local",
+        crate::daemon::SummaryBootstrapAction::ConfigureCloud => "configure_cloud",
     }
 }
 

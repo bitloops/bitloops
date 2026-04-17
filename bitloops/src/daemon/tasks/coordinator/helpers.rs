@@ -49,6 +49,7 @@ pub(super) fn task_kind_from_spec(spec: &DevqlTaskSpec) -> DevqlTaskKind {
         DevqlTaskSpec::Sync(_) => DevqlTaskKind::Sync,
         DevqlTaskSpec::Ingest(_) => DevqlTaskKind::Ingest,
         DevqlTaskSpec::EmbeddingsBootstrap(_) => DevqlTaskKind::EmbeddingsBootstrap,
+        DevqlTaskSpec::SummaryBootstrap(_) => DevqlTaskKind::SummaryBootstrap,
     }
 }
 
@@ -63,6 +64,7 @@ pub(super) fn progress_action(update: &DevqlTaskProgress) -> String {
             IngestionProgressPhase::Failed => "failed".to_string(),
         },
         DevqlTaskProgress::EmbeddingsBootstrap(update) => update.phase.as_str().to_string(),
+        DevqlTaskProgress::SummaryBootstrap(update) => update.phase.to_string(),
     }
 }
 
@@ -134,6 +136,8 @@ pub(super) fn should_persist_embeddings_bootstrap_progress(
 pub(super) fn sync_spec_from_task_spec_mut(spec: &mut DevqlTaskSpec) -> Option<&mut SyncTaskSpec> {
     match spec {
         DevqlTaskSpec::Sync(spec) => Some(spec),
-        DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+        DevqlTaskSpec::Ingest(_)
+        | DevqlTaskSpec::EmbeddingsBootstrap(_)
+        | DevqlTaskSpec::SummaryBootstrap(_) => None,
     }
 }

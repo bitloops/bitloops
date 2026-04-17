@@ -195,20 +195,61 @@ pub(crate) fn format_live_task_status_line(
             }
             line
         }
+        ("summary_bootstrap", "queued") => format!(
+            "Summary bootstrap queued for {} · action={} · {} ahead",
+            task.repo_name,
+            task.summary_bootstrap_spec
+                .as_ref()
+                .map(|spec| spec.action.as_str())
+                .unwrap_or("configure_cloud"),
+            task.tasks_ahead.unwrap_or(0),
+        ),
+        ("summary_bootstrap", "running") => {
+            let progress = task.summary_bootstrap_progress.as_ref();
+            let mut line = format!(
+                "Bootstrapping summaries for {} · {}",
+                task.repo_name,
+                progress
+                    .map(|progress| humanise_summary_bootstrap_phase(progress.phase.as_str()))
+                    .unwrap_or("working"),
+            );
+            if let Some(progress) = progress {
+                if let (downloaded, Some(total)) = (progress.bytes_downloaded, progress.bytes_total)
+                    && total > 0
+                {
+                    line.push_str(&format!(" · {downloaded}/{total} bytes"));
+                }
+                if let Some(asset_name) = progress.asset_name.as_ref() {
+                    line.push_str(&format!(" · {asset_name}"));
+                } else if let Some(message) = progress.message.as_ref() {
+                    line.push_str(&format!(" · {message}"));
+                }
+            }
+            line
+        }
         ("sync", "completed") => format!("✓ Sync complete for {}", task.repo_name),
         ("ingest", "completed") => format!("✓ Ingest complete for {}", task.repo_name),
         ("embeddings_bootstrap", "completed") => {
             format!("✓ Embeddings bootstrap complete for {}", task.repo_name)
+        }
+        ("summary_bootstrap", "completed") => {
+            format!("✓ Summary bootstrap complete for {}", task.repo_name)
         }
         ("sync", "failed") => format!("✖ Sync failed for {}", task.repo_name),
         ("ingest", "failed") => format!("✖ Ingest failed for {}", task.repo_name),
         ("embeddings_bootstrap", "failed") => {
             format!("✖ Embeddings bootstrap failed for {}", task.repo_name)
         }
+        ("summary_bootstrap", "failed") => {
+            format!("✖ Summary bootstrap failed for {}", task.repo_name)
+        }
         ("sync", "cancelled") => format!("✖ Sync cancelled for {}", task.repo_name),
         ("ingest", "cancelled") => format!("✖ Ingest cancelled for {}", task.repo_name),
         ("embeddings_bootstrap", "cancelled") => {
             format!("✖ Embeddings bootstrap cancelled for {}", task.repo_name)
+        }
+        ("summary_bootstrap", "cancelled") => {
+            format!("✖ Summary bootstrap cancelled for {}", task.repo_name)
         }
         _ => format!(
             "{} {} for {}",
@@ -298,6 +339,21 @@ fn progress_ratio(task: &TaskGraphqlRecord) -> Option<(f64, i32, i32)> {
                         .or_else(|| (status_key(task) == "completed").then_some((1.0, 1, 1)))
                 })
         }
+        "summary_bootstrap" => task
+            .summary_bootstrap_progress
+            .as_ref()
+            .and_then(|progress| {
+                progress
+                    .bytes_total
+                    .and_then(|total| {
+                        (total > 0).then_some((
+                            (progress.bytes_downloaded as f64 / total as f64).clamp(0.0, 1.0),
+                            progress.bytes_downloaded as i32,
+                            total as i32,
+                        ))
+                    })
+                    .or_else(|| (status_key(task) == "completed").then_some((1.0, 1, 1)))
+            }),
         _ => None,
     }
 }
@@ -373,6 +429,7 @@ fn humanise_kind(task: &TaskGraphqlRecord) -> &'static str {
         "sync" => "Sync",
         "ingest" => "Ingest",
         "embeddings_bootstrap" => "Embeddings bootstrap",
+        "summary_bootstrap" => "Summary bootstrap",
         _ => "Task",
     }
 }
@@ -393,6 +450,11 @@ fn humanise_phase(task: &TaskGraphqlRecord) -> &'static str {
             .embeddings_bootstrap_progress
             .as_ref()
             .map(|progress| humanise_bootstrap_phase(progress.phase.as_str()))
+            .unwrap_or("working"),
+        "summary_bootstrap" => task
+            .summary_bootstrap_progress
+            .as_ref()
+            .map(|progress| humanise_summary_bootstrap_phase(progress.phase.as_str()))
             .unwrap_or("working"),
         _ => "working",
     }
@@ -436,6 +498,20 @@ fn humanise_bootstrap_phase(phase: &str) -> &'static str {
         "extracting_runtime" => "extracting runtime",
         "rewriting_runtime" => "updating runtime config",
         "warming_profile" => "warming profile cache",
+        "complete" => "complete",
+        "failed" => "failed",
+        _ => "working",
+    }
+}
+
+fn humanise_summary_bootstrap_phase(phase: &str) -> &'static str {
+    match phase {
+        "queued" => "waiting in queue",
+        "resolving_release" => "resolving release",
+        "downloading_runtime" => "downloading runtime",
+        "extracting_runtime" => "extracting runtime",
+        "rewriting_runtime" => "updating runtime config",
+        "writing_profile" => "writing profile",
         "complete" => "complete",
         "failed" => "failed",
         _ => "working",

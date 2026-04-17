@@ -37,6 +37,7 @@ fn sync_task(
         },
         "ingestSpec": null,
         "embeddingsBootstrapSpec": null,
+        "summaryBootstrapSpec": null,
         "syncProgress": {
             "phase": "extracting_paths",
             "currentPath": "src/lib.rs",
@@ -53,9 +54,11 @@ fn sync_task(
         },
         "ingestProgress": null,
         "embeddingsBootstrapProgress": null,
+        "summaryBootstrapProgress": null,
         "syncResult": null,
         "ingestResult": null,
-        "embeddingsBootstrapResult": null
+        "embeddingsBootstrapResult": null,
+        "summaryBootstrapResult": null
     }))
     .expect("build sync task")
 }
@@ -84,6 +87,7 @@ fn ingest_task(
             "backfill": 50
         },
         "embeddingsBootstrapSpec": null,
+        "summaryBootstrapSpec": null,
         "syncProgress": null,
         "ingestProgress": {
             "phase": "extracting",
@@ -96,9 +100,11 @@ fn ingest_task(
             "artefactsUpserted": 0
         },
         "embeddingsBootstrapProgress": null,
+        "summaryBootstrapProgress": null,
         "syncResult": null,
         "ingestResult": null,
-        "embeddingsBootstrapResult": null
+        "embeddingsBootstrapResult": null,
+        "summaryBootstrapResult": null
     }))
     .expect("build ingest task")
 }

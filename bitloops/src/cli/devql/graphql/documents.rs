@@ -40,6 +40,12 @@ pub(super) const ENQUEUE_TASK_MUTATION: &str = r#"
             configPath
             profileName
           }
+          summaryBootstrapSpec {
+            action
+            message
+            modelName
+            gatewayUrlOverride
+          }
           syncProgress {
             phase
             currentPath
@@ -65,6 +71,14 @@ pub(super) const ENQUEUE_TASK_MUTATION: &str = r#"
             artefactsUpserted
           }
           embeddingsBootstrapProgress {
+            phase
+            assetName
+            bytesDownloaded
+            bytesTotal
+            version
+            message
+          }
+          summaryBootstrapProgress {
             phase
             assetName
             bytesDownloaded
@@ -132,6 +146,11 @@ pub(super) const ENQUEUE_TASK_MUTATION: &str = r#"
             freshlyInstalled
             message
           }
+          summaryBootstrapResult {
+            outcomeKind
+            modelName
+            message
+          }
         }
       }
     }
@@ -165,6 +184,12 @@ pub(super) const TASK_QUERY: &str = r#"
           configPath
           profileName
         }
+        summaryBootstrapSpec {
+          action
+          message
+          modelName
+          gatewayUrlOverride
+        }
         syncProgress {
           phase
           currentPath
@@ -190,6 +215,14 @@ pub(super) const TASK_QUERY: &str = r#"
           artefactsUpserted
         }
         embeddingsBootstrapProgress {
+          phase
+          assetName
+          bytesDownloaded
+          bytesTotal
+          version
+          message
+        }
+        summaryBootstrapProgress {
           phase
           assetName
           bytesDownloaded
@@ -255,6 +288,11 @@ pub(super) const TASK_QUERY: &str = r#"
           runtimeName
           modelName
           freshlyInstalled
+          message
+        }
+        summaryBootstrapResult {
+          outcomeKind
+          modelName
           message
         }
       }
@@ -474,6 +512,12 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
               configPath
               profileName
             }
+            summaryBootstrapSpec {
+              action
+              message
+              modelName
+              gatewayUrlOverride
+            }
             syncProgress {
               phase
               currentPath
@@ -499,6 +543,14 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
               artefactsUpserted
             }
             embeddingsBootstrapProgress {
+              phase
+              assetName
+              bytesDownloaded
+              bytesTotal
+              version
+              message
+            }
+            summaryBootstrapProgress {
               phase
               assetName
               bytesDownloaded
@@ -624,7 +676,7 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
           ingestTaskId
           followUpSyncTaskId
           embeddingsBootstrapTaskId
-          summaryBootstrapRunId
+          summaryBootstrapTaskId
           terminalError
           topPipelineLane {
             status
@@ -808,15 +860,20 @@ pub(super) const CANCEL_TASK_MUTATION: &str = r#"
           eventsInserted
           artefactsUpserted
         }
-        embeddingsBootstrapResult {
-          version
-          binaryPath
-          cacheDir
-          runtimeName
-          modelName
-          freshlyInstalled
-          message
-        }
+            embeddingsBootstrapResult {
+              version
+              binaryPath
+              cacheDir
+              runtimeName
+              modelName
+              freshlyInstalled
+              message
+            }
+            summaryBootstrapResult {
+              outcomeKind
+              modelName
+              message
+            }
       }
     }
 "#;

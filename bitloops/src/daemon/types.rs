@@ -449,6 +449,7 @@ pub enum SummaryBootstrapPhase {
     RewritingRuntime,
     WritingProfile,
     Complete,
+    Failed,
 }
 
 impl fmt::Display for SummaryBootstrapPhase {
@@ -461,6 +462,7 @@ impl fmt::Display for SummaryBootstrapPhase {
             Self::RewritingRuntime => write!(f, "rewriting_runtime"),
             Self::WritingProfile => write!(f, "writing_profile"),
             Self::Complete => write!(f, "complete"),
+            Self::Failed => write!(f, "failed"),
         }
     }
 }
@@ -601,9 +603,20 @@ pub struct InitSessionRecord {
     pub initial_sync_task_id: Option<String>,
     pub ingest_task_id: Option<String>,
     pub embeddings_bootstrap_task_id: Option<String>,
-    pub summary_bootstrap_run_id: Option<String>,
+    #[serde(alias = "summary_bootstrap_run_id", default)]
+    pub summary_bootstrap_task_id: Option<String>,
     pub follow_up_sync_required: bool,
     pub follow_up_sync_task_id: Option<String>,
+    #[serde(default)]
+    pub next_completion_seq: u64,
+    #[serde(default)]
+    pub initial_sync_completion_seq: Option<u64>,
+    #[serde(default)]
+    pub embeddings_bootstrap_completion_seq: Option<u64>,
+    #[serde(default)]
+    pub summary_bootstrap_completion_seq: Option<u64>,
+    #[serde(default)]
+    pub follow_up_sync_completion_seq: Option<u64>,
     pub submitted_at_unix: u64,
     pub updated_at_unix: u64,
     pub terminal_status: Option<InitSessionTerminalStatus>,
@@ -721,6 +734,7 @@ pub enum DevqlTaskKind {
     Sync,
     Ingest,
     EmbeddingsBootstrap,
+    SummaryBootstrap,
 }
 
 impl fmt::Display for DevqlTaskKind {
@@ -729,6 +743,7 @@ impl fmt::Display for DevqlTaskKind {
             Self::Sync => write!(f, "sync"),
             Self::Ingest => write!(f, "ingest"),
             Self::EmbeddingsBootstrap => write!(f, "embeddings_bootstrap"),
+            Self::SummaryBootstrap => write!(f, "summary_bootstrap"),
         }
     }
 }
@@ -833,6 +848,7 @@ pub enum DevqlTaskSpec {
     Sync(SyncTaskSpec),
     Ingest(IngestTaskSpec),
     EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec),
+    SummaryBootstrap(SummaryBootstrapRequest),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -905,6 +921,7 @@ pub enum DevqlTaskProgress {
     Sync(crate::host::devql::SyncProgressUpdate),
     Ingest(crate::host::devql::IngestionProgressUpdate),
     EmbeddingsBootstrap(EmbeddingsBootstrapProgress),
+    SummaryBootstrap(SummaryBootstrapProgress),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -913,6 +930,7 @@ pub enum DevqlTaskResult {
     Sync(Box<crate::host::devql::SyncSummary>),
     Ingest(crate::host::devql::IngestionCounters),
     EmbeddingsBootstrap(EmbeddingsBootstrapResult),
+    SummaryBootstrap(SummaryBootstrapResultRecord),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -953,7 +971,9 @@ impl DevqlTaskRecord {
     pub fn sync_spec(&self) -> Option<&SyncTaskSpec> {
         match &self.spec {
             DevqlTaskSpec::Sync(spec) => Some(spec),
-            DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+            DevqlTaskSpec::Ingest(_)
+            | DevqlTaskSpec::EmbeddingsBootstrap(_)
+            | DevqlTaskSpec::SummaryBootstrap(_) => None,
         }
     }
 
@@ -961,27 +981,42 @@ impl DevqlTaskRecord {
         match &self.spec {
             DevqlTaskSpec::Sync(_) => None,
             DevqlTaskSpec::Ingest(spec) => Some(spec),
-            DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+            DevqlTaskSpec::EmbeddingsBootstrap(_) | DevqlTaskSpec::SummaryBootstrap(_) => None,
         }
     }
 
     pub fn embeddings_bootstrap_spec(&self) -> Option<&EmbeddingsBootstrapTaskSpec> {
         match &self.spec {
             DevqlTaskSpec::EmbeddingsBootstrap(spec) => Some(spec),
-            DevqlTaskSpec::Sync(_) | DevqlTaskSpec::Ingest(_) => None,
+            DevqlTaskSpec::Sync(_)
+            | DevqlTaskSpec::Ingest(_)
+            | DevqlTaskSpec::SummaryBootstrap(_) => None,
+        }
+    }
+
+    pub fn summary_bootstrap_spec(&self) -> Option<&SummaryBootstrapRequest> {
+        match &self.spec {
+            DevqlTaskSpec::SummaryBootstrap(spec) => Some(spec),
+            DevqlTaskSpec::Sync(_)
+            | DevqlTaskSpec::Ingest(_)
+            | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
         }
     }
 
     pub fn sync_progress(&self) -> Option<&crate::host::devql::SyncProgressUpdate> {
         match &self.progress {
             DevqlTaskProgress::Sync(progress) => Some(progress),
-            DevqlTaskProgress::Ingest(_) | DevqlTaskProgress::EmbeddingsBootstrap(_) => None,
+            DevqlTaskProgress::Ingest(_)
+            | DevqlTaskProgress::EmbeddingsBootstrap(_)
+            | DevqlTaskProgress::SummaryBootstrap(_) => None,
         }
     }
 
     pub fn ingest_progress(&self) -> Option<&crate::host::devql::IngestionProgressUpdate> {
         match &self.progress {
-            DevqlTaskProgress::Sync(_) | DevqlTaskProgress::EmbeddingsBootstrap(_) => None,
+            DevqlTaskProgress::Sync(_)
+            | DevqlTaskProgress::EmbeddingsBootstrap(_)
+            | DevqlTaskProgress::SummaryBootstrap(_) => None,
             DevqlTaskProgress::Ingest(progress) => Some(progress),
         }
     }
@@ -989,7 +1024,18 @@ impl DevqlTaskRecord {
     pub fn embeddings_bootstrap_progress(&self) -> Option<&EmbeddingsBootstrapProgress> {
         match &self.progress {
             DevqlTaskProgress::EmbeddingsBootstrap(progress) => Some(progress),
-            DevqlTaskProgress::Sync(_) | DevqlTaskProgress::Ingest(_) => None,
+            DevqlTaskProgress::Sync(_)
+            | DevqlTaskProgress::Ingest(_)
+            | DevqlTaskProgress::SummaryBootstrap(_) => None,
+        }
+    }
+
+    pub fn summary_bootstrap_progress(&self) -> Option<&SummaryBootstrapProgress> {
+        match &self.progress {
+            DevqlTaskProgress::SummaryBootstrap(progress) => Some(progress),
+            DevqlTaskProgress::Sync(_)
+            | DevqlTaskProgress::Ingest(_)
+            | DevqlTaskProgress::EmbeddingsBootstrap(_) => None,
         }
     }
 
@@ -1010,6 +1056,13 @@ impl DevqlTaskRecord {
     pub fn embeddings_bootstrap_result(&self) -> Option<&EmbeddingsBootstrapResult> {
         match &self.result {
             Some(DevqlTaskResult::EmbeddingsBootstrap(result)) => Some(result),
+            _ => None,
+        }
+    }
+
+    pub fn summary_bootstrap_result(&self) -> Option<&SummaryBootstrapResultRecord> {
+        match &self.result {
+            Some(DevqlTaskResult::SummaryBootstrap(result)) => Some(result),
             _ => None,
         }
     }

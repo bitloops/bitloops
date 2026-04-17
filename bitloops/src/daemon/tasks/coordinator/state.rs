@@ -7,7 +7,8 @@ use crate::host::runtime_store::PersistedDevqlTaskQueueState;
 use super::super::super::types::{
     DevqlTaskControlResult, DevqlTaskKind, DevqlTaskProgress, DevqlTaskQueueStatus,
     DevqlTaskRecord, DevqlTaskResult, DevqlTaskSource, DevqlTaskStatus, EmbeddingsBootstrapPhase,
-    EmbeddingsBootstrapProgress, EmbeddingsBootstrapResult, RepoTaskControlState, SyncTaskMode,
+    EmbeddingsBootstrapProgress, EmbeddingsBootstrapResult, RepoTaskControlState,
+    SummaryBootstrapPhase, SummaryBootstrapProgress, SummaryBootstrapResultRecord, SyncTaskMode,
     unix_timestamp_now,
 };
 use super::super::queue::{
@@ -252,6 +253,36 @@ impl DevqlTaskCoordinator {
                 bytes_downloaded: 0,
                 bytes_total: None,
                 version: result.version.clone(),
+                message: Some(result.message.clone()),
+            });
+            state.last_action = Some("completed".to_string());
+            Ok(())
+        })
+        .map(|_: ()| ())
+    }
+
+    pub(super) fn finish_summary_bootstrap_task_completed(
+        &self,
+        task_id: &str,
+        result: SummaryBootstrapResultRecord,
+    ) -> Result<()> {
+        let task_id = task_id.to_string();
+        self.mutate_state(|state| {
+            let Some(task) = state.tasks.iter_mut().find(|task| task.task_id == task_id) else {
+                return Ok(());
+            };
+            let now = unix_timestamp_now();
+            task.status = DevqlTaskStatus::Completed;
+            task.updated_at_unix = now;
+            task.completed_at_unix = Some(now);
+            task.error = None;
+            task.result = Some(DevqlTaskResult::SummaryBootstrap(result.clone()));
+            task.progress = DevqlTaskProgress::SummaryBootstrap(SummaryBootstrapProgress {
+                phase: SummaryBootstrapPhase::Complete,
+                asset_name: None,
+                bytes_downloaded: 0,
+                bytes_total: None,
+                version: None,
                 message: Some(result.message.clone()),
             });
             state.last_action = Some("completed".to_string());

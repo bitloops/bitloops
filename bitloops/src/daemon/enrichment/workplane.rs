@@ -31,16 +31,16 @@ use super::super::types::{
 };
 use super::worker_count::{EnrichmentWorkerPool, configured_enrichment_worker_budgets};
 use super::{
-    EnrichmentJobTarget, EnrichmentQueueState, JobExecutionOutcome,
+    EnrichmentControlState, EnrichmentJobTarget, JobExecutionOutcome,
     WORKPLANE_PENDING_COMPACTION_MIN_AGE_SECS, WORKPLANE_PENDING_COMPACTION_MIN_COUNT,
     WORKPLANE_TERMINAL_RETENTION_SECS, WORKPLANE_TERMINAL_ROW_LIMIT, WorkplaneMailboxReadiness,
 };
 
-pub(super) fn default_state() -> EnrichmentQueueState {
-    EnrichmentQueueState {
+pub(super) fn default_state() -> EnrichmentControlState {
+    EnrichmentControlState {
         version: 1,
         last_action: Some("initialized".to_string()),
-        ..EnrichmentQueueState::default()
+        ..EnrichmentControlState::default()
     }
 }
 
@@ -496,7 +496,7 @@ fn prune_terminal_workplane_jobs(conn: &rusqlite::Connection) -> Result<()> {
 pub(super) fn claim_next_workplane_job(
     workplane_store: &DaemonSqliteRuntimeStore,
     runtime_store: &DaemonSqliteRuntimeStore,
-    control_state: &EnrichmentQueueState,
+    control_state: &EnrichmentControlState,
     pool: EnrichmentWorkerPool,
 ) -> Result<Option<WorkplaneJobRecord>> {
     workplane_store.with_connection(|conn| {
@@ -602,7 +602,7 @@ pub(super) fn persist_workplane_job_completion(
 
 pub(super) fn project_workplane_status(
     workplane_store: &DaemonSqliteRuntimeStore,
-    control_state: &EnrichmentQueueState,
+    control_state: &EnrichmentControlState,
 ) -> Result<ProjectedEnrichmentQueueState> {
     let (pending_summary, pending_embeddings, pending_rebuilds) =
         count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Pending)?;
@@ -1096,7 +1096,7 @@ fn mailbox_worker_pool(mailbox_name: &str) -> Option<EnrichmentWorkerPool> {
     }
 }
 
-fn job_is_paused_for_mailbox(state: &EnrichmentQueueState, mailbox_name: &str) -> bool {
+fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str) -> bool {
     match mailbox_name {
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => state.paused_semantic,
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX

@@ -50,6 +50,9 @@ pub(super) fn merge_existing_task(
     if kind == DevqlTaskKind::EmbeddingsBootstrap {
         return None;
     }
+    if kind == DevqlTaskKind::SummaryBootstrap {
+        return None;
+    }
 
     if kind == DevqlTaskKind::Ingest {
         if let Some(existing) = state.tasks.iter_mut().find(|task| {
@@ -234,7 +237,10 @@ fn pending_sort_key(index: usize, task: &DevqlTaskRecord) -> (u8, u64, usize) {
     (
         if task.kind == DevqlTaskKind::Sync && task.source == DevqlTaskSource::RepoPolicyChange {
             0
-        } else if task.kind == DevqlTaskKind::EmbeddingsBootstrap {
+        } else if matches!(
+            task.kind,
+            DevqlTaskKind::EmbeddingsBootstrap | DevqlTaskKind::SummaryBootstrap
+        ) {
             2
         } else if task.kind == DevqlTaskKind::Sync
             && task
@@ -381,6 +387,7 @@ fn counts_by_kind(tasks: &[DevqlTaskRecord]) -> Vec<DevqlTaskKindCounts> {
         DevqlTaskKind::Sync,
         DevqlTaskKind::Ingest,
         DevqlTaskKind::EmbeddingsBootstrap,
+        DevqlTaskKind::SummaryBootstrap,
     ] {
         counts.insert(
             kind,
@@ -415,6 +422,7 @@ fn select_repo_tasks(tasks: &[DevqlTaskRecord], repo_id: &str) -> Vec<DevqlTaskR
         DevqlTaskKind::Sync,
         DevqlTaskKind::Ingest,
         DevqlTaskKind::EmbeddingsBootstrap,
+        DevqlTaskKind::SummaryBootstrap,
     ]
     .into_iter()
     .filter_map(|kind| select_repo_task(tasks, repo_id, kind))
@@ -521,6 +529,9 @@ pub(super) fn default_progress_for_spec(spec: &DevqlTaskSpec) -> DevqlTaskProgre
         DevqlTaskSpec::EmbeddingsBootstrap(_) => DevqlTaskProgress::EmbeddingsBootstrap(
             crate::daemon::EmbeddingsBootstrapProgress::default(),
         ),
+        DevqlTaskSpec::SummaryBootstrap(_) => {
+            DevqlTaskProgress::SummaryBootstrap(crate::daemon::SummaryBootstrapProgress::default())
+        }
     }
 }
 
@@ -541,20 +552,29 @@ pub(super) fn failed_progress(progress: &DevqlTaskProgress) -> DevqlTaskProgress
             progress.phase = crate::daemon::EmbeddingsBootstrapPhase::Failed;
             DevqlTaskProgress::EmbeddingsBootstrap(progress)
         }
+        DevqlTaskProgress::SummaryBootstrap(progress) => {
+            let mut progress = progress.clone();
+            progress.phase = crate::daemon::SummaryBootstrapPhase::Failed;
+            DevqlTaskProgress::SummaryBootstrap(progress)
+        }
     }
 }
 
 pub(super) fn sync_spec_from_task_spec(spec: &DevqlTaskSpec) -> Option<&SyncTaskSpec> {
     match spec {
         DevqlTaskSpec::Sync(spec) => Some(spec),
-        DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+        DevqlTaskSpec::Ingest(_)
+        | DevqlTaskSpec::EmbeddingsBootstrap(_)
+        | DevqlTaskSpec::SummaryBootstrap(_) => None,
     }
 }
 
 fn sync_spec_from_task_spec_mut(spec: &mut DevqlTaskSpec) -> Option<&mut SyncTaskSpec> {
     match spec {
         DevqlTaskSpec::Sync(spec) => Some(spec),
-        DevqlTaskSpec::Ingest(_) | DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+        DevqlTaskSpec::Ingest(_)
+        | DevqlTaskSpec::EmbeddingsBootstrap(_)
+        | DevqlTaskSpec::SummaryBootstrap(_) => None,
     }
 }
 

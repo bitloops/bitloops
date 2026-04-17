@@ -4,6 +4,11 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::cli::inference::{
+    PreparedSummarySetupAction, PreparedSummarySetupPlan, SummarySetupExecutionResult,
+    SummarySetupOutcome, SummarySetupPhase, SummarySetupProgress,
+    execute_prepared_summary_setup_with_progress,
+};
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::daemon::tasks::queue::{
     sync_task_mode_from_host as queue_sync_task_mode_from_host,
@@ -11,6 +16,8 @@ use crate::daemon::tasks::queue::{
 };
 use crate::daemon::types::{
     DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, EmbeddingsBootstrapProgress,
+    SummaryBootstrapAction, SummaryBootstrapProgress, SummaryBootstrapRequest,
+    SummaryBootstrapResultRecord,
 };
 use crate::host::devql::{
     DevqlConfig, RelationalStorage, RepoIdentity, SyncProgressPhase, SyncProgressUpdate,
@@ -19,7 +26,7 @@ use crate::host::devql::{
 use super::super::DevqlTaskCoordinator;
 use super::super::helpers::{
     enqueue_sync_completed_runs, receive_embeddings_bootstrap_outcome,
-    should_persist_embeddings_bootstrap_progress,
+    should_persist_embeddings_bootstrap_progress, should_persist_progress,
 };
 use super::super::observers::{
     IngestCoordinatorObserver, ProgressPersistState, SyncCoordinatorObserver,
@@ -305,6 +312,64 @@ impl DevqlTaskCoordinator {
 
         Ok(())
     }
+
+    pub(super) async fn run_summary_bootstrap_task(
+        self: Arc<Self>,
+        task: DevqlTaskRecord,
+    ) -> Result<()> {
+        let spec = task
+            .summary_bootstrap_spec()
+            .cloned()
+            .ok_or_else(|| anyhow!("summary bootstrap task missing spec"))?;
+        let repo_root = task.repo_root.clone();
+        let (progress_tx, progress_rx) = mpsc::unbounded_channel();
+        let execution = tokio::task::spawn_blocking(move || {
+            let plan = prepared_summary_setup_plan_from_request(&spec);
+            let mut progress_state: ProgressPersistState<SummaryBootstrapProgress> =
+                ProgressPersistState::default();
+            execute_prepared_summary_setup_with_progress(&repo_root, plan, |progress| {
+                let progress = summary_progress_from_cli(progress);
+                let now = Instant::now();
+                if !should_persist_progress(
+                    progress_state.last_persisted.as_ref(),
+                    &progress,
+                    progress_state.last_persisted_at,
+                    now,
+                ) {
+                    return Ok(());
+                }
+                progress_state.last_persisted = Some(progress.clone());
+                progress_state.last_persisted_at = Some(now);
+                progress_tx
+                    .send(progress)
+                    .map_err(|_| anyhow!("summary bootstrap progress receiver dropped"))?;
+                Ok(())
+            })
+        });
+        let (result_tx, result_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = execution
+                .await
+                .map_err(|err| anyhow!("summary bootstrap worker join failed: {err:#}"))
+                .and_then(|result| result);
+            let _ = result_tx.send(result);
+        });
+
+        let final_result = receive_summary_bootstrap_outcome(progress_rx, result_rx, |progress| {
+            self.update_task_progress(&task.task_id, DevqlTaskProgress::SummaryBootstrap(progress))
+        })
+        .await?;
+
+        match final_result {
+            Ok(result) => self.finish_summary_bootstrap_task_completed(
+                &task.task_id,
+                summary_result_from_cli(&result),
+            )?,
+            Err(err) => self.finish_task_failed(&task.task_id, err)?,
+        }
+
+        Ok(())
+    }
 }
 
 fn repo_identity_from_task(task: &DevqlTaskRecord) -> RepoIdentity {
@@ -314,5 +379,100 @@ fn repo_identity_from_task(task: &DevqlTaskRecord) -> RepoIdentity {
         provider: task.repo_provider.clone(),
         organization: task.repo_organisation.clone(),
         identity: task.repo_identity.clone(),
+    }
+}
+
+async fn receive_summary_bootstrap_outcome<R>(
+    mut progress_rx: mpsc::UnboundedReceiver<SummaryBootstrapProgress>,
+    mut result_rx: oneshot::Receiver<Result<SummarySetupExecutionResult>>,
+    mut on_progress: R,
+) -> Result<Result<SummarySetupExecutionResult>>
+where
+    R: FnMut(SummaryBootstrapProgress) -> Result<()>,
+{
+    let mut progress_closed = false;
+    let mut final_result = None;
+
+    while final_result.is_none() || !progress_closed {
+        tokio::select! {
+            maybe_progress = progress_rx.recv(), if !progress_closed => {
+                match maybe_progress {
+                    Some(progress) => on_progress(progress)?,
+                    None => progress_closed = true,
+                }
+            }
+            result = &mut result_rx, if final_result.is_none() => {
+                let received: Result<SummarySetupExecutionResult> =
+                    result.map_err(|_| anyhow!("summary bootstrap worker result channel dropped"))?;
+                final_result = Some(received);
+            }
+        }
+    }
+
+    final_result.ok_or_else(|| anyhow!("summary bootstrap task exited without a result"))
+}
+
+fn prepared_summary_setup_plan_from_request(
+    request: &SummaryBootstrapRequest,
+) -> PreparedSummarySetupPlan {
+    PreparedSummarySetupPlan::new(match request.action {
+        SummaryBootstrapAction::InstallRuntimeOnly => {
+            PreparedSummarySetupAction::InstallRuntimeOnly {
+                message: request.message.clone().unwrap_or_default(),
+            }
+        }
+        SummaryBootstrapAction::InstallRuntimeOnlyPendingProbe => {
+            PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe {
+                message: request.message.clone().unwrap_or_default(),
+            }
+        }
+        SummaryBootstrapAction::ConfigureLocal => PreparedSummarySetupAction::ConfigureLocal {
+            model_name: request.model_name.clone().unwrap_or_default(),
+        },
+        SummaryBootstrapAction::ConfigureCloud => PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override: request.gateway_url_override.clone(),
+        },
+    })
+}
+
+fn summary_progress_from_cli(progress: SummarySetupProgress) -> SummaryBootstrapProgress {
+    SummaryBootstrapProgress {
+        phase: match progress.phase {
+            SummarySetupPhase::Queued => crate::daemon::SummaryBootstrapPhase::Queued,
+            SummarySetupPhase::ResolvingRelease => {
+                crate::daemon::SummaryBootstrapPhase::ResolvingRelease
+            }
+            SummarySetupPhase::DownloadingRuntime => {
+                crate::daemon::SummaryBootstrapPhase::DownloadingRuntime
+            }
+            SummarySetupPhase::ExtractingRuntime => {
+                crate::daemon::SummaryBootstrapPhase::ExtractingRuntime
+            }
+            SummarySetupPhase::RewritingRuntime => {
+                crate::daemon::SummaryBootstrapPhase::RewritingRuntime
+            }
+            SummarySetupPhase::WritingProfile => {
+                crate::daemon::SummaryBootstrapPhase::WritingProfile
+            }
+        },
+        asset_name: progress.asset_name,
+        bytes_downloaded: progress.bytes_downloaded,
+        bytes_total: progress.bytes_total,
+        version: progress.version,
+        message: progress.message,
+    }
+}
+
+fn summary_result_from_cli(result: &SummarySetupExecutionResult) -> SummaryBootstrapResultRecord {
+    SummaryBootstrapResultRecord {
+        outcome_kind: match &result.outcome {
+            SummarySetupOutcome::InstalledRuntimeOnly => "installed_runtime_only".to_string(),
+            SummarySetupOutcome::Configured { .. } => "configured".to_string(),
+        },
+        model_name: match &result.outcome {
+            SummarySetupOutcome::InstalledRuntimeOnly => None,
+            SummarySetupOutcome::Configured { model_name } => Some(model_name.clone()),
+        },
+        message: result.message.clone(),
     }
 }

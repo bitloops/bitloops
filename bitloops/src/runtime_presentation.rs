@@ -36,6 +36,7 @@ pub(crate) fn task_kind_label(kind: &str) -> &'static str {
         "sync" => "Syncing repository",
         "ingest" => "Ingesting commit history",
         "embeddings_bootstrap" => "Preparing the embeddings runtime",
+        "summary_bootstrap" => "Preparing summary generation",
         _ => "Background task",
     }
 }

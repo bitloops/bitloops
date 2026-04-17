@@ -129,7 +129,7 @@ pub(super) fn spool_task_dedupe_key(
                 .map(|backfill| backfill.to_string())
                 .unwrap_or_else(|| "all".to_string())
         )),
-        DevqlTaskSpec::EmbeddingsBootstrap(_) => None,
+        DevqlTaskSpec::EmbeddingsBootstrap(_) | DevqlTaskSpec::SummaryBootstrap(_) => None,
     }
 }
 

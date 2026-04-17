@@ -105,7 +105,7 @@ pub struct EnrichmentJob {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct EnrichmentQueueState {
+pub struct EnrichmentControlState {
     pub version: u8,
     pub paused_semantic: bool,
     pub paused_embeddings: bool,
@@ -564,14 +564,14 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         }
     }
 
-    fn load_state(&self) -> Result<EnrichmentQueueState> {
+    fn load_state(&self) -> Result<EnrichmentControlState> {
         Ok(self
             .runtime_store
             .load_enrichment_queue_state()?
             .unwrap_or_else(default_state))
     }
 
-    fn save_state(&self, state: &mut EnrichmentQueueState) -> Result<()> {
+    fn save_state(&self, state: &mut EnrichmentControlState) -> Result<()> {
         state.version = 1;
         state.jobs.clear();
         state.active_branch_by_repo.clear();

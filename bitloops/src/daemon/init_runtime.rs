@@ -5,7 +5,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
-use tokio::runtime::Handle;
 use uuid::Uuid;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
@@ -18,11 +17,6 @@ use crate::capability_packs::semantic_clones::types::{
 use crate::capability_packs::semantic_clones::workplane::{
     payload_artefact_id, payload_is_repo_backfill, payload_repo_backfill_artefact_ids,
     payload_work_item_count,
-};
-use crate::cli::inference::{
-    PreparedSummarySetupAction, PreparedSummarySetupPlan, SummarySetupExecutionResult,
-    SummarySetupOutcome, SummarySetupPhase, SummarySetupProgress,
-    execute_prepared_summary_setup_with_progress,
 };
 use crate::config::resolve_semantic_clones_config_for_repo;
 use crate::graphql::SubscriptionHub;
@@ -43,9 +37,8 @@ use super::types::{
     BlockedMailboxStatus, DevqlTaskRecord, DevqlTaskSpec, DevqlTaskStatus,
     EmbeddingsBootstrapGateStatus, EmbeddingsBootstrapTaskSpec, IngestTaskSpec, InitSessionRecord,
     InitSessionState, InitSessionTerminalStatus, StartInitSessionSelections,
-    SummaryBootstrapAction, SummaryBootstrapProgress, SummaryBootstrapRequest,
-    SummaryBootstrapResultRecord, SummaryBootstrapRunRecord, SummaryBootstrapState,
-    SummaryBootstrapStatus, SyncTaskMode, SyncTaskSpec, unix_timestamp_now,
+    SummaryBootstrapRunRecord, SummaryBootstrapState, SummaryBootstrapStatus, SyncTaskMode,
+    SyncTaskSpec, unix_timestamp_now,
 };
 
 pub(crate) type PersistedInitSessionState = InitSessionState;
@@ -158,7 +151,7 @@ pub struct InitRuntimeSessionView {
     pub ingest_task_id: Option<String>,
     pub follow_up_sync_task_id: Option<String>,
     pub embeddings_bootstrap_task_id: Option<String>,
-    pub summary_bootstrap_run_id: Option<String>,
+    pub summary_bootstrap_task_id: Option<String>,
     pub terminal_error: Option<String>,
     pub top_pipeline_lane: InitRuntimeLaneView,
     pub embeddings_lane: InitRuntimeLaneView,
@@ -357,9 +350,14 @@ impl InitRuntimeCoordinator {
             initial_sync_task_id: None,
             ingest_task_id: None,
             embeddings_bootstrap_task_id: None,
-            summary_bootstrap_run_id: None,
+            summary_bootstrap_task_id: None,
             follow_up_sync_required: false,
             follow_up_sync_task_id: None,
+            next_completion_seq: 0,
+            initial_sync_completion_seq: None,
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: None,
+            follow_up_sync_completion_seq: None,
             submitted_at_unix: now,
             updated_at_unix: now,
             terminal_status: None,
@@ -403,39 +401,13 @@ impl InitRuntimeCoordinator {
         }
 
         if let Some(request) = selections.summaries_bootstrap.clone() {
-            let run_id = format!("summary-bootstrap-run-{}", Uuid::new_v4());
-            let run = SummaryBootstrapRunRecord {
-                run_id: run_id.clone(),
-                repo_id: cfg.repo.repo_id.clone(),
-                repo_root: cfg.repo_root.clone(),
-                init_session_id: init_session_id.clone(),
-                request: request.clone(),
-                status: SummaryBootstrapStatus::Queued,
-                progress: SummaryBootstrapProgress::default(),
-                result: None,
-                error: None,
-                submitted_at_unix: now,
-                started_at_unix: None,
-                updated_at_unix: now,
-                completed_at_unix: None,
-            };
-            session.summary_bootstrap_run_id = Some(run_id.clone());
-            self.runtime_store.mutate_summary_bootstrap_state(|state| {
-                state.runs.push(run.clone());
-                state.last_action = Some("queued".to_string());
-                state.updated_at_unix = now;
-                Ok(())
-            })?;
-            self.spawn_summary_bootstrap_worker(cfg.repo_root.clone(), request, run_id.clone());
-            self.publish_event(RuntimeEventRecord {
-                domain: "summary_bootstrap".to_string(),
-                repo_id: cfg.repo.repo_id.clone(),
-                init_session_id: Some(init_session_id.clone()),
-                updated_at_unix: now,
-                task_id: None,
-                run_id: Some(run_id),
-                mailbox_name: None,
-            });
+            let queued = super::shared_devql_task_coordinator().enqueue_with_init_session(
+                cfg,
+                super::DevqlTaskSource::Init,
+                DevqlTaskSpec::SummaryBootstrap(request),
+                Some(init_session_id.clone()),
+            )?;
+            session.summary_bootstrap_task_id = Some(queued.task.task_id);
         }
 
         self.runtime_store.mutate_init_session_state(|state| {
@@ -451,7 +423,7 @@ impl InitRuntimeCoordinator {
             init_session_id: Some(init_session_id.clone()),
             updated_at_unix: now,
             task_id: session.initial_sync_task_id.clone(),
-            run_id: session.summary_bootstrap_run_id.clone(),
+            run_id: None,
             mailbox_name: None,
         });
 
@@ -473,6 +445,7 @@ impl InitRuntimeCoordinator {
                 return Ok(());
             };
             session.updated_at_unix = unix_timestamp_now();
+            record_task_completion_seq(session, &task);
             if task.task_id == session.initial_sync_task_id.clone().unwrap_or_default()
                 && task.status == DevqlTaskStatus::Completed
             {
@@ -484,8 +457,7 @@ impl InitRuntimeCoordinator {
                         session.selections.ingest_backfill,
                     ));
                 }
-                if session.follow_up_sync_task_id.is_none()
-                    && !session.follow_up_sync_required
+                if !session.follow_up_sync_required
                     && session_requires_semantic_follow_up(session)
                     && !self.semantic_bootstraps_ready(session)?
                 {
@@ -580,14 +552,15 @@ impl InitRuntimeCoordinator {
         &self,
         repo_id: &str,
     ) -> Result<Option<SummaryBootstrapRunRecord>> {
-        Ok(self
-            .runtime_store
-            .load_summary_bootstrap_state()?
-            .unwrap_or_default()
-            .runs
+        Ok(super::shared_devql_task_coordinator()
+            .tasks(
+                Some(repo_id),
+                Some(super::DevqlTaskKind::SummaryBootstrap),
+                None,
+                Some(1),
+            )?
             .into_iter()
-            .filter(|run| run.repo_id == repo_id)
-            .max_by_key(|run| (run.updated_at_unix, run.submitted_at_unix)))
+            .find_map(summary_run_from_task))
     }
 
     fn current_session_view(
@@ -615,8 +588,8 @@ impl InitRuntimeCoordinator {
             &cfg.repo.repo_id,
             &session.init_session_id,
         )?;
-        let summary_run =
-            load_summary_run_for_session(&self.runtime_store, &session.init_session_id)?;
+        let summary_task = load_summary_task_by_id(session.summary_bootstrap_task_id.as_deref())?;
+        let summary_run = summary_task.as_ref().and_then(summary_run_from_task_ref);
         let initial_sync = load_task_by_id(session.initial_sync_task_id.as_deref())?;
         let ingest_task = load_task_by_id(session.ingest_task_id.as_deref())?;
         let follow_up_sync = load_task_by_id(session.follow_up_sync_task_id.as_deref())?;
@@ -798,7 +771,7 @@ impl InitRuntimeCoordinator {
             ingest_task_id: session.ingest_task_id,
             follow_up_sync_task_id: session.follow_up_sync_task_id,
             embeddings_bootstrap_task_id: session.embeddings_bootstrap_task_id,
-            summary_bootstrap_run_id: session.summary_bootstrap_run_id,
+            summary_bootstrap_task_id: session.summary_bootstrap_task_id,
             terminal_error: if status == "failed" {
                 fatal_failure_detail.or(session.terminal_error)
             } else {
@@ -829,8 +802,8 @@ impl InitRuntimeCoordinator {
         let ingest_task = load_task_by_id(session.ingest_task_id.as_deref())?;
         let follow_up_sync = load_task_by_id(session.follow_up_sync_task_id.as_deref())?;
         let embeddings_task = load_task_by_id(session.embeddings_bootstrap_task_id.as_deref())?;
-        let summary_run =
-            load_summary_run_for_session(&self.runtime_store, &session.init_session_id)?;
+        let summary_task = load_summary_task_by_id(session.summary_bootstrap_task_id.as_deref())?;
+        let summary_run = summary_task.as_ref().and_then(summary_run_from_task_ref);
         if !selected_top_level_terminal(&session, initial_sync.as_ref(), ingest_task.as_ref()) {
             return Ok(());
         }
@@ -895,8 +868,8 @@ impl InitRuntimeCoordinator {
 
     fn semantic_bootstraps_ready(&self, session: &InitSessionRecord) -> Result<bool> {
         let embeddings_task = load_task_by_id(session.embeddings_bootstrap_task_id.as_deref())?;
-        let summary_run =
-            load_summary_run_for_session(&self.runtime_store, &session.init_session_id)?;
+        let summary_task = load_summary_task_by_id(session.summary_bootstrap_task_id.as_deref())?;
+        let summary_run = summary_task.as_ref().and_then(summary_run_from_task_ref);
         Ok(semantic_bootstraps_ready(
             session,
             embeddings_task.as_ref(),
@@ -919,209 +892,6 @@ impl InitRuntimeCoordinator {
     pub(crate) fn publish_runtime_event(&self, event: RuntimeEventRecord) {
         self.publish_event(event);
     }
-
-    fn spawn_summary_bootstrap_worker(
-        self: &Arc<Self>,
-        repo_root: PathBuf,
-        request: SummaryBootstrapRequest,
-        run_id: String,
-    ) {
-        let coordinator = Arc::clone(self);
-        let handle = Handle::try_current().ok();
-        let Some(handle) = handle else {
-            log::warn!("summary bootstrap worker requested without an active tokio runtime");
-            return;
-        };
-        handle.spawn(async move {
-            let blocking_coordinator = Arc::clone(&coordinator);
-            let blocking_run_id = run_id.clone();
-            let worker = tokio::task::spawn_blocking(move || {
-                let plan = prepared_summary_setup_plan_from_request(&request);
-                let now = unix_timestamp_now();
-                blocking_coordinator
-                    .runtime_store
-                    .mutate_summary_bootstrap_state(|state| {
-                        if let Some(run) = state
-                            .runs
-                            .iter_mut()
-                            .find(|run| run.run_id == blocking_run_id)
-                        {
-                            run.status = SummaryBootstrapStatus::Running;
-                            run.started_at_unix = Some(now);
-                            run.updated_at_unix = now;
-                            state.last_action = Some("running".to_string());
-                            state.updated_at_unix = now;
-                        }
-                        Ok(())
-                    })?;
-                execute_prepared_summary_setup_with_progress(&repo_root, plan, |progress| {
-                    blocking_coordinator.update_summary_progress(&blocking_run_id, progress)
-                })
-            });
-
-            match worker.await {
-                Ok(Ok(result)) => {
-                    if let Err(err) = coordinator.finish_summary_bootstrap(&run_id, Ok(result)) {
-                        log::warn!("failed to persist summary bootstrap completion: {err:#}");
-                    }
-                }
-                Ok(Err(err)) => {
-                    if let Err(persist_err) =
-                        coordinator.finish_summary_bootstrap(&run_id, Err(format!("{err:#}")))
-                    {
-                        log::warn!(
-                            "failed to persist summary bootstrap failure after worker error: {persist_err:#}"
-                        );
-                    }
-                }
-                Err(err) => {
-                    if let Err(persist_err) = coordinator.finish_summary_bootstrap(
-                        &run_id,
-                        Err(format!("summary bootstrap worker join failed: {err:#}")),
-                    ) {
-                        log::warn!(
-                            "failed to persist summary bootstrap failure after join error: {persist_err:#}"
-                        );
-                    }
-                }
-            }
-        });
-    }
-
-    fn update_summary_progress(&self, run_id: &str, progress: SummarySetupProgress) -> Result<()> {
-        let progress = summary_progress_from_cli(progress);
-        let mut event = None::<RuntimeEventRecord>;
-        self.runtime_store.mutate_summary_bootstrap_state(|state| {
-            if let Some(run) = state.runs.iter_mut().find(|run| run.run_id == run_id) {
-                run.progress = progress.clone();
-                run.updated_at_unix = unix_timestamp_now();
-                state.last_action = Some(progress.phase.to_string());
-                state.updated_at_unix = run.updated_at_unix;
-                event = Some(RuntimeEventRecord {
-                    domain: "summary_bootstrap".to_string(),
-                    repo_id: run.repo_id.clone(),
-                    init_session_id: Some(run.init_session_id.clone()),
-                    updated_at_unix: run.updated_at_unix,
-                    task_id: None,
-                    run_id: Some(run.run_id.clone()),
-                    mailbox_name: None,
-                });
-            }
-            Ok(())
-        })?;
-        if let Some(event) = event {
-            self.publish_event(event);
-        }
-        Ok(())
-    }
-
-    fn finish_summary_bootstrap(
-        &self,
-        run_id: &str,
-        result: std::result::Result<SummarySetupExecutionResult, String>,
-    ) -> Result<()> {
-        let mut session_id = None::<String>;
-        let mut repo_id = None::<String>;
-        self.runtime_store.mutate_summary_bootstrap_state(|state| {
-            if let Some(run) = state.runs.iter_mut().find(|run| run.run_id == run_id) {
-                let now = unix_timestamp_now();
-                run.updated_at_unix = now;
-                run.completed_at_unix = Some(now);
-                match &result {
-                    Ok(result) => {
-                        run.status = SummaryBootstrapStatus::Completed;
-                        run.progress.phase = super::SummaryBootstrapPhase::Complete;
-                        run.progress.message = Some(result.message.clone());
-                        run.result = Some(summary_result_from_cli(result));
-                        run.error = None;
-                        state.last_action = Some("completed".to_string());
-                    }
-                    Err(error) => {
-                        run.status = SummaryBootstrapStatus::Failed;
-                        run.error = Some(error.clone());
-                        run.progress.message = Some(error.clone());
-                        state.last_action = Some("failed".to_string());
-                    }
-                }
-                state.updated_at_unix = now;
-                session_id = Some(run.init_session_id.clone());
-                repo_id = Some(run.repo_id.clone());
-            }
-            Ok(())
-        })?;
-        if let Some(session_id) = session_id.as_deref() {
-            self.maybe_enqueue_follow_up_sync(session_id)?;
-        }
-        if let (Some(repo_id), Some(session_id)) = (repo_id, session_id) {
-            self.publish_event(RuntimeEventRecord {
-                domain: "summary_bootstrap".to_string(),
-                repo_id,
-                init_session_id: Some(session_id),
-                updated_at_unix: unix_timestamp_now(),
-                task_id: None,
-                run_id: Some(run_id.to_string()),
-                mailbox_name: None,
-            });
-        }
-        Ok(())
-    }
-}
-
-fn prepared_summary_setup_plan_from_request(
-    request: &SummaryBootstrapRequest,
-) -> PreparedSummarySetupPlan {
-    PreparedSummarySetupPlan::new(match request.action {
-        SummaryBootstrapAction::InstallRuntimeOnly => {
-            PreparedSummarySetupAction::InstallRuntimeOnly {
-                message: request.message.clone().unwrap_or_default(),
-            }
-        }
-        SummaryBootstrapAction::InstallRuntimeOnlyPendingProbe => {
-            PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe {
-                message: request.message.clone().unwrap_or_default(),
-            }
-        }
-        SummaryBootstrapAction::ConfigureLocal => PreparedSummarySetupAction::ConfigureLocal {
-            model_name: request.model_name.clone().unwrap_or_default(),
-        },
-        SummaryBootstrapAction::ConfigureCloud => PreparedSummarySetupAction::ConfigureCloud {
-            gateway_url_override: request.gateway_url_override.clone(),
-        },
-    })
-}
-
-fn summary_progress_from_cli(progress: SummarySetupProgress) -> SummaryBootstrapProgress {
-    SummaryBootstrapProgress {
-        phase: match progress.phase {
-            SummarySetupPhase::Queued => super::SummaryBootstrapPhase::Queued,
-            SummarySetupPhase::ResolvingRelease => super::SummaryBootstrapPhase::ResolvingRelease,
-            SummarySetupPhase::DownloadingRuntime => {
-                super::SummaryBootstrapPhase::DownloadingRuntime
-            }
-            SummarySetupPhase::ExtractingRuntime => super::SummaryBootstrapPhase::ExtractingRuntime,
-            SummarySetupPhase::RewritingRuntime => super::SummaryBootstrapPhase::RewritingRuntime,
-            SummarySetupPhase::WritingProfile => super::SummaryBootstrapPhase::WritingProfile,
-        },
-        asset_name: progress.asset_name,
-        bytes_downloaded: progress.bytes_downloaded,
-        bytes_total: progress.bytes_total,
-        version: progress.version,
-        message: progress.message,
-    }
-}
-
-fn summary_result_from_cli(result: &SummarySetupExecutionResult) -> SummaryBootstrapResultRecord {
-    SummaryBootstrapResultRecord {
-        outcome_kind: match &result.outcome {
-            SummarySetupOutcome::InstalledRuntimeOnly => "installed_runtime_only".to_string(),
-            SummarySetupOutcome::Configured { .. } => "configured".to_string(),
-        },
-        model_name: match &result.outcome {
-            SummarySetupOutcome::InstalledRuntimeOnly => None,
-            SummarySetupOutcome::Configured { model_name } => Some(model_name.clone()),
-        },
-        message: result.message.clone(),
-    }
 }
 
 fn load_task_by_id(task_id: Option<&str>) -> Result<Option<DevqlTaskRecord>> {
@@ -1131,17 +901,115 @@ fn load_task_by_id(task_id: Option<&str>) -> Result<Option<DevqlTaskRecord>> {
     super::shared_devql_task_coordinator().task(task_id)
 }
 
-fn load_summary_run_for_session(
-    runtime_store: &DaemonSqliteRuntimeStore,
-    init_session_id: &str,
-) -> Result<Option<SummaryBootstrapRunRecord>> {
-    Ok(runtime_store
-        .load_summary_bootstrap_state()?
-        .unwrap_or_default()
-        .runs
-        .into_iter()
-        .filter(|run| run.init_session_id == init_session_id)
-        .max_by_key(|run| (run.updated_at_unix, run.submitted_at_unix)))
+fn load_summary_task_by_id(task_id: Option<&str>) -> Result<Option<DevqlTaskRecord>> {
+    Ok(
+        load_task_by_id(task_id)?
+            .filter(|task| task.kind == super::DevqlTaskKind::SummaryBootstrap),
+    )
+}
+
+fn summary_run_from_task(task: DevqlTaskRecord) -> Option<SummaryBootstrapRunRecord> {
+    let request = task.summary_bootstrap_spec()?.clone();
+    let init_session_id = task.init_session_id.clone()?;
+    let status = summary_status_from_task_status(task.status);
+    let progress = task
+        .summary_bootstrap_progress()
+        .cloned()
+        .unwrap_or_default();
+    let result = task.summary_bootstrap_result().cloned();
+    Some(SummaryBootstrapRunRecord {
+        run_id: task.task_id,
+        repo_id: task.repo_id,
+        repo_root: task.repo_root,
+        init_session_id,
+        request,
+        status,
+        progress,
+        result,
+        error: task.error,
+        submitted_at_unix: task.submitted_at_unix,
+        started_at_unix: task.started_at_unix,
+        updated_at_unix: task.updated_at_unix,
+        completed_at_unix: task.completed_at_unix,
+    })
+}
+
+fn summary_run_from_task_ref(task: &DevqlTaskRecord) -> Option<SummaryBootstrapRunRecord> {
+    let request = task.summary_bootstrap_spec()?.clone();
+    Some(SummaryBootstrapRunRecord {
+        run_id: task.task_id.clone(),
+        repo_id: task.repo_id.clone(),
+        repo_root: task.repo_root.clone(),
+        init_session_id: task.init_session_id.clone()?,
+        request,
+        status: summary_status_from_task_status(task.status),
+        progress: task
+            .summary_bootstrap_progress()
+            .cloned()
+            .unwrap_or_default(),
+        result: task.summary_bootstrap_result().cloned(),
+        error: task.error.clone(),
+        submitted_at_unix: task.submitted_at_unix,
+        started_at_unix: task.started_at_unix,
+        updated_at_unix: task.updated_at_unix,
+        completed_at_unix: task.completed_at_unix,
+    })
+}
+
+fn summary_status_from_task_status(status: DevqlTaskStatus) -> SummaryBootstrapStatus {
+    match status {
+        DevqlTaskStatus::Queued => SummaryBootstrapStatus::Queued,
+        DevqlTaskStatus::Running => SummaryBootstrapStatus::Running,
+        DevqlTaskStatus::Completed => SummaryBootstrapStatus::Completed,
+        DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled => SummaryBootstrapStatus::Failed,
+    }
+}
+
+fn record_task_completion_seq(session: &mut InitSessionRecord, task: &DevqlTaskRecord) {
+    if task.status != DevqlTaskStatus::Completed {
+        return;
+    }
+    if session.initial_sync_task_id.as_deref() == Some(task.task_id.as_str()) {
+        assign_completion_seq(
+            &mut session.next_completion_seq,
+            &mut session.initial_sync_completion_seq,
+        );
+        return;
+    }
+    if session.follow_up_sync_task_id.as_deref() == Some(task.task_id.as_str()) {
+        assign_completion_seq(
+            &mut session.next_completion_seq,
+            &mut session.follow_up_sync_completion_seq,
+        );
+        return;
+    }
+    if session.embeddings_bootstrap_task_id.as_deref() == Some(task.task_id.as_str()) {
+        assign_completion_seq(
+            &mut session.next_completion_seq,
+            &mut session.embeddings_bootstrap_completion_seq,
+        );
+        return;
+    }
+    if session.summary_bootstrap_task_id.as_deref() == Some(task.task_id.as_str()) {
+        assign_completion_seq(
+            &mut session.next_completion_seq,
+            &mut session.summary_bootstrap_completion_seq,
+        );
+    }
+}
+
+fn assign_completion_seq(next_completion_seq: &mut u64, target: &mut Option<u64>) {
+    if target.is_some() {
+        return;
+    }
+    *next_completion_seq += 1;
+    *target = Some(*next_completion_seq);
+}
+
+fn latest_completed_sync_seq(session: &InitSessionRecord) -> Option<u64> {
+    session
+        .initial_sync_completion_seq
+        .max(session.follow_up_sync_completion_seq)
 }
 
 fn session_requires_semantic_follow_up(session: &InitSessionRecord) -> bool {
@@ -1226,77 +1094,68 @@ fn semantic_bootstrap_waiting_reason(
     }
 }
 
-fn completed_task_at(task: Option<&DevqlTaskRecord>) -> Option<u64> {
-    task.filter(|task| task.status == DevqlTaskStatus::Completed)
-        .and_then(|task| task.completed_at_unix.or(Some(task.updated_at_unix)))
-}
-
-fn completed_summary_run_at(run: Option<&SummaryBootstrapRunRecord>) -> Option<u64> {
-    run.filter(|run| run.status == SummaryBootstrapStatus::Completed)
-        .and_then(|run| run.completed_at_unix.or(Some(run.updated_at_unix)))
-}
-
-fn latest_completed_sync_at(
-    initial_sync: Option<&DevqlTaskRecord>,
-    follow_up_sync: Option<&DevqlTaskRecord>,
-) -> Option<u64> {
-    completed_task_at(initial_sync).max(completed_task_at(follow_up_sync))
-}
-
 fn embeddings_bootstrap_outstanding_after_initial_sync(
     session: &InitSessionRecord,
-    initial_sync: Option<&DevqlTaskRecord>,
+    _initial_sync: Option<&DevqlTaskRecord>,
     embeddings_task: Option<&DevqlTaskRecord>,
 ) -> bool {
     session.selections.embeddings_bootstrap.is_some()
-        && completed_task_at(initial_sync).is_some()
-        && completed_task_at(embeddings_task).is_none()
+        && session.initial_sync_completion_seq.is_some()
+        && session.embeddings_bootstrap_completion_seq.is_none()
+        && !task_failed(embeddings_task)
 }
 
 fn summary_bootstrap_outstanding_after_initial_sync(
     session: &InitSessionRecord,
-    initial_sync: Option<&DevqlTaskRecord>,
+    _initial_sync: Option<&DevqlTaskRecord>,
     summary_run: Option<&SummaryBootstrapRunRecord>,
 ) -> bool {
     session.selections.summaries_bootstrap.is_some()
-        && completed_task_at(initial_sync).is_some()
-        && completed_summary_run_at(summary_run).is_none()
+        && session.initial_sync_completion_seq.is_some()
+        && session.summary_bootstrap_completion_seq.is_none()
+        && !summary_run.is_some_and(summary_run_failed)
 }
 
 fn embeddings_follow_up_pending(
     session: &InitSessionRecord,
-    initial_sync: Option<&DevqlTaskRecord>,
-    follow_up_sync: Option<&DevqlTaskRecord>,
+    _initial_sync: Option<&DevqlTaskRecord>,
+    _follow_up_sync: Option<&DevqlTaskRecord>,
     embeddings_task: Option<&DevqlTaskRecord>,
 ) -> bool {
     if session.selections.embeddings_bootstrap.is_none() {
         return false;
     }
-    let Some(bootstrap_completed_at) = completed_task_at(embeddings_task) else {
+    if task_failed(embeddings_task) {
+        return false;
+    }
+    let Some(bootstrap_completed_seq) = session.embeddings_bootstrap_completion_seq else {
         return false;
     };
-    let Some(sync_completed_at) = latest_completed_sync_at(initial_sync, follow_up_sync) else {
+    let Some(sync_completed_seq) = latest_completed_sync_seq(session) else {
         return false;
     };
-    bootstrap_completed_at > sync_completed_at
+    bootstrap_completed_seq > sync_completed_seq
 }
 
 fn summaries_follow_up_pending(
     session: &InitSessionRecord,
-    initial_sync: Option<&DevqlTaskRecord>,
-    follow_up_sync: Option<&DevqlTaskRecord>,
+    _initial_sync: Option<&DevqlTaskRecord>,
+    _follow_up_sync: Option<&DevqlTaskRecord>,
     summary_run: Option<&SummaryBootstrapRunRecord>,
 ) -> bool {
     if session.selections.summaries_bootstrap.is_none() {
         return false;
     }
-    let Some(bootstrap_completed_at) = completed_summary_run_at(summary_run) else {
+    if summary_run.is_some_and(summary_run_failed) {
+        return false;
+    }
+    let Some(bootstrap_completed_seq) = session.summary_bootstrap_completion_seq else {
         return false;
     };
-    let Some(sync_completed_at) = latest_completed_sync_at(initial_sync, follow_up_sync) else {
+    let Some(sync_completed_seq) = latest_completed_sync_seq(session) else {
         return false;
     };
-    bootstrap_completed_at > sync_completed_at
+    bootstrap_completed_seq > sync_completed_seq
 }
 
 fn semantic_bootstrap_still_outstanding_after_initial_sync(
@@ -2681,16 +2540,21 @@ mod tests {
             initial_sync_task_id: None,
             ingest_task_id: None,
             embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
-            summary_bootstrap_run_id: Some("summary-run-1".to_string()),
+            summary_bootstrap_task_id: Some("summary-task-1".to_string()),
             follow_up_sync_required: false,
             follow_up_sync_task_id: None,
+            next_completion_seq: 0,
+            initial_sync_completion_seq: None,
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: None,
+            follow_up_sync_completion_seq: None,
             submitted_at_unix: 1,
             updated_at_unix: 1,
             terminal_status: None,
             terminal_error: None,
         };
         let summary_run = SummaryBootstrapRunRecord {
-            run_id: "summary-run-1".to_string(),
+            run_id: "summary-task-1".to_string(),
             repo_id: "repo-1".to_string(),
             repo_root: PathBuf::from("/tmp/repo-1"),
             init_session_id: "init-session-1".to_string(),
@@ -2758,9 +2622,14 @@ mod tests {
             initial_sync_task_id: None,
             ingest_task_id: None,
             embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
-            summary_bootstrap_run_id: Some("summary-run-1".to_string()),
+            summary_bootstrap_task_id: Some("summary-task-1".to_string()),
             follow_up_sync_required: true,
             follow_up_sync_task_id: None,
+            next_completion_seq: 1,
+            initial_sync_completion_seq: None,
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: Some(1),
+            follow_up_sync_completion_seq: None,
             submitted_at_unix: 1,
             updated_at_unix: 1,
             terminal_status: None,
@@ -2796,7 +2665,7 @@ mod tests {
             result: None,
         };
         let summary_run = SummaryBootstrapRunRecord {
-            run_id: "summary-run-1".to_string(),
+            run_id: "summary-task-1".to_string(),
             repo_id: "repo-1".to_string(),
             repo_root: PathBuf::from("/tmp/repo-1"),
             init_session_id: "init-session-1".to_string(),
@@ -2847,9 +2716,14 @@ mod tests {
             initial_sync_task_id: Some("sync-task-1".to_string()),
             ingest_task_id: None,
             embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
-            summary_bootstrap_run_id: Some("summary-run-1".to_string()),
+            summary_bootstrap_task_id: Some("summary-task-1".to_string()),
             follow_up_sync_required: true,
             follow_up_sync_task_id: None,
+            next_completion_seq: 2,
+            initial_sync_completion_seq: Some(1),
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: Some(2),
+            follow_up_sync_completion_seq: None,
             submitted_at_unix: 1,
             updated_at_unix: 1,
             terminal_status: None,
@@ -2857,7 +2731,7 @@ mod tests {
         };
         let initial_sync = completed_sync_task("sync-task-1", 10);
         let summary_run = SummaryBootstrapRunRecord {
-            run_id: "summary-run-1".to_string(),
+            run_id: "summary-task-1".to_string(),
             repo_id: "repo-1".to_string(),
             repo_root: PathBuf::from("/tmp/repo-1"),
             init_session_id: "init-session-1".to_string(),
@@ -2922,9 +2796,14 @@ mod tests {
             initial_sync_task_id: Some("sync-task-1".to_string()),
             ingest_task_id: None,
             embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
-            summary_bootstrap_run_id: Some("summary-run-1".to_string()),
+            summary_bootstrap_task_id: Some("summary-task-1".to_string()),
             follow_up_sync_required: false,
             follow_up_sync_task_id: None,
+            next_completion_seq: 2,
+            initial_sync_completion_seq: Some(1),
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: Some(2),
+            follow_up_sync_completion_seq: None,
             submitted_at_unix: 1,
             updated_at_unix: 1,
             terminal_status: None,
@@ -2932,7 +2811,7 @@ mod tests {
         };
         let initial_sync = completed_sync_task("sync-task-1", 10);
         let summary_run = SummaryBootstrapRunRecord {
-            run_id: "summary-run-1".to_string(),
+            run_id: "summary-task-1".to_string(),
             repo_id: "repo-1".to_string(),
             repo_root: PathBuf::from("/tmp/repo-1"),
             init_session_id: "init-session-1".to_string(),
@@ -3012,9 +2891,14 @@ mod tests {
             initial_sync_task_id: Some("sync-task-1".to_string()),
             ingest_task_id: None,
             embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
-            summary_bootstrap_run_id: Some("summary-run-1".to_string()),
+            summary_bootstrap_task_id: Some("summary-task-1".to_string()),
             follow_up_sync_required: true,
             follow_up_sync_task_id: None,
+            next_completion_seq: 2,
+            initial_sync_completion_seq: Some(1),
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: Some(2),
+            follow_up_sync_completion_seq: None,
             submitted_at_unix: 1,
             updated_at_unix: 1,
             terminal_status: None,
@@ -3051,7 +2935,7 @@ mod tests {
             result: None,
         };
         let summary_run = SummaryBootstrapRunRecord {
-            run_id: "summary-run-1".to_string(),
+            run_id: "summary-task-1".to_string(),
             repo_id: "repo-1".to_string(),
             repo_root: PathBuf::from("/tmp/repo-1"),
             init_session_id: "init-session-1".to_string(),
@@ -3105,9 +2989,14 @@ mod tests {
             initial_sync_task_id: Some("sync-task-1".to_string()),
             ingest_task_id: None,
             embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
-            summary_bootstrap_run_id: Some("summary-run-1".to_string()),
+            summary_bootstrap_task_id: Some("summary-task-1".to_string()),
             follow_up_sync_required: true,
             follow_up_sync_task_id: Some("follow-up-sync-1".to_string()),
+            next_completion_seq: 4,
+            initial_sync_completion_seq: Some(1),
+            embeddings_bootstrap_completion_seq: Some(4),
+            summary_bootstrap_completion_seq: Some(2),
+            follow_up_sync_completion_seq: Some(3),
             submitted_at_unix: 1,
             updated_at_unix: 1,
             terminal_status: None,
@@ -3145,7 +3034,7 @@ mod tests {
             result: None,
         };
         let summary_run = SummaryBootstrapRunRecord {
-            run_id: "summary-run-1".to_string(),
+            run_id: "summary-task-1".to_string(),
             repo_id: "repo-1".to_string(),
             repo_root: PathBuf::from("/tmp/repo-1"),
             init_session_id: "init-session-1".to_string(),
@@ -3191,9 +3080,14 @@ mod tests {
             initial_sync_task_id: Some("sync-task-1".to_string()),
             ingest_task_id: None,
             embeddings_bootstrap_task_id: None,
-            summary_bootstrap_run_id: None,
+            summary_bootstrap_task_id: None,
             follow_up_sync_required: false,
             follow_up_sync_task_id: None,
+            next_completion_seq: 0,
+            initial_sync_completion_seq: None,
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: None,
+            follow_up_sync_completion_seq: None,
             submitted_at_unix: 1,
             updated_at_unix: 1,
             terminal_status: None,

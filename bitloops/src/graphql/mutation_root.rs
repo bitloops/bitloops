@@ -739,6 +739,12 @@ fn resolve_enqueue_task_input(
             operation,
             "`enqueueTask` does not support EMBEDDINGS_BOOTSTRAP; bootstrap tasks are enqueued internally by the daemon-aware CLI flows",
         )),
+        TaskKind::SummaryBootstrap => Err(operation_error(
+            "BAD_USER_INPUT",
+            "validation",
+            operation,
+            "`enqueueTask` does not support SUMMARY_BOOTSTRAP; bootstrap tasks are enqueued internally by the daemon-aware CLI flows",
+        )),
     }
 }
 

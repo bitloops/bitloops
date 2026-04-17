@@ -30,8 +30,8 @@ pub(crate) use self::types::{
     EmbeddingsBootstrapResultGraphqlRecord, RuntimeEmbeddingsBootstrapRequestInput,
     RuntimeInitLaneGraphqlRecord, RuntimeInitSessionGraphqlRecord, RuntimeSnapshotGraphqlRecord,
     RuntimeStartInitInput, RuntimeSummaryBootstrapRequestInput,
-    RuntimeSummaryBootstrapRunGraphqlRecord, TaskGraphqlRecord, TaskQueueControlGraphqlRecord,
-    TaskQueueGraphqlRecord,
+    RuntimeSummaryBootstrapRunGraphqlRecord, SummaryBootstrapResultGraphqlRecord,
+    TaskGraphqlRecord, TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord,
 };
 #[cfg(test)]
 pub(crate) use self::types::{

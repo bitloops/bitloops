@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use super::progress::{format_live_task_progress_bar_line, format_live_task_status_line};
 use super::subscription::should_accept_invalid_daemon_websocket_certs;
 use super::types::{
+    SummaryBootstrapProgressGraphqlRecord, SummaryBootstrapTaskSpecGraphqlRecord,
     SyncMutationResult, SyncTaskProgressGraphqlRecord, SyncTaskSpecGraphqlRecord,
     SyncValidationFileDriftMutationResult, SyncValidationMutationResult, TaskGraphqlRecord,
 };
@@ -32,6 +33,7 @@ fn sample_task(status: &str) -> TaskGraphqlRecord {
         }),
         ingest_spec: None,
         embeddings_bootstrap_spec: None,
+        summary_bootstrap_spec: None,
         sync_progress: Some(SyncTaskProgressGraphqlRecord {
             phase: "extracting_paths".to_string(),
             current_path: Some("src/lib.rs".to_string()),
@@ -48,9 +50,11 @@ fn sample_task(status: &str) -> TaskGraphqlRecord {
         }),
         ingest_progress: None,
         embeddings_bootstrap_progress: None,
+        summary_bootstrap_progress: None,
         sync_result: None,
         ingest_result: None,
         embeddings_bootstrap_result: None,
+        summary_bootstrap_result: None,
     }
 }
 
@@ -76,6 +80,7 @@ fn sample_task_json(status: &str) -> serde_json::Value {
         },
         "ingestSpec": serde_json::Value::Null,
         "embeddingsBootstrapSpec": serde_json::Value::Null,
+        "summaryBootstrapSpec": serde_json::Value::Null,
         "syncProgress": {
             "phase": "complete",
             "currentPath": serde_json::Value::Null,
@@ -92,10 +97,55 @@ fn sample_task_json(status: &str) -> serde_json::Value {
         },
         "ingestProgress": serde_json::Value::Null,
         "embeddingsBootstrapProgress": serde_json::Value::Null,
+        "summaryBootstrapProgress": serde_json::Value::Null,
         "syncResult": serde_json::Value::Null,
         "ingestResult": serde_json::Value::Null,
-        "embeddingsBootstrapResult": serde_json::Value::Null
+        "embeddingsBootstrapResult": serde_json::Value::Null,
+        "summaryBootstrapResult": serde_json::Value::Null
     })
+}
+
+fn sample_summary_bootstrap_task(status: &str) -> TaskGraphqlRecord {
+    TaskGraphqlRecord {
+        task_id: "summary-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "bitloops".to_string(),
+        repo_identity: "local/bitloops".to_string(),
+        kind: "SUMMARY_BOOTSTRAP".to_string(),
+        source: "init".to_string(),
+        status: status.to_ascii_uppercase(),
+        submitted_at_unix: 1,
+        started_at_unix: Some(2),
+        updated_at_unix: 3,
+        completed_at_unix: None,
+        queue_position: Some(1),
+        tasks_ahead: Some(0),
+        error: None,
+        sync_spec: None,
+        ingest_spec: None,
+        embeddings_bootstrap_spec: None,
+        summary_bootstrap_spec: Some(SummaryBootstrapTaskSpecGraphqlRecord {
+            action: "configure_cloud".to_string(),
+            message: None,
+            model_name: None,
+            gateway_url_override: None,
+        }),
+        sync_progress: None,
+        ingest_progress: None,
+        embeddings_bootstrap_progress: None,
+        summary_bootstrap_progress: Some(SummaryBootstrapProgressGraphqlRecord {
+            phase: "downloading_runtime".to_string(),
+            asset_name: Some("summary-runtime.tgz".to_string()),
+            bytes_downloaded: 512,
+            bytes_total: Some(1024),
+            version: Some("1.2.3".to_string()),
+            message: None,
+        }),
+        sync_result: None,
+        ingest_result: None,
+        embeddings_bootstrap_result: None,
+        summary_bootstrap_result: None,
+    }
 }
 
 fn test_scope() -> crate::devql_transport::SlimCliRepoScope {
@@ -220,6 +270,16 @@ fn live_task_status_line_covers_terminal_states() {
 
     let unknown = format_live_task_status_line(&sample_task("paused"), "*", None);
     assert!(unknown.contains("Sync paused for bitloops"));
+}
+
+#[test]
+fn live_task_status_line_covers_summary_bootstrap_tasks() {
+    let rendered =
+        format_live_task_status_line(&sample_summary_bootstrap_task("running"), "*", None);
+
+    assert!(rendered.contains("Bootstrapping summaries for bitloops"));
+    assert!(rendered.contains("downloading runtime"));
+    assert!(rendered.contains("512/1024 bytes"));
 }
 
 #[test]

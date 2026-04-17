@@ -92,12 +92,15 @@ pub(crate) struct TaskGraphqlRecord {
     pub sync_spec: Option<SyncTaskSpecGraphqlRecord>,
     pub ingest_spec: Option<IngestTaskSpecGraphqlRecord>,
     pub embeddings_bootstrap_spec: Option<EmbeddingsBootstrapTaskSpecGraphqlRecord>,
+    pub summary_bootstrap_spec: Option<SummaryBootstrapTaskSpecGraphqlRecord>,
     pub sync_progress: Option<SyncTaskProgressGraphqlRecord>,
     pub ingest_progress: Option<IngestTaskProgressGraphqlRecord>,
     pub embeddings_bootstrap_progress: Option<EmbeddingsBootstrapProgressGraphqlRecord>,
+    pub summary_bootstrap_progress: Option<SummaryBootstrapProgressGraphqlRecord>,
     pub sync_result: Option<SyncMutationResult>,
     pub ingest_result: Option<IngestionCounters>,
     pub embeddings_bootstrap_result: Option<EmbeddingsBootstrapResultGraphqlRecord>,
+    pub summary_bootstrap_result: Option<SummaryBootstrapResultGraphqlRecord>,
 }
 
 impl TaskGraphqlRecord {
@@ -111,6 +114,10 @@ impl TaskGraphqlRecord {
 
     pub(crate) fn is_embeddings_bootstrap(&self) -> bool {
         self.kind.eq_ignore_ascii_case("embeddings_bootstrap")
+    }
+
+    pub(crate) fn is_summary_bootstrap(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("summary_bootstrap")
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
@@ -143,6 +150,15 @@ pub(crate) struct IngestTaskSpecGraphqlRecord {
 pub(crate) struct EmbeddingsBootstrapTaskSpecGraphqlRecord {
     pub config_path: String,
     pub profile_name: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SummaryBootstrapTaskSpecGraphqlRecord {
+    pub action: String,
+    pub message: Option<String>,
+    pub model_name: Option<String>,
+    pub gateway_url_override: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -188,6 +204,17 @@ pub(crate) struct EmbeddingsBootstrapProgressGraphqlRecord {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct SummaryBootstrapProgressGraphqlRecord {
+    pub phase: String,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: i64,
+    pub bytes_total: Option<i64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct EmbeddingsBootstrapResultGraphqlRecord {
     pub version: Option<String>,
     pub binary_path: Option<String>,
@@ -195,6 +222,14 @@ pub(crate) struct EmbeddingsBootstrapResultGraphqlRecord {
     pub runtime_name: Option<String>,
     pub model_name: Option<String>,
     pub freshly_installed: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SummaryBootstrapResultGraphqlRecord {
+    pub outcome_kind: String,
+    pub model_name: Option<String>,
     pub message: String,
 }
 
@@ -453,7 +488,7 @@ pub(crate) struct RuntimeInitSessionGraphqlRecord {
     pub ingest_task_id: Option<String>,
     pub follow_up_sync_task_id: Option<String>,
     pub embeddings_bootstrap_task_id: Option<String>,
-    pub summary_bootstrap_run_id: Option<String>,
+    pub summary_bootstrap_task_id: Option<String>,
     pub terminal_error: Option<String>,
     pub top_pipeline_lane: RuntimeInitLaneGraphqlRecord,
     pub embeddings_lane: RuntimeInitLaneGraphqlRecord,
