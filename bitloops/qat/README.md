@@ -2,7 +2,8 @@
 
 QAT runs as dedicated Rust integration test targets, executed via `cargo-nextest`. The legacy `qat_acceptance` target has been
 split into `qat`, `qat_smoke`, `qat_devql_capabilities`, `qat_devql_ingest`, `qat_devql_sync`, `qat_onboarding`, and
-`qat_quickstart`. The production binary no longer exposes a `qat` subcommand, and the repo aliases enable the dedicated
+`qat_agents_checkpoints`. The focused lane is `cargo qat-agents-checkpoints`; `cargo qat-quickstart` remains only as a temporary
+compatibility alias. The production binary no longer exposes a `qat` subcommand, and the repo aliases enable the dedicated
 `qat-tests` feature automatically.
 
 ## Where to run from
@@ -14,19 +15,19 @@ The explicit `cargo nextest run` forms also work from the `bitloops/` crate dire
 
 ### Active suite overview
 
-Active QAT currently defines 76 scenarios total:
+Active QAT currently defines 92 scenarios total:
 
-- 75 scenarios in the bundled `cargo qat` lane
-- 1 scenario in the focused `cargo qat-quickstart` lane
+- 87 scenarios in the bundled `cargo qat` lane
+- 5 scenarios in the focused `cargo qat-agents-checkpoints` lane
 
 | Suite              | Command                        | In `cargo qat` | Active scenarios | Primary purpose                                                                   |
 | ------------------ | ------------------------------ | -------------- | ---------------: | --------------------------------------------------------------------------------- |
 | Onboarding         | `cargo qat-onboarding`         | Yes            |               13 | First-run install, init, enable, disable, and uninstall flows                     |
 | Smoke              | `cargo qat-smoke`              | Yes            |               13 | Deterministic agent/checkpoint golden path across supported agents                |
-| DevQL Sync         | `cargo qat-devql-sync`         | Yes            |               15 | Current-workspace reconciliation via queued sync tasks                            |
-| DevQL Capabilities | `cargo qat-devql-capabilities` | Yes            |               22 | Query surfaces over checkpoints, DevQL state, TestHarness, and semantic clones    |
-| DevQL Ingest       | `cargo qat-devql-ingest`       | Yes            |               12 | Commit-history replay, ledger correctness, rewrite handling, and bounded backfill |
-| Quickstart         | `cargo qat-quickstart`         | No             |                1 | Focused first-value checkpoint capture flow                                       |
+| DevQL Sync         | `cargo qat-devql-sync`         | Yes            |               23 | Current-workspace reconciliation, validation/repair, path/full modes, queue control |
+| DevQL Capabilities | `cargo qat-devql-capabilities` | Yes            |               24 | Query surfaces over checkpoints, DevQL state, TestHarness, semantic clones, and deterministic Confluence knowledge |
+| DevQL Ingest       | `cargo qat-devql-ingest`       | Yes            |               14 | Commit-history replay, rewrite handling, and bounded backfill catch-up            |
+| Agents Checkpoints | `cargo qat-agents-checkpoints` | No             |                5 | Focused checkpoint capture, pre-commit interaction, progression, and ordering     |
 
 ### Bundled QAT suites (CI bundle)
 
@@ -111,12 +112,13 @@ cargo nextest run --features qat-tests --test qat_onboarding --run-ignored only 
 | 12  | Uninstall removes agent and git hooks              | `uninstall-repo`               |
 | 13  | Full uninstall removes all artefacts               | `uninstall-full`               |
 
-### 3. DevQL Sync (`cargo qat-devql-sync`, 15 scenarios)
+### 3. DevQL Sync (`cargo qat-devql-sync`, 23 scenarios)
 
 Exercises the queue-backed `bitloops devql tasks enqueue --kind sync` workspace
 reconciliation flow: full indexing, TestHarness current-state sync, incremental
 add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
-validation and repair, and `init --sync=true` integration.
+validation and repair, explicit full and path-scoped modes, task queue control,
+`--require-daemon` failure handling, and `init --sync=true` integration.
 
 ```bash
 cargo qat-devql-sync
@@ -148,17 +150,18 @@ cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only 
 | 14  | Init with sync=true still allows incremental sync for new files           | `SyncInitSyncTrueIncremental`   |
 | 15  | Init with sync=true keeps sync validation clean without workspace changes | `SyncInitSyncTrueValidateClean` |
 
-The helper layer still supports negative drift assertions, but the current active sync
-feature set does not include drift-validation scenarios.
+The helper layer still supports negative drift assertions, and the active sync set now
+includes drift validation plus accumulated-drift coverage.
 
-### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 22 scenarios)
+### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 24 scenarios)
 
 Exercises the strict offline DevQL capability surface: agent queryability,
 checkpoint and chat-history retrieval, artefact-scoped dependency blast radius,
 artefact-scoped TestHarness proof-map queries, guide-aligned deterministic
-semantic clones, knowledge rejection handling, and one final integrated
-cross-capability smoke. The semantic-clones lane validates the offline
-fake-runtime path rather than real local-model warm-cache behavior.
+semantic clones, deterministic Confluence knowledge add/query/associate/refresh,
+knowledge rejection handling, and one final integrated cross-capability smoke.
+The semantic-clones lane validates the offline fake-runtime path rather than real
+local-model warm-cache behavior.
 
 ```bash
 cargo qat-devql-capabilities
@@ -193,19 +196,19 @@ cargo nextest run --features qat-tests --test qat_devql_capabilities --run-ignor
   - handler-clone ranking, explanations, and filtering
   - DevQL clone summary grouped counts
   - GraphQL clone summary grouped counts
-- Knowledge ingestion rejection handling (1 scenario)
+- Deterministic Confluence knowledge flows (3 scenarios)
+  - add/query/associate happy path for deterministic fixtures
+  - refresh creates a new version
   - unsupported URL fails cleanly without partial persistence
 - Cross-capability deterministic smoke (1 scenario)
   - checkpoints, sessions, artefacts, dependency queries, TestHarness queries, and clone queries compose in one repo
 
-Knowledge happy-path coverage is not part of the active QAT lane today; the current
-knowledge scenario is rejection-only by design.
-
-### 5. DevQL Ingest (`cargo qat-devql-ingest`, 12 scenarios)
+### 5. DevQL Ingest (`cargo qat-devql-ingest`, 14 scenarios)
 
 Exercises the queue-backed `bitloops devql tasks enqueue --kind ingest` commit-history
 replay flow: initial backlog ingest, idempotent replay, batching, merge and rewrite
-handling, and bounded backfill integration through `bitloops init --ingest=true`.
+handling, bounded backfill integration through `bitloops init --ingest=true`, and
+direct enqueue backfill catch-up.
 
 ```bash
 cargo qat-devql-ingest
@@ -231,28 +234,33 @@ cargo nextest run --features qat-tests --test qat_devql_ingest --run-ignored onl
 - `bitloops init --ingest=true --backfill=1` ingests only the latest reachable commit.
 - A later full ingest catches up after `--backfill=1`.
 - `bitloops init --ingest=true --backfill=2` stays bounded and a later full ingest catches up.
+- Direct enqueue with `--backfill 1` ingests only the latest reachable commit.
+- A later direct enqueue full ingest catches up after `--backfill 1`.
 
-### 6. Quickstart (`cargo qat-quickstart`, 1 scenario)
+### 6. Agents Checkpoints (`cargo qat-agents-checkpoints`, 5 scenarios)
 
-This focused lane is not part of `cargo qat`. It currently validates checkpoint capture,
-not the full DevQL/TestHarness first-value story implied by older quickstart wording.
+This focused lane is not part of `cargo qat`. It validates checkpoint capture directly:
+first checkpoint bootstrap, pre-commit interaction visibility, single-agent progression,
+relative-day timeline integrity, and multi-agent checkpoint ordering. `cargo qat-quickstart`
+remains as a temporary compatibility alias to the same suite.
 
 ```bash
-cargo qat-quickstart
+cargo qat-agents-checkpoints
 ```
 
 Or equivalently:
 
 ```bash
-cargo nextest run --features qat-tests --test qat_quickstart --run-ignored only -- qat_quickstart --exact
+cargo nextest run --features qat-tests --test qat_agents_checkpoints --run-ignored only -- qat_agents_checkpoints --exact
 ```
 
 **Active coverage:**
 
-- Checkpoint creation through Claude Code edits.
-
-The quickstart feature file still contains commented future scenarios for DevQL ingest,
-TestHarness ingestion, and coverage ingestion. Those are not active QAT coverage today.
+- Supported agent can complete bootstrap and create the first checkpoint.
+- Agent interaction exists before the first checkpoint is committed.
+- Single-agent checkpoint progression stays ordered across multiple commits.
+- Single-agent checkpoint timeline stays coherent across yesterday and today.
+- Multiple agents can interleave checkpoint activity without breaking history order.
 
 ## Runtime notes
 

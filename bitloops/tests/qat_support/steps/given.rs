@@ -315,6 +315,21 @@ pub(super) fn given_claude_code_prompt(
     })
 }
 
+pub(super) fn given_supported_agent_prompt(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let prompt = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I ask a supported agent to make a change",
+            helpers::run_agent_prompt_for_repo(world, &repo_name, &agent_name, &prompt),
+        );
+    })
+}
+
 pub(super) fn given_second_claude_change(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -772,6 +787,38 @@ pub(super) fn given_knowledge_add(
     })
 }
 
+pub(super) fn given_configure_deterministic_confluence_knowledge_fixtures(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I configure deterministic Confluence knowledge fixtures",
+            helpers::ensure_bitloops_repo_name(&repo_name).and_then(|_| {
+                helpers::configure_deterministic_confluence_knowledge_fixtures_for_repo(
+                    world, &repo_name,
+                )
+            }),
+        );
+    })
+}
+
+pub(super) fn given_fixture_knowledge_add(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let fixture_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I add fixture knowledge",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::run_fixture_knowledge_add(world, &fixture_name)),
+        );
+    })
+}
+
 pub(super) fn given_knowledge_add_with_commit(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -818,6 +865,21 @@ pub(super) fn given_knowledge_refresh(
     })
 }
 
+pub(super) fn given_fixture_knowledge_refresh(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let fixture_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I refresh fixture knowledge",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::run_fixture_knowledge_refresh(world, &fixture_name)),
+        );
+    })
+}
+
 pub(super) fn given_enqueue_devql_sync_task_with_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -840,6 +902,54 @@ pub(super) fn given_enqueue_devql_sync_task_without_status(
         run_step(
             "I enqueue DevQL sync task without status",
             helpers::enqueue_devql_sync_task_without_status_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_enqueue_devql_ingest_task_without_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I enqueue DevQL ingest task without status",
+            helpers::enqueue_devql_ingest_task_without_status_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_enqueue_devql_sync_task_with_paths_and_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let paths = ctx.matches[1]
+            .1
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I enqueue DevQL sync task with paths and status",
+            helpers::enqueue_devql_sync_task_with_paths_and_status_for_repo(
+                world, &repo_name, &paths,
+            ),
+        );
+    })
+}
+
+pub(super) fn given_enqueue_devql_full_sync_task_with_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I enqueue DevQL full sync task with status",
+            helpers::enqueue_devql_full_sync_task_with_status_for_repo(world, &repo_name),
         );
     })
 }
@@ -896,6 +1006,133 @@ pub(super) fn given_attempt_to_enqueue_devql_sync_task(
     })
 }
 
+pub(super) fn given_attempt_to_enqueue_devql_sync_task_require_daemon(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I attempt to enqueue DevQL sync task with require-daemon",
+            helpers::attempt_to_enqueue_devql_sync_task_require_daemon_for_repo(
+                world, &repo_name,
+            ),
+        );
+    })
+}
+
+pub(super) fn given_run_devql_tasks_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run DevQL tasks status",
+            helpers::run_devql_tasks_status_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_run_devql_tasks_list(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run DevQL tasks list",
+            helpers::run_devql_tasks_list_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_run_devql_tasks_list_for_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let status = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I run DevQL tasks list for status",
+            helpers::run_devql_tasks_list_for_status_for_repo(world, &repo_name, &status),
+        );
+    })
+}
+
+pub(super) fn given_watch_last_devql_task(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I watch the last DevQL task",
+            helpers::watch_last_devql_task_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_pause_devql_tasks_with_reason(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let reason = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I pause the DevQL task queue",
+            helpers::pause_devql_tasks_for_repo(world, &repo_name, Some(&reason)),
+        );
+    })
+}
+
+pub(super) fn given_resume_devql_tasks(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I resume the DevQL task queue",
+            helpers::resume_devql_tasks_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_cancel_last_devql_task(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I cancel the last DevQL task",
+            helpers::cancel_last_devql_task_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_enqueue_devql_ingest_task_with_backfill_and_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let backfill = ctx.matches[1]
+            .1
+            .parse::<usize>()
+            .expect("backfill should parse as usize");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I enqueue DevQL ingest task with backfill and status",
+            helpers::enqueue_devql_ingest_task_with_backfill_and_status_for_repo(
+                world, &repo_name, backfill,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_add_new_source_file(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -910,6 +1147,20 @@ pub(super) fn given_add_new_source_file(
     })
 }
 
+pub(super) fn given_add_source_file_at_path(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I add a source file at path",
+            helpers::add_source_file_at_path_for_repo(world, &repo_name, &path),
+        );
+    })
+}
+
 pub(super) fn given_modify_existing_source_file(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -920,6 +1171,40 @@ pub(super) fn given_modify_existing_source_file(
             "I modify an existing source file",
             helpers::ensure_bitloops_repo_name(&repo_name)
                 .and_then(|_| helpers::modify_rust_main(world)),
+        );
+    })
+}
+
+pub(super) fn given_modify_source_file_at_path(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I modify a source file at path",
+            helpers::modify_source_file_at_path_for_repo(world, &repo_name, &path),
+        );
+    })
+}
+
+pub(super) fn given_snapshot_current_file_state_content_ids(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let paths = ctx.matches[1]
+            .1
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I snapshot current-state content ids",
+            helpers::snapshot_current_file_state_content_ids_for_paths(world, &repo_name, &paths),
         );
     })
 }

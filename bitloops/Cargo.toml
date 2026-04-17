@@ -123,8 +123,8 @@ path = "tests/qat_onboarding.rs"
 required-features = ["qat-tests"]
 
 [[test]]
-name = "qat_quickstart"
-path = "tests/qat_quickstart.rs"
+name = "qat_agents_checkpoints"
+path = "tests/qat_agents_checkpoints.rs"
 required-features = ["qat-tests"]
 
 [[test]]

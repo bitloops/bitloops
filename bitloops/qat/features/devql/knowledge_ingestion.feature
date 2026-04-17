@@ -15,6 +15,24 @@ Feature: Knowledge ingestion rejection handling
     And I enqueue DevQL ingest task with status in bitloops
 
   @devql @knowledge
+  Scenario: Deterministic Confluence knowledge can be added, queried, and associated
+    Given I configure deterministic Confluence knowledge fixtures in bitloops
+    And I add fixture knowledge "alpha" in bitloops
+    And I add fixture knowledge "beta" in bitloops
+    Then DevQL knowledge query returns at least 2 items in bitloops
+    And knowledge item has provider "confluence" and source_kind "confluence_page" in bitloops
+    Given I associate knowledge "alpha" to knowledge "beta" in bitloops
+    Then the command output contains "Knowledge associated" in bitloops
+
+  @devql @knowledge
+  Scenario: Deterministic Confluence knowledge refresh creates a new version
+    Given I configure deterministic Confluence knowledge fixtures in bitloops
+    And I add fixture knowledge "alpha" in bitloops
+    Given I refresh fixture knowledge "alpha" in bitloops
+    Then the command output contains "Knowledge refreshed" in bitloops
+    And knowledge versions for "alpha" shows exactly 2 versions in bitloops
+
+  @devql @knowledge
   Scenario: Unsupported URL fails cleanly without partial persistence
     Given I attempt to add knowledge URL "https://unsupported-provider.example.com/doc/123" in bitloops
     Then the knowledge add command fails with an error in bitloops

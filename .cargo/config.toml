@@ -33,7 +33,8 @@ qat-devql-capabilities = "nextest run --manifest-path bitloops/Cargo.toml --feat
 qat-devql-sync = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact"
 qat-onboarding = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact"
 qat-devql-ingest = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_ingest --run-ignored only -- qat_devql_ingest --exact"
-qat-quickstart = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_quickstart --run-ignored only -- qat_quickstart --exact"
+qat-agents-checkpoints = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_agents_checkpoints --run-ignored only -- qat_agents_checkpoints --exact"
+qat-quickstart = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_agents_checkpoints --run-ignored only -- qat_agents_checkpoints --exact"
 
 # Explicit bundled-DuckDB aliases for release/offline/exotic targets.
 dev-check-bundled = "check --manifest-path bitloops/Cargo.toml --features duckdb-bundled"

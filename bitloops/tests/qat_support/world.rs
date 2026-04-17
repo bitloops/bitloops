@@ -1,3 +1,4 @@
+use super::helpers::KnowledgeStubServer;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -108,9 +109,13 @@ pub struct QatWorld {
     pub semantic_clone_table_snapshot: Option<SemanticCloneTableSnapshot>,
     pub last_enrichment_status_snapshot: Option<EnrichmentStatusSnapshot>,
     pub semantic_clone_progress_observation: Option<SemanticCloneProgressObservation>,
+    pub current_file_state_content_id_snapshots: HashMap<String, Option<String>>,
     pub knowledge_items_by_url: HashMap<String, String>,
     pub knowledge_versions_by_ref: HashMap<String, usize>,
+    pub knowledge_fixture_urls: HashMap<String, String>,
+    pub knowledge_stub_server: Option<KnowledgeStubServer>,
     pub last_knowledge_add_had_commit_association: Option<bool>,
+    pub last_task_id: Option<String>,
     pub agent_name: Option<String>,
 }
 
@@ -159,9 +164,13 @@ impl QatWorld {
         self.semantic_clone_table_snapshot = None;
         self.last_enrichment_status_snapshot = None;
         self.semantic_clone_progress_observation = None;
+        self.current_file_state_content_id_snapshots = HashMap::new();
         self.knowledge_items_by_url = HashMap::new();
         self.knowledge_versions_by_ref = HashMap::new();
+        self.knowledge_fixture_urls = HashMap::new();
+        self.knowledge_stub_server = None;
         self.last_knowledge_add_had_commit_association = None;
+        self.last_task_id = None;
         self.agent_name = None;
     }
 

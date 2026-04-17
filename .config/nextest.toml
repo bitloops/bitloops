@@ -7,7 +7,7 @@ filter = 'binary(=production_seed) or binary(=graphql_smoke) or binary(=graphql)
 test-group = 'env-mutating'
 
 [[profile.default.overrides]]
-filter = 'binary(=qat) or binary(=qat_smoke) or binary(=qat_devql_capabilities) or binary(=qat_devql_ingest) or binary(=qat_devql_sync) or binary(=qat_onboarding) or binary(=qat_quickstart)'
+filter = 'binary(=qat) or binary(=qat_smoke) or binary(=qat_devql_capabilities) or binary(=qat_devql_ingest) or binary(=qat_devql_sync) or binary(=qat_onboarding) or binary(=qat_agents_checkpoints)'
 test-group = 'qat'
 
 [profile.ci]
@@ -22,7 +22,7 @@ filter = 'binary(=production_seed) or binary(=graphql_smoke) or binary(=graphql)
 test-group = 'env-mutating'
 
 [[profile.ci.overrides]]
-filter = 'binary(=qat) or binary(=qat_smoke) or binary(=qat_devql_capabilities) or binary(=qat_devql_ingest) or binary(=qat_devql_sync) or binary(=qat_onboarding) or binary(=qat_quickstart)'
+filter = 'binary(=qat) or binary(=qat_smoke) or binary(=qat_devql_capabilities) or binary(=qat_devql_ingest) or binary(=qat_devql_sync) or binary(=qat_onboarding) or binary(=qat_agents_checkpoints)'
 test-group = 'qat'
 
 [test-groups]

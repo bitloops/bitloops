@@ -214,3 +214,31 @@ Feature: DevQL ingest workspace history coverage
     Then only latest 2 reachable SHAs are completed in commit_ingest_ledger in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     Then all reachable SHAs are completed in commit_ingest_ledger in bitloops
+
+  @devql @ingest @backfill
+  Scenario: Direct enqueue backfill 1 ingests only latest commit
+    Given I run CleanStart for flow "IngestDirectBackfillOne"
+    And I start the daemon in bitloops
+    And I create a simple Rust project in bitloops
+    And I run InitCommit for bitloops
+    And I create 2 ingest commits in bitloops
+    And I run bitloops init --agent claude --sync=false in bitloops
+    And I run EnableCLI for bitloops
+    And I run DevQL init in bitloops
+    And I enqueue DevQL ingest task with backfill 1 and status in bitloops
+    Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops
+
+  @devql @ingest @backfill
+  Scenario: Full ingest catches up after direct enqueue backfill 1
+    Given I run CleanStart for flow "IngestDirectBackfillCatchup"
+    And I start the daemon in bitloops
+    And I create a simple Rust project in bitloops
+    And I run InitCommit for bitloops
+    And I create 2 ingest commits in bitloops
+    And I run bitloops init --agent claude --sync=false in bitloops
+    And I run EnableCLI for bitloops
+    And I run DevQL init in bitloops
+    And I enqueue DevQL ingest task with backfill 1 and status in bitloops
+    Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops
+    Given I enqueue DevQL ingest task with status in bitloops
+    Then all reachable SHAs are completed in commit_ingest_ledger in bitloops

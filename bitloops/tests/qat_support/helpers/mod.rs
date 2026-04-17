@@ -146,5 +146,6 @@ include!("daemon_harness.rs");
 include!("capability_runtime.rs");
 include!("deps_and_testlens.rs");
 include!("semantic_clones.rs");
+include!("knowledge_stub.rs");
 include!("knowledge.rs");
 include!("internals.rs");

@@ -275,6 +275,93 @@ fn build_devql_task_enqueue_args_builds_ingest_command_with_status() {
 }
 
 #[test]
+fn build_devql_task_enqueue_args_supports_paths_and_require_daemon_flags() {
+    let args = build_devql_task_enqueue_args(
+        DevqlTaskEnqueueKind::Sync,
+        &["--paths", "src/main.rs,src/lib.rs", "--require-daemon", "--status"],
+    );
+    assert_eq!(
+        args,
+        vec![
+            "devql".to_string(),
+            "tasks".to_string(),
+            "enqueue".to_string(),
+            "--kind".to_string(),
+            "sync".to_string(),
+            "--paths".to_string(),
+            "src/main.rs,src/lib.rs".to_string(),
+            "--require-daemon".to_string(),
+            "--status".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn parse_task_id_from_submission_extracts_queue_id() {
+    let stdout = "task queued: task=task-123 repo=bitloops kind=sync";
+    assert_eq!(
+        parse_task_id_from_submission(stdout),
+        Some("task-123".to_string())
+    );
+}
+
+#[test]
+fn parse_task_briefs_reads_task_summary_lines() {
+    let stdout = "task task-123: kind=sync status=completed repo=bitloops\n\
+task task-456: kind=ingest status=queued repo=bitloops";
+    assert_eq!(
+        parse_task_briefs(stdout),
+        vec![
+            DevqlTaskBriefRecord {
+                task_id: "task-123".to_string(),
+                kind: "sync".to_string(),
+                status: "completed".to_string(),
+                repo: "bitloops".to_string(),
+            },
+            DevqlTaskBriefRecord {
+                task_id: "task-456".to_string(),
+                kind: "ingest".to_string(),
+                status: "queued".to_string(),
+                repo: "bitloops".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_task_queue_status_reads_status_fields_and_current_repo_tasks() {
+    let stdout = "DevQL task queue\n\
+state: paused\n\
+queued: 1\n\
+running: 0\n\
+failed: 0\n\
+completed_recent: 2\n\
+pause_reason: qat-cancel\n\
+last_action: pause\n\
+kind=sync queued=1 running=0 failed=0 completed_recent=2\n\
+current_repo_tasks:\n\
+task task-123: kind=sync status=queued repo=bitloops\n";
+    assert_eq!(
+        parse_task_queue_status(stdout).expect("parse queue status"),
+        DevqlTaskQueueStatusSnapshot {
+            state: "paused".to_string(),
+            queued: 1,
+            running: 0,
+            failed: 0,
+            completed_recent: 2,
+            pause_reason: Some("qat-cancel".to_string()),
+            last_action: Some("pause".to_string()),
+            current_repo_tasks: vec![DevqlTaskBriefRecord {
+                task_id: "task-123".to_string(),
+                kind: "sync".to_string(),
+                status: "queued".to_string(),
+                repo: "bitloops".to_string(),
+            }],
+        }
+    );
+}
+
+#[test]
 fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_and_two_workers() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");
@@ -1204,6 +1291,89 @@ fn expected_smoke_transcript_path_uses_agent_specific_locations() {
             .join(AGENT_NAME_OPEN_CODE)
             .join(format!("{opencode_session_id}.jsonl"))
     );
+}
+
+#[test]
+fn parse_git_timeline_reads_sha_subject_and_timestamp() {
+    let commits = parse_git_timeline(
+        "aaa111|chore: initial commit|2026-04-15T12:00:00Z\nbbb222|test: committed today|2026-04-16T12:00:00Z",
+    );
+
+    assert_eq!(
+        commits,
+        vec![
+            GitTimelineCommit {
+                sha: "aaa111".to_string(),
+                subject: "chore: initial commit".to_string(),
+                author_iso: "2026-04-15T12:00:00Z".to_string(),
+            },
+            GitTimelineCommit {
+                sha: "bbb222".to_string(),
+                subject: "test: committed today".to_string(),
+                author_iso: "2026-04-16T12:00:00Z".to_string(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn captured_commit_history_is_ordered_accepts_monotonic_git_log_positions() {
+    let commits = vec![
+        GitTimelineCommit {
+            sha: "ccc333".to_string(),
+            subject: "test: committed today".to_string(),
+            author_iso: "2026-04-16T12:00:00Z".to_string(),
+        },
+        GitTimelineCommit {
+            sha: "bbb222".to_string(),
+            subject: "test: committed yesterday".to_string(),
+            author_iso: "2026-04-15T12:00:00Z".to_string(),
+        },
+        GitTimelineCommit {
+            sha: "aaa111".to_string(),
+            subject: "chore: initial commit".to_string(),
+            author_iso: "2026-04-15T12:00:00Z".to_string(),
+        },
+    ];
+
+    assert!(captured_commit_history_is_ordered(
+        &commits,
+        &[
+            "aaa111".to_string(),
+            "bbb222".to_string(),
+            "ccc333".to_string(),
+        ]
+    ));
+}
+
+#[test]
+fn captured_commit_history_is_ordered_rejects_out_of_order_captured_shas() {
+    let commits = vec![
+        GitTimelineCommit {
+            sha: "ccc333".to_string(),
+            subject: "test: committed today".to_string(),
+            author_iso: "2026-04-16T12:00:00Z".to_string(),
+        },
+        GitTimelineCommit {
+            sha: "bbb222".to_string(),
+            subject: "test: committed yesterday".to_string(),
+            author_iso: "2026-04-15T12:00:00Z".to_string(),
+        },
+        GitTimelineCommit {
+            sha: "aaa111".to_string(),
+            subject: "chore: initial commit".to_string(),
+            author_iso: "2026-04-15T12:00:00Z".to_string(),
+        },
+    ];
+
+    assert!(!captured_commit_history_is_ordered(
+        &commits,
+        &[
+            "aaa111".to_string(),
+            "ccc333".to_string(),
+            "bbb222".to_string(),
+        ]
+    ));
 }
 
 fn command_env_value(command: &std::process::Command, key: &str) -> Option<std::ffi::OsString> {

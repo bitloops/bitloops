@@ -21,7 +21,7 @@ pub enum Suite {
     DevqlIngest,
     DevqlSync,
     Onboarding,
-    Quickstart,
+    AgentsCheckpoints,
 }
 
 impl Suite {
@@ -32,7 +32,7 @@ impl Suite {
             Suite::DevqlIngest => "devql-ingest",
             Suite::DevqlSync => "devql-sync",
             Suite::Onboarding => "onboarding",
-            Suite::Quickstart => "quickstart",
+            Suite::AgentsCheckpoints => "agents-checkpoints",
         }
     }
 
@@ -43,7 +43,7 @@ impl Suite {
             Suite::DevqlIngest => "cargo qat-devql-ingest",
             Suite::DevqlSync => "cargo qat-devql-sync",
             Suite::Onboarding => "cargo qat-onboarding",
-            Suite::Quickstart => "cargo qat-quickstart",
+            Suite::AgentsCheckpoints => "cargo qat-agents-checkpoints",
         }
     }
 }
@@ -435,7 +435,7 @@ fn suite_feature_path(suite: &Suite) -> PathBuf {
         Suite::DevqlIngest => root.join("devql-ingest").join("ingest_workspace.feature"),
         Suite::DevqlSync => root.join("devql-sync"),
         Suite::Onboarding => root.join("onboarding"),
-        Suite::Quickstart => root.join("quickstart"),
+        Suite::AgentsCheckpoints => root.join("agents-checkpoints"),
     }
 }
 

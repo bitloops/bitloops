@@ -41,6 +41,27 @@ fn resolve_execution_binary_uses_snapshot_for_devql_sync() {
 }
 
 #[test]
+fn agents_checkpoints_suite_reports_expected_id_and_rerun_alias() {
+    assert_eq!(Suite::AgentsCheckpoints.id(), "agents-checkpoints");
+    assert_eq!(
+        Suite::AgentsCheckpoints.rerun_alias(),
+        "cargo qat-agents-checkpoints"
+    );
+}
+
+#[test]
+fn suite_feature_path_points_to_agents_checkpoints_feature() {
+    let path = suite_feature_path(&Suite::AgentsCheckpoints);
+    assert_eq!(
+        path,
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("qat")
+            .join("features")
+            .join("agents-checkpoints")
+    );
+}
+
+#[test]
 fn suite_feature_path_points_to_dedicated_devql_ingest_feature() {
     let path = suite_feature_path(&Suite::DevqlIngest);
     assert_eq!(

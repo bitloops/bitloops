@@ -1,3 +1,56 @@
+use toml_edit::{DocumentMut, Item, Table, Value as TomlValue};
+
+const KNOWLEDGE_FIXTURE_ALPHA: &str = "alpha";
+const KNOWLEDGE_FIXTURE_BETA: &str = "beta";
+const KNOWLEDGE_FIXTURE_ALPHA_PAGE_ID: &str = "1001";
+const KNOWLEDGE_FIXTURE_BETA_PAGE_ID: &str = "1002";
+
+pub fn configure_deterministic_confluence_knowledge_fixtures_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let server = KnowledgeStubServer::start()?;
+    let base_url = server.base_url().to_string();
+    enqueue_confluence_fixture_responses(&server);
+    write_confluence_provider_configs(world.repo_dir(), &base_url)?;
+    if world.daemon_process.is_some() || world.daemon_url.is_some() {
+        stop_daemon_for_scenario(world)?;
+        ensure_daemon_for_scenario(world)?;
+    }
+
+    world.knowledge_fixture_urls = HashMap::from([
+        (
+            KNOWLEDGE_FIXTURE_ALPHA.to_string(),
+            fixture_confluence_page_url(&base_url, KNOWLEDGE_FIXTURE_ALPHA_PAGE_ID, "Alpha"),
+        ),
+        (
+            KNOWLEDGE_FIXTURE_BETA.to_string(),
+            fixture_confluence_page_url(&base_url, KNOWLEDGE_FIXTURE_BETA_PAGE_ID, "Beta"),
+        ),
+    ]);
+    world.knowledge_stub_server = Some(server);
+    Ok(())
+}
+
+pub fn run_fixture_knowledge_add(world: &mut QatWorld, fixture_name: &str) -> Result<()> {
+    let url = resolve_fixture_knowledge_url(world, fixture_name)?;
+    run_knowledge_add(world, &url)?;
+    mirror_knowledge_item_id_for_alias(world, fixture_name, &url);
+    Ok(())
+}
+
+pub fn run_fixture_knowledge_refresh(world: &mut QatWorld, fixture_name: &str) -> Result<()> {
+    let url = resolve_fixture_knowledge_url(world, fixture_name)?;
+    if let Some(knowledge_item_id) = world.knowledge_items_by_url.get(&url).cloned() {
+        world
+            .knowledge_items_by_url
+            .insert(fixture_name.to_string(), knowledge_item_id);
+    }
+    run_knowledge_refresh(world, fixture_name)
+}
+
 pub fn run_knowledge_add(world: &mut QatWorld, url: &str) -> Result<()> {
     let output = run_command_capture(
         world,
@@ -199,4 +252,160 @@ pub fn assert_knowledge_versions_count(
         "expected {expected_count} knowledge versions, got {count}"
     );
     Ok(())
+}
+
+fn resolve_fixture_knowledge_url(world: &QatWorld, fixture_name: &str) -> Result<String> {
+    world
+        .knowledge_fixture_urls
+        .get(fixture_name)
+        .cloned()
+        .ok_or_else(|| anyhow!("no deterministic knowledge fixture named `{fixture_name}`"))
+}
+
+fn mirror_knowledge_item_id_for_alias(world: &mut QatWorld, alias: &str, url: &str) {
+    if let Some(knowledge_item_id) = world.knowledge_items_by_url.get(url).cloned() {
+        world
+            .knowledge_items_by_url
+            .insert(alias.to_string(), knowledge_item_id);
+    }
+}
+
+fn fixture_confluence_page_url(base_url: &str, page_id: &str, title_slug: &str) -> String {
+    format!("{base_url}/wiki/spaces/QAT/pages/{page_id}/{title_slug}")
+}
+
+fn fixture_confluence_content_path(page_id: &str) -> String {
+    format!("/wiki/rest/api/content/{page_id}?expand=body.storage,version")
+}
+
+fn enqueue_confluence_fixture_responses(server: &KnowledgeStubServer) {
+    server.enqueue_json(
+        fixture_confluence_content_path(KNOWLEDGE_FIXTURE_ALPHA_PAGE_ID),
+        serde_json::json!({
+            "title": "Alpha knowledge page",
+            "version": {
+                "when": "2026-04-16T10:00:00Z",
+                "by": { "displayName": "QAT Docs" }
+            },
+            "body": {
+                "storage": {
+                    "value": "<p>Initial alpha content</p>"
+                }
+            }
+        }),
+    );
+    server.enqueue_json(
+        fixture_confluence_content_path(KNOWLEDGE_FIXTURE_ALPHA_PAGE_ID),
+        serde_json::json!({
+            "title": "Alpha knowledge page",
+            "version": {
+                "when": "2026-04-16T10:05:00Z",
+                "by": { "displayName": "QAT Docs" }
+            },
+            "body": {
+                "storage": {
+                    "value": "<p>Updated alpha content for refresh</p>"
+                }
+            }
+        }),
+    );
+    server.enqueue_json(
+        fixture_confluence_content_path(KNOWLEDGE_FIXTURE_BETA_PAGE_ID),
+        serde_json::json!({
+            "title": "Beta knowledge page",
+            "version": {
+                "when": "2026-04-16T10:01:00Z",
+                "by": { "displayName": "QAT Docs" }
+            },
+            "body": {
+                "storage": {
+                    "value": "<p>Beta reference content</p>"
+                }
+            }
+        }),
+    );
+}
+
+fn write_confluence_provider_configs(repo_dir: &Path, base_url: &str) -> Result<()> {
+    let mut config_paths = vec![repo_dir.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH)];
+    if let Ok(bound_config_path) = bitloops::config::resolve_bound_daemon_config_path_for_repo(repo_dir)
+    {
+        if !config_paths.iter().any(|path| path == &bound_config_path) {
+            config_paths.push(bound_config_path);
+        }
+    }
+    for config_path in config_paths {
+        write_confluence_provider_config(&config_path, base_url)?;
+    }
+    Ok(())
+}
+
+fn write_confluence_provider_config(config_path: &Path, base_url: &str) -> Result<()> {
+    let mut doc = if config_path.exists() {
+        fs::read_to_string(&config_path)
+            .with_context(|| format!("reading {}", config_path.display()))?
+            .parse::<DocumentMut>()
+            .with_context(|| format!("parsing {}", config_path.display()))?
+    } else {
+        DocumentMut::new()
+    };
+
+    if doc.get("knowledge").is_none_or(|item| !item.is_table()) {
+        doc["knowledge"] = Item::Table(Table::new());
+    }
+    let knowledge = doc["knowledge"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("knowledge config should be a table"))?;
+    if knowledge
+        .get("providers")
+        .is_none_or(|item| !item.is_table())
+    {
+        knowledge["providers"] = Item::Table(Table::new());
+    }
+    let providers = knowledge["providers"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("knowledge.providers config should be a table"))?;
+    if providers
+        .get("confluence")
+        .is_none_or(|item| !item.is_table())
+    {
+        providers["confluence"] = Item::Table(Table::new());
+    }
+    let confluence = providers["confluence"]
+        .as_table_mut()
+        .ok_or_else(|| anyhow!("knowledge.providers.confluence config should be a table"))?;
+    confluence["site_url"] = Item::Value(TomlValue::from(base_url));
+    confluence["email"] = Item::Value(TomlValue::from("qat@example.com"));
+    confluence["token"] = Item::Value(TomlValue::from("qat-token"));
+
+    fs::write(&config_path, doc.to_string())
+        .with_context(|| format!("writing {}", config_path.display()))
+}
+
+#[cfg(test)]
+mod knowledge_config_tests {
+    use super::write_confluence_provider_config;
+    use anyhow::Result;
+
+    #[test]
+    fn write_confluence_provider_config_creates_nested_tables_on_existing_config() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let config_path =
+            temp_dir.path().join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+        std::fs::create_dir_all(
+            config_path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("config path missing parent"))?,
+        )?;
+        std::fs::write(&config_path, "[daemon]\nenabled = true\n")?;
+
+        write_confluence_provider_config(&config_path, "http://127.0.0.1:4242")?;
+
+        let config = std::fs::read_to_string(config_path)?;
+        assert!(config.contains("[knowledge.providers.confluence]"));
+        assert!(config.contains("site_url = \"http://127.0.0.1:4242\""));
+        assert!(config.contains("email = \"qat@example.com\""));
+        assert!(config.contains("token = \"qat-token\""));
+        Ok(())
+    }
 }

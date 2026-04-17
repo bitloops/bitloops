@@ -637,6 +637,26 @@ enum DevqlTaskEnqueueKind {
     Ingest,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevqlTaskBriefRecord {
+    pub task_id: String,
+    pub kind: String,
+    pub status: String,
+    pub repo: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevqlTaskQueueStatusSnapshot {
+    pub state: String,
+    pub queued: usize,
+    pub running: usize,
+    pub failed: usize,
+    pub completed_recent: usize,
+    pub pause_reason: Option<String>,
+    pub last_action: Option<String>,
+    pub current_repo_tasks: Vec<DevqlTaskBriefRecord>,
+}
+
 fn build_devql_task_enqueue_args(kind: DevqlTaskEnqueueKind, flags: &[&str]) -> Vec<String> {
     let kind_arg = match kind {
         DevqlTaskEnqueueKind::Sync => "sync",
@@ -653,6 +673,12 @@ fn build_devql_task_enqueue_args(kind: DevqlTaskEnqueueKind, flags: &[&str]) -> 
     args
 }
 
+fn build_devql_tasks_args(command_args: &[&str]) -> Vec<String> {
+    let mut args = vec!["devql".to_string(), "tasks".to_string()];
+    args.extend(command_args.iter().map(|value| (*value).to_string()));
+    args
+}
+
 fn run_devql_task_enqueue_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
@@ -665,8 +691,31 @@ fn run_devql_task_enqueue_for_repo(
     let label = format!("bitloops {}", args.join(" "));
     let output = run_command_capture(world, &label, build_bitloops_command(world, &arg_refs)?)?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
-    world.last_command_stdout = Some(String::from_utf8_lossy(&output.stdout).to_string());
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    update_last_task_id_from_output(world, &stdout);
+    world.last_command_stdout = Some(stdout);
     ensure_success(&output, &label)
+}
+
+fn run_devql_tasks_command_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    command_args: &[&str],
+    expect_success: bool,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let args = build_devql_tasks_args(command_args);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let label = format!("bitloops {}", args.join(" "));
+    let output = run_command_capture(world, &label, build_bitloops_command(world, &arg_refs)?)?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    update_last_task_id_from_output(world, &stdout);
+    world.last_command_stdout = Some(stdout);
+    if expect_success {
+        ensure_success(&output, &label)?;
+    }
+    Ok(())
 }
 
 pub fn enqueue_devql_ingest_task_with_status_for_repo(
@@ -678,6 +727,27 @@ pub fn enqueue_devql_ingest_task_with_status_for_repo(
         repo_name,
         DevqlTaskEnqueueKind::Ingest,
         &["--status"],
+    )
+}
+
+pub fn enqueue_devql_ingest_task_without_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    run_devql_task_enqueue_for_repo(world, repo_name, DevqlTaskEnqueueKind::Ingest, &[])
+}
+
+pub fn enqueue_devql_ingest_task_with_backfill_and_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    backfill: usize,
+) -> Result<()> {
+    let backfill = backfill.to_string();
+    run_devql_task_enqueue_for_repo(
+        world,
+        repo_name,
+        DevqlTaskEnqueueKind::Ingest,
+        &["--backfill", backfill.as_str(), "--status"],
     )
 }
 
@@ -1169,8 +1239,28 @@ pub fn run_claude_code_prompt_for_repo(
     repo_name: &str,
     prompt: &str,
 ) -> Result<()> {
+    run_agent_prompt_for_repo(world, repo_name, AGENT_NAME_CLAUDE_CODE, prompt)
+}
+
+pub fn run_agent_prompt_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    prompt: &str,
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_claude_code_prompt(world, prompt)
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
+    world.agent_name = Some(normalised_agent_name.to_string());
+
+    match normalised_agent_name {
+        AGENT_NAME_CLAUDE_CODE => run_deterministic_claude_smoke_prompt(world, prompt),
+        AGENT_NAME_CURSOR => run_cursor_prompt(world, prompt),
+        AGENT_NAME_GEMINI => run_gemini_prompt(world, prompt),
+        AGENT_NAME_COPILOT => run_copilot_prompt(world, prompt),
+        AGENT_NAME_CODEX => run_codex_prompt(world, prompt),
+        AGENT_NAME_OPEN_CODE => run_opencode_prompt(world, prompt),
+        other => bail!("unsupported smoke agent: {other}"),
+    }
 }
 
 pub fn run_second_change_using_claude_code_for_repo(
@@ -1238,6 +1328,33 @@ pub fn enqueue_devql_sync_task_without_status_for_repo(
     run_devql_task_enqueue_for_repo(world, repo_name, DevqlTaskEnqueueKind::Sync, &[])
 }
 
+pub fn enqueue_devql_sync_task_with_paths_and_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    paths: &[String],
+) -> Result<()> {
+    ensure!(!paths.is_empty(), "expected at least one path for scoped sync");
+    let joined = paths.join(",");
+    run_devql_task_enqueue_for_repo(
+        world,
+        repo_name,
+        DevqlTaskEnqueueKind::Sync,
+        &["--paths", joined.as_str(), "--status"],
+    )
+}
+
+pub fn enqueue_devql_full_sync_task_with_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    run_devql_task_enqueue_for_repo(
+        world,
+        repo_name,
+        DevqlTaskEnqueueKind::Sync,
+        &["--full", "--status"],
+    )
+}
+
 pub fn enqueue_devql_sync_validate_task_with_status_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
@@ -1278,6 +1395,71 @@ pub fn attempt_to_enqueue_devql_sync_task_for_repo(
     Ok(())
 }
 
+pub fn attempt_to_enqueue_devql_sync_task_require_daemon_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let args =
+        build_devql_task_enqueue_args(DevqlTaskEnqueueKind::Sync, &["--require-daemon"]);
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let label = "bitloops devql tasks enqueue --kind sync --require-daemon (expect failure)";
+    let output = run_command_capture(world, label, build_bitloops_command(world, &arg_refs)?)?;
+    world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    world.last_command_stdout = Some(format!("{stdout}\n{stderr}"));
+    Ok(())
+}
+
+pub fn run_devql_tasks_status_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    run_devql_tasks_command_for_repo(world, repo_name, &["status"], true)
+}
+
+pub fn run_devql_tasks_list_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    run_devql_tasks_command_for_repo(world, repo_name, &["list"], true)
+}
+
+pub fn run_devql_tasks_list_for_status_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    status: &str,
+) -> Result<()> {
+    run_devql_tasks_command_for_repo(world, repo_name, &["list", "--status", status], true)
+}
+
+pub fn watch_last_devql_task_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    let task_id = world
+        .last_task_id
+        .clone()
+        .ok_or_else(|| anyhow!("no DevQL task id captured for watch"))?;
+    run_devql_tasks_command_for_repo(world, repo_name, &["watch", task_id.as_str()], true)
+}
+
+pub fn pause_devql_tasks_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    reason: Option<&str>,
+) -> Result<()> {
+    if let Some(reason) = reason {
+        run_devql_tasks_command_for_repo(world, repo_name, &["pause", "--reason", reason], true)
+    } else {
+        run_devql_tasks_command_for_repo(world, repo_name, &["pause"], true)
+    }
+}
+
+pub fn resume_devql_tasks_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    run_devql_tasks_command_for_repo(world, repo_name, &["resume"], true)
+}
+
+pub fn cancel_last_devql_task_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    let task_id = world
+        .last_task_id
+        .clone()
+        .ok_or_else(|| anyhow!("no DevQL task id captured for cancel"))?;
+    run_devql_tasks_command_for_repo(world, repo_name, &["cancel", task_id.as_str()], true)
+}
+
 pub fn add_new_rust_source_file(world: &QatWorld) -> Result<()> {
     let file_path = world.repo_dir().join("src").join("lib.rs");
     fs::write(
@@ -1288,6 +1470,15 @@ pub fn add_new_rust_source_file(world: &QatWorld) -> Result<()> {
     Ok(())
 }
 
+pub fn add_source_file_at_path_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    relative_path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    write_deterministic_source_file(world.repo_dir(), relative_path, false)
+}
+
 pub fn modify_rust_main(world: &QatWorld) -> Result<()> {
     let file_path = world.repo_dir().join("src").join("main.rs");
     fs::write(
@@ -1296,6 +1487,15 @@ pub fn modify_rust_main(world: &QatWorld) -> Result<()> {
     )
     .with_context(|| format!("writing {}", file_path.display()))?;
     Ok(())
+}
+
+pub fn modify_source_file_at_path_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    relative_path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    write_deterministic_source_file(world.repo_dir(), relative_path, true)
 }
 
 pub fn delete_rust_source_file(world: &QatWorld) -> Result<()> {
@@ -1885,6 +2085,168 @@ pub fn parse_sync_summary_field(stdout: &str, field: &str) -> Option<usize> {
     None
 }
 
+pub fn parse_task_id_from_submission(stdout: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let line = line.trim();
+        let prefix = "task queued: task=";
+        let suffix = " repo=";
+        let remainder = line.strip_prefix(prefix)?;
+        let task_id = remainder.split(suffix).next()?.trim();
+        if task_id.is_empty() {
+            None
+        } else {
+            Some(task_id.to_string())
+        }
+    })
+}
+
+pub fn parse_task_briefs(stdout: &str) -> Vec<DevqlTaskBriefRecord> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let remainder = line.strip_prefix("task ")?;
+            let (task_id, remainder) = remainder.split_once(": kind=")?;
+            let (kind, remainder) = remainder.split_once(" status=")?;
+            let (status, repo) = remainder.split_once(" repo=")?;
+            Some(DevqlTaskBriefRecord {
+                task_id: task_id.trim().to_string(),
+                kind: kind.trim().to_string(),
+                status: status.trim().to_string(),
+                repo: repo.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn parse_task_queue_status(stdout: &str) -> Result<DevqlTaskQueueStatusSnapshot> {
+    let mut state = None;
+    let mut queued = None;
+    let mut running = None;
+    let mut failed = None;
+    let mut completed_recent = None;
+    let mut pause_reason = None;
+    let mut last_action = None;
+    let mut current_repo_tasks = Vec::new();
+    let mut in_current_repo_tasks = false;
+
+    for raw_line in stdout.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line == "DevQL task queue" {
+            continue;
+        }
+        if line == "current_repo_tasks:" {
+            in_current_repo_tasks = true;
+            continue;
+        }
+        if in_current_repo_tasks {
+            let tasks = parse_task_briefs(line);
+            if tasks.is_empty() {
+                in_current_repo_tasks = false;
+            } else {
+                current_repo_tasks.extend(tasks);
+                continue;
+            }
+        }
+        if let Some(value) = line.strip_prefix("state: ") {
+            state = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("queued: ") {
+            queued = Some(value.trim().parse::<usize>()?);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("running: ") {
+            running = Some(value.trim().parse::<usize>()?);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("failed: ") {
+            failed = Some(value.trim().parse::<usize>()?);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("completed_recent: ") {
+            completed_recent = Some(value.trim().parse::<usize>()?);
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("pause_reason: ") {
+            pause_reason = Some(value.trim().to_string());
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("last_action: ") {
+            last_action = Some(value.trim().to_string());
+        }
+    }
+
+    Ok(DevqlTaskQueueStatusSnapshot {
+        state: state.ok_or_else(|| anyhow!("missing task queue `state` field"))?,
+        queued: queued.ok_or_else(|| anyhow!("missing task queue `queued` field"))?,
+        running: running.ok_or_else(|| anyhow!("missing task queue `running` field"))?,
+        failed: failed.ok_or_else(|| anyhow!("missing task queue `failed` field"))?,
+        completed_recent: completed_recent
+            .ok_or_else(|| anyhow!("missing task queue `completed_recent` field"))?,
+        pause_reason,
+        last_action,
+        current_repo_tasks,
+    })
+}
+
+fn update_last_task_id_from_output(world: &mut QatWorld, stdout: &str) {
+    if let Some(task_id) = parse_task_id_from_submission(stdout) {
+        world.last_task_id = Some(task_id);
+        return;
+    }
+    if let Some(task) = parse_task_briefs(stdout).into_iter().next() {
+        world.last_task_id = Some(task.task_id);
+    }
+}
+
+fn write_deterministic_source_file(
+    repo_dir: &Path,
+    relative_path: &str,
+    modified: bool,
+) -> Result<()> {
+    let path = repo_dir.join(relative_path);
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("source file `{relative_path}` is missing a parent directory"))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let body = deterministic_source_contents(relative_path, modified)?;
+    fs::write(&path, body).with_context(|| format!("writing {}", path.display()))
+}
+
+fn deterministic_source_contents(relative_path: &str, modified: bool) -> Result<String> {
+    let normalized = relative_path.replace('\\', "/");
+    let stem = normalized
+        .rsplit('/')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .trim_end_matches(".rs")
+        .trim_end_matches(".ts");
+
+    if normalized.ends_with("main.rs") {
+        let label = if modified { "modified" } else { "added" };
+        return Ok(format!(
+            "fn main() {{\n    println!(\"{stem}-{label}\");\n}}\n"
+        ));
+    }
+    if normalized.ends_with(".rs") {
+        let function_name = stem.replace('-', "_");
+        let value = if modified { "modified" } else { "added" };
+        return Ok(format!(
+            "pub fn {function_name}() -> &'static str {{\n    \"{function_name}-{value}\"\n}}\n"
+        ));
+    }
+    if normalized.ends_with(".ts") {
+        let function_name = stem.replace('-', "_");
+        let value = if modified { "modified" } else { "added" };
+        return Ok(format!(
+            "export function {function_name}(): string {{\n  return \"{function_name}-{value}\";\n}}\n"
+        ));
+    }
+
+    bail!("unsupported deterministic source file path `{relative_path}`")
+}
+
 pub fn commit_for_relative_day_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
@@ -1977,6 +2339,24 @@ pub fn assert_bitloops_stores_exist_for_repo(world: &QatWorld, repo_name: &str) 
 
 pub fn assert_claude_session_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     assert_agent_session_exists_for_repo(world, repo_name, AGENT_NAME_CLAUDE_CODE)
+}
+
+pub fn assert_agent_interaction_exists_before_commit_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    assert_agent_session_exists_for_repo(world, repo_name, agent_name)?;
+
+    let mappings = with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+        .context("reading Bitloops checkpoint mappings before commit")?;
+    ensure!(
+        mappings.is_empty(),
+        "expected no checkpoint mappings before commit, found {}",
+        mappings.len()
+    );
+    Ok(())
 }
 
 pub fn assert_agent_session_exists_for_repo(
@@ -2119,6 +2499,75 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitTimelineCommit {
+    pub sha: String,
+    pub subject: String,
+    pub author_iso: String,
+}
+
+pub fn parse_git_timeline(stdout: &str) -> Vec<GitTimelineCommit> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (sha, rest) = line.split_once('|')?;
+            let (subject, author_iso) = rest.split_once('|')?;
+            Some(GitTimelineCommit {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+                author_iso: author_iso.to_string(),
+            })
+        })
+        .collect()
+}
+
+pub fn captured_commit_history_is_ordered(
+    commits: &[GitTimelineCommit],
+    captured_shas: &[String],
+) -> bool {
+    let mut previous_index = None;
+    for sha in captured_shas {
+        let Some(index) = commits.iter().position(|commit| commit.sha == *sha) else {
+            return false;
+        };
+        if let Some(previous_index) = previous_index
+            && index >= previous_index
+        {
+            return false;
+        }
+        previous_index = Some(index);
+    }
+    true
+}
+
+pub fn assert_captured_commit_history_is_ordered_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        !world.captured_commit_shas.is_empty(),
+        "expected captured commit SHAs before asserting history order"
+    );
+    let output = run_command_capture(
+        world,
+        "git log ordered history",
+        build_git_command(world, &["log", "--pretty=format:%H|%s|%aI", "-n", "50"], &[]),
+    )?;
+    ensure_success(&output, "git log ordered history")?;
+    let commits = parse_git_timeline(String::from_utf8_lossy(&output.stdout).as_ref());
+    ensure!(
+        captured_commit_history_is_ordered(&commits, &world.captured_commit_shas),
+        "expected captured commits {:?} to appear in chronological order within git log {:?}",
+        world.captured_commit_shas,
+        commits
+            .iter()
+            .map(|commit| commit.sha.as_str())
+            .collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
 pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
     world: &QatWorld,
     repo_name: &str,
@@ -2127,17 +2576,10 @@ pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
     let output = run_command_capture(
         world,
         "git log timeline",
-        build_git_command(world, &["log", "--pretty=format:%s|%aI", "-n", "30"], &[]),
+        build_git_command(world, &["log", "--pretty=format:%H|%s|%aI", "-n", "30"], &[]),
     )?;
     ensure_success(&output, "git log timeline")?;
-    let log = String::from_utf8_lossy(&output.stdout);
-    let commits = log
-        .lines()
-        .filter_map(|line| {
-            let (subject, author_iso) = line.split_once('|')?;
-            Some((subject.to_string(), author_iso.to_string()))
-        })
-        .collect::<Vec<_>>();
+    let commits = parse_git_timeline(String::from_utf8_lossy(&output.stdout).as_ref());
     ensure!(
         commits.len() >= 3,
         "expected at least 3 commits, got {}",
@@ -2148,20 +2590,21 @@ pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
     let today = expected_date_for_relative_day(0)?;
 
     ensure!(
-        commits.iter().any(|(subject, iso)| {
-            subject == "chore: initial commit" && iso.starts_with(&yesterday)
+        commits.iter().any(|commit| {
+            commit.subject == "chore: initial commit" && commit.author_iso.starts_with(&yesterday)
         }),
         "missing initial commit dated {yesterday}"
     );
     ensure!(
-        commits.iter().any(|(subject, iso)| {
-            subject == "test: committed yesterday" && iso.starts_with(&yesterday)
+        commits.iter().any(|commit| {
+            commit.subject == "test: committed yesterday"
+                && commit.author_iso.starts_with(&yesterday)
         }),
         "missing yesterday checkpoint commit dated {yesterday}"
     );
     ensure!(
-        commits.iter().any(|(subject, iso)| {
-            subject == "test: committed today" && iso.starts_with(&today)
+        commits.iter().any(|commit| {
+            commit.subject == "test: committed today" && commit.author_iso.starts_with(&today)
         }),
         "missing today checkpoint commit dated {today}"
     );
@@ -2492,6 +2935,24 @@ fn artefacts_current_count_for_path(world: &QatWorld, path: &str) -> Result<usiz
         )
         .with_context(|| format!("counting artefacts_current rows for path `{path}`"))?;
     usize::try_from(count).context("converting artefacts_current path count to usize")
+}
+
+fn current_file_state_effective_content_id(
+    world: &QatWorld,
+    path: &str,
+) -> Result<Option<String>> {
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    use rusqlite::OptionalExtension;
+    conn.query_row(
+        "SELECT effective_content_id \
+         FROM current_file_state \
+         WHERE repo_id = ?1 AND path = ?2",
+        rusqlite::params![repo_id, path],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .with_context(|| format!("loading current_file_state effective_content_id for `{path}`"))
 }
 
 fn file_state_count_for_commit(world: &QatWorld, commit_sha: &str) -> Result<usize> {
@@ -3024,6 +3485,150 @@ pub fn assert_artefacts_current_contains_path(
     ensure!(
         count > 0,
         "expected artefacts_current rows for `{path}`, got {count}"
+    );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_lacks_path(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let count = artefacts_current_count_for_path(world, path)?;
+    ensure!(
+        count == 0,
+        "expected artefacts_current to omit `{path}`, got {count} rows"
+    );
+    Ok(())
+}
+
+pub fn snapshot_current_file_state_content_ids_for_paths(
+    world: &mut QatWorld,
+    repo_name: &str,
+    paths: &[String],
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    ensure!(
+        !paths.is_empty(),
+        "expected at least one path for current_file_state snapshot"
+    );
+    for path in paths {
+        let current = current_file_state_effective_content_id(world, path)?;
+        world
+            .current_file_state_content_id_snapshots
+            .insert(path.clone(), current);
+    }
+    Ok(())
+}
+
+pub fn assert_current_file_state_content_id_changed_since_snapshot_for_path(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let before = world
+        .current_file_state_content_id_snapshots
+        .get(path)
+        .cloned()
+        .ok_or_else(|| anyhow!("no current_file_state snapshot captured for `{path}`"))?;
+    let after = current_file_state_effective_content_id(world, path)?;
+    ensure!(
+        after != before,
+        "expected current_file_state effective_content_id for `{path}` to change, but both snapshots were {after:?}"
+    );
+    Ok(())
+}
+
+pub fn assert_current_file_state_content_id_unchanged_since_snapshot_for_path(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let before = world
+        .current_file_state_content_id_snapshots
+        .get(path)
+        .cloned()
+        .ok_or_else(|| anyhow!("no current_file_state snapshot captured for `{path}`"))?;
+    let after = current_file_state_effective_content_id(world, path)?;
+    ensure!(
+        after == before,
+        "expected current_file_state effective_content_id for `{path}` to remain {before:?}, got {after:?}"
+    );
+    Ok(())
+}
+
+pub fn assert_last_task_id_captured(world: &QatWorld) -> Result<()> {
+    let task_id = world
+        .last_task_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("expected a captured DevQL task id"))?;
+    ensure!(
+        !task_id.trim().is_empty(),
+        "expected non-empty captured DevQL task id"
+    );
+    Ok(())
+}
+
+pub fn assert_task_queue_state_in_last_output(world: &QatWorld, expected_state: &str) -> Result<()> {
+    let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+    let status = parse_task_queue_status(stdout)?;
+    ensure!(
+        status.state == expected_state,
+        "expected DevQL task queue state `{expected_state}`, got `{}`\nstdout: {stdout}",
+        status.state
+    );
+    Ok(())
+}
+
+pub fn assert_task_queue_pause_reason_in_last_output(
+    world: &QatWorld,
+    expected_reason: &str,
+) -> Result<()> {
+    let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+    let status = parse_task_queue_status(stdout)?;
+    let actual = status
+        .pause_reason
+        .ok_or_else(|| anyhow!("expected a pause reason in DevQL task queue status output"))?;
+    ensure!(
+        actual == expected_reason,
+        "expected DevQL task queue pause reason `{expected_reason}`, got `{actual}`\nstdout: {stdout}"
+    );
+    Ok(())
+}
+
+pub fn assert_task_list_in_last_output_contains_last_task(world: &QatWorld) -> Result<()> {
+    let expected_task_id = world
+        .last_task_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("expected a captured DevQL task id before asserting task list"))?;
+    let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+    let tasks = parse_task_briefs(stdout);
+    ensure!(
+        tasks.iter().any(|task| task.task_id == expected_task_id),
+        "expected task list to include `{expected_task_id}`, observed {:?}\nstdout: {stdout}",
+        tasks.iter().map(|task| task.task_id.as_str()).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+pub fn assert_last_task_status_in_last_output(world: &QatWorld, expected_status: &str) -> Result<()> {
+    let expected_task_id = world
+        .last_task_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("expected a captured DevQL task id before asserting task status"))?;
+    let stdout = world.last_command_stdout.as_deref().unwrap_or("");
+    let tasks = parse_task_briefs(stdout);
+    let task = tasks
+        .iter()
+        .find(|task| task.task_id == expected_task_id)
+        .ok_or_else(|| anyhow!("expected task `{expected_task_id}` in parsed task output"))?;
+    ensure!(
+        task.status == expected_status,
+        "expected task `{expected_task_id}` to have status `{expected_status}`, got `{}`\nstdout: {stdout}",
+        task.status
     );
     Ok(())
 }

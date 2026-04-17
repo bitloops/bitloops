@@ -47,4 +47,4 @@ qat-devql-capabilities = "nextest run --features qat-tests --test qat_devql_capa
 qat-devql-sync = "nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact"
 qat-onboarding = "nextest run --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact"
 qat-devql-ingest = "nextest run --features qat-tests --test qat_devql_ingest --run-ignored only -- qat_devql_ingest --exact"
-qat-quickstart = "nextest run --features qat-tests --test qat_quickstart --run-ignored only -- qat_quickstart --exact"
+qat-agents-checkpoints = "nextest run --features qat-tests --test qat_agents_checkpoints --run-ignored only -- qat_agents_checkpoints --exact"
