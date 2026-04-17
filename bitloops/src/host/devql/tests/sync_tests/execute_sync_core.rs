@@ -157,6 +157,43 @@ async fn full_sync_indexes_all_supported_files() {
 }
 
 #[tokio::test]
+async fn full_sync_persists_scope_exclusions_fingerprint_and_skips_follow_up_reconcile() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let stored_fingerprint: Option<String> = db
+        .query_row(
+            "SELECT scope_exclusions_fingerprint FROM repo_sync_state WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("read scope exclusions fingerprint");
+    let expected_fingerprint =
+        crate::host::devql::current_scope_exclusions_fingerprint(repo.path())
+            .expect("load current scope exclusions fingerprint");
+    assert_eq!(
+        stored_fingerprint.as_deref(),
+        Some(expected_fingerprint.as_str())
+    );
+
+    let reconcile_needed = crate::host::devql::scope_exclusion_reconcile_needed(&cfg, &relational)
+        .await
+        .expect("check scope exclusion reconcile after completed sync");
+    assert_eq!(reconcile_needed, None);
+}
+
+#[tokio::test]
 async fn sync_validate_reports_clean_state_then_detects_stale_rows() {
     let repo = seed_full_sync_repo();
     let cfg = sync_test_cfg_for_repo(repo.path());

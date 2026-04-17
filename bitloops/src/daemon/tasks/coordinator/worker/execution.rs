@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use tokio::sync::{mpsc, oneshot};
@@ -8,7 +9,7 @@ use crate::daemon::tasks::queue::{
     sync_task_mode_from_host as queue_sync_task_mode_from_host,
     sync_task_mode_to_host as queue_sync_task_mode_to_host,
 };
-use crate::daemon::types::{DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, SyncTaskMode};
+use crate::daemon::types::{DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource};
 use crate::host::devql::{
     DevqlConfig, RelationalStorage, RepoIdentity, SyncProgressPhase, SyncProgressUpdate,
 };
@@ -18,8 +19,6 @@ use super::super::helpers::{enqueue_sync_completed_runs, receive_embeddings_boot
 use super::super::observers::{
     IngestCoordinatorObserver, ProgressPersistState, SyncCoordinatorObserver,
 };
-use super::reconcile::persist_scope_exclusions_fingerprint;
-
 impl DevqlTaskCoordinator {
     pub(super) async fn run_sync_task(self: Arc<Self>, task: DevqlTaskRecord) -> Result<()> {
         self.update_task_progress(
@@ -142,14 +141,15 @@ impl DevqlTaskCoordinator {
             }
         };
 
-        match crate::host::devql::run_sync_with_summary_and_observer_and_diffs(
+        match crate::host::devql::run_sync_with_summary_and_stats_and_observer_and_diffs(
             &cfg,
             effective_mode,
             Some(&observer),
+            reconcile_fingerprint.as_deref(),
         )
         .await
         {
-            Ok((summary, file_diff, artefact_diff)) => {
+            Ok((summary, mut stats, file_diff, artefact_diff)) => {
                 if let Some(snapshot) = task
                     .sync_spec()
                     .and_then(|spec| spec.post_commit_snapshot.as_ref())
@@ -162,21 +162,11 @@ impl DevqlTaskCoordinator {
                     self.finish_task_failed(&task.task_id, err)?;
                     return Ok(());
                 }
-                if !matches!(effective_spec, SyncTaskMode::Validate)
-                    && let Err(err) = persist_scope_exclusions_fingerprint(
-                        &cfg,
-                        reconcile_relational.as_ref(),
-                        reconcile_fingerprint.as_deref(),
-                    )
-                    .await
-                {
-                    self.finish_task_failed(&task.task_id, err)?;
-                    return Ok(());
-                }
                 if let Some(host) = host.as_ref() {
                     let capability_event_coordinator =
                         crate::daemon::shared_capability_event_coordinator();
                     capability_event_coordinator.activate_worker();
+                    let enqueue_started = Instant::now();
                     if let Err(err) = enqueue_sync_completed_runs(
                         capability_event_coordinator.as_ref(),
                         host,
@@ -191,7 +181,9 @@ impl DevqlTaskCoordinator {
                             task.task_id
                         );
                     }
+                    stats.capability_event_enqueue_total = enqueue_started.elapsed();
                 }
+                stats.log(&cfg.repo.repo_id, &summary.mode);
                 self.finish_sync_task_completed(&task.task_id, summary)?
             }
             Err(err) => self.finish_task_failed(&task.task_id, err)?,

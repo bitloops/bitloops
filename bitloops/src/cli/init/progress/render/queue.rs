@@ -124,12 +124,19 @@ pub(super) fn format_embedding_queue_complete_status_line(
 
 pub(super) fn format_embedding_waiting_status_line(
     checklist: InitChecklistState,
+    baseline_total: u64,
     completed_jobs: u64,
     failed_jobs: u64,
     spinner: &str,
     terminal_width: Option<usize>,
 ) -> String {
-    let prefix = if completed_jobs > 0 {
+    let prefix = if baseline_total > 0 {
+        format!(
+            "bitloops-local-embeddings processed {}/{} artefacts",
+            format_count_u64(completed_jobs.min(baseline_total)),
+            format_count_u64(baseline_total),
+        )
+    } else if completed_jobs > 0 {
         format!(
             "bitloops-local-embeddings processed {} artefacts",
             format_count_u64(completed_jobs)
@@ -178,6 +185,11 @@ pub(super) fn format_summary_progress_bar_line(
             }
         }
         SummaryProgressState::WaitingForQueue { .. } => " waiting ".to_string(),
+        SummaryProgressState::Complete { baseline_total, .. } if *baseline_total > 0 => format!(
+            " 100% {}/{} summaries",
+            format_count_u64(*baseline_total),
+            format_count_u64(*baseline_total),
+        ),
         SummaryProgressState::Complete { .. } => " 100% complete ".to_string(),
         SummaryProgressState::Failed { .. } => " failed ".to_string(),
         SummaryProgressState::Running(progress) => {
@@ -296,11 +308,18 @@ pub(super) fn format_summary_status_line(
             format!("{spinner} {fitted}")
         }
         SummaryProgressState::WaitingForQueue {
+            baseline_total,
             completed_jobs,
             failed_jobs,
             ..
         } => {
-            let prefix = if *completed_jobs > 0 {
+            let prefix = if *baseline_total > 0 {
+                format!(
+                    "bitloops-inference processed {}/{} summaries",
+                    format_count_u64((*completed_jobs).min(*baseline_total)),
+                    format_count_u64(*baseline_total),
+                )
+            } else if *completed_jobs > 0 {
                 format!(
                     "bitloops-inference processed {} summaries",
                     format_count_u64(*completed_jobs)

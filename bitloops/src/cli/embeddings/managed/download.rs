@@ -77,6 +77,16 @@ enum WorkerEvent {
     Done(usize, Result<DownloadedManagedChunk, String>),
 }
 
+#[derive(Clone)]
+struct DownloadByteRangeRequest {
+    client: Client,
+    url: String,
+    user_agent: String,
+    asset_label: String,
+    total_bytes: u64,
+    abort: Arc<AtomicBool>,
+}
+
 impl Drop for DownloadedManagedAsset {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -150,24 +160,18 @@ fn download_release_asset_to_temp_file_in_parallel(
     let (tx, rx) = mpsc::channel();
     let mut handles = Vec::with_capacity(part_ranges.len());
     for (index, range) in part_ranges.iter().copied().enumerate() {
-        let abort = Arc::clone(&abort);
-        let client = client.clone();
         let tx = tx.clone();
-        let url = url.to_string();
-        let user_agent = user_agent.to_string();
-        let asset_label = asset_label.to_string();
+        let request = DownloadByteRangeRequest {
+            client: client.clone(),
+            url: url.to_string(),
+            user_agent: user_agent.to_string(),
+            asset_label: asset_label.to_string(),
+            total_bytes,
+            abort: Arc::clone(&abort),
+        };
         handles.push(thread::spawn(move || {
-            let result = download_byte_range_to_temp_file(
-                &client,
-                &url,
-                &user_agent,
-                &asset_label,
-                total_bytes,
-                range,
-                &tx,
-                abort.as_ref(),
-            )
-            .map_err(|err| err.to_string());
+            let result = download_byte_range_to_temp_file(&request, range, &tx)
+                .map_err(|err| err.to_string());
             let _ = tx.send(WorkerEvent::Done(index, result));
         }));
     }
@@ -301,33 +305,32 @@ fn download_response_to_temp_file(
 }
 
 fn download_byte_range_to_temp_file(
-    client: &Client,
-    url: &str,
-    user_agent: &str,
-    asset_label: &str,
-    total_bytes: u64,
+    request: &DownloadByteRangeRequest,
     range: DownloadByteRange,
     progress_tx: &mpsc::Sender<WorkerEvent>,
-    abort: &AtomicBool,
 ) -> Result<DownloadedManagedChunk> {
-    let path = temporary_download_path(&format!("{asset_label}-{}-{}", range.start, range.end));
+    let path = temporary_download_path(&format!(
+        "{}-{}-{}",
+        request.asset_label, range.start, range.end
+    ));
     let result = (|| {
-        let mut response = managed_download_request(client, url, user_agent)
-            .header(RANGE, format!("bytes={}-{}", range.start, range.end))
-            .send()
-            .with_context(|| {
-                format!(
-                    "downloading {asset_label} range {}-{}",
-                    range.start, range.end
-                )
-            })?
-            .error_for_status()
-            .with_context(|| {
-                format!(
-                    "downloading {asset_label} range {}-{}",
-                    range.start, range.end
-                )
-            })?;
+        let mut response =
+            managed_download_request(&request.client, &request.url, &request.user_agent)
+                .header(RANGE, format!("bytes={}-{}", range.start, range.end))
+                .send()
+                .with_context(|| {
+                    format!(
+                        "downloading {} range {}-{}",
+                        request.asset_label, range.start, range.end
+                    )
+                })?
+                .error_for_status()
+                .with_context(|| {
+                    format!(
+                        "downloading {} range {}-{}",
+                        request.asset_label, range.start, range.end
+                    )
+                })?;
         if response.status() != StatusCode::PARTIAL_CONTENT {
             anyhow::bail!(
                 "managed runtime range request {}-{} returned HTTP {} instead of 206",
@@ -336,20 +339,24 @@ fn download_byte_range_to_temp_file(
                 response.status()
             );
         }
-        validate_content_range_header(response.headers().get(CONTENT_RANGE), range, total_bytes)?;
+        validate_content_range_header(
+            response.headers().get(CONTENT_RANGE),
+            range,
+            request.total_bytes,
+        )?;
 
         let mut file = File::create(&path)
             .with_context(|| format!("creating temporary chunk file {}", path.display()))?;
         let mut bytes_downloaded = 0_u64;
         let mut chunk = [0_u8; MANAGED_RELEASE_DOWNLOAD_BUFFER_BYTES];
         loop {
-            if abort.load(Ordering::SeqCst) {
+            if request.abort.load(Ordering::SeqCst) {
                 anyhow::bail!("parallel managed runtime download aborted");
             }
             let read = response.read(&mut chunk).with_context(|| {
                 format!(
-                    "reading {asset_label} range {}-{} bytes",
-                    range.start, range.end
+                    "reading {} range {}-{} bytes",
+                    request.asset_label, range.start, range.end
                 )
             })?;
             if read == 0 {

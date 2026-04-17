@@ -29,6 +29,28 @@ struct CurrentEmbeddingRow {
     embedding_input_hash: String,
 }
 
+fn summary_plan_input(index: usize) -> SemanticFeatureInput {
+    SemanticFeatureInput {
+        artefact_id: format!("artefact-{index}"),
+        symbol_id: Some(format!("symbol-{index}")),
+        repo_id: "repo-summary-plan".to_string(),
+        blob_sha: format!("blob-{index}"),
+        path: format!("src/file_{index}.ts"),
+        language: "typescript".to_string(),
+        canonical_kind: "function".to_string(),
+        language_kind: "function".to_string(),
+        symbol_fqn: format!("src/file_{index}.ts::fn_{index}"),
+        name: format!("fn_{index}"),
+        signature: Some(format!("function fn_{index}(): string")),
+        modifiers: vec!["export".to_string()],
+        body: format!("return '{index}';"),
+        docstring: Some(format!("Summary input {index}")),
+        parent_kind: None,
+        dependency_signals: Vec::new(),
+        content_hash: Some(format!("content-{index}")),
+    }
+}
+
 fn daemon_test_cfg_for_repo(repo_root: &Path) -> DevqlConfig {
     let repo = resolve_repo_identity(repo_root).expect("resolve repo identity");
     DevqlConfig::from_roots(repo_root.to_path_buf(), repo_root.to_path_buf(), repo)
@@ -224,6 +246,80 @@ fn fake_runtime_scripts_bake_runtime_metadata_without_process_env() {
     assert!(script.contains("model-b"));
     assert!(script.contains("vectors"));
     assert!(!script.contains("BITLOOPS_TEST_EMBED_MODEL"));
+}
+
+#[test]
+fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups() {
+    let job = WorkplaneJobRecord {
+        job_id: "summary-backfill-1".to_string(),
+        repo_id: "repo-summary-plan".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-summary-plan"),
+        config_root: PathBuf::from("/tmp/config-summary-plan"),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+    let inputs = (0..40).map(summary_plan_input).collect::<Vec<_>>();
+
+    let plan = build_summary_refresh_workplane_plan(&job, inputs, true);
+
+    assert_eq!(
+        plan.inputs.len(),
+        WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE
+    );
+    assert_eq!(plan.follow_ups.len(), 2);
+
+    match &plan.follow_ups[0] {
+        FollowUpJob::SymbolEmbeddings {
+            artefact_ids,
+            representation_kind,
+            ..
+        } => {
+            assert_eq!(
+                *representation_kind,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
+            );
+            assert_eq!(
+                artefact_ids.len(),
+                WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE
+            );
+            assert_eq!(artefact_ids.first().map(String::as_str), Some("artefact-0"));
+            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-31"));
+        }
+        other => panic!("expected summary-embedding follow-up, got {other:?}"),
+    }
+
+    match &plan.follow_ups[1] {
+        FollowUpJob::SemanticSummaries { artefact_ids, .. } => {
+            assert_eq!(artefact_ids.len(), 8);
+            assert_eq!(
+                artefact_ids.first().map(String::as_str),
+                Some("artefact-32")
+            );
+            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-39"));
+        }
+        other => panic!("expected summary follow-up batch, got {other:?}"),
+    }
 }
 
 fn daemon_checkpoint_write_options(
@@ -1132,6 +1228,63 @@ async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
             .iter()
             .all(|input| input.path != "src/legacy.ts"),
         "repo backfill should exclude historical-only artefacts"
+    );
+}
+
+#[tokio::test]
+async fn workplane_embedding_repo_backfill_job_processes_current_repo_inputs() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-repo-backfill-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+    let rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
+
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.follow_ups.len(), 1);
+    assert!(matches!(
+        outcome.follow_ups.first(),
+        Some(FollowUpJob::CloneEdgesRebuild { .. })
+    ));
+    assert!(
+        rows.len() >= 2,
+        "repo backfill embedding job should process the current repo inputs"
     );
 }
 

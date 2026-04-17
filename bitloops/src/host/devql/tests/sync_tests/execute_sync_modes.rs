@@ -1777,7 +1777,7 @@ async fn sync_removes_deleted_file() {
 }
 
 #[tokio::test]
-async fn sync_populates_current_semantic_tables_with_current_embeddings_and_clone_edges() {
+async fn sync_does_not_populate_current_semantic_tables_inline() {
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config(repo.path());
     let cfg = sync_test_cfg_for_repo(repo.path());
@@ -1790,7 +1790,7 @@ async fn sync_populates_current_semantic_tables_with_current_embeddings_and_clon
         crate::host::devql::sync::types::SyncMode::Full,
     )
     .await
-    .expect("execute sync with current semantic clone projection");
+    .expect("execute sync with deferred semantic clone projection");
 
     let db = Connection::open(&sqlite_path).expect("open sqlite db");
     let semantic_rows: i64 = db
@@ -1831,30 +1831,33 @@ async fn sync_populates_current_semantic_tables_with_current_embeddings_and_clon
 
     assert!(
         result.success,
-        "sync should succeed with current clone projection"
+        "sync should succeed with deferred semantic scheduling enabled"
     );
-    assert!(semantic_rows > 0, "current semantics should be populated");
-    assert!(
-        feature_rows > 0,
-        "current semantic features should be populated"
+    assert_eq!(
+        semantic_rows, 0,
+        "sync should not project current semantics inline"
     );
-    assert!(
-        code_embedding_rows > 0,
-        "current code embeddings should be populated during sync"
+    assert_eq!(
+        feature_rows, 0,
+        "sync should not project current semantic features inline"
     );
-    assert!(
-        summary_embedding_rows > 0,
-        "current summary embeddings should be populated during sync"
+    assert_eq!(
+        code_embedding_rows, 0,
+        "sync should not project current code embeddings inline"
     );
-    assert!(
-        current_clone_edge_rows > 0,
-        "current clone edges should be rebuilt from current projection during sync"
+    assert_eq!(
+        summary_embedding_rows, 0,
+        "sync should not project current summary embeddings inline"
+    );
+    assert_eq!(
+        current_clone_edge_rows, 0,
+        "sync should not rebuild current clone edges inline"
     );
 }
 
 #[tokio::test]
-async fn sync_rehydrates_current_semantic_tables_with_model_backed_summaries_when_summary_generation_is_configured()
- {
+async fn sync_leaves_current_semantic_tables_empty_for_unchanged_repo_when_semantics_are_deferred()
+{
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config_with_local_summary(repo.path());
     let cfg = sync_test_cfg_for_repo(repo.path());
@@ -1897,7 +1900,7 @@ async fn sync_rehydrates_current_semantic_tables_with_model_backed_summaries_whe
         crate::host::devql::sync::types::SyncMode::Full,
     )
     .await
-    .expect("rehydrate current semantic projection with configured summary runtime");
+    .expect("execute unchanged sync with deferred semantic scheduling");
     let db = Connection::open(&sqlite_path).expect("reopen sqlite db after sync");
 
     let semantic_rows: i64 = db
@@ -1927,52 +1930,55 @@ async fn sync_rehydrates_current_semantic_tables_with_model_backed_summaries_whe
     assert_eq!(result.paths_changed, 0);
     assert!(
         result.paths_unchanged > 0,
-        "rehydration test should run against an unchanged repo"
-    );
-    assert!(
-        semantic_rows > 0,
-        "current semantic rows should be repopulated"
+        "test should run against an unchanged repo"
     );
     assert_eq!(
-        llm_summary_rows, semantic_rows,
-        "configured summary generation should populate model-backed summaries for every current semantic row"
+        semantic_rows, 0,
+        "sync should leave current semantic rows empty"
     );
     assert_eq!(
-        source_model_rows, semantic_rows,
-        "configured summary generation should record source_model for every current semantic row"
+        llm_summary_rows, 0,
+        "sync should not repopulate model-backed summaries inline"
+    );
+    assert_eq!(
+        source_model_rows, 0,
+        "sync should not record source_model inline"
     );
 }
 
 #[tokio::test]
-async fn sync_fails_when_summary_generation_is_configured_but_current_projection_cannot_resolve_provider()
- {
+async fn sync_succeeds_when_summary_generation_is_configured_but_provider_is_unavailable() {
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config_with_broken_summary_provider(repo.path());
     let cfg = sync_test_cfg_for_repo(repo.path());
     let sqlite_path = repo.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
 
-    let err = crate::host::devql::execute_sync(
+    let result = crate::host::devql::execute_sync(
         &cfg,
         &relational,
         crate::host::devql::sync::types::SyncMode::Full,
     )
     .await
-    .expect_err("configured summary generation should not silently degrade during sync");
-    let message = format!("{err:#}");
+    .expect("deferred semantic work should not fail sync when summary provider is missing");
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    let semantic_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count current semantic rows");
 
-    assert!(
-        message.contains("resolving semantic summary provider for slot `summary_generation`"),
-        "unexpected sync failure: {message}"
-    );
-    assert!(
-        message.contains("runtime `bitloops_inference` is not defined"),
-        "unexpected sync failure: {message}"
+    assert!(result.success, "sync should still succeed");
+    assert_eq!(
+        semantic_rows, 0,
+        "sync should not attempt current semantic projection when work is deferred"
     );
 }
 
 #[tokio::test]
-async fn sync_rehydrates_current_semantic_clone_tables_for_unchanged_repo_without_rebuilding_historical_tables()
+async fn sync_leaves_current_semantic_clone_tables_empty_for_unchanged_repo_without_rebuilding_historical_tables()
  {
     let repo = seed_full_sync_repo();
     write_sync_semantic_clone_config(repo.path());
@@ -2072,17 +2078,17 @@ async fn sync_rehydrates_current_semantic_clone_tables_for_unchanged_repo_withou
         historical_summary_embedding_rows, 0,
         "unchanged sync should not repopulate historical summary embeddings"
     );
-    assert!(
-        current_code_embedding_rows > 0,
-        "unchanged sync should repopulate current code embeddings"
+    assert_eq!(
+        current_code_embedding_rows, 0,
+        "unchanged sync should leave current code embeddings empty"
     );
-    assert!(
-        current_summary_embedding_rows > 0,
-        "unchanged sync should repopulate current summary embeddings"
+    assert_eq!(
+        current_summary_embedding_rows, 0,
+        "unchanged sync should leave current summary embeddings empty"
     );
-    assert!(
-        current_clone_edge_rows > 0,
-        "unchanged sync should rebuild current clone edges"
+    assert_eq!(
+        current_clone_edge_rows, 0,
+        "unchanged sync should leave current clone edges empty"
     );
 }
 
@@ -2204,12 +2210,12 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
         bad_embedding_rows, 0,
         "bad.rs should not project current embeddings"
     );
-    assert!(
-        good_feature_rows > 0,
-        "good.rs should still populate semantic features"
+    assert_eq!(
+        good_feature_rows, 0,
+        "good.rs current semantic features should now be deferred"
     );
-    assert!(
-        good_embedding_rows > 0,
-        "good.rs should still populate current embeddings"
+    assert_eq!(
+        good_embedding_rows, 0,
+        "good.rs current embeddings should now be deferred"
     );
 }

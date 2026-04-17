@@ -10,7 +10,7 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
-    SemanticClonesMailboxPayload, repo_backfill_dedupe_key,
+    SemanticClonesMailboxPayload, payload_work_item_count, repo_backfill_dedupe_key,
 };
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CAPABILITY_ID, embeddings::EmbeddingRepresentationKind,
@@ -41,6 +41,12 @@ pub(super) fn default_state() -> EnrichmentQueueState {
         last_action: Some("initialized".to_string()),
         ..EnrichmentQueueState::default()
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct WorkplaneBucketCounts {
+    jobs: u64,
+    work_items: u64,
 }
 
 pub(super) fn enqueue_workplane_summary_jobs(
@@ -808,7 +814,15 @@ pub(super) fn load_workplane_jobs_by_status(
                 lease_expires_at_unix, last_error
          FROM capability_workplane_jobs
          WHERE status = ?1
-         ORDER BY available_at_unix ASC, submitted_at_unix ASC",
+         ORDER BY CASE mailbox_name
+                      WHEN 'semantic_clones.embedding.code' THEN 0
+                      WHEN 'semantic_clones.embedding.summary' THEN 0
+                      WHEN 'semantic_clones.summary_refresh' THEN 1
+                      WHEN 'semantic_clones.clone_rebuild' THEN 2
+                  ELSE 3
+                  END ASC,
+                  available_at_unix ASC,
+                  submitted_at_unix ASC",
     )?;
     let rows = stmt.query_map(params![status.as_str()], map_workplane_job_row)?;
     let mut values = Vec::new();

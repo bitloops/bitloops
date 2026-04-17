@@ -36,7 +36,10 @@ const REPO_BACKFILL_DEDUPE_SUFFIX: &str = "repo_backfill";
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SemanticClonesMailboxPayload {
     Artefact { artefact_id: String },
-    RepoBackfill,
+    RepoBackfill {
+        #[serde(default)]
+        work_item_count: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -151,7 +154,7 @@ pub fn payload_artefact_id(payload: &serde_json::Value) -> Option<String> {
             SemanticClonesMailboxPayload::Artefact { artefact_id },
         ) => Some(artefact_id),
         LegacySemanticClonesMailboxPayload::Structured(
-            SemanticClonesMailboxPayload::RepoBackfill,
+            SemanticClonesMailboxPayload::RepoBackfill { .. },
         ) => None,
         LegacySemanticClonesMailboxPayload::LegacyArtefact { artefact_id } => Some(artefact_id),
     }
@@ -161,9 +164,22 @@ pub fn payload_is_repo_backfill(payload: &serde_json::Value) -> bool {
     matches!(
         serde_json::from_value::<LegacySemanticClonesMailboxPayload>(payload.clone()),
         Ok(LegacySemanticClonesMailboxPayload::Structured(
-            SemanticClonesMailboxPayload::RepoBackfill
+            SemanticClonesMailboxPayload::RepoBackfill { .. }
         ))
     )
+}
+
+pub fn payload_work_item_count(payload: &serde_json::Value, mailbox_name: &str) -> u64 {
+    match serde_json::from_value::<LegacySemanticClonesMailboxPayload>(payload.clone()) {
+        Ok(LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::Artefact { .. },
+        ))
+        | Ok(LegacySemanticClonesMailboxPayload::LegacyArtefact { .. }) => 1,
+        Ok(LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::RepoBackfill { work_item_count },
+        )) => work_item_count.unwrap_or_else(|| default_work_item_count_for_mailbox(mailbox_name)),
+        Err(_) => default_work_item_count_for_mailbox(mailbox_name),
+    }
 }
 
 pub fn payload_representation_kind(mailbox_name: &str) -> Option<EmbeddingRepresentationKind> {
@@ -176,6 +192,13 @@ pub fn payload_representation_kind(mailbox_name: &str) -> Option<EmbeddingRepres
 
 pub fn repo_backfill_dedupe_key(mailbox_name: &str) -> String {
     format!("{mailbox_name}:{REPO_BACKFILL_DEDUPE_SUFFIX}")
+}
+
+fn default_work_item_count_for_mailbox(mailbox_name: &str) -> u64 {
+    match mailbox_name {
+        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => 1,
+        _ => 1,
+    }
 }
 
 fn open_workplane_store_for_repo(repo_root: &Path) -> Result<RepoSqliteRuntimeStore> {

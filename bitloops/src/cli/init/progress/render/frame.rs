@@ -293,7 +293,7 @@ impl InitProgressRenderer {
                 ));
             }
             BottomProgressState::WaitingForQueue {
-                baseline_total: _,
+                baseline_total,
                 completed_floor: _,
                 completed_jobs,
                 failed_jobs,
@@ -312,6 +312,7 @@ impl InitProgressRenderer {
                 ));
                 lines.push(format_embedding_waiting_status_line(
                     checklist,
+                    *baseline_total,
                     *completed_jobs,
                     *failed_jobs,
                     spinner.as_str(),

@@ -40,6 +40,7 @@ struct EmbeddingQueueSnapshot {
     running: u64,
     failed: u64,
     completed: u64,
+    total: u64,
 }
 
 impl EmbeddingQueueSnapshot {
@@ -325,7 +326,11 @@ pub(super) async fn run_dual_init_progress(
                     match runner.result_rx.try_recv() {
                         Ok(Ok(result)) => {
                             let queue_snapshot = if summary_queue_tracking_enabled(&result) {
-                                current_summary_queue_snapshot(&scope.repo_root).await?
+                                current_summary_queue_snapshot(
+                                    &scope.repo_root,
+                                    &scope.repo.repo_id,
+                                )
+                                .await?
                             } else {
                                 None
                             };
@@ -377,8 +382,11 @@ pub(super) async fn run_dual_init_progress(
                             Some(refreshed) if refreshed.is_terminal() => {
                                 if refreshed.status.eq_ignore_ascii_case("completed") {
                                     embeddings_bootstrap_ready = true;
-                                    let queue_snapshot =
-                                        current_embedding_queue_snapshot(&scope.repo_root).await?;
+                                    let queue_snapshot = current_embedding_queue_snapshot(
+                                        &scope.repo_root,
+                                        &scope.repo.repo_id,
+                                    )
+                                    .await?;
                                     let completed_floor = queue_snapshot
                                         .map(|snapshot| snapshot.completed)
                                         .unwrap_or_default();
@@ -397,8 +405,11 @@ pub(super) async fn run_dual_init_progress(
                             }
                             Some(refreshed) => BottomProgressState::Bootstrap(refreshed),
                             None => {
-                                let queue_snapshot =
-                                    current_embedding_queue_snapshot(&scope.repo_root).await?;
+                                let queue_snapshot = current_embedding_queue_snapshot(
+                                    &scope.repo_root,
+                                    &scope.repo.repo_id,
+                                )
+                                .await?;
                                 let completed_floor = queue_snapshot
                                     .map(|snapshot| snapshot.completed)
                                     .unwrap_or_default();
@@ -419,7 +430,8 @@ pub(super) async fn run_dual_init_progress(
                         baseline_total,
                         completed_floor,
                     } => update_embeddings_queue_state(
-                        current_embedding_queue_snapshot(&scope.repo_root).await?,
+                        current_embedding_queue_snapshot(&scope.repo_root, &scope.repo.repo_id)
+                            .await?,
                         allow_empty_queue_completion,
                         baseline_total,
                         completed_floor,
@@ -433,11 +445,26 @@ pub(super) async fn run_dual_init_progress(
                         completed_jobs,
                         failed_jobs,
                     } => update_embeddings_queue_state(
-                        current_embedding_queue_snapshot(&scope.repo_root).await?,
+                        current_embedding_queue_snapshot(&scope.repo_root, &scope.repo.repo_id)
+                            .await?,
                         allow_empty_queue_completion,
                         baseline_total,
                         completed_floor,
                         completed_jobs,
+                        failed_jobs,
+                        inline_completed_embedding_artefacts,
+                    ),
+                    BottomProgressState::QueueComplete {
+                        failed_jobs,
+                        baseline_total,
+                        ..
+                    } => update_embeddings_queue_state(
+                        current_embedding_queue_snapshot(&scope.repo_root, &scope.repo.repo_id)
+                            .await?,
+                        allow_empty_queue_completion,
+                        baseline_total,
+                        0,
+                        baseline_total,
                         failed_jobs,
                         inline_completed_embedding_artefacts,
                     ),
@@ -451,7 +478,9 @@ pub(super) async fn run_dual_init_progress(
                         baseline_total,
                         completed_floor,
                     } => {
-                        let queue_snapshot = current_summary_queue_snapshot(&scope.repo_root).await?;
+                        let queue_snapshot =
+                            current_summary_queue_snapshot(&scope.repo_root, &scope.repo.repo_id)
+                                .await?;
                         update_summary_queue_state(
                             result,
                             queue_snapshot,
@@ -469,7 +498,9 @@ pub(super) async fn run_dual_init_progress(
                         completed_jobs,
                         failed_jobs,
                     } => {
-                        let queue_snapshot = current_summary_queue_snapshot(&scope.repo_root).await?;
+                        let queue_snapshot =
+                            current_summary_queue_snapshot(&scope.repo_root, &scope.repo.repo_id)
+                                .await?;
                         update_summary_queue_state(
                             result,
                             queue_snapshot,
@@ -477,6 +508,24 @@ pub(super) async fn run_dual_init_progress(
                             baseline_total,
                             completed_floor,
                             completed_jobs,
+                            failed_jobs,
+                        )
+                    }
+                    SummaryProgressState::Complete {
+                        result,
+                        failed_jobs,
+                        baseline_total,
+                    } if summary_queue_tracking_enabled(&result) => {
+                        let queue_snapshot =
+                            current_summary_queue_snapshot(&scope.repo_root, &scope.repo.repo_id)
+                                .await?;
+                        update_summary_queue_state(
+                            result,
+                            queue_snapshot,
+                            allow_empty_queue_completion,
+                            baseline_total,
+                            0,
+                            baseline_total,
                             failed_jobs,
                         )
                     }
@@ -575,31 +624,32 @@ fn update_embeddings_queue_state(
     snapshot: Option<EmbeddingQueueSnapshot>,
     allow_empty_completion: bool,
     baseline_total: u64,
-    completed_floor: u64,
+    _completed_floor: u64,
     completed_jobs: u64,
     failed_jobs: u64,
     inline_completed_artefacts: u64,
 ) -> BottomProgressState {
     match snapshot {
         Some(snapshot) => {
-            let completed_since_start = snapshot.completed.saturating_sub(completed_floor);
-            let baseline_total = baseline_total.max(completed_since_start + snapshot.remaining());
+            let baseline_total = baseline_total.max(snapshot.total).max(snapshot.completed);
+            let completed_since_start = snapshot.completed.min(baseline_total);
             let failed_jobs = snapshot.failed;
             if snapshot.remaining() > 0 {
                 BottomProgressState::Queue {
                     snapshot: EmbeddingQueueSnapshot {
                         completed: completed_since_start,
+                        total: baseline_total,
                         ..snapshot
                     },
                     baseline_total,
-                    completed_floor,
+                    completed_floor: 0,
                 }
             } else if allow_empty_completion {
                 completed_embeddings_state(failed_jobs, baseline_total, inline_completed_artefacts)
             } else {
                 BottomProgressState::WaitingForQueue {
                     baseline_total,
-                    completed_floor,
+                    completed_floor: 0,
                     completed_jobs: completed_since_start,
                     failed_jobs,
                 }
@@ -610,7 +660,7 @@ fn update_embeddings_queue_state(
         }
         None => BottomProgressState::WaitingForQueue {
             baseline_total,
-            completed_floor,
+            completed_floor: 0,
             completed_jobs,
             failed_jobs,
         },
@@ -646,7 +696,7 @@ fn update_summary_queue_state(
     snapshot: Option<EmbeddingQueueSnapshot>,
     allow_empty_completion: bool,
     baseline_total: u64,
-    completed_floor: u64,
+    _completed_floor: u64,
     completed_jobs: u64,
     failed_jobs: u64,
 ) -> SummaryProgressState {
@@ -660,18 +710,19 @@ fn update_summary_queue_state(
 
     match snapshot {
         Some(snapshot) => {
-            let completed_since_start = snapshot.completed.saturating_sub(completed_floor);
-            let baseline_total = baseline_total.max(completed_since_start + snapshot.remaining());
+            let baseline_total = baseline_total.max(snapshot.total).max(snapshot.completed);
+            let completed_since_start = snapshot.completed.min(baseline_total);
             let failed_jobs = snapshot.failed;
             if snapshot.remaining() > 0 {
                 SummaryProgressState::Queue {
                     result,
                     snapshot: EmbeddingQueueSnapshot {
                         completed: completed_since_start,
+                        total: baseline_total,
                         ..snapshot
                     },
                     baseline_total,
-                    completed_floor,
+                    completed_floor: 0,
                 }
             } else if allow_empty_completion {
                 SummaryProgressState::Complete {
@@ -683,7 +734,7 @@ fn update_summary_queue_state(
                 SummaryProgressState::WaitingForQueue {
                     result,
                     baseline_total,
-                    completed_floor,
+                    completed_floor: 0,
                     completed_jobs: completed_since_start,
                     failed_jobs,
                 }
@@ -697,7 +748,7 @@ fn update_summary_queue_state(
         None => SummaryProgressState::WaitingForQueue {
             result,
             baseline_total,
-            completed_floor,
+            completed_floor: 0,
             completed_jobs,
             failed_jobs,
         },
@@ -775,6 +826,68 @@ mod tests {
 
         let state = update_summary_queue_state(configured_summary_result(), None, true, 0, 0, 0, 0);
         assert!(matches!(state, SummaryProgressState::Complete { .. }));
+    }
+
+    #[test]
+    fn embeddings_queue_progress_uses_snapshot_artefact_totals() {
+        let state = update_embeddings_queue_state(
+            Some(EmbeddingQueueSnapshot {
+                pending: 1,
+                running: 1,
+                failed: 0,
+                completed: 42,
+                total: 100,
+            }),
+            false,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+
+        match state {
+            BottomProgressState::Queue {
+                snapshot,
+                baseline_total,
+                ..
+            } => {
+                assert_eq!(snapshot.completed, 42);
+                assert_eq!(baseline_total, 100);
+            }
+            _ => panic!("expected queue state"),
+        }
+    }
+
+    #[test]
+    fn summary_queue_progress_uses_snapshot_summary_totals() {
+        let state = update_summary_queue_state(
+            configured_summary_result(),
+            Some(EmbeddingQueueSnapshot {
+                pending: 3,
+                running: 1,
+                failed: 0,
+                completed: 75,
+                total: 120,
+            }),
+            false,
+            0,
+            0,
+            0,
+            0,
+        );
+
+        match state {
+            SummaryProgressState::Queue {
+                snapshot,
+                baseline_total,
+                ..
+            } => {
+                assert_eq!(snapshot.completed, 75);
+                assert_eq!(baseline_total, 120);
+            }
+            _ => panic!("expected queue state"),
+        }
     }
 
     #[test]

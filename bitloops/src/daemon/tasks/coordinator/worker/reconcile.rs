@@ -123,6 +123,7 @@ impl DevqlTaskCoordinator {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn persist_scope_exclusions_fingerprint(
     cfg: &DevqlConfig,
     relational: Option<&RelationalStorage>,

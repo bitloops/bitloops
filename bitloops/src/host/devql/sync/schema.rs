@@ -295,6 +295,9 @@ ON artefacts_current (repo_id, canonical_kind);
 CREATE INDEX IF NOT EXISTS artefacts_current_fqn_idx
 ON artefacts_current (repo_id, symbol_fqn);
 
+CREATE INDEX IF NOT EXISTS artefacts_current_language_kind_path_idx
+ON artefacts_current (repo_id, language_kind, path);
+
 DROP TABLE IF EXISTS artefact_edges_current;
 
 CREATE TABLE IF NOT EXISTS artefact_edges_current (
@@ -327,5 +330,11 @@ ON artefact_edges_current (repo_id, path);
 
 CREATE INDEX IF NOT EXISTS artefact_edges_current_from_idx
 ON artefact_edges_current (repo_id, from_symbol_id, edge_kind);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_current_resolution_idx
+ON artefact_edges_current (repo_id, to_symbol_id, to_symbol_ref);
+
+CREATE INDEX IF NOT EXISTS artefact_edges_current_kind_path_idx
+ON artefact_edges_current (repo_id, edge_kind, path);
 "#
 }

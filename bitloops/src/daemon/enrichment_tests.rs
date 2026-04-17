@@ -84,6 +84,85 @@ fn enrichment_job_kind_deserializes_legacy_inputs_into_artefact_ids() {
     }
 }
 
+#[test]
+fn load_workplane_jobs_prioritises_embedding_mailboxes_before_summary_refresh() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-a"),
+            job_id: "summary-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("code-a"),
+            job_id: "code-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-embed-a"),
+            job_id: "summary-embed-a",
+            updated_at_unix: 3,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 4,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let pending_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    let mailboxes = pending_jobs
+        .iter()
+        .map(|job| job.mailbox_name.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        mailboxes,
+        vec![
+            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+        ]
+    );
+}
+
 fn sample_target(config_root: PathBuf, repo_root: PathBuf) -> EnrichmentJobTarget {
     EnrichmentJobTarget::new(config_root, repo_root)
 }

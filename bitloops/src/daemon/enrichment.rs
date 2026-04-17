@@ -15,7 +15,7 @@ use crate::capability_packs::semantic_clones::features as semantic_features;
 #[cfg(test)]
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::config::resolve_repo_runtime_db_path_for_config_root;
 use crate::host::runtime_store::{DaemonSqliteRuntimeStore, WorkplaneJobStatus};
@@ -145,6 +145,10 @@ pub struct EnrichmentCoordinator {
 
 #[derive(Debug, Clone)]
 enum FollowUpJob {
+    SemanticSummaries {
+        target: EnrichmentJobTarget,
+        artefact_ids: Vec<String>,
+    },
     SymbolEmbeddings {
         target: EnrichmentJobTarget,
         artefact_ids: Vec<String>,
@@ -467,6 +471,13 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
 
     async fn enqueue_follow_up(&self, follow_up: FollowUpJob) -> Result<()> {
         match follow_up {
+            FollowUpJob::SemanticSummaries {
+                target,
+                artefact_ids,
+            } => {
+                self.enqueue_semantic_summary_workplane_jobs(target, artefact_ids)
+                    .await
+            }
             FollowUpJob::SymbolEmbeddings {
                 target,
                 artefact_ids,
@@ -513,6 +524,20 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         enqueue_workplane_embedding_jobs(&target, artefact_ids, representation_kind)?;
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
+        self.save_state(&mut state)?;
+        compact_and_prune_workplane_jobs(&self.workplane_store)?;
+        self.notify.notify_waiters();
+        Ok(())
+    }
+
+    async fn enqueue_semantic_summary_workplane_jobs(
+        &self,
+        target: EnrichmentJobTarget,
+        artefact_ids: Vec<String>,
+    ) -> Result<()> {
+        enqueue_workplane_summary_jobs(&target, artefact_ids)?;
+        let mut state = self.load_state()?;
+        state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
         compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();

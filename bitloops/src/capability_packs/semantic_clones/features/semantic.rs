@@ -6,7 +6,6 @@ use super::common::{normalize_repo_path, render_dependency_context, split_identi
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
 
 const MINIMUM_SUMMARY_LENGTH: usize = 12;
-const MAXIMUM_SUMMARY_LENGTH: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSummaryCandidate {
@@ -205,10 +204,7 @@ pub(super) fn build_semantics_row(
         .as_ref()
         .map(|candidate| normalize_summary_text(&candidate.summary))
         .filter(|summary| !summary.is_empty());
-    let valid_llm_summary = llm_summary
-        .as_deref()
-        .filter(|summary| is_valid_summary(summary))
-        .map(ensure_terminal_period);
+    let canonical_llm_summary = llm_summary.as_deref().map(ensure_terminal_period);
     let template_summary = build_template_summary(input);
     let llm_confidence = llm_candidate
         .as_ref()
@@ -220,11 +216,11 @@ pub(super) fn build_semantics_row(
     let summary = synthesize_summary(
         &template_summary,
         docstring_summary.as_deref(),
-        valid_llm_summary.as_deref(),
+        canonical_llm_summary.as_deref(),
     );
     let confidence = synthesize_summary_confidence(
         docstring_summary.as_deref(),
-        valid_llm_summary.as_deref(),
+        canonical_llm_summary.as_deref(),
         llm_confidence,
     );
 
@@ -349,7 +345,6 @@ fn is_valid_summary(summary: &str) -> bool {
     !trimmed.is_empty()
         && !trimmed.contains('\n')
         && trimmed.len() >= MINIMUM_SUMMARY_LENGTH
-        && trimmed.len() <= MAXIMUM_SUMMARY_LENGTH
         && trimmed.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
@@ -400,6 +395,26 @@ fn summary_subject(input: &SemanticFeatureInput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StaticSummaryProvider {
+        summary: Option<String>,
+        confidence: f32,
+        source_model: Option<String>,
+    }
+
+    impl SemanticSummaryProvider for StaticSummaryProvider {
+        fn cache_key(&self) -> String {
+            "provider=test".to_string()
+        }
+
+        fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
+            Some(SemanticSummaryCandidate {
+                summary: self.summary.clone()?,
+                confidence: self.confidence,
+                source_model: self.source_model.clone(),
+            })
+        }
+    }
 
     fn sample_input(kind: &str, name: &str) -> SemanticFeatureInput {
         SemanticFeatureInput {
@@ -522,6 +537,33 @@ mod tests {
         );
 
         assert_eq!(confidence, 0.88);
+    }
+
+    #[test]
+    fn semantic_features_build_semantics_row_keeps_overlong_llm_summary_as_canonical_summary() {
+        let input = sample_input("file", "cache");
+        let llm_summary = "Creates and ensures the existence of a directory for caching local embeddings by validating and creating the specified path, defaulting to a user-specific cache location if no explicit path is provided.";
+        assert!(
+            llm_summary.chars().count() > 200,
+            "test summary must stay over the previous hard limit"
+        );
+
+        let row = build_semantics_row(
+            &input,
+            &StaticSummaryProvider {
+                summary: Some(llm_summary.to_string()),
+                confidence: 0.91,
+                source_model: Some("ollama:ministral-3:3b".to_string()),
+            },
+        );
+
+        assert_eq!(row.llm_summary.as_deref(), Some(llm_summary));
+        assert_eq!(
+            row.summary,
+            format!("Defines the typescript source file. {llm_summary}")
+        );
+        assert_eq!(row.confidence, 0.91);
+        assert_eq!(row.source_model.as_deref(), Some("ollama:ministral-3:3b"));
     }
 
     #[test]
