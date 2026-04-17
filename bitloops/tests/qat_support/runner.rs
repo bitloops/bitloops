@@ -15,8 +15,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Suite {
-    Smoke,
+    AgentSmoke,
     Devql,
     DevqlIngest,
     DevqlSync,
@@ -27,7 +28,7 @@ pub enum Suite {
 impl Suite {
     pub fn id(&self) -> &'static str {
         match self {
-            Suite::Smoke => "smoke",
+            Suite::AgentSmoke => "agent-smoke",
             Suite::Devql => "devql-capabilities",
             Suite::DevqlIngest => "devql-ingest",
             Suite::DevqlSync => "devql-sync",
@@ -38,7 +39,7 @@ impl Suite {
 
     pub fn rerun_alias(&self) -> &'static str {
         match self {
-            Suite::Smoke => "cargo qat-smoke",
+            Suite::AgentSmoke => "cargo qat-agent-smoke",
             Suite::Devql => "cargo qat-devql-capabilities",
             Suite::DevqlIngest => "cargo qat-devql-ingest",
             Suite::DevqlSync => "cargo qat-devql-sync",
@@ -135,6 +136,14 @@ fn build_suite_failure_message(
 const CUCUMBER_FILTER_TAGS_ENV: &str = "CUCUMBER_FILTER_TAGS";
 
 pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
+    run_suite_with_tags(binary_path, suite, None).await
+}
+
+pub async fn run_suite_with_tags(
+    binary_path: PathBuf,
+    suite: Suite,
+    explicit_tags_filter: Option<&str>,
+) -> Result<()> {
     let max_concurrent = resolve_max_concurrent_scenarios();
     let runs_root = resolve_runs_root()?;
     let suite_root = create_suite_root(&runs_root)?;
@@ -203,8 +212,9 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
         .fail_on_skipped()
         .with_default_cli();
 
+    let env_tags_filter = env::var(CUCUMBER_FILTER_TAGS_ENV).ok();
     let result = if let Some(tags_filter) =
-        parse_cucumber_tags_filter(env::var(CUCUMBER_FILTER_TAGS_ENV).ok().as_deref())?
+        resolve_cucumber_tags_filter(explicit_tags_filter, env_tags_filter.as_deref())?
     {
         cucumber
             .filter_run(feature_path.clone(), move |feature, rule, scenario| {
@@ -430,7 +440,7 @@ fn feature_root() -> PathBuf {
 fn suite_feature_path(suite: &Suite) -> PathBuf {
     let root = feature_root();
     match suite {
-        Suite::Smoke => root.join("smoke"),
+        Suite::AgentSmoke => root.join("smoke"),
         Suite::Devql => root.join("devql"),
         Suite::DevqlIngest => root.join("devql-ingest").join("ingest_workspace.feature"),
         Suite::DevqlSync => root.join("devql-sync"),
@@ -448,14 +458,35 @@ fn resolve_max_concurrent_scenarios() -> usize {
 }
 
 fn parse_cucumber_tags_filter(raw: Option<&str>) -> Result<Option<TagOperation>> {
+    parse_cucumber_tags_filter_with_source(raw, CUCUMBER_FILTER_TAGS_ENV)
+}
+
+fn parse_cucumber_tags_filter_with_source(
+    raw: Option<&str>,
+    source: &str,
+) -> Result<Option<TagOperation>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
 
-    let parsed = raw.parse::<TagOperation>().with_context(|| {
-        format!("parsing {CUCUMBER_FILTER_TAGS_ENV} value `{raw}` as a cucumber tag expression")
-    })?;
+    let parsed = raw
+        .parse::<TagOperation>()
+        .with_context(|| format!("parsing {source} value `{raw}` as a cucumber tag expression"))?;
     Ok(Some(parsed))
+}
+
+fn resolve_cucumber_tags_filter(
+    explicit_raw: Option<&str>,
+    env_raw: Option<&str>,
+) -> Result<Option<TagOperation>> {
+    let explicit_raw = explicit_raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if explicit_raw.is_some() {
+        return parse_cucumber_tags_filter_with_source(explicit_raw, "explicit tag filter");
+    }
+
+    parse_cucumber_tags_filter(env_raw)
 }
 
 fn scenario_matches_tags_filter(

@@ -16,7 +16,7 @@ Feature: DevQL sync workspace reconciliation
     And DevQL sync summary shows 0 parse errors in bitloops
     And DevQL artefacts query returns results in bitloops
 
-  @devql @sync @test_harness_sync
+  @devql @sync @test_harness_sync @develop_gate
   Scenario: Sync materializes test-harness coverage for discovered tests
     Given I run CleanStart for flow "SyncTestHarnessPopulate"
     And I start the daemon in bitloops
@@ -270,7 +270,7 @@ Feature: DevQL sync workspace reconciliation
     Then the command fails with exit code non-zero in bitloops
     And the command output contains "daemon" in bitloops
 
-  @devql @sync
+  @devql @sync @task_queue_observability
   Scenario: Task queue observability surfaces queued task lifecycle
     Given I run CleanStart for flow "SyncTaskQueueObservability"
     And I start the daemon in bitloops
@@ -281,9 +281,11 @@ Feature: DevQL sync workspace reconciliation
     And I run DevQL init in bitloops
     And I add a new source file in bitloops
     And I commit changes without hooks in bitloops
+    And I wait for the DevQL task queue to become idle in bitloops
     And I pause the DevQL task queue with reason "qat-observe" in bitloops
     And I enqueue DevQL ingest task without status in bitloops
     Then DevQL task id is captured in bitloops
+    And the last DevQL task kind is "ingest" in bitloops
     Given I run DevQL tasks status in bitloops
     Then DevQL task queue state is "paused" in bitloops
     And DevQL task queue pause reason is "qat-observe" in bitloops

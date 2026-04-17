@@ -64,6 +64,19 @@ where
 
     let result = handler();
 
+    if let Err(err) = result.as_ref() {
+        logging::warn(
+            &ctx,
+            "hook failed",
+            &[
+                logging::string_attr("hook", hook_name),
+                logging::string_attr("hook_type", "git"),
+                logging::string_attr("strategy", strategy_name),
+                logging::string_attr("error", &format!("{err:#}")),
+            ],
+        );
+    }
+
     logging::log_duration(
         &ctx,
         logging::LogLevel::Debug,
@@ -491,6 +504,36 @@ mod tests {
                 assert!(
                     result.is_ok(),
                     "run should swallow strategy errors and keep git hook non-blocking"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn run_swallows_strategy_errors_and_logs_git_hook_failure_details() {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        with_test_logging_state(dir.path(), || {
+            with_logger_test_lock(|| {
+                logging::reset_logger_for_tests();
+
+                let result = run_git_hook_with_logging(
+                    dir.path(),
+                    "prepare-commit-msg",
+                    "manual-commit",
+                    || Err(anyhow::anyhow!("simulated git hook failure")),
+                );
+                assert!(result.is_err(), "failing hook should return an error");
+
+                let content = fs::read_to_string(logging::log_file_path())
+                    .expect("hook log file should exist");
+                assert!(
+                    content.contains("\"msg\":\"hook failed\""),
+                    "expected hook failure log entry, got: {content}"
+                );
+                assert!(
+                    content.contains("simulated git hook failure"),
+                    "expected hook failure details, got: {content}"
                 );
             });
         });

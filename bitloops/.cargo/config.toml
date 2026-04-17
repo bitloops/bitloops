@@ -42,7 +42,8 @@ test-coverage-lcov = "llvm-cov --workspace --all-targets --features slow-tests -
 
 # QAT aliases
 qat = "nextest run --features qat-tests --test qat --run-ignored only -- qat --exact"
-qat-smoke = "nextest run --features qat-tests --test qat_smoke --run-ignored only -- qat_smoke --exact"
+qat-agent-smoke = "nextest run --features qat-tests --test qat_agent_smoke --run-ignored only -- qat_agent_smoke --exact"
+qat-develop-gate = "nextest run --features qat-tests --test qat_develop_gate --run-ignored only -- qat_develop_gate --exact"
 qat-devql-capabilities = "nextest run --features qat-tests --test qat_devql_capabilities --run-ignored only -- qat_devql_capabilities --exact"
 qat-devql-sync = "nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact"
 qat-onboarding = "nextest run --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact"

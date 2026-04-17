@@ -177,37 +177,51 @@ pub fn restart_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()
 }
 
 pub async fn run_process_command(args: WatcherProcessArgs) -> Result<()> {
-    let repo_root = resolve_repo_root(args.repo_root)?;
-    let daemon_config_root = resolve_daemon_config_root(args.daemon_config_root, &repo_root)?;
-    let repo = crate::host::devql::resolve_repo_identity(&repo_root)?;
-    let cfg = crate::host::devql::DevqlConfig::from_roots(
-        daemon_config_root.clone(),
-        repo_root.clone(),
-        repo,
-    )?;
-    let _ = crate::host::devql::load_repo_exclusion_matcher(&repo_root)
-        .context("loading repo policy exclusions for DevQL watcher start")?;
-    let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
-    let opts = DevqlWatchOptions::from(watch_cfg);
+    let result = async {
+        let repo_root = resolve_repo_root(args.repo_root)?;
+        let daemon_config_root = resolve_daemon_config_root(args.daemon_config_root, &repo_root)?;
+        let repo = crate::host::devql::resolve_repo_identity(&repo_root)?;
+        let cfg = crate::host::devql::DevqlConfig::from_roots(
+            daemon_config_root.clone(),
+            repo_root.clone(),
+            repo,
+        )?;
+        let _ = crate::host::devql::load_repo_exclusion_matcher(&repo_root)
+            .context("loading repo policy exclusions for DevQL watcher start")?;
+        let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
+        let opts = DevqlWatchOptions::from(watch_cfg);
 
-    initialise_local_watch_schema(&repo_root, &daemon_config_root)?;
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let worker_cfg = cfg.clone();
-    let worker_shutdown = shutdown.clone();
-    let runtime_handle = tokio::runtime::Handle::current();
-    let mut worker = tokio::task::spawn_blocking(move || {
-        run_notify_loop(&worker_cfg, opts, worker_shutdown, runtime_handle)
-    });
-    let shutdown_signal = wait_for_shutdown_signal();
-    tokio::pin!(shutdown_signal);
+        initialise_local_watch_schema(&repo_root, &daemon_config_root)?;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_cfg = cfg.clone();
+        let worker_shutdown = shutdown.clone();
+        let runtime_handle = tokio::runtime::Handle::current();
+        let mut worker = tokio::task::spawn_blocking(move || {
+            run_notify_loop(&worker_cfg, opts, worker_shutdown, runtime_handle)
+        });
+        let shutdown_signal = wait_for_shutdown_signal();
+        tokio::pin!(shutdown_signal);
 
-    tokio::select! {
-        worker_result = &mut worker => worker_result.context("joining watcher loop task")?,
-        _ = &mut shutdown_signal => {
-            shutdown.store(true, Ordering::SeqCst);
-            worker.await.context("joining watcher loop task after shutdown")?
+        tokio::select! {
+            worker_result = &mut worker => {
+                worker_result.context("joining watcher loop task")??;
+            }
+            _ = &mut shutdown_signal => {
+                shutdown.store(true, Ordering::SeqCst);
+                worker
+                    .await
+                    .context("joining watcher loop task after shutdown")??;
+            }
         }
+        Ok(())
     }
+    .await;
+
+    if let Err(err) = &result {
+        log::error!("devql watcher failed: {err:#}");
+    }
+
+    result
 }
 
 pub fn run_process_from_cli() -> Result<()> {
@@ -260,6 +274,11 @@ fn run_notify_loop(
     let runtime_store =
         RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
     let _registration_guard = WatcherRegistrationGuard::acquire(runtime_store, &cfg.repo_root)?;
+    log::info!(
+        "devql watcher started: repo_root={} daemon_config_root={}",
+        cfg.repo_root.display(),
+        cfg.daemon_config_root.display()
+    );
 
     let debounce = Duration::from_millis(opts.debounce_ms.max(50));
     let mut batch: BTreeSet<PathBuf> = BTreeSet::new();
@@ -665,9 +684,16 @@ async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
         let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => Some(signal),
+                Err(err) => {
+                    log::warn!("failed to install SIGTERM handler for devql watcher: {err:#}");
+                    None
+                }
+            };
         let ctrl_c = async {
-            if tokio::signal::ctrl_c().await.is_err() {
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                log::warn!("failed to install Ctrl-C handler for devql watcher: {err:#}");
                 std::future::pending::<()>().await;
             }
         };
@@ -685,7 +711,8 @@ async fn wait_for_shutdown_signal() {
 
     #[cfg(not(unix))]
     {
-        if tokio::signal::ctrl_c().await.is_err() {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            log::warn!("failed to install Ctrl-C handler for devql watcher: {err:#}");
             std::future::pending::<()>().await;
         }
     }
@@ -695,6 +722,7 @@ async fn wait_for_shutdown_signal() {
 mod tests {
     use crate::host::runtime_store::RepoWatcherRegistration;
     use crate::test_support::git_fixtures::init_test_repo;
+    use crate::test_support::log_capture::capture_logs_async;
     use crate::test_support::process_state::with_env_var;
 
     use tempfile::TempDir;
@@ -996,5 +1024,23 @@ mod tests {
         let token = current_watcher_restart_token().expect("restart token");
         assert_eq!(token.len(), 64);
         assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[tokio::test]
+    async fn run_process_command_logs_terminal_failure() {
+        let temp = TempDir::new().expect("temp dir");
+        let missing_repo = temp.path().join("missing-repo");
+        let daemon_config_root = temp.path().join("config-root");
+
+        let (result, logs) = capture_logs_async(run_process_command(WatcherProcessArgs {
+            repo_root: Some(missing_repo),
+            daemon_config_root: Some(daemon_config_root),
+        }))
+        .await;
+
+        assert!(result.is_err(), "missing repo should fail watcher startup");
+        assert!(logs.iter().any(|entry| {
+            entry.level == log::Level::Error && entry.message.contains("devql watcher failed")
+        }));
     }
 }

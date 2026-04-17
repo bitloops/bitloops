@@ -593,6 +593,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
+        assert!(exclude.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
         assert!(!exclude.contains(".bitloops/"));
         assert!(!exclude.contains("config.local.json"));
         assert!(!exclude.contains(".bitloops/config.local.json"));
@@ -1201,6 +1202,9 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                     repo_skill.exists(),
                     "expected Codex repo-local skill to be installed"
                 );
+                let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
+                    .expect("read git exclude");
+                assert!(exclude.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
                 assert!(!repo.path().join(".claude/settings.json").exists());
             });
         },
@@ -1246,6 +1250,9 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                 .join(".gemini/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let exclude =
+            std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
+        assert!(exclude.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
     });
 }
 
@@ -1286,6 +1293,9 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 .join(".github/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let exclude =
+            std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
+        assert!(exclude.contains(".github/skills/bitloops/using-devql/SKILL.md"));
     });
 }
 
@@ -1326,6 +1336,9 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 .join(".opencode/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let exclude =
+            std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
+        assert!(exclude.contains(".opencode/skills/bitloops/using-devql/SKILL.md"));
     });
 }
 

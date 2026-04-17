@@ -416,6 +416,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I wait for the DevQL task queue to become idle in (\S+)$"),
+            step_fn(given_wait_for_devql_task_queue_idle),
+        )
+        .given(
+            None,
             regex(r"^I run DevQL tasks list in (\S+)$"),
             step_fn(given_run_devql_tasks_list),
         )
@@ -863,6 +868,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL task id is captured in (\S+)$"),
             step_fn(then_devql_task_id_captured),
+        )
+        .then(
+            None,
+            regex(r#"^the last DevQL task kind is \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_last_devql_task_kind_is),
         )
         .then(
             None,

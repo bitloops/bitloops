@@ -1,9 +1,9 @@
-Feature: Bitloops unified agent smoke suite
+Feature: Bitloops unified Agent Smoke suite
   As a Bitloops maintainer
-  I want deterministic smoke coverage for the supported agent integrations
-  So that `cargo qat-smoke` and `cargo qat` validate the Bitloops golden path in CI
+  I want deterministic Agent Smoke coverage for the supported agent integrations
+  So that `cargo qat-agent-smoke` and `cargo qat` validate the Bitloops golden path in CI
 
-  @smoke
+  @agent_smoke
   Scenario Outline: First agent-driven Bitloops session is captured
     Given I run CleanStart for flow "<first_flow>"
     And I start the daemon in bitloops
@@ -17,16 +17,34 @@ Feature: Bitloops unified agent smoke suite
     And <agent> session exists in bitloops
     And checkpoint mapping exists in bitloops
 
+    @develop_gate
     Examples:
-      | agent       | first_flow               |
-      | claude-code | SmokeClaudeFirstSession  |
-      | cursor      | SmokeCursorFirstSession  |
-      | gemini      | SmokeGeminiFirstSession  |
-      | copilot     | SmokeCopilotFirstSession |
-      | codex       | SmokeCodexFirstSession   |
-      | opencode    | SmokeOpenCodeFirstSession |
+      | agent       | first_flow              |
+      | claude-code | SmokeClaudeFirstSession |
 
-  @smoke
+    @develop_gate
+    Examples:
+      | agent  | first_flow             |
+      | cursor | SmokeCursorFirstSession |
+
+    @develop_gate
+    Examples:
+      | agent | first_flow            |
+      | codex | SmokeCodexFirstSession |
+
+    Examples:
+      | agent   | first_flow             |
+      | gemini  | SmokeGeminiFirstSession |
+
+    Examples:
+      | agent   | first_flow              |
+      | copilot | SmokeCopilotFirstSession |
+
+    Examples:
+      | agent    | first_flow               |
+      | opencode | SmokeOpenCodeFirstSession |
+
+  @agent_smoke
   Scenario Outline: Follow-up agent edits create progression
     Given I run CleanStart for flow "<followup_flow>"
     And I start the daemon in bitloops
@@ -42,11 +60,29 @@ Feature: Bitloops unified agent smoke suite
     And <agent> session exists in bitloops
     And checkpoint mapping count is at least 2 in bitloops
 
+    @develop_gate
     Examples:
-      | agent       | followup_flow               |
-      | claude-code | SmokeClaudeProgression      |
-      | cursor      | SmokeCursorProgression      |
-      | gemini      | SmokeGeminiProgression      |
-      | copilot     | SmokeCopilotProgression     |
-      | codex       | SmokeCodexProgression       |
-      | opencode    | SmokeOpenCodeProgression    |
+      | agent       | followup_flow          |
+      | claude-code | SmokeClaudeProgression |
+
+    @develop_gate
+    Examples:
+      | agent  | followup_flow          |
+      | cursor | SmokeCursorProgression |
+
+    @develop_gate
+    Examples:
+      | agent | followup_flow        |
+      | codex | SmokeCodexProgression |
+
+    Examples:
+      | agent   | followup_flow         |
+      | gemini  | SmokeGeminiProgression |
+
+    Examples:
+      | agent   | followup_flow          |
+      | copilot | SmokeCopilotProgression |
+
+    Examples:
+      | agent    | followup_flow         |
+      | opencode | SmokeOpenCodeProgression |

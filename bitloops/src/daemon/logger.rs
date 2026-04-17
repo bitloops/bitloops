@@ -1,15 +1,19 @@
 use anyhow::{Context, Result};
+use chrono::{SecondsFormat, TimeZone, Utc};
 use env_logger::Target;
 use log::{LevelFilter, Record};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::env;
-use std::fs::{self, OpenOptions};
+#[cfg(test)]
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::load_daemon_settings;
+
+use super::log_file::open_daemon_log_sink;
 
 pub const DAEMON_LOG_FILE_NAME: &str = "daemon.log";
 pub const LOG_LEVEL_ENV_VAR: &str = "BITLOOPS_LOG_LEVEL";
@@ -68,6 +72,15 @@ impl ProcessLogContext {
             service_name: Some(super::GLOBAL_SUPERVISOR_SERVICE_NAME.to_string()),
         }
     }
+
+    pub fn watcher(config_path: Option<PathBuf>) -> Self {
+        Self {
+            process: "watcher",
+            mode: "watcher",
+            config_path,
+            service_name: None,
+        }
+    }
 }
 
 pub fn daemon_log_file_path() -> PathBuf {
@@ -77,7 +90,7 @@ pub fn daemon_log_file_path() -> PathBuf {
         .join(DAEMON_LOG_FILE_NAME)
 }
 
-pub fn init_process_logger(context: ProcessLogContext) -> Result<()> {
+pub fn init_process_logger(context: ProcessLogContext, require_log_file: bool) -> Result<()> {
     let resolved_level = resolve_log_level(context.config_path.as_deref());
     if let Some(value) = resolved_level.invalid_value.as_ref() {
         eprintln!(
@@ -86,7 +99,7 @@ pub fn init_process_logger(context: ProcessLogContext) -> Result<()> {
         );
     }
 
-    let target = daemon_log_target();
+    let target = daemon_log_target(require_log_file)?;
     let format_context = context.clone();
     let mut logger = env_logger::Builder::new();
     logger.filter_level(resolved_level.level);
@@ -100,26 +113,21 @@ pub fn init_process_logger(context: ProcessLogContext) -> Result<()> {
         .context("initializing Bitloops daemon process logger")
 }
 
-fn daemon_log_target() -> Target {
+fn daemon_log_target(require_log_file: bool) -> Result<Target> {
     let log_path = daemon_log_file_path();
-    if let Some(parent) = log_path.parent()
-        && let Err(err) = fs::create_dir_all(parent)
-    {
-        eprintln!(
-            "[bitloops] Warning: failed to create daemon log directory {}: {err}",
-            parent.display()
-        );
-        return Target::Stderr;
-    }
-
-    match OpenOptions::new().create(true).append(true).open(&log_path) {
-        Ok(file) => Target::Pipe(Box::new(file)),
+    match open_daemon_log_sink(&log_path) {
+        Ok(file) => Ok(Target::Pipe(Box::new(file))),
         Err(err) => {
+            if require_log_file {
+                return Err(err).with_context(|| {
+                    format!("opening required daemon log file {}", log_path.display())
+                });
+            }
             eprintln!(
                 "[bitloops] Warning: failed to open daemon log file {}: {err}",
                 log_path.display()
             );
-            Target::Stderr
+            Ok(Target::Stderr)
         }
     }
 }
@@ -172,7 +180,10 @@ fn parse_log_level(value: &str) -> Option<LevelFilter> {
 
 fn build_log_entry(record: &Record<'_>, context: &ProcessLogContext, timestamp_ms: u128) -> Value {
     let mut object = Map::new();
-    object.insert("time".to_string(), Value::String(timestamp_ms.to_string()));
+    object.insert(
+        "time".to_string(),
+        Value::String(format_timestamp(timestamp_ms)),
+    );
     object.insert(
         "level".to_string(),
         Value::String(record.level().as_str().to_string()),
@@ -220,6 +231,14 @@ fn optional_string_value(value: Option<&str>) -> Value {
     value
         .map(|value| Value::String(value.to_string()))
         .unwrap_or(Value::Null)
+}
+
+fn format_timestamp(timestamp_ms: u128) -> String {
+    i64::try_from(timestamp_ms)
+        .ok()
+        .and_then(|timestamp_ms| Utc.timestamp_millis_opt(timestamp_ms).single())
+        .map(|timestamp| timestamp.to_rfc3339_opts(SecondsFormat::Millis, true))
+        .unwrap_or_else(|| timestamp_ms.to_string())
 }
 
 fn current_time_millis() -> u128 {
@@ -342,17 +361,75 @@ mod tests {
 
         let entry = build_log_entry(&record, &context, 1234);
 
-        assert_eq!(entry["time"], "1234");
         assert_eq!(entry["level"], "INFO");
         assert_eq!(entry["msg"], "daemon ready");
         assert_eq!(entry["target"], "bitloops::daemon");
         assert_eq!(entry["module"], "bitloops::daemon::tests");
         assert_eq!(entry["file"], "src/daemon/logger.rs");
         assert_eq!(entry["line"], 42);
+        assert!(entry["time"].is_string());
         assert_eq!(entry["process"], "daemon");
         assert_eq!(entry["mode"], "service");
         assert_eq!(entry["config_path"], "/tmp/bitloops/config.toml");
         assert_eq!(entry["service_name"], "com.bitloops.daemon");
         assert!(entry.get("pid").is_some());
+    }
+
+    #[test]
+    fn build_log_entry_formats_time_as_rfc3339_utc() {
+        let context = ProcessLogContext::daemon("service", None, None);
+        let message = format_args!("daemon ready");
+        let record = Record::builder()
+            .args(message)
+            .level(Level::Info)
+            .target("bitloops::daemon")
+            .build();
+
+        let entry = build_log_entry(&record, &context, 1_234);
+        let expected_time = Utc
+            .timestamp_millis_opt(1_234)
+            .single()
+            .expect("valid UTC timestamp")
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        assert_eq!(entry["time"], expected_time);
+    }
+
+    #[test]
+    fn daemon_log_target_falls_back_to_stderr_when_file_logging_is_optional() {
+        let temp = TempDir::new().expect("temp dir");
+        let blocked_state_root = temp.path().join("blocked-state-root");
+        fs::write(&blocked_state_root, "occupied").expect("write blocking state root file");
+        let blocked_state_root_str = blocked_state_root.display().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(blocked_state_root_str.as_str()),
+            )],
+        );
+
+        assert!(matches!(
+            daemon_log_target(false).expect("daemon log target"),
+            Target::Stderr
+        ));
+    }
+
+    #[test]
+    fn daemon_log_target_errors_when_file_logging_is_required() {
+        let temp = TempDir::new().expect("temp dir");
+        let blocked_state_root = temp.path().join("blocked-state-root");
+        fs::write(&blocked_state_root, "occupied").expect("write blocking state root file");
+        let blocked_state_root_str = blocked_state_root.display().to_string();
+        let _guard = enter_process_state(
+            None,
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(blocked_state_root_str.as_str()),
+            )],
+        );
+
+        let err = daemon_log_target(true).expect_err("required daemon log target should fail");
+        assert!(err.to_string().contains(&blocked_state_root_str));
     }
 }

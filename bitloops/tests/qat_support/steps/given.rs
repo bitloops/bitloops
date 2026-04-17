@@ -1046,6 +1046,19 @@ pub(super) fn given_run_devql_tasks_status(
     })
 }
 
+pub(super) fn given_wait_for_devql_task_queue_idle(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I wait for the DevQL task queue to become idle",
+            helpers::wait_for_devql_task_queue_idle_for_repo(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_run_devql_tasks_list(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

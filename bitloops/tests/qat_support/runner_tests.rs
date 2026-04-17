@@ -41,11 +41,29 @@ fn resolve_execution_binary_uses_snapshot_for_devql_sync() {
 }
 
 #[test]
+fn agent_smoke_suite_reports_expected_id_and_rerun_alias() {
+    assert_eq!(Suite::AgentSmoke.id(), "agent-smoke");
+    assert_eq!(Suite::AgentSmoke.rerun_alias(), "cargo qat-agent-smoke");
+}
+
+#[test]
 fn agents_checkpoints_suite_reports_expected_id_and_rerun_alias() {
     assert_eq!(Suite::AgentsCheckpoints.id(), "agents-checkpoints");
     assert_eq!(
         Suite::AgentsCheckpoints.rerun_alias(),
         "cargo qat-agents-checkpoints"
+    );
+}
+
+#[test]
+fn suite_feature_path_points_to_agent_smoke_feature_directory() {
+    let path = suite_feature_path(&Suite::AgentSmoke);
+    assert_eq!(
+        path,
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("qat")
+            .join("features")
+            .join("smoke")
     );
 }
 
@@ -135,6 +153,19 @@ fn scenario_matches_tags_filter_merges_feature_rule_and_scenario_tags() {
         &scenario,
         &filter
     ));
+}
+
+#[test]
+fn resolve_cucumber_tags_filter_prefers_explicit_filter_over_environment() {
+    let parsed = resolve_cucumber_tags_filter(
+        Some("@develop_gate"),
+        Some("@agent_smoke and not @develop_gate"),
+    )
+    .expect("resolve tag filter")
+    .expect("tag filter should be present");
+
+    assert!(parsed.eval(["develop_gate"]));
+    assert!(!parsed.eval(["agent_smoke"]));
 }
 
 #[test]

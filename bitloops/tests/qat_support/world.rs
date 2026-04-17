@@ -1,5 +1,4 @@
 use super::helpers::KnowledgeStubServer;
-use bitloops::daemon::CapabilityEventRunRecord;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Child;
@@ -116,7 +115,7 @@ pub struct QatWorld {
     pub knowledge_fixture_urls: HashMap<String, String>,
     pub knowledge_stub_server: Option<KnowledgeStubServer>,
     pub last_knowledge_add_had_commit_association: Option<bool>,
-    pub last_test_harness_run_baseline: Option<CapabilityEventRunRecord>,
+    pub last_test_harness_target_generation: Option<u64>,
     pub last_task_id: Option<String>,
     pub agent_name: Option<String>,
     pub watcher_autostart_enabled: bool,
@@ -173,7 +172,7 @@ impl QatWorld {
         self.knowledge_fixture_urls = HashMap::new();
         self.knowledge_stub_server = None;
         self.last_knowledge_add_had_commit_association = None;
-        self.last_test_harness_run_baseline = None;
+        self.last_test_harness_target_generation = None;
         self.last_task_id = None;
         self.agent_name = None;
         self.watcher_autostart_enabled = false;

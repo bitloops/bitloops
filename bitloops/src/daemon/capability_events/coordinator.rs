@@ -146,7 +146,7 @@ impl CapabilityEventCoordinator {
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
-            log::warn!(
+            log::error!(
                 "current-state consumer worker activation requested without an active tokio runtime"
             );
             return;
@@ -706,8 +706,26 @@ fn terminal_or_retry(
 ) -> RunCompletion {
     let error = format!("{:#}", err.into());
     if run.attempts >= MAX_RUN_ATTEMPTS {
+        log::error!(
+            "current-state consumer run failed: run_id={} repo_id={} capability_id={} consumer_id={} attempts={} error={}",
+            run.run_id,
+            run.repo_id,
+            run.capability_id,
+            run.consumer_id,
+            run.attempts,
+            error
+        );
         RunCompletion::Failed { run, error }
     } else {
+        log::warn!(
+            "current-state consumer run failed and will retry: run_id={} repo_id={} capability_id={} consumer_id={} attempts={} error={}",
+            run.run_id,
+            run.repo_id,
+            run.capability_id,
+            run.consumer_id,
+            run.attempts,
+            error
+        );
         RunCompletion::RetryableFailure { run, error }
     }
 }
@@ -721,6 +739,10 @@ fn retry_backoff_seconds(attempts: u32) -> u64 {
         _ => 60,
     }
 }
+
+#[cfg(test)]
+#[path = "coordinator_logging_tests.rs"]
+mod logging_tests;
 
 #[cfg(test)]
 mod tests {

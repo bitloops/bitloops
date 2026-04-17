@@ -22,7 +22,7 @@ Feature: Cross-capability deterministic smoke
     And I run TestHarness ingest-tests for latest commit in bitloops
     And I run TestHarness ingest-coverage for latest commit in bitloops
 
-  @devql @integration
+  @devql @integration @develop_gate
   Scenario: Hardened DevQL capability surfaces compose in one offline workflow
     Then checkpoint mapping exists in bitloops
     And claude-code session exists in bitloops

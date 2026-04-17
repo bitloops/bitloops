@@ -1480,12 +1480,13 @@ mod tests {
     fn slow_lane_excludes_qat_targets() {
         for target in [
             "qat",
-            "qat_smoke",
+            "qat_agent_smoke",
+            "qat_develop_gate",
             "qat_devql_capabilities",
             "qat_devql_ingest",
             "qat_devql_sync",
             "qat_onboarding",
-            "qat_quickstart",
+            "qat_agents_checkpoints",
         ] {
             assert!(
                 !SLOW_TEST_TARGETS.contains(&target),
@@ -1514,7 +1515,16 @@ mod tests {
 
         for (name, path, required_features) in [
             ("qat", "tests/qat.rs", &["qat-tests"][..]),
-            ("qat_smoke", "tests/qat_smoke.rs", &["qat-tests"][..]),
+            (
+                "qat_agent_smoke",
+                "tests/qat_agent_smoke.rs",
+                &["qat-tests"][..],
+            ),
+            (
+                "qat_develop_gate",
+                "tests/qat_develop_gate.rs",
+                &["qat-tests"][..],
+            ),
             (
                 "qat_devql_capabilities",
                 "tests/qat_devql_capabilities.rs",
@@ -1536,8 +1546,8 @@ mod tests {
                 &["qat-tests"][..],
             ),
             (
-                "qat_quickstart",
-                "tests/qat_quickstart.rs",
+                "qat_agents_checkpoints",
+                "tests/qat_agents_checkpoints.rs",
                 &["qat-tests"][..],
             ),
             (
@@ -1566,7 +1576,18 @@ mod tests {
 
         for (alias, target, test_name, expect_no_capture) in [
             ("qat = ", "qat", "qat", false),
-            ("qat-smoke = ", "qat_smoke", "qat_smoke", false),
+            (
+                "qat-agent-smoke = ",
+                "qat_agent_smoke",
+                "qat_agent_smoke",
+                false,
+            ),
+            (
+                "qat-develop-gate = ",
+                "qat_develop_gate",
+                "qat_develop_gate",
+                false,
+            ),
             (
                 "qat-devql-capabilities = ",
                 "qat_devql_capabilities",
@@ -1592,9 +1613,9 @@ mod tests {
                 false,
             ),
             (
-                "qat-quickstart = ",
-                "qat_quickstart",
-                "qat_quickstart",
+                "qat-agents-checkpoints = ",
+                "qat_agents_checkpoints",
+                "qat_agents_checkpoints",
                 false,
             ),
         ] {
@@ -1647,7 +1668,18 @@ mod tests {
 
         for (alias, target, test_name, expect_no_capture) in [
             ("qat = ", "qat", "qat", false),
-            ("qat-smoke = ", "qat_smoke", "qat_smoke", false),
+            (
+                "qat-agent-smoke = ",
+                "qat_agent_smoke",
+                "qat_agent_smoke",
+                false,
+            ),
+            (
+                "qat-develop-gate = ",
+                "qat_develop_gate",
+                "qat_develop_gate",
+                false,
+            ),
             (
                 "qat-devql-capabilities = ",
                 "qat_devql_capabilities",
@@ -1673,9 +1705,9 @@ mod tests {
                 false,
             ),
             (
-                "qat-quickstart = ",
-                "qat_quickstart",
-                "qat_quickstart",
+                "qat-agents-checkpoints = ",
+                "qat_agents_checkpoints",
+                "qat_agents_checkpoints",
                 false,
             ),
         ] {
@@ -1738,12 +1770,13 @@ mod tests {
 
         for target in [
             "qat",
-            "qat_smoke",
+            "qat_agent_smoke",
+            "qat_develop_gate",
             "qat_devql_capabilities",
             "qat_devql_ingest",
             "qat_devql_sync",
             "qat_onboarding",
-            "qat_quickstart",
+            "qat_agents_checkpoints",
         ] {
             let needle = format!("binary(={target})");
             assert!(
