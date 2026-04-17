@@ -97,9 +97,9 @@ pub use self::types::{
     DevqlTaskKind, DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState,
     DevqlTaskQueueStatus, DevqlTaskRecord, DevqlTaskResult, DevqlTaskSource, DevqlTaskSpec,
     DevqlTaskStatus, EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus,
-    EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
-    EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, EnrichmentQueueMode,
-    EnrichmentQueueState, EnrichmentQueueStatus, EnrichmentWorkerPoolKind,
+    EmbeddingsBootstrapMode, EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress,
+    EmbeddingsBootstrapReadiness, EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec,
+    EnrichmentQueueMode, EnrichmentQueueState, EnrichmentQueueStatus, EnrichmentWorkerPoolKind,
     EnrichmentWorkerPoolStatus, FailedEmbeddingJobSummary, IngestTaskSpec,
     InitEmbeddingsBootstrapRequest, InitSessionRecord, InitSessionState, InitSessionTerminalStatus,
     InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, PostCommitSnapshotSpec,
@@ -429,6 +429,9 @@ pub fn enqueue_embeddings_bootstrap_for_config(
         DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
             config_path,
             profile_name,
+            mode: EmbeddingsBootstrapMode::Local,
+            gateway_url_override: None,
+            api_key_env: None,
         }),
     )
 }

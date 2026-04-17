@@ -239,20 +239,43 @@ fn has_managed_hook(entries: &[super::types::CopilotHookEntry]) -> bool {
 
 pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
     let path = hooks_file_path()?;
-    install_hooks_at_path(&path, local_dev, force)
+    install_hooks_at_path(&path, local_dev, force, true)
 }
 
 pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
-    install_hooks_at_path(&hooks_file_path_at(repo_root), local_dev, force)
+    install_hooks_at_with_bitloops_skill(repo_root, local_dev, force, true)
 }
 
-fn install_hooks_at_path(path: &Path, local_dev: bool, force: bool) -> Result<usize> {
+pub fn install_hooks_at_with_bitloops_skill(
+    repo_root: &Path,
+    local_dev: bool,
+    force: bool,
+    install_bitloops_skill: bool,
+) -> Result<usize> {
+    install_hooks_at_path(
+        &hooks_file_path_at(repo_root),
+        local_dev,
+        force,
+        install_bitloops_skill,
+    )
+}
+
+fn install_hooks_at_path(
+    path: &Path,
+    local_dev: bool,
+    force: bool,
+    install_bitloops_skill: bool,
+) -> Result<usize> {
     let repo_root = path
         .parent()
         .and_then(|parent| parent.parent())
         .and_then(|parent| parent.parent())
         .unwrap_or_else(|| Path::new("."));
-    crate::adapters::agents::copilot::skills::install_repo_skill(repo_root)?;
+    if install_bitloops_skill {
+        crate::adapters::agents::copilot::skills::install_repo_skill(repo_root)?;
+    } else {
+        crate::adapters::agents::copilot::skills::uninstall_repo_skill(repo_root)?;
+    }
 
     let daemon_config_override = daemon_config_override_from_env();
     install_hooks_at_path_with_daemon_config_override(

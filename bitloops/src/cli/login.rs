@@ -34,7 +34,10 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
             Ok(session)
         }
         crate::daemon::WorkosLoginStart::Pending(start) => {
-            println!("Open this URL to sign in to Bitloops:");
+            println!();
+            println!("Sign in to Bitloops");
+            println!();
+            println!("Open the following URL in your browser:");
             println!(
                 "{}",
                 start
@@ -43,7 +46,7 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
                     .unwrap_or(&start.verification_url)
             );
             println!();
-            println!("If prompted, enter this code: {}", start.user_code);
+            println!("Enter code: {}", start.user_code);
 
             if let Some(url) = start
                 .verification_url_complete
@@ -54,9 +57,11 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
                 eprintln!("[bitloops] Warning: failed to open browser automatically: {err:#}");
             }
 
-            println!("Waiting for Bitloops sign-in to complete...");
+            println!();
+            println!("Waiting for authentication…");
             let session = crate::daemon::complete_workos_device_login(&start).await?;
-            println!("Signed in as {}.", session.display_label());
+            println!("🔒 Signed in as {}", session.display_label());
+            println!();
             Ok(session)
         }
     }

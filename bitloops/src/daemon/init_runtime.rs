@@ -394,6 +394,9 @@ impl InitRuntimeCoordinator {
                 DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
                     config_path: request.config_path,
                     profile_name: request.profile_name,
+                    mode: request.mode,
+                    gateway_url_override: request.gateway_url_override,
+                    api_key_env: request.api_key_env,
                 }),
                 Some(init_session_id.clone()),
             )?;
@@ -1514,9 +1517,12 @@ fn derive_summaries_lane(
             .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
     }
     if progress_has_remaining(progress.as_ref()) {
-        return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
-            .with_waiting_reason("waiting_for_workplane")
+        return runtime_lane("warning", progress, stats.summary_jobs, warnings)
             .with_activity_label("Generating summaries")
+            .with_detail(
+                "Summary generation finished without producing current summaries for every eligible artefact"
+                    .to_string(),
+            )
             .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
     }
     completed_lane_with_progress(progress)
@@ -2535,6 +2541,9 @@ mod tests {
                 embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                     config_path: PathBuf::from("/tmp/config-1/config.toml"),
                     profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
                 }),
                 summaries_bootstrap: Some(SummaryBootstrapRequest {
                     action: SummaryBootstrapAction::ConfigureCloud,
@@ -2617,6 +2626,9 @@ mod tests {
                 embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                     config_path: PathBuf::from("/tmp/config-1/config.toml"),
                     profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
                 }),
                 summaries_bootstrap: Some(SummaryBootstrapRequest {
                     action: SummaryBootstrapAction::ConfigureCloud,
@@ -2656,6 +2668,9 @@ mod tests {
             spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
                 profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
             }),
             status: DevqlTaskStatus::Running,
             submitted_at_unix: 1,
@@ -2711,6 +2726,9 @@ mod tests {
                 embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                     config_path: PathBuf::from("/tmp/config-1/config.toml"),
                     profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
                 }),
                 summaries_bootstrap: Some(SummaryBootstrapRequest {
                     action: SummaryBootstrapAction::ConfigureCloud,
@@ -2791,6 +2809,9 @@ mod tests {
                 embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                     config_path: PathBuf::from("/tmp/config-1/config.toml"),
                     profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
                 }),
                 summaries_bootstrap: Some(SummaryBootstrapRequest {
                     action: SummaryBootstrapAction::ConfigureCloud,
@@ -2873,6 +2894,92 @@ mod tests {
     }
 
     #[test]
+    fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
+        let session = InitSessionRecord {
+            init_session_id: "init-session-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_root: PathBuf::from("/tmp/repo-1"),
+            daemon_config_root: PathBuf::from("/tmp/config-1"),
+            selections: StartInitSessionSelections {
+                run_sync: true,
+                run_ingest: false,
+                ingest_backfill: None,
+                embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                    config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                    profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
+                }),
+                summaries_bootstrap: Some(SummaryBootstrapRequest {
+                    action: SummaryBootstrapAction::ConfigureCloud,
+                    message: None,
+                    model_name: None,
+                    gateway_url_override: None,
+                }),
+            },
+            initial_sync_task_id: Some("sync-task-1".to_string()),
+            ingest_task_id: None,
+            embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+            summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+            follow_up_sync_required: false,
+            follow_up_sync_task_id: None,
+            next_completion_seq: 2,
+            initial_sync_completion_seq: Some(1),
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: Some(2),
+            follow_up_sync_completion_seq: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            terminal_status: None,
+            terminal_error: None,
+        };
+        let initial_sync = completed_sync_task("sync-task-1", 10);
+        let summary_run = SummaryBootstrapRunRecord {
+            run_id: "summary-task-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_root: PathBuf::from("/tmp/repo-1"),
+            init_session_id: "init-session-1".to_string(),
+            request: SummaryBootstrapRequest {
+                action: SummaryBootstrapAction::ConfigureCloud,
+                message: None,
+                model_name: None,
+                gateway_url_override: None,
+            },
+            status: SummaryBootstrapStatus::Completed,
+            progress: SummaryBootstrapProgress::default(),
+            result: None,
+            error: None,
+            submitted_at_unix: 1,
+            started_at_unix: Some(1),
+            updated_at_unix: 10,
+            completed_at_unix: Some(10),
+        };
+
+        let lane = derive_summaries_lane(
+            &session,
+            Some(&initial_sync),
+            None,
+            Some(&summary_run),
+            &SessionWorkplaneStats::default(),
+            Some(InitRuntimeLaneProgressView {
+                completed: 272,
+                total: 285,
+                remaining: 13,
+            }),
+        );
+
+        assert_eq!(lane.status, "warning");
+        assert_eq!(lane.waiting_reason, None);
+        assert_eq!(
+            lane.detail.as_deref(),
+            Some(
+                "Summary generation finished without producing current summaries for every eligible artefact"
+            )
+        );
+    }
+
+    #[test]
     fn summary_follow_up_can_start_before_embeddings_bootstrap_finishes() {
         let session = InitSessionRecord {
             init_session_id: "init-session-1".to_string(),
@@ -2886,6 +2993,9 @@ mod tests {
                 embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                     config_path: PathBuf::from("/tmp/config-1/config.toml"),
                     profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
                 }),
                 summaries_bootstrap: Some(SummaryBootstrapRequest {
                     action: SummaryBootstrapAction::ConfigureCloud,
@@ -2926,6 +3036,9 @@ mod tests {
             spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
                 profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
             }),
             status: DevqlTaskStatus::Running,
             submitted_at_unix: 1,
@@ -2984,6 +3097,9 @@ mod tests {
                 embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                     config_path: PathBuf::from("/tmp/config-1/config.toml"),
                     profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
                 }),
                 summaries_bootstrap: Some(SummaryBootstrapRequest {
                     action: SummaryBootstrapAction::ConfigureCloud,
@@ -3025,6 +3141,9 @@ mod tests {
             spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
                 profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
             }),
             status: DevqlTaskStatus::Completed,
             submitted_at_unix: 1,

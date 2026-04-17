@@ -96,11 +96,11 @@ pub(super) async fn run(
         }
         DashboardStartupMode::SlowProbe => {
             if !tls::mkcert_on_path() {
-                startup_warnings.push(
+                startup_warnings.push(format!(
                     "Warning: `mkcert` is not on PATH. Falling back to local HTTP.\n\
-                     See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
-                        .to_string(),
-                );
+                     See {} for local TLS setup instructions.",
+                    tls::LOCAL_HTTPS_SETUP_DOCS_URL
+                ));
                 (DashboardTransport::Http, None)
             } else {
                 match tls::ensure_dashboard_tls_material(&browser_host) {
@@ -120,7 +120,8 @@ pub(super) async fn run(
                         startup_warnings.push(format!(
                             "Warning: Dashboard HTTPS setup failed ({err:#}).\n\
                              Falling back to local HTTP.\n\
-                             See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
+                             See {} for local TLS setup instructions.",
+                            tls::LOCAL_HTTPS_SETUP_DOCS_URL
                         ));
                         (DashboardTransport::Http, None)
                     }

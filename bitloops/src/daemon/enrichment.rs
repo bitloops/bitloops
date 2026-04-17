@@ -45,7 +45,9 @@ use self::workplane::{
     persist_workplane_job_completion, project_workplane_status, retry_failed_workplane_jobs,
     sql_i64,
 };
-use worker_count::{EnrichmentWorkerPool, configured_enrichment_worker_budgets};
+use worker_count::{
+    EnrichmentWorkerBudgets, EnrichmentWorkerPool, configured_enrichment_worker_budgets_for_repo,
+};
 
 #[cfg(test)]
 const MAX_SEMANTIC_ENRICHMENT_JOB_ARTEFACTS: usize = 32;
@@ -149,10 +151,11 @@ impl EnrichmentJobTarget {
 pub struct EnrichmentCoordinator {
     runtime_store: DaemonSqliteRuntimeStore,
     workplane_store: DaemonSqliteRuntimeStore,
+    daemon_config_root: PathBuf,
     lock: Mutex<()>,
     notify: Notify,
     state_initialised: AtomicBool,
-    workers_started: AtomicBool,
+    started_worker_counts: std::sync::Mutex<EnrichmentWorkerBudgets>,
     subscription_hub: std::sync::Mutex<Option<Arc<SubscriptionHub>>>,
 }
 
@@ -226,23 +229,31 @@ where
 impl EnrichmentCoordinator {
     pub(crate) fn shared() -> Arc<Self> {
         static INSTANCE: OnceLock<Arc<EnrichmentCoordinator>> = OnceLock::new();
-        let coordinator = Arc::clone(INSTANCE.get_or_init(|| {
-            let daemon_config =
-                crate::daemon::resolve_daemon_config(None).expect("resolving daemon config");
-            Arc::new(Self {
-                runtime_store: DaemonSqliteRuntimeStore::open()
-                    .expect("opening daemon runtime store for enrichment controls"),
-                workplane_store: DaemonSqliteRuntimeStore::open_at(
-                    resolve_repo_runtime_db_path_for_config_root(&daemon_config.config_root),
-                )
-                .expect("opening repo runtime workplane store for enrichment queue"),
-                lock: Mutex::new(()),
-                notify: Notify::new(),
-                state_initialised: AtomicBool::new(false),
-                workers_started: AtomicBool::new(false),
-                subscription_hub: std::sync::Mutex::new(None),
-            })
-        }));
+        let coordinator =
+            Arc::clone(
+                INSTANCE.get_or_init(|| {
+                    let daemon_config = crate::daemon::resolve_daemon_config(None)
+                        .expect("resolving daemon config");
+                    Arc::new(Self {
+                        runtime_store: DaemonSqliteRuntimeStore::open()
+                            .expect("opening daemon runtime store for enrichment controls"),
+                        workplane_store: DaemonSqliteRuntimeStore::open_at(
+                            resolve_repo_runtime_db_path_for_config_root(
+                                &daemon_config.config_root,
+                            ),
+                        )
+                        .expect("opening repo runtime workplane store for enrichment queue"),
+                        daemon_config_root: daemon_config.config_root.clone(),
+                        lock: Mutex::new(()),
+                        notify: Notify::new(),
+                        state_initialised: AtomicBool::new(false),
+                        started_worker_counts: std::sync::Mutex::new(
+                            EnrichmentWorkerBudgets::default(),
+                        ),
+                        subscription_hub: std::sync::Mutex::new(None),
+                    })
+                }),
+            );
         coordinator.ensure_started();
         coordinator
     }
@@ -259,32 +270,46 @@ impl EnrichmentCoordinator {
             self.requeue_running_jobs();
             let _ = compact_and_prune_workplane_jobs(&self.workplane_store);
         }
-        self.start_workers_if_possible();
+        self.ensure_worker_capacity();
     }
 
-    fn start_workers_if_possible(self: &Arc<Self>) {
+    fn ensure_worker_capacity(self: &Arc<Self>) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        if self.workers_started.swap(true, Ordering::AcqRel) {
+        let budgets = effective_worker_budgets(&self.workplane_store, &self.daemon_config_root)
+            .unwrap_or_else(|err| {
+                log::warn!(
+                    "failed to resolve effective enrichment worker budgets from `{}`: {err:#}",
+                    self.daemon_config_root.display()
+                );
+                configured_enrichment_worker_budgets_for_repo(&self.daemon_config_root)
+            });
+        let Ok(mut started_worker_counts) = self.started_worker_counts.lock() else {
+            log::warn!("failed to lock enrichment worker counts; skipping worker-capacity update");
             return;
-        }
-
-        let budgets = configured_enrichment_worker_budgets();
+        };
         for pool in [
             EnrichmentWorkerPool::SummaryRefresh,
             EnrichmentWorkerPool::Embeddings,
             EnrichmentWorkerPool::CloneRebuild,
         ] {
-            let worker_count = budgets.for_pool(pool);
-            if worker_count > 0 {
+            let current_count = started_worker_counts.for_pool(pool);
+            let desired_count = budgets.for_pool(pool);
+            if desired_count <= current_count {
+                continue;
+            }
+            let additional_workers = desired_count - current_count;
+            if additional_workers > 0 {
                 log::info!(
-                    "starting {} enrichment workers for pool {}",
-                    worker_count,
-                    pool.as_str()
+                    "starting {} additional enrichment workers for pool {} (total {})",
+                    additional_workers,
+                    pool.as_str(),
+                    desired_count
                 );
             }
-            for _ in 0..worker_count {
+            started_worker_counts.set_for_pool(pool, desired_count);
+            for _ in 0..additional_workers {
                 let coordinator = Arc::clone(self);
                 handle.spawn(async move {
                     coordinator.run_loop(pool).await;
@@ -473,6 +498,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
 
     async fn run_loop(self: Arc<Self>, pool: EnrichmentWorkerPool) {
         loop {
+            self.ensure_worker_capacity();
             match self.process_next_job(pool).await {
                 Ok(true) => continue,
                 Ok(false) => {}
@@ -693,7 +719,11 @@ pub fn snapshot() -> Result<EnrichmentQueueStatus> {
     let state = runtime_store
         .load_enrichment_queue_state()?
         .unwrap_or_else(default_state);
-    let projected = project_workplane_status(&workplane_store, &state)?;
+    let projected = project_workplane_status(
+        &workplane_store,
+        &state,
+        effective_worker_budgets(&workplane_store, &daemon_config.config_root)?,
+    )?;
     let gate = crate::daemon::embeddings_bootstrap::gate_status_for_enrichment_queue(
         &runtime_store,
         iter_workplane_job_config_roots(&workplane_store)?,
@@ -732,7 +762,11 @@ pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResu
     state.paused_reason = reason.clone();
     state.last_action = Some("paused".to_string());
     runtime_store.save_enrichment_queue_state(&state)?;
-    let mut projected = project_workplane_status(&workplane_store, &state)?;
+    let mut projected = project_workplane_status(
+        &workplane_store,
+        &state,
+        effective_worker_budgets(&workplane_store, &daemon_config.config_root)?,
+    )?;
     projected.mode = EnrichmentQueueMode::Paused;
     projected.last_action = Some("paused".to_string());
     projected.paused_reason = reason.clone();
@@ -760,7 +794,11 @@ pub fn resume_enrichments() -> Result<EnrichmentControlResult> {
     )?;
     Ok(EnrichmentControlResult {
         message: "Enrichment queue resumed.".to_string(),
-        state: project_workplane_status(&workplane_store, &state)?,
+        state: project_workplane_status(
+            &workplane_store,
+            &state,
+            effective_worker_budgets(&workplane_store, &daemon_config.config_root)?,
+        )?,
     })
 }
 
@@ -777,13 +815,31 @@ pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
     state.retried_failed_jobs += retried;
     state.last_action = Some("retry_failed".to_string());
     runtime_store.save_enrichment_queue_state(&state)?;
-    let mut projected = project_workplane_status(&workplane_store, &state)?;
+    let mut projected = project_workplane_status(
+        &workplane_store,
+        &state,
+        effective_worker_budgets(&workplane_store, &daemon_config.config_root)?,
+    )?;
     projected.retried_failed_jobs = state.retried_failed_jobs;
     projected.last_action = Some("retry_failed".to_string());
     Ok(EnrichmentControlResult {
         message: format!("Requeued {retried} failed enrichment jobs."),
         state: projected,
     })
+}
+
+fn effective_worker_budgets(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    fallback_config_root: &std::path::Path,
+) -> Result<EnrichmentWorkerBudgets> {
+    let mut budgets = configured_enrichment_worker_budgets_for_repo(fallback_config_root);
+    for config_root in iter_workplane_job_config_roots(workplane_store)? {
+        let next = configured_enrichment_worker_budgets_for_repo(&config_root);
+        budgets.summary_refresh = budgets.summary_refresh.max(next.summary_refresh);
+        budgets.embeddings = budgets.embeddings.max(next.embeddings);
+        budgets.clone_rebuild = budgets.clone_rebuild.max(next.clone_rebuild);
+    }
+    Ok(budgets)
 }
 
 #[cfg(test)]

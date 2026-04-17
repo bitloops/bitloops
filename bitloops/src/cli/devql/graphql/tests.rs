@@ -507,6 +507,9 @@ fn start_init_runtime_mutation_serializes_runtime_orchestration_input() {
         embeddings_bootstrap: Some(super::types::RuntimeEmbeddingsBootstrapRequestInput {
             config_path: "/tmp/daemon-config.toml".to_string(),
             profile_name: "local_code".to_string(),
+            mode: "local".to_string(),
+            gateway_url_override: None,
+            api_key_env: None,
         }),
         summaries_bootstrap: Some(super::types::RuntimeSummaryBootstrapRequestInput {
             action: "configure_local".to_string(),
@@ -526,6 +529,10 @@ fn start_init_runtime_mutation_serializes_runtime_orchestration_input() {
             assert_eq!(
                 variables["input"]["embeddingsBootstrap"]["profileName"],
                 json!("local_code")
+            );
+            assert_eq!(
+                variables["input"]["embeddingsBootstrap"]["mode"],
+                json!("LOCAL")
             );
             assert_eq!(
                 variables["input"]["summariesBootstrap"]["action"],

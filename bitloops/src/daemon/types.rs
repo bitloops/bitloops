@@ -574,6 +574,12 @@ impl Default for SummaryBootstrapState {
 pub struct InitEmbeddingsBootstrapRequest {
     pub config_path: PathBuf,
     pub profile_name: String,
+    #[serde(default)]
+    pub mode: EmbeddingsBootstrapMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_url_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -836,10 +842,24 @@ pub struct IngestTaskSpec {
     pub backfill: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EmbeddingsBootstrapMode {
+    #[default]
+    Local,
+    Platform,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EmbeddingsBootstrapTaskSpec {
     pub config_path: PathBuf,
     pub profile_name: String,
+    #[serde(default)]
+    pub mode: EmbeddingsBootstrapMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_url_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -184,11 +184,14 @@ fn new_test_coordinator(temp: &TempDir) -> (EnrichmentCoordinator, EnrichmentJob
                 .expect("open test daemon runtime store"),
             workplane_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
                 .expect("open test workplane store"),
+            daemon_config_root: config_root.clone(),
             subscription_hub: std::sync::Mutex::new(None),
             lock: Mutex::new(()),
             notify: Notify::new(),
             state_initialised: AtomicBool::new(false),
-            workers_started: AtomicBool::new(false),
+            started_worker_counts: std::sync::Mutex::new(
+                super::worker_count::EnrichmentWorkerBudgets::default(),
+            ),
         },
         sample_target(config_root, repo_root),
         repo_id,
@@ -284,6 +287,48 @@ model = "local-code"
 "#
     ));
     fs::write(&config_path, config).expect("write test daemon config with embeddings profile");
+    config_path
+}
+
+fn configure_remote_embeddings_for_repo(
+    target: &EnrichmentJobTarget,
+    profile_name: &str,
+) -> PathBuf {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "platform-embeddings"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.{profile_name}]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+"#
+    ));
+    fs::write(&config_path, config)
+        .expect("write test daemon config with remote embeddings profile");
     config_path
 }
 
@@ -742,8 +787,16 @@ fn projected_workplane_status_reports_per_pool_counts() {
         },
     );
 
-    let projected = project_workplane_status(&coordinator.workplane_store, &default_state())
-        .expect("project workplane status");
+    let projected = project_workplane_status(
+        &coordinator.workplane_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerBudgets {
+            summary_refresh: 1,
+            embeddings: 1,
+            clone_rebuild: 1,
+        },
+    )
+    .expect("project workplane status");
 
     assert_eq!(projected.completed_recent_jobs, 1);
     assert_eq!(projected.worker_pools.len(), 3);
@@ -792,6 +845,36 @@ fn projected_workplane_status_reports_per_pool_counts() {
             }),
         Some((0, 0, 1, 0))
     );
+}
+
+#[test]
+fn effective_worker_budgets_use_remote_embedding_defaults_for_active_config_roots() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_remote_embeddings_for_repo(&target, "platform_code");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("code-pending"),
+            job_id: "code-pending",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let budgets = effective_worker_budgets(
+        &coordinator.workplane_store,
+        &coordinator.daemon_config_root,
+    )
+    .expect("resolve effective worker budgets");
+
+    assert_eq!(budgets.embeddings, 6);
 }
 
 struct WorkplaneJobFixture<'a> {

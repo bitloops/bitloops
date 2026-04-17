@@ -14,9 +14,11 @@ pub use args::{
 };
 #[allow(unused_imports)]
 pub(crate) use managed::{
-    ensure_managed_embeddings_runtime_with_progress, install_or_bootstrap_embeddings,
+    ensure_managed_embeddings_runtime_with_progress,
+    install_managed_platform_embeddings_binary_with_progress, install_or_bootstrap_embeddings,
     install_or_configure_platform_embeddings, managed_embeddings_binary_dir,
     managed_embeddings_binary_path, managed_embeddings_metadata_path,
+    managed_platform_runtime_command_is_eligible, managed_platform_runtime_version_for_command,
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
 pub(crate) use profiles::{

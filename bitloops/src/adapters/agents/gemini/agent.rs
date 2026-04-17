@@ -407,7 +407,21 @@ impl GeminiCliAgent {
         local_dev: bool,
         force: bool,
     ) -> Result<usize> {
-        super::skills::install_repo_skill(repo_root)?;
+        self.install_hooks_at_with_bitloops_skill(repo_root, local_dev, force, true)
+    }
+
+    pub(crate) fn install_hooks_at_with_bitloops_skill(
+        &self,
+        repo_root: &Path,
+        local_dev: bool,
+        force: bool,
+        install_bitloops_skill: bool,
+    ) -> Result<usize> {
+        if install_bitloops_skill {
+            super::skills::install_repo_skill(repo_root)?;
+        } else {
+            super::skills::uninstall_repo_skill(repo_root)?;
+        }
         let settings_path = self.settings_path_at(repo_root);
 
         let mut raw_settings: Map<String, Value> = match std::fs::read(&settings_path) {

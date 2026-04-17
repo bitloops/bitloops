@@ -34,40 +34,32 @@ pub(crate) fn prompt_summary_setup_selection(
 
 fn prompt_summary_setup_selection_with_picker(
     out: &mut dyn Write,
-    cloud_logged_in: bool,
+    _cloud_logged_in: bool,
 ) -> Result<SummarySetupSelection> {
     let options = vec![
         SingleSelectOption::new(
-            "Bitloops cloud (recommended)",
-            vec![
-                "Requires you to create or use your free Bitloops account. No local model needed."
-                    .to_string(),
-            ],
+            "Bitloops Cloud (recommended)",
+            vec!["Fast setup. No local compute required.".to_string()],
         ),
         SingleSelectOption::new(
-            "Local Ollama",
-            vec![
-                "No code leaves your machine but requires RAM >32GB and GPU acceleration (64GB+ recommended)."
-                    .to_string(),
-            ],
+            "Local (Ollama)",
+            vec!["Runs locally (32GB+ RAM, GPU strongly recommended).".to_string()],
         ),
         SingleSelectOption::new("Skip for now", Vec::new()),
     ];
-    let mut footer = Vec::new();
-    if !cloud_logged_in {
-        footer.push(
-            "Choosing Bitloops cloud will open the Bitloops sign-in flow in your browser."
-                .to_string(),
-        );
-    }
+    let intro = vec![
+        "Summaries help agents understand your code structure".to_string(),
+        "(e.g. file purposes, module responsibilities).".to_string(),
+    ];
 
     writeln!(out)?;
     let selection = prompt_single_select(
         out,
-        "How would you like Bitloops to configure semantic summaries?",
+        "Configure semantic summaries",
+        &intro,
         &options,
         0,
-        &footer,
+        &[],
     )?;
 
     Ok(match selection {
@@ -81,30 +73,22 @@ fn prompt_summary_setup_selection_with_picker(
 fn prompt_summary_setup_selection_with_text_input(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-    cloud_logged_in: bool,
+    _cloud_logged_in: bool,
 ) -> Result<SummarySetupSelection> {
     writeln!(out)?;
+    writeln!(out, "Configure semantic summaries")?;
+    writeln!(out)?;
+    writeln!(out, "Summaries help agents understand your code structure")?;
+    writeln!(out, "(e.g. file purposes, module responsibilities).")?;
+    writeln!(out)?;
+    writeln!(out, "1. Bitloops Cloud (recommended)")?;
+    writeln!(out, "   Fast setup. No local compute required.")?;
+    writeln!(out, "2. Local (Ollama)")?;
     writeln!(
         out,
-        "How would you like Bitloops to configure semantic summaries?"
-    )?;
-    writeln!(out, "1. Bitloops cloud (recommended)")?;
-    writeln!(
-        out,
-        "   Requires you to create or use your free Bitloops account. No local model needed."
-    )?;
-    writeln!(out, "2. Local Ollama")?;
-    writeln!(
-        out,
-        "   No code leaves your machine but requires RAM >32GB and GPU acceleration (64GB+ recommended)."
+        "   Runs locally (32GB+ RAM, GPU strongly recommended)."
     )?;
     writeln!(out, "3. Skip for now")?;
-    if !cloud_logged_in {
-        writeln!(
-            out,
-            "Choosing Bitloops cloud will open the Bitloops sign-in flow in your browser."
-        )?;
-    }
 
     loop {
         writeln!(out, "Select an option [1/2/3]")?;

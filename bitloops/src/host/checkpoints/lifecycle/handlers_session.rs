@@ -33,7 +33,13 @@ fn ensure_hook_setup(repo_root: &std::path::Path, agent_name: &str) -> Result<()
         .are_agent_hooks_installed(repo_root, agent_name)
         .unwrap_or(false)
     {
-        let _ = registry.install_agent_hooks(repo_root, agent_name, local_dev, false);
+        let _ = registry.install_agent_hooks(
+            repo_root,
+            agent_name,
+            local_dev,
+            false,
+            crate::adapters::agents::AgentHookInstallOptions::default(),
+        );
     }
     if !crate::adapters::agents::claude_code::git_hooks::is_git_hook_installed(repo_root) {
         let _ = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(

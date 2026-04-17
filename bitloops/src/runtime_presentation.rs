@@ -6,9 +6,9 @@ use crate::capability_packs::semantic_clones::types::{
 pub(crate) const INIT_CODEBASE_SECTION_TITLE: &str = "Codebase";
 pub(crate) const INIT_CODEBASE_LANE_LABEL: &str = "Syncing files and commit history";
 pub(crate) const INIT_EMBEDDINGS_SECTION_TITLE: &str = "Embeddings";
-pub(crate) const INIT_EMBEDDINGS_LANE_LABEL: &str = "Building the semantic search index";
+pub(crate) const INIT_EMBEDDINGS_LANE_LABEL: &str = "Building semantic index";
 pub(crate) const INIT_SUMMARIES_SECTION_TITLE: &str = "Summaries";
-pub(crate) const INIT_SUMMARIES_LANE_LABEL: &str = "Generating code summaries";
+pub(crate) const INIT_SUMMARIES_LANE_LABEL: &str = "Generating summaries";
 pub(crate) const RETRY_FAILED_ENRICHMENTS_COMMAND: &str =
     "bitloops daemon enrichments retry-failed";
 

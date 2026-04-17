@@ -6,7 +6,7 @@ use super::super::adapters::{
     AgentAdapterCapability, AgentAdapterCompatibility, AgentAdapterDescriptor,
     AgentAdapterPackageDescriptor, AgentAdapterRegistration, AgentAdapterRuntime,
     AgentAdapterRuntimeCompatibility, AgentConfigField, AgentConfigSchema, AgentConfigValueKind,
-    AgentProtocolFamilyDescriptor, AgentTargetProfileDescriptor,
+    AgentHookInstallOptions, AgentProtocolFamilyDescriptor, AgentTargetProfileDescriptor,
 };
 
 pub(super) const NO_ALIASES: &[&str] = &[];
@@ -92,7 +92,7 @@ fn hooks_false(_: &Path) -> bool {
     false
 }
 
-fn install_noop(_: &Path, _: bool, _: bool) -> Result<usize> {
+fn install_noop(_: &Path, _: bool, _: bool, _: AgentHookInstallOptions) -> Result<usize> {
     Ok(0)
 }
 

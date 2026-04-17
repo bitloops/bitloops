@@ -283,6 +283,9 @@ pub(crate) struct RuntimeStartInitInput {
 pub(crate) struct RuntimeEmbeddingsBootstrapRequestInput {
     pub config_path: String,
     pub profile_name: String,
+    pub mode: String,
+    pub gateway_url_override: Option<String>,
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -503,6 +503,9 @@ fn runtime_embeddings_bootstrap_input_json(
     json!({
         "configPath": input.config_path,
         "profileName": input.profile_name,
+        "mode": graphql_enum_name(input.mode.as_str()),
+        "gatewayUrlOverride": input.gateway_url_override,
+        "apiKeyEnv": input.api_key_env,
     })
 }
 

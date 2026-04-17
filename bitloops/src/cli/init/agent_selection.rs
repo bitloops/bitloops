@@ -9,8 +9,15 @@ use std::{env, fs};
 use anyhow::{Result, anyhow, bail};
 
 use crate::cli::enable::initialized_agents;
+use crate::utils::branding::{BITLOOPS_PURPLE_HEX, color_hex_if_enabled, should_use_color_output};
 
 use super::agent_hooks::{DEFAULT_AGENT, agent_display, available_agents, detect_agents};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitAgentSelection {
+    pub agents: Vec<String>,
+    pub enable_bitloops_skill: bool,
+}
 
 pub fn can_prompt_interactively() -> bool {
     #[cfg(test)]
@@ -58,48 +65,31 @@ fn executable_with_extensions(dir: &Path, program: &str) -> [PathBuf; 3] {
 pub fn detect_or_select_agent(
     repo_root: &Path,
     out: &mut dyn Write,
+    default_enable_bitloops_skill: bool,
     select_fn: Option<&super::AgentSelector>,
-) -> Result<Vec<String>> {
+) -> Result<InitAgentSelection> {
     let detected = detect_agents(repo_root);
     let installed = initialized_agents(repo_root);
 
-    if detected.len() == 1 {
-        writeln!(out, "Detected agent: {}", agent_display(&detected[0]))?;
-        writeln!(out)?;
-    }
-
-    if detected.len() > 1 {
-        let labels = detected
-            .iter()
-            .map(|a| agent_display(a))
-            .collect::<Vec<_>>()
-            .join(", ");
-        writeln!(out, "Detected multiple agents: {labels}")?;
-        writeln!(out)?;
-    }
-
     if !can_prompt_interactively() {
         if !detected.is_empty() {
-            return Ok(detected);
+            return Ok(InitAgentSelection {
+                agents: detected,
+                enable_bitloops_skill: default_enable_bitloops_skill,
+            });
         }
         if !installed.is_empty() {
-            return Ok(installed);
+            return Ok(InitAgentSelection {
+                agents: installed,
+                enable_bitloops_skill: default_enable_bitloops_skill,
+            });
         }
         writeln!(out, "Agent: {} (default)", agent_display(DEFAULT_AGENT))?;
         writeln!(out)?;
-        return Ok(vec![DEFAULT_AGENT.to_string()]);
-    }
-
-    if detected.is_empty() {
-        writeln!(
-            out,
-            "No agent configuration detected (e.g., .claude, .codex, .cursor, .gemini, or .opencode)."
-        )?;
-        writeln!(
-            out,
-            "This is normal - some agents don't require a config directory."
-        )?;
-        writeln!(out)?;
+        return Ok(InitAgentSelection {
+            agents: vec![DEFAULT_AGENT.to_string()],
+            enable_bitloops_skill: default_enable_bitloops_skill,
+        });
     }
 
     let available = available_agents();
@@ -112,39 +102,34 @@ pub fn detect_or_select_agent(
     };
 
     let mut selected = match select_fn {
-        Some(select) => select(&available).map_err(|e| anyhow!(e))?,
-        None => prompt_select_agents(&available, &defaults, out)?,
+        Some(select) => {
+            select(&available, default_enable_bitloops_skill).map_err(|e| anyhow!(e))?
+        }
+        None => prompt_select_agents(&available, &defaults, default_enable_bitloops_skill, out)?,
     };
 
-    if selected.is_empty() {
+    if selected.agents.is_empty() {
         bail!("no agents selected");
     }
 
     let available_set: BTreeSet<&str> = available.iter().map(String::as_str).collect();
-    for name in &selected {
+    for name in &selected.agents {
         if !available_set.contains(name.as_str()) {
             bail!("failed to get selected agent {name}");
         }
     }
 
     let mut seen = BTreeSet::new();
-    selected.retain(|name| seen.insert(name.clone()));
-
-    let labels = selected
-        .iter()
-        .map(|s| agent_display(s))
-        .collect::<Vec<_>>()
-        .join(", ");
-    writeln!(out, "Selected agents: {labels}")?;
-    writeln!(out)?;
+    selected.agents.retain(|name| seen.insert(name.clone()));
     Ok(selected)
 }
 
 fn prompt_select_agents(
     available: &[String],
     defaults: &[String],
+    default_enable_bitloops_skill: bool,
     out: &mut dyn Write,
-) -> Result<Vec<String>> {
+) -> Result<InitAgentSelection> {
     let default_set: BTreeSet<&str> = defaults.iter().map(String::as_str).collect();
     let labels: Vec<String> = available
         .iter()
@@ -161,9 +146,11 @@ fn prompt_select_agents(
     }
 
     let mut cursor = 0usize;
+    let mut enable_bitloops_skill = default_enable_bitloops_skill;
     let mut tty_in = fs::OpenOptions::new().read(true).open("/dev/tty")?;
     let _raw_mode = SttyRawMode::enter()?;
-    let mut rendered_lines = render_agent_picker(out, &labels, &selected, cursor, None)?;
+    let mut rendered_lines =
+        render_agent_picker(out, &labels, &selected, enable_bitloops_skill, cursor, None)?;
 
     loop {
         match read_key(&mut tty_in)? {
@@ -171,12 +158,14 @@ fn prompt_select_agents(
                 cursor = cursor.saturating_sub(1);
             }
             Key::Down => {
-                if cursor + 1 < labels.len() {
+                if cursor < labels.len() {
                     cursor += 1;
                 }
             }
             Key::Toggle => {
-                if !selected.is_empty() {
+                if cursor == labels.len() {
+                    enable_bitloops_skill = !enable_bitloops_skill;
+                } else if !selected.is_empty() {
                     selected[cursor] = !selected[cursor];
                 }
             }
@@ -188,8 +177,14 @@ fn prompt_select_agents(
             Key::Submit => break,
             Key::Unknown => {}
         }
-        rendered_lines =
-            render_agent_picker(out, &labels, &selected, cursor, Some(rendered_lines))?;
+        rendered_lines = render_agent_picker(
+            out,
+            &labels,
+            &selected,
+            enable_bitloops_skill,
+            cursor,
+            Some(rendered_lines),
+        )?;
     }
 
     writeln!(out)?;
@@ -210,7 +205,10 @@ fn prompt_select_agents(
     if selected_agents.is_empty() {
         bail!("no agents selected");
     }
-    Ok(selected_agents)
+    Ok(InitAgentSelection {
+        agents: selected_agents,
+        enable_bitloops_skill,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -285,28 +283,56 @@ fn render_agent_picker(
     out: &mut dyn Write,
     labels: &[String],
     selected: &[bool],
+    enable_bitloops_skill: bool,
     cursor: usize,
     previous_lines: Option<usize>,
 ) -> Result<usize> {
     let mut lines = Vec::new();
-    lines.push("Which agents are you using?".to_string());
-    lines.push("Use space to select, enter to confirm.".to_string());
+    lines.push("Select agents to integrate:".to_string());
+    lines.push(style_picker_hint("Use space to select, enter to confirm."));
     lines.push(String::new());
     for (idx, label) in labels.iter().enumerate() {
         let pointer = if idx == cursor {
-            "\x1b[38;2;116;4;228m>\x1b[0m"
+            color_hex_if_enabled(">", BITLOOPS_PURPLE_HEX)
         } else {
-            " "
+            " ".to_string()
         };
-
-        if selected[idx] {
-            lines.push(format!("{pointer} \x1b[38;2;116;4;228m[•] {label}\x1b[0m"));
+        let checkbox = if selected[idx] {
+            selected_picker_checkbox()
         } else {
-            lines.push(format!("{pointer} [ ] {label}"));
-        }
+            "[ ]".to_string()
+        };
+        let label = if selected[idx] {
+            selected_picker_label(label)
+        } else {
+            label.clone()
+        };
+        lines.push(format!("{pointer} {checkbox} {label}"));
     }
     lines.push(String::new());
-    lines.push("x toggle • ↑/↓ move • enter submit • ctrl+a all".to_string());
+    let pointer = if cursor == labels.len() {
+        color_hex_if_enabled(">", BITLOOPS_PURPLE_HEX)
+    } else {
+        " ".to_string()
+    };
+    let checkbox = if enable_bitloops_skill {
+        selected_picker_checkbox()
+    } else {
+        "[ ]".to_string()
+    };
+    let label = if enable_bitloops_skill {
+        selected_picker_label("Enable Bitloops Skill")
+    } else {
+        "Enable Bitloops Skill".to_string()
+    };
+    lines.push(format!("{pointer} {checkbox} {label}"));
+    lines.push(String::new());
+    lines.push(format!(
+        "space {} • ↑/↓ {} • enter {}",
+        style_picker_hint("toggle"),
+        style_picker_hint("move"),
+        style_picker_hint("submit")
+    ));
 
     if let Some(previous_lines) = previous_lines {
         if previous_lines > 1 {
@@ -326,12 +352,35 @@ fn render_agent_picker(
     Ok(lines.len())
 }
 
+fn style_picker_hint(detail: &str) -> String {
+    if should_use_color_output() {
+        format!("\x1b[2;3m{detail}\x1b[0m")
+    } else {
+        detail.to_string()
+    }
+}
+
+fn selected_picker_checkbox() -> String {
+    const SELECTION_WHITE_HEX: &str = "#ffffff";
+    format!(
+        "{}{}{}",
+        color_hex_if_enabled("[", SELECTION_WHITE_HEX),
+        color_hex_if_enabled("•", BITLOOPS_PURPLE_HEX),
+        color_hex_if_enabled("]", SELECTION_WHITE_HEX)
+    )
+}
+
+fn selected_picker_label(label: &str) -> String {
+    const SELECTION_WHITE_HEX: &str = "#ffffff";
+    color_hex_if_enabled(label, SELECTION_WHITE_HEX)
+}
+
 fn read_key(input: &mut dyn Read) -> Result<Key> {
     let mut first = [0u8; 1];
     input.read_exact(&mut first)?;
     match first[0] {
         3 => Ok(Key::Cancel),
-        b' ' | b'x' => Ok(Key::Toggle),
+        b' ' => Ok(Key::Toggle),
         b'\r' | b'\n' => Ok(Key::Submit),
         1 => Ok(Key::SelectAll),
         b'k' => Ok(Key::Up),

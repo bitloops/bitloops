@@ -39,7 +39,7 @@ pub(super) async fn run_dual_init_progress(
         out,
         "{}",
         fit_line(
-            "Bitloops is currently updating its local database with the following:",
+            "This may take a few minutes depending on your codebase size.",
             renderer.terminal_width,
         )
     )?;
@@ -182,59 +182,62 @@ impl RuntimeInitRenderer {
             return lines.join("\n");
         };
 
-        lines.push(section_heading(
+        let selected_titles = compact_selected_section_titles(session);
+        let label_width = selected_titles
+            .iter()
+            .map(|title| title.chars().count())
+            .max()
+            .unwrap_or(0)
+            + 12;
+
+        lines.extend(render_compact_lane(
             INIT_CODEBASE_SECTION_TITLE,
-            self.terminal_width,
-        ));
-        lines.push(render_lane(
-            INIT_CODEBASE_LANE_LABEL,
             &session.top_pipeline_lane,
+            INIT_CODEBASE_LANE_LABEL,
             task_for_lane(snapshot, &session.top_pipeline_lane),
             None,
+            label_width,
             &render_context,
         ));
 
         if session.embeddings_selected {
             lines.push(String::new());
-            lines.push(section_heading(
-                INIT_EMBEDDINGS_SECTION_TITLE,
-                self.terminal_width,
-            ));
             let bootstrap_task = session
                 .embeddings_bootstrap_task_id
                 .as_deref()
                 .and_then(|task_id| task_by_id(snapshot, task_id));
-            lines.push(render_lane(
-                INIT_EMBEDDINGS_LANE_LABEL,
+            lines.extend(render_compact_lane(
+                INIT_EMBEDDINGS_SECTION_TITLE,
                 &session.embeddings_lane,
+                INIT_EMBEDDINGS_LANE_LABEL,
                 bootstrap_task,
                 None,
+                label_width,
                 &render_context,
             ));
         }
 
         if session.summaries_selected {
             lines.push(String::new());
-            lines.push(section_heading(
-                INIT_SUMMARIES_SECTION_TITLE,
-                self.terminal_width,
-            ));
             let summary_run = snapshot
                 .summaries_bootstrap
                 .as_ref()
                 .and_then(|run| (run.init_session_id == session.init_session_id).then_some(run));
-            lines.push(render_lane(
-                INIT_SUMMARIES_LANE_LABEL,
+            lines.extend(render_compact_lane(
+                INIT_SUMMARIES_SECTION_TITLE,
                 &session.summaries_lane,
+                INIT_SUMMARIES_LANE_LABEL,
                 None,
                 summary_run,
+                label_width,
                 &render_context,
             ));
         }
 
         lines.push(String::new());
+        lines.push(fit_line("Session Status", self.terminal_width));
         lines.push(format!(
-            "{} {}",
+            " {} {}",
             if matches!(
                 session.status.to_ascii_lowercase().as_str(),
                 "completed" | "completed_with_warnings"
@@ -244,8 +247,8 @@ impl RuntimeInitRenderer {
                 spinner.as_str()
             },
             fit_line(
-                &session_status_line(snapshot, session),
-                self.terminal_width.map(|width| width.saturating_sub(2)),
+                &compact_session_status_line(snapshot, session),
+                self.terminal_width.map(|width| width.saturating_sub(4)),
             )
         ));
 
@@ -253,8 +256,17 @@ impl RuntimeInitRenderer {
     }
 }
 
-fn section_heading(title: &str, terminal_width: Option<usize>) -> String {
-    fit_line(title, terminal_width)
+fn compact_selected_section_titles(
+    session: &crate::cli::devql::graphql::RuntimeInitSessionGraphqlRecord,
+) -> Vec<&'static str> {
+    let mut titles = vec![INIT_CODEBASE_SECTION_TITLE];
+    if session.embeddings_selected {
+        titles.push(INIT_EMBEDDINGS_SECTION_TITLE);
+    }
+    if session.summaries_selected {
+        titles.push(INIT_SUMMARIES_SECTION_TITLE);
+    }
+    titles
 }
 
 struct LaneRenderContext<'a> {
@@ -264,6 +276,235 @@ struct LaneRenderContext<'a> {
     terminal_width: Option<usize>,
 }
 
+fn render_compact_lane(
+    title: &str,
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+    activity_label: &str,
+    task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+    summary_run: Option<&crate::cli::devql::graphql::RuntimeSummaryBootstrapRunGraphqlRecord>,
+    label_width: usize,
+    render_context: &LaneRenderContext<'_>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(compact_lane_heading(
+        title,
+        lane,
+        task,
+        summary_run,
+        label_width,
+        render_context,
+    ));
+
+    let mut status_parts = vec![activity_label.to_string()];
+    if let Some(queue) = compact_queue_status_text(lane) {
+        status_parts.push(queue);
+    }
+    if let Some(detail) = compact_lane_detail(title, lane) {
+        status_parts.push(detail);
+    }
+
+    lines.push(format!(
+        " {} {}",
+        lane_status_icon(
+            lane.status.as_str(),
+            render_context.spinner,
+            render_context.tick
+        ),
+        fit_line(
+            &status_parts.join(" | "),
+            render_context
+                .terminal_width
+                .map(|width| width.saturating_sub(2)),
+        )
+    ));
+    lines
+}
+
+fn compact_lane_heading(
+    title: &str,
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+    task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+    summary_run: Option<&crate::cli::devql::graphql::RuntimeSummaryBootstrapRunGraphqlRecord>,
+    label_width: usize,
+    render_context: &LaneRenderContext<'_>,
+) -> String {
+    let available_width = render_context.terminal_width.unwrap_or(80).max(24);
+    let percent = compact_lane_percent(title, lane, task, summary_run)
+        .map(|value| format!(" {:>3}%", value))
+        .unwrap_or_else(|| "     ".to_string());
+    let reserved = label_width + percent.chars().count() + 2;
+    let bar_width = available_width.saturating_sub(reserved).max(8);
+    let bar = if let Some(ratio) = compact_lane_ratio(title, lane, task, summary_run) {
+        render_determinate_progress_bar(bar_width, ratio)
+    } else {
+        render_indeterminate_progress_bar(bar_width, render_context.spinner_index)
+    };
+    format!("{title:<label_width$}[{bar}]{percent}")
+}
+
+fn compact_lane_ratio(
+    title: &str,
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+    task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+    summary_run: Option<&crate::cli::devql::graphql::RuntimeSummaryBootstrapRunGraphqlRecord>,
+) -> Option<f64> {
+    if let Some(task) = task.filter(|task| is_active_runtime_status(task.status.as_str())) {
+        return task_progress(task).0;
+    }
+    if let Some(run) = summary_run.filter(|run| is_active_runtime_status(run.status.as_str())) {
+        return summary_progress(run).0;
+    }
+    lane_progress(title, lane).0
+}
+
+fn compact_lane_percent(
+    title: &str,
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+    task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+    summary_run: Option<&crate::cli::devql::graphql::RuntimeSummaryBootstrapRunGraphqlRecord>,
+) -> Option<usize> {
+    compact_lane_ratio(title, lane, task, summary_run)
+        .map(|ratio| ((ratio * 100.0).round() as usize).min(100))
+}
+
+fn compact_queue_status_text(
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+) -> Option<String> {
+    let queued = lane.queue.queued.max(0) as u64;
+    let running = lane.queue.running.max(0) as u64;
+    let failed = lane.queue.failed.max(0) as u64;
+    if queued == 0 && running == 0 && failed == 0 {
+        return None;
+    }
+    Some(format!(
+        "Queue: {} waiting · {} running · {} failed",
+        compact_count_column(queued, 3),
+        compact_count_column(running, 3),
+        compact_count_column(failed, 3)
+    ))
+}
+
+fn compact_lane_detail(
+    title: &str,
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+) -> Option<String> {
+    if title == INIT_EMBEDDINGS_SECTION_TITLE {
+        return compact_ready_summary(lane, false).or_else(|| compact_lane_waiting_detail(lane));
+    }
+    if title == INIT_SUMMARIES_SECTION_TITLE {
+        return compact_ready_summary(lane, true).or_else(|| compact_lane_waiting_detail(lane));
+    }
+
+    lane.activity_label
+        .clone()
+        .or_else(|| lane.detail.clone())
+        .or_else(|| compact_lane_waiting_detail(lane))
+        .or_else(|| {
+            if lane.status.eq_ignore_ascii_case("completed") {
+                Some("Complete".to_string())
+            } else if lane.status.eq_ignore_ascii_case("failed") {
+                Some("Failed".to_string())
+            } else {
+                None
+            }
+        })
+}
+
+fn compact_ready_summary(
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+    include_percent: bool,
+) -> Option<String> {
+    let progress = lane.progress.as_ref()?;
+    let total = progress.total.max(0);
+    if total == 0 {
+        return None;
+    }
+    let completed = progress.completed.max(0).min(total);
+    if include_percent {
+        let ratio = (completed as f64 / total as f64).clamp(0.0, 1.0);
+        let total_width = total.to_string().len();
+        return Some(format!(
+            "{:>3}% · {} / {} ready",
+            (ratio * 100.0).round() as usize,
+            compact_count_column(completed as u64, total_width),
+            total
+        ));
+    }
+    Some(format!(
+        "{} / {} ready",
+        compact_count_column(completed as u64, total.to_string().len()),
+        total
+    ))
+}
+
+fn compact_lane_waiting_detail(
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+) -> Option<String> {
+    lane.waiting_reason
+        .as_ref()
+        .map(|reason| match reason.as_str() {
+            "waiting_for_follow_up_sync" => "Waiting for follow-up sync".to_string(),
+            other => waiting_reason_label(other).to_string(),
+        })
+}
+
+fn compact_session_status_line(
+    snapshot: &crate::cli::devql::graphql::RuntimeSnapshotGraphqlRecord,
+    session: &crate::cli::devql::graphql::RuntimeInitSessionGraphqlRecord,
+) -> String {
+    let mut parts = vec![compact_session_status_text(session)];
+    if let Some(summary) = session.warning_summary.as_ref() {
+        parts.push(summary.clone());
+    } else if !snapshot.blocked_mailboxes.is_empty() {
+        let blocked = snapshot
+            .blocked_mailboxes
+            .iter()
+            .map(|blocked| blocked.display_name.as_str())
+            .collect::<Vec<_>>();
+        match blocked.as_slice() {
+            [] => {}
+            [label] => parts.push(format!("Blocked worker pool: {label}")),
+            [label, ..] => parts.push(format!(
+                "Blocked worker pools: {label} +{} more",
+                blocked.len() - 1
+            )),
+        }
+    }
+    parts.join(" | ")
+}
+
+fn compact_session_status_text(
+    session: &crate::cli::devql::graphql::RuntimeInitSessionGraphqlRecord,
+) -> String {
+    if let Some(reason) = session.waiting_reason.as_deref() {
+        return match reason {
+            "waiting_for_follow_up_sync" | "waiting_for_top_level_work" => {
+                "Waiting for codebase processing to stabilise".to_string()
+            }
+            "waiting_on_blocked_mailbox" | "blocked_mailbox" => {
+                "Waiting for blocked worker pools".to_string()
+            }
+            "waiting_for_embeddings_bootstrap" => "Waiting for embeddings to be ready".to_string(),
+            "waiting_for_summary_bootstrap" => "Waiting for summaries to be ready".to_string(),
+            other => waiting_reason_label(other).to_string(),
+        };
+    }
+
+    match session.status.to_ascii_lowercase().as_str() {
+        "completed" => "Setup tasks completed".to_string(),
+        "completed_with_warnings" => "Setup tasks completed with warnings".to_string(),
+        "failed" => "Setup failed".to_string(),
+        "queued" => "Waiting to start background processing".to_string(),
+        "running" => "Building your project's Intelligence Layer".to_string(),
+        _ => "Background processing is running".to_string(),
+    }
+}
+
+fn compact_count_column(value: u64, width: usize) -> String {
+    format!("{value:>width$}")
+}
+
+#[allow(dead_code)]
 fn render_lane(
     title: &str,
     lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
@@ -325,6 +566,7 @@ fn task_by_id<'a>(
         .find(|task| task.task_id == task_id)
 }
 
+#[allow(dead_code)]
 fn session_status_line(
     snapshot: &crate::cli::devql::graphql::RuntimeSnapshotGraphqlRecord,
     session: &crate::cli::devql::graphql::RuntimeInitSessionGraphqlRecord,
@@ -350,6 +592,7 @@ fn session_status_line(
     line
 }
 
+#[allow(dead_code)]
 fn lane_status_text(
     lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
     task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
@@ -384,6 +627,7 @@ fn lane_status_text(
         .unwrap_or_else(|| "Working".to_string())
 }
 
+#[allow(dead_code)]
 fn task_status_text(task: &crate::cli::devql::graphql::TaskGraphqlRecord) -> String {
     if task.is_sync() {
         let mut line = format!(
@@ -447,6 +691,7 @@ fn task_status_text(task: &crate::cli::devql::graphql::TaskGraphqlRecord) -> Str
     format!("Working on {}", task.repo_name)
 }
 
+#[allow(dead_code)]
 fn summary_run_status_text(
     run: &crate::cli::devql::graphql::RuntimeSummaryBootstrapRunGraphqlRecord,
     _lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
@@ -460,6 +705,7 @@ fn summary_run_status_text(
     line
 }
 
+#[allow(dead_code)]
 fn render_lane_progress_bar(
     title: &str,
     lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
@@ -688,6 +934,7 @@ fn lane_progress(
     )
 }
 
+#[allow(dead_code)]
 fn queue_status_text(lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord) -> String {
     let queued = lane.queue.queued.max(0) as u64;
     let running = lane.queue.running.max(0) as u64;
@@ -698,6 +945,7 @@ fn queue_status_text(lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRe
     queue_state_summary(queued, running, failed)
 }
 
+#[allow(dead_code)]
 fn lane_warning_text(
     lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
 ) -> Option<String> {
@@ -818,8 +1066,9 @@ fn is_active_runtime_status(status: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT_EMBEDDINGS_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL, is_active_runtime_status,
-        lane_progress, queue_status_text,
+        INIT_EMBEDDINGS_LANE_LABEL, INIT_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_LANE_LABEL,
+        INIT_SUMMARIES_SECTION_TITLE, compact_lane_detail, compact_queue_status_text,
+        is_active_runtime_status, lane_progress, queue_status_text,
     };
     use crate::cli::devql::graphql::{
         RuntimeInitLaneGraphqlRecord, RuntimeInitLaneProgressGraphqlRecord,
@@ -969,6 +1218,66 @@ mod tests {
         assert_eq!(
             queue_status_text(&lane),
             "Queue: 66 waiting · 0 running · 1 failed"
+        );
+    }
+
+    #[test]
+    fn compact_queue_status_text_keeps_all_queue_columns_visible() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "running".to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: Some("Indexing source code".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: None,
+            queue: RuntimeInitLaneQueueGraphqlRecord {
+                queued: 66,
+                running: 0,
+                failed: 1,
+            },
+            warnings: Vec::new(),
+            pending_count: 66,
+            running_count: 0,
+            failed_count: 1,
+            completed_count: 8,
+        };
+
+        assert_eq!(
+            compact_queue_status_text(&lane),
+            Some("Queue:  66 waiting ·   0 running ·   1 failed".to_string())
+        );
+    }
+
+    #[test]
+    fn compact_lane_detail_pads_ready_counts_to_total_width() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "running".to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: Some("Indexing source code".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 7,
+                total: 570,
+                remaining: 563,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 0,
+        };
+
+        assert_eq!(
+            compact_lane_detail(INIT_EMBEDDINGS_SECTION_TITLE, &lane),
+            Some("  7 / 570 ready".to_string())
+        );
+        assert_eq!(
+            compact_lane_detail(INIT_SUMMARIES_SECTION_TITLE, &lane),
+            Some("  1% ·   7 / 570 ready".to_string())
         );
     }
 }

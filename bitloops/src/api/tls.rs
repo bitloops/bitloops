@@ -4,6 +4,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use rustls::ServerConfig;
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::CertificateDer;
+#[cfg(test)]
+use std::cell::RefCell;
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::net::{IpAddr, Ipv6Addr};
@@ -13,6 +15,14 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use x509_parser::extensions::GeneralName;
 use x509_parser::parse_x509_certificate;
+
+pub const LOCAL_HTTPS_SETUP_DOCS_URL: &str =
+    "https://bitloops.com/docs/guides/dashboard-local-https-setup";
+
+#[cfg(test)]
+thread_local! {
+    static MKCERT_ON_PATH_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
+}
 
 fn eprint_mkcert_not_found_on_path() {
     eprintln!();
@@ -90,7 +100,7 @@ fn ensure_mkcert_trust_ready(mkcert: &Path) -> Result<()> {
 
 /// Ensures `mkcert` is on `PATH` before any certificate work.
 pub fn require_mkcert_binary() -> Result<PathBuf> {
-    match which::which("mkcert") {
+    match lookup_mkcert_binary() {
         Ok(p) => Ok(p),
         Err(_) => {
             eprint_mkcert_not_found_on_path();
@@ -100,7 +110,36 @@ pub fn require_mkcert_binary() -> Result<PathBuf> {
 }
 
 pub fn mkcert_on_path() -> bool {
-    which::which("mkcert").is_ok()
+    lookup_mkcert_binary().is_ok()
+}
+
+fn lookup_mkcert_binary() -> std::result::Result<PathBuf, ()> {
+    #[cfg(test)]
+    if let Some(available) = MKCERT_ON_PATH_OVERRIDE.with(|cell| *cell.borrow()) {
+        return if available {
+            Ok(PathBuf::from("mkcert"))
+        } else {
+            Err(())
+        };
+    }
+
+    which::which("mkcert")
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_mkcert_on_path<T>(available: bool, f: impl FnOnce() -> T) -> T {
+    MKCERT_ON_PATH_OVERRIDE.with(|cell| {
+        assert!(
+            cell.borrow().is_none(),
+            "mkcert PATH override already installed"
+        );
+        *cell.borrow_mut() = Some(available);
+    });
+    let result = f();
+    MKCERT_ON_PATH_OVERRIDE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
 }
 
 pub(crate) fn rustls_crypto_provider() -> Result<Arc<CryptoProvider>> {
@@ -507,5 +546,15 @@ Run "mkcert -install" for certificates to be trusted automatically ⚠️"#;
         assert!(!mkcert_output_indicates_untrusted_ca(
             "Created a new certificate"
         ));
+    }
+
+    #[test]
+    fn mkcert_on_path_honours_test_override() {
+        with_test_mkcert_on_path(false, || {
+            assert!(!mkcert_on_path());
+        });
+        with_test_mkcert_on_path(true, || {
+            assert!(mkcert_on_path());
+        });
     }
 }

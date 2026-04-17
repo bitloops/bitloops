@@ -29,7 +29,7 @@ use super::super::types::{
     EnrichmentQueueState as ProjectedEnrichmentQueueState, EnrichmentWorkerPoolKind,
     EnrichmentWorkerPoolStatus, FailedEmbeddingJobSummary, unix_timestamp_now,
 };
-use super::worker_count::{EnrichmentWorkerPool, configured_enrichment_worker_budgets};
+use super::worker_count::{EnrichmentWorkerBudgets, EnrichmentWorkerPool};
 use super::{
     EnrichmentControlState, EnrichmentJobTarget, JobExecutionOutcome,
     WORKPLANE_PENDING_COMPACTION_MIN_AGE_SECS, WORKPLANE_PENDING_COMPACTION_MIN_COUNT,
@@ -603,6 +603,7 @@ pub(super) fn persist_workplane_job_completion(
 pub(super) fn project_workplane_status(
     workplane_store: &DaemonSqliteRuntimeStore,
     control_state: &EnrichmentControlState,
+    budgets: EnrichmentWorkerBudgets,
 ) -> Result<ProjectedEnrichmentQueueState> {
     let (pending_summary, pending_embeddings, pending_rebuilds) =
         count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Pending)?;
@@ -612,7 +613,6 @@ pub(super) fn project_workplane_status(
         count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Failed)?;
     let (completed_summary, completed_embeddings, completed_rebuilds) =
         count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Completed)?;
-    let budgets = configured_enrichment_worker_budgets();
     let worker_pools = vec![
         EnrichmentWorkerPoolStatus {
             kind: EnrichmentWorkerPoolKind::SummaryRefresh,

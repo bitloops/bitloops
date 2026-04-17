@@ -1,9 +1,11 @@
 use std::path::Path;
 
+#[cfg(test)]
+use crate::config::SemanticClonesConfig;
 use crate::config::{
     DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS, DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS,
-    DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS, SemanticClonesConfig,
-    resolve_inference_capability_config_for_repo, resolve_semantic_clones_worker_settings_for_repo,
+    DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS, resolve_inference_capability_config_for_repo,
+    resolve_semantic_clones_worker_settings_for_repo,
 };
 use crate::host::inference::{
     BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID,
@@ -30,7 +32,7 @@ pub(crate) enum EnrichmentWorkerPool {
     CloneRebuild,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct EnrichmentWorkerBudgets {
     pub summary_refresh: usize,
     pub embeddings: usize,
@@ -67,6 +69,14 @@ impl EnrichmentWorkerBudgets {
             EnrichmentWorkerPool::CloneRebuild => self.clone_rebuild,
         }
     }
+
+    pub(crate) fn set_for_pool(&mut self, pool: EnrichmentWorkerPool, value: usize) {
+        match pool {
+            EnrichmentWorkerPool::SummaryRefresh => self.summary_refresh = value,
+            EnrichmentWorkerPool::Embeddings => self.embeddings = value,
+            EnrichmentWorkerPool::CloneRebuild => self.clone_rebuild = value,
+        }
+    }
 }
 
 impl EnrichmentWorkerPool {
@@ -79,6 +89,7 @@ impl EnrichmentWorkerPool {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn configured_enrichment_worker_budgets() -> EnrichmentWorkerBudgets {
     std::env::current_dir()
         .ok()
@@ -124,6 +135,7 @@ pub(crate) fn configured_enrichment_worker_budgets_for_repo(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn configured_enrichment_worker_budgets_for_config(
     config: &SemanticClonesConfig,
 ) -> EnrichmentWorkerBudgets {

@@ -17,12 +17,12 @@ use super::handlers::resolve_repo_root_from_repo_id;
 use super::{ApiError, DashboardState};
 use crate::daemon::{
     CapabilityEventQueueStatus, CapabilityEventRunRecord, EmbeddingsBootstrapGateStatus,
-    InitEmbeddingsBootstrapRequest, InitRuntimeLaneProgressView, InitRuntimeLaneQueueView,
-    InitRuntimeLaneView, InitRuntimeLaneWarningView, InitRuntimeSessionView, InitRuntimeSnapshot,
-    InitRuntimeWorkplaneMailboxSnapshot, InitRuntimeWorkplanePoolSnapshot,
-    InitRuntimeWorkplaneSnapshot, RuntimeEventRecord, StartInitSessionSelections,
-    SummaryBootstrapAction, SummaryBootstrapRequest, SummaryBootstrapResultRecord,
-    SummaryBootstrapRunRecord,
+    EmbeddingsBootstrapMode, InitEmbeddingsBootstrapRequest, InitRuntimeLaneProgressView,
+    InitRuntimeLaneQueueView, InitRuntimeLaneView, InitRuntimeLaneWarningView,
+    InitRuntimeSessionView, InitRuntimeSnapshot, InitRuntimeWorkplaneMailboxSnapshot,
+    InitRuntimeWorkplanePoolSnapshot, InitRuntimeWorkplaneSnapshot, RuntimeEventRecord,
+    StartInitSessionSelections, SummaryBootstrapAction, SummaryBootstrapRequest,
+    SummaryBootstrapResultRecord, SummaryBootstrapRunRecord,
 };
 use crate::devql_transport::parse_repo_root_header;
 use crate::graphql::{
@@ -201,6 +201,11 @@ pub(crate) struct InitEmbeddingsBootstrapRequestInput {
     pub config_path: String,
     #[graphql(name = "profileName")]
     pub profile_name: String,
+    pub mode: Option<EmbeddingsBootstrapModeInput>,
+    #[graphql(name = "gatewayUrlOverride")]
+    pub gateway_url_override: Option<String>,
+    #[graphql(name = "apiKeyEnv")]
+    pub api_key_env: Option<String>,
 }
 
 impl From<InitEmbeddingsBootstrapRequestInput> for InitEmbeddingsBootstrapRequest {
@@ -208,6 +213,24 @@ impl From<InitEmbeddingsBootstrapRequestInput> for InitEmbeddingsBootstrapReques
         Self {
             config_path: value.config_path.into(),
             profile_name: value.profile_name,
+            mode: value.mode.map(Into::into).unwrap_or_default(),
+            gateway_url_override: value.gateway_url_override,
+            api_key_env: value.api_key_env,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub(crate) enum EmbeddingsBootstrapModeInput {
+    Local,
+    Platform,
+}
+
+impl From<EmbeddingsBootstrapModeInput> for EmbeddingsBootstrapMode {
+    fn from(value: EmbeddingsBootstrapModeInput) -> Self {
+        match value {
+            EmbeddingsBootstrapModeInput::Local => Self::Local,
+            EmbeddingsBootstrapModeInput::Platform => Self::Platform,
         }
     }
 }

@@ -6,23 +6,36 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::cli::embeddings::{
     PulledEmbeddingProfileOutcome, embedding_capability_for_config_path,
-    ensure_managed_embeddings_runtime_with_progress, managed_runtime_command_is_eligible,
-    managed_runtime_version_for_command, pull_profile_with_config_path_and_progress,
-    selected_inference_profile_name,
+    ensure_managed_embeddings_runtime_with_progress,
+    install_managed_platform_embeddings_binary_with_progress,
+    managed_platform_runtime_command_is_eligible, managed_platform_runtime_version_for_command,
+    managed_runtime_command_is_eligible, managed_runtime_version_for_command,
+    pull_profile_with_config_path_and_progress, selected_inference_profile_name,
 };
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install,
+    prepare_daemon_platform_embeddings_install,
 };
 use crate::daemon::DevqlTaskStatus;
 use crate::daemon::{
-    EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus, EmbeddingsBootstrapPhase,
-    EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness, EmbeddingsBootstrapResult,
-    EmbeddingsBootstrapTaskSpec, PersistedEmbeddingsBootstrapState, unix_timestamp_now,
+    EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus, EmbeddingsBootstrapMode,
+    EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
+    EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, PersistedEmbeddingsBootstrapState,
+    unix_timestamp_now,
 };
 use crate::host::inference::{
     BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID,
+    BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID,
 };
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
+
+const DEFAULT_PLATFORM_GATEWAY_API_KEY_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_TOKEN";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedEmbeddingsRuntimeKind {
+    Local,
+    Platform,
+}
 
 pub(crate) fn execute_task_with_progress<R>(
     runtime_store: &DaemonSqliteRuntimeStore,
@@ -56,13 +69,12 @@ where
         ..Default::default()
     })?;
 
-    if let Some(result) = already_ready_result(runtime_store, &config_path, &spec.profile_name)? {
+    if let Some(result) = already_ready_result(runtime_store, &config_path, spec)? {
         mark_gate_ready(runtime_store, &config_path, &spec.profile_name)?;
         return Ok(result);
     }
 
-    let execution =
-        execute_bootstrap_flow(repo_root, &config_path, &spec.profile_name, &mut report);
+    let execution = execute_bootstrap_flow(repo_root, &config_path, spec, &mut report);
     match execution {
         Ok(result) => {
             mark_gate_ready(runtime_store, &config_path, &spec.profile_name)?;
@@ -77,6 +89,46 @@ where
                 &err,
             )?;
             Err(err)
+        }
+    }
+}
+
+fn managed_runtime_kind_for_profile(
+    profile: &crate::config::InferenceProfileConfig,
+) -> Option<ManagedEmbeddingsRuntimeKind> {
+    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER {
+        return None;
+    }
+
+    match profile.runtime.as_deref() {
+        Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID) => Some(ManagedEmbeddingsRuntimeKind::Local),
+        Some(BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID) => {
+            Some(ManagedEmbeddingsRuntimeKind::Platform)
+        }
+        _ => None,
+    }
+}
+
+fn managed_runtime_command_is_eligible_for_kind(
+    kind: ManagedEmbeddingsRuntimeKind,
+    config_path: &Path,
+) -> Result<bool> {
+    match kind {
+        ManagedEmbeddingsRuntimeKind::Local => managed_runtime_command_is_eligible(config_path),
+        ManagedEmbeddingsRuntimeKind::Platform => {
+            managed_platform_runtime_command_is_eligible(config_path)
+        }
+    }
+}
+
+fn managed_runtime_version_for_kind(
+    kind: ManagedEmbeddingsRuntimeKind,
+    command: &str,
+) -> Result<Option<String>> {
+    match kind {
+        ManagedEmbeddingsRuntimeKind::Local => managed_runtime_version_for_command(command),
+        ManagedEmbeddingsRuntimeKind::Platform => {
+            managed_platform_runtime_version_for_command(command)
         }
     }
 }
@@ -147,9 +199,7 @@ pub(crate) fn gate_status_for_config_path(
         });
     };
 
-    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER
-        || profile.runtime.as_deref() != Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
-    {
+    let Some(runtime_kind) = managed_runtime_kind_for_profile(profile) else {
         return Ok(EmbeddingsBootstrapGateStatus {
             blocked: false,
             readiness: Some(EmbeddingsBootstrapReadiness::Ready),
@@ -162,9 +212,9 @@ pub(crate) fn gate_status_for_config_path(
             last_error: None,
             last_updated_unix,
         });
-    }
+    };
 
-    if !managed_runtime_command_is_eligible(&config_path)? {
+    if !managed_runtime_command_is_eligible_for_kind(runtime_kind, &config_path)? {
         return Ok(EmbeddingsBootstrapGateStatus {
             blocked: false,
             readiness: Some(EmbeddingsBootstrapReadiness::Ready),
@@ -183,7 +233,7 @@ pub(crate) fn gate_status_for_config_path(
 
     if let Some(runtime_name) = profile.runtime.as_deref()
         && let Some(runtime) = capability.inference.runtimes.get(runtime_name)
-        && let Some(version) = managed_runtime_version_for_command(&runtime.command)?
+        && let Some(version) = managed_runtime_version_for_kind(runtime_kind, &runtime.command)?
     {
         return Ok(EmbeddingsBootstrapGateStatus {
             blocked: false,
@@ -308,6 +358,25 @@ pub(crate) fn gate_status_for_enrichment_queue(
 fn execute_bootstrap_flow<R>(
     repo_root: &Path,
     config_path: &Path,
+    spec: &EmbeddingsBootstrapTaskSpec,
+    report: &mut R,
+) -> Result<EmbeddingsBootstrapResult>
+where
+    R: FnMut(EmbeddingsBootstrapProgress) -> Result<()>,
+{
+    match spec.mode {
+        EmbeddingsBootstrapMode::Local => {
+            execute_local_bootstrap_flow(repo_root, config_path, &spec.profile_name, report)
+        }
+        EmbeddingsBootstrapMode::Platform => {
+            execute_platform_bootstrap_flow(config_path, spec, report)
+        }
+    }
+}
+
+fn execute_local_bootstrap_flow<R>(
+    repo_root: &Path,
+    config_path: &Path,
     requested_profile_name: &str,
     report: &mut R,
 ) -> Result<EmbeddingsBootstrapResult>
@@ -412,6 +481,63 @@ where
     }
 }
 
+fn execute_platform_bootstrap_flow<R>(
+    config_path: &Path,
+    spec: &EmbeddingsBootstrapTaskSpec,
+    report: &mut R,
+) -> Result<EmbeddingsBootstrapResult>
+where
+    R: FnMut(EmbeddingsBootstrapProgress) -> Result<()>,
+{
+    let install_plan = prepare_daemon_platform_embeddings_install(
+        config_path,
+        spec.gateway_url_override.as_deref(),
+        spec.api_key_env
+            .as_deref()
+            .unwrap_or(DEFAULT_PLATFORM_GATEWAY_API_KEY_ENV),
+    )?;
+    let target_profile_name = install_plan.profile_name.clone();
+    let result = (|| -> Result<EmbeddingsBootstrapResult> {
+        let install = install_managed_platform_embeddings_binary_with_progress(&mut *report)?;
+        report(EmbeddingsBootstrapProgress {
+            phase: EmbeddingsBootstrapPhase::RewritingRuntime,
+            version: Some(install.version.clone()),
+            message: Some(format!(
+                "Applying embeddings config in {}",
+                config_path.display()
+            )),
+            ..Default::default()
+        })?;
+        install_plan
+            .apply_with_managed_runtime_path(&install.binary_path)
+            .with_context(|| {
+                format!(
+                    "applying staged platform embeddings config in {}",
+                    config_path.display()
+                )
+            })?;
+        Ok(EmbeddingsBootstrapResult {
+            version: Some(install.version.clone()),
+            binary_path: Some(install.binary_path),
+            cache_dir: None,
+            runtime_name: Some(BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID.to_string()),
+            model_name: Some(target_profile_name.clone()),
+            freshly_installed: install.freshly_installed,
+            message: format!("Configured platform embeddings profile `{target_profile_name}`."),
+        })
+    })();
+
+    match result {
+        Ok(result) => Ok(result),
+        Err(err) => {
+            if install_plan.config_modified {
+                install_plan.rollback()?;
+            }
+            Err(err)
+        }
+    }
+}
+
 fn warm_existing_profile<R>(
     repo_root: &Path,
     config_path: &Path,
@@ -485,40 +611,44 @@ fn should_install_managed_runtime(
 fn already_ready_result(
     _runtime_store: &DaemonSqliteRuntimeStore,
     config_path: &Path,
-    profile_name: &str,
+    spec: &EmbeddingsBootstrapTaskSpec,
 ) -> Result<Option<EmbeddingsBootstrapResult>> {
     let capability = match embedding_capability_for_config_path(config_path) {
         Ok(capability) => capability,
         Err(_) => return Ok(None),
     };
-    if selected_inference_profile_name(&capability) != Some(profile_name) {
+    if selected_inference_profile_name(&capability) != Some(spec.profile_name.as_str()) {
         return Ok(None);
     }
-    let Some(profile) = capability.inference.profiles.get(profile_name) else {
+    let Some(profile) = capability.inference.profiles.get(&spec.profile_name) else {
         return Ok(None);
     };
-    if profile.driver != BITLOOPS_EMBEDDINGS_IPC_DRIVER
-        || profile.runtime.as_deref() != Some(BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
-    {
+    let Some(runtime_kind) = managed_runtime_kind_for_profile(profile) else {
         return Ok(Some(EmbeddingsBootstrapResult {
             version: None,
             binary_path: None,
             cache_dir: None,
             runtime_name: None,
-            model_name: Some(profile_name.to_string()),
+            model_name: Some(spec.profile_name.clone()),
             freshly_installed: false,
-            message: format!("Embeddings bootstrap already ready for profile `{profile_name}`."),
+            message: format!(
+                "Embeddings bootstrap already ready for profile `{}`.",
+                spec.profile_name
+            ),
         }));
-    }
-    if !managed_runtime_command_is_eligible(config_path)? {
+    };
+    if !managed_runtime_command_is_eligible_for_kind(runtime_kind, config_path)? {
         return Ok(Some(EmbeddingsBootstrapResult {
             version: None,
             binary_path: None,
             cache_dir: None,
             runtime_name: None,
-            model_name: Some(profile_name.to_string()),
+            model_name: Some(spec.profile_name.clone()),
             freshly_installed: false,
-            message: format!("Embeddings bootstrap already ready for profile `{profile_name}`."),
+            message: format!(
+                "Embeddings bootstrap already ready for profile `{}`.",
+                spec.profile_name
+            ),
         }));
     }
     let Some(runtime_name) = profile.runtime.as_deref() else {
@@ -527,7 +657,7 @@ fn already_ready_result(
     let Some(runtime) = capability.inference.runtimes.get(runtime_name) else {
         return Ok(None);
     };
-    if managed_runtime_version_for_command(&runtime.command)?.is_none() {
+    if managed_runtime_version_for_kind(runtime_kind, &runtime.command)?.is_none() {
         return Ok(None);
     }
     Ok(Some(EmbeddingsBootstrapResult {
@@ -535,9 +665,12 @@ fn already_ready_result(
         binary_path: None,
         cache_dir: None,
         runtime_name: None,
-        model_name: Some(profile_name.to_string()),
+        model_name: Some(spec.profile_name.clone()),
         freshly_installed: false,
-        message: format!("Embeddings bootstrap already ready for profile `{profile_name}`."),
+        message: format!(
+            "Embeddings bootstrap already ready for profile `{}`.",
+            spec.profile_name
+        ),
     }))
 }
 
@@ -636,10 +769,15 @@ fn config_path_key(config_path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::embeddings::{
+        ManagedPlatformEmbeddingsBinaryInstallOutcome,
+        with_managed_platform_embeddings_install_hook,
+    };
     use crate::daemon::{
         DevqlTaskKind, DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec,
         DevqlTaskStatus, EmbeddingsBootstrapTaskSpec,
     };
+    use crate::host::inference::BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID;
 
     #[test]
     fn enrichment_queue_gate_status_recomputes_from_config_when_no_jobs_are_present() {
@@ -724,6 +862,9 @@ mod tests {
                     spec: DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
                         config_path: config_path.clone(),
                         profile_name: "local_code".to_string(),
+                        mode: EmbeddingsBootstrapMode::Local,
+                        gateway_url_override: None,
+                        api_key_env: None,
                     }),
                     status: DevqlTaskStatus::Running,
                     submitted_at_unix: 1,
@@ -758,6 +899,84 @@ mod tests {
                 .reason
                 .as_deref()
                 .is_some_and(|reason| reason.contains("still bootstrapping"))
+        );
+    }
+
+    #[test]
+    fn execute_platform_bootstrap_task_installs_managed_runtime_and_applies_config() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let runtime_store = DaemonSqliteRuntimeStore::open_at(temp.path().join("runtime.sqlite"))
+            .expect("open daemon runtime store");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).expect("create repo root");
+        let config_path = temp.path().join("config.toml");
+        std::fs::write(&config_path, "[runtime]\nlocal_dev = false\n")
+            .expect("write minimal daemon config");
+        let binary_path = temp.path().join("bin/bitloops-platform-embeddings");
+
+        with_managed_platform_embeddings_install_hook(
+            {
+                let binary_path = binary_path.clone();
+                move || {
+                    Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                        version: "v0.2.0".to_string(),
+                        binary_path: binary_path.clone(),
+                        freshly_installed: true,
+                    })
+                }
+            },
+            || {
+                let mut phases = Vec::new();
+                let result = execute_task_with_progress(
+                    &runtime_store,
+                    &repo_root,
+                    "bootstrap-task-1",
+                    &EmbeddingsBootstrapTaskSpec {
+                        config_path: config_path.clone(),
+                        profile_name: "platform_code".to_string(),
+                        mode: EmbeddingsBootstrapMode::Platform,
+                        gateway_url_override: Some(
+                            "https://platform.example/v1/embeddings".to_string(),
+                        ),
+                        api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+                    },
+                    |progress| {
+                        phases.push(progress.phase);
+                        Ok(())
+                    },
+                )
+                .expect("execute platform bootstrap task");
+
+                assert_eq!(result.version.as_deref(), Some("v0.2.0"));
+                assert_eq!(result.binary_path.as_deref(), Some(binary_path.as_path()));
+                assert_eq!(
+                    result.runtime_name.as_deref(),
+                    Some(BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID)
+                );
+                assert_eq!(result.model_name.as_deref(), Some("platform_code"));
+                assert!(result.freshly_installed);
+
+                let rendered =
+                    std::fs::read_to_string(&config_path).expect("read daemon config after task");
+                assert!(
+                    rendered.contains("code_embeddings = \"platform_code\"")
+                        && rendered.contains("summary_embeddings = \"platform_code\""),
+                    "expected platform embeddings bindings:\n{rendered}"
+                );
+                assert!(
+                    rendered.contains(&format!("command = \"{}\"", binary_path.display())),
+                    "expected managed platform runtime path:\n{rendered}"
+                );
+                assert!(
+                    rendered.contains(
+                        "args = [\"--gateway-url\", \"https://platform.example/v1/embeddings\", \"--api-key-env\", \"BITLOOPS_PLATFORM_GATEWAY_TOKEN\"]"
+                    ),
+                    "expected platform runtime args:\n{rendered}"
+                );
+                assert!(phases.contains(&EmbeddingsBootstrapPhase::PreparingConfig));
+                assert!(phases.contains(&EmbeddingsBootstrapPhase::ResolvingRelease));
+                assert!(phases.contains(&EmbeddingsBootstrapPhase::RewritingRuntime));
+            },
         );
     }
 }
