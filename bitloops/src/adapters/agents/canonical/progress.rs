@@ -47,12 +47,10 @@ impl CanonicalProgressUpdate {
     pub fn with_counts(mut self, completed: u64, total: u64) -> Self {
         self.completed = Some(completed);
         self.total = Some(total);
-        self.percentage = if total == 0 {
-            None
-        } else {
-            let percentage = completed.saturating_mul(100) / total;
-            Some(percentage.min(100) as u8)
-        };
+        self.percentage = completed
+            .saturating_mul(100)
+            .checked_div(total)
+            .map(|percentage| percentage.min(100) as u8);
         self
     }
 

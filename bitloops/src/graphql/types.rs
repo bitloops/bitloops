@@ -29,7 +29,9 @@ pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, CommitConnection, CommitEdge, ConnectionPagination,
-    DependencyConnectionEdge, DependencyEdgeConnection, KnowledgeItemConnection, KnowledgeItemEdge,
+    DependencyConnectionEdge, DependencyEdgeConnection, InteractionEventConnection,
+    InteractionEventEdge, InteractionSessionConnection, InteractionSessionEdge,
+    InteractionTurnConnection, InteractionTurnEdge, KnowledgeItemConnection, KnowledgeItemEdge,
     KnowledgeRelationConnection, KnowledgeRelationEdge, KnowledgeVersionConnection,
     KnowledgeVersionEdge, TelemetryEventConnection, TelemetryEventEdge, paginate_items,
 };
@@ -39,6 +41,11 @@ pub use dependency_edge::{
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};
 pub use ingestion::IngestionProgressEvent;
+pub use interaction::{
+    InteractionEventObject, InteractionFilterInput, InteractionSearchInputObject,
+    InteractionSessionObject, InteractionSessionSearchHitObject, InteractionTurnObject,
+    InteractionTurnSearchHitObject,
+};
 pub use knowledge::{
     KnowledgeItem, KnowledgeProvider, KnowledgeRelation, KnowledgeSourceKind, KnowledgeTargetType,
     KnowledgeVersion,

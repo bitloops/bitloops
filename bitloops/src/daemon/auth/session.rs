@@ -60,6 +60,10 @@ pub async fn resolve_workos_session_status() -> Result<Option<WorkosSessionDetai
     resolve_workos_session_status_with_store(default_secure_store()).await
 }
 
+pub(crate) fn load_workos_session_details_cached() -> Result<Option<WorkosSessionDetails>> {
+    Ok(load_workos_session_state()?.map(|state| session_details_from_state(&state)))
+}
+
 pub async fn logout_workos_session() -> Result<bool> {
     logout_workos_session_with_store(default_secure_store()).await
 }

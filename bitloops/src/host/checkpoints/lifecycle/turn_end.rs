@@ -35,37 +35,54 @@ pub fn handle_lifecycle_turn_end(
     agent: &dyn LifecycleAgentAdapter,
     event: &LifecycleEvent,
 ) -> Result<()> {
-    if !event.session_id.is_empty() {
-        let _canonical_request = build_phase3_canonical_request(agent.agent_name(), event)?;
-    }
-
-    if event.session_ref.is_empty() {
-        return Err(anyhow!("transcript file not specified"));
-    }
-
-    // Agents flush transcripts asynchronously; retry briefly before giving up.
-    let transcript_data = read_transcript_with_retry(&event.session_ref)?;
-
-    if crate::git::is_empty_repository()? {
-        return Err(anyhow!("empty repository"));
-    }
-
-    let repo_root = crate::utils::paths::repo_root()?;
     let session_id = apply_session_id_policy(&event.session_id, SessionIdPolicy::FallbackUnknown)?;
-
-    let transcript_ref_canon = Path::new(&event.session_ref)
-        .canonicalize()
-        .unwrap_or_else(|_| Path::new(&event.session_ref).to_path_buf());
-    let transcript_ref_str = transcript_ref_canon.to_string_lossy().to_string();
-
+    let repo_root = crate::utils::paths::repo_root()?;
     let backend = create_session_backend_or_local(&repo_root);
     let pre_prompt = backend.load_pre_prompt(&session_id).ok().flatten();
+    let session_before_capture = backend.load_session(&session_id).ok().flatten();
+    let (transcript_ref, attempted_sources) = resolve_turn_end_transcript_ref(
+        &event.session_ref,
+        pre_prompt
+            .as_ref()
+            .map(|state| state.transcript_path.as_str()),
+        session_before_capture
+            .as_ref()
+            .map(|state| state.transcript_path.as_str()),
+    );
+
+    if !event.session_id.is_empty() {
+        let mut resolved_event = event.clone();
+        resolved_event.session_ref = transcript_ref.clone();
+        let _canonical_request =
+            build_phase3_canonical_request(agent.agent_name(), &resolved_event)?;
+    }
+
     if event.source == PRE_PROMPT_SOURCE_CURSOR_SHELL
         && pre_prompt.as_ref().map(|state| state.source.as_str())
             != Some(PRE_PROMPT_SOURCE_CURSOR_SHELL)
     {
         return Ok(());
     }
+
+    if transcript_ref.is_empty() {
+        return Err(anyhow!(
+            "transcript file not specified (checked: {})",
+            attempted_sources.join(", ")
+        ));
+    }
+
+    // Agents flush transcripts asynchronously; retry briefly before giving up.
+    let transcript_data = read_transcript_with_retry(&transcript_ref)?;
+
+    if crate::git::is_empty_repository()? {
+        return Err(anyhow!("empty repository"));
+    }
+
+    let transcript_ref_canon = Path::new(&transcript_ref)
+        .canonicalize()
+        .unwrap_or_else(|_| Path::new(&transcript_ref).to_path_buf());
+    let transcript_ref_str = transcript_ref_canon.to_string_lossy().to_string();
+
     let lifecycle_pre = pre_prompt.as_ref().map(|p| PrePromptState {
         transcript_offset: p.transcript_offset as usize,
     });
@@ -115,7 +132,6 @@ pub fn handle_lifecycle_turn_end(
             .ok()
     });
 
-    let session_before_capture = backend.load_session(&session_id).ok().flatten();
     let turn_id = session_before_capture
         .as_ref()
         .map(|state| state.turn_id.clone())
@@ -131,7 +147,7 @@ pub fn handle_lifecycle_turn_end(
     let mut snapshot = SessionMetadataSnapshot::new(session_id.clone(), metadata.clone());
     snapshot.turn_id = turn_id.clone();
     snapshot.transcript_identifier = session_id.clone();
-    snapshot.transcript_path = event.session_ref.clone();
+    snapshot.transcript_path = transcript_ref.clone();
     runtime_store
         .save_session_metadata_snapshot(&snapshot)
         .context("saving lifecycle turn-end metadata snapshot")?;
@@ -143,7 +159,7 @@ pub fn handle_lifecycle_turn_end(
         deleted_files: rel_deleted,
         metadata: Some(metadata.clone()),
         commit_message,
-        transcript_path: event.session_ref.clone(),
+        transcript_path: transcript_ref.clone(),
         author_name: author.name,
         author_email: author.email,
         agent_type: agent.agent_name().to_string(),
@@ -198,6 +214,7 @@ pub fn handle_lifecycle_turn_end(
                 ended_at: state.ended_at.clone(),
                 last_event_at: interaction_now.clone(),
                 updated_at: interaction_now.clone(),
+                ..Default::default()
             })
             .unwrap_or(InteractionSession {
                 session_id: session_id.clone(),
@@ -205,13 +222,14 @@ pub fn handle_lifecycle_turn_end(
                 agent_type: ctx.agent_type.clone(),
                 model: model.clone(),
                 first_prompt: last_prompt.clone(),
-                transcript_path: event.session_ref.clone(),
+                transcript_path: transcript_ref.clone(),
                 worktree_path: repo_root.to_string_lossy().to_string(),
                 worktree_id: crate::utils::paths::get_worktree_id(&repo_root).unwrap_or_default(),
                 started_at: interaction_now.clone(),
                 ended_at: None,
                 last_event_at: interaction_now.clone(),
                 updated_at: interaction_now.clone(),
+                ..Default::default()
             });
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -249,6 +267,7 @@ pub fn handle_lifecycle_turn_end(
             files_modified: all_files.clone(),
             checkpoint_id: None,
             updated_at: interaction_now.clone(),
+            ..Default::default()
         };
         if let Err(err) = spool.record_turn(&turn) {
             eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
@@ -272,6 +291,7 @@ pub fn handle_lifecycle_turn_end(
                 "transcript_fragment": transcript_fragment,
                 "token_usage": token_meta,
             }),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool turn_end event: {err}");
         }
@@ -298,6 +318,33 @@ pub fn handle_lifecycle_turn_end(
     let _ = backend.delete_pre_prompt(&session_id);
 
     Ok(())
+}
+
+fn resolve_turn_end_transcript_ref(
+    raw_path: &str,
+    pre_prompt_path: Option<&str>,
+    session_path: Option<&str>,
+) -> (String, Vec<&'static str>) {
+    let mut attempted_sources = vec!["hook payload transcript_path"];
+    if !raw_path.trim().is_empty() {
+        return (raw_path.to_string(), attempted_sources);
+    }
+
+    attempted_sources.push("pre-prompt state");
+    if let Some(path) = pre_prompt_path
+        && !path.trim().is_empty()
+    {
+        return (path.to_string(), attempted_sources);
+    }
+
+    attempted_sources.push("session state");
+    if let Some(path) = session_path
+        && !path.trim().is_empty()
+    {
+        return (path.to_string(), attempted_sources);
+    }
+
+    (String::new(), attempted_sources)
 }
 
 /// Reads the transcript file with a brief retry window to handle agents that

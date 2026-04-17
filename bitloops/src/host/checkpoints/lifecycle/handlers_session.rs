@@ -105,6 +105,7 @@ pub fn handle_lifecycle_session_start(
             ended_at: None,
             last_event_at: now.clone(),
             updated_at: now.clone(),
+            ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -124,6 +125,7 @@ pub fn handle_lifecycle_session_start(
                 "worktree_path": state.worktree_path,
                 "worktree_id": state.worktree_id,
             }),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool session_start event: {err}");
         }
@@ -247,6 +249,7 @@ pub fn handle_lifecycle_turn_start(
             ended_at: state.ended_at.clone(),
             last_event_at: now.clone(),
             updated_at: now.clone(),
+            ..Default::default()
         };
         if let Err(err) = spool.record_session(&session) {
             eprintln!("[bitloops] Warning: failed to spool interaction session: {err}");
@@ -280,6 +283,7 @@ pub fn handle_lifecycle_turn_start(
                 "prompt": prompt_text,
                 "turn_number": turn_number,
             }),
+            ..Default::default()
         }) {
             eprintln!("[bitloops] Warning: failed to spool turn_start event: {err}");
         }
