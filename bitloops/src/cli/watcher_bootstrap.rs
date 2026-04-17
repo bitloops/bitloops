@@ -35,9 +35,17 @@ pub(crate) fn reconcile_repo_watcher(repo_root: &Path) -> Result<()> {
         return result;
     }
 
-    let daemon_config_root = crate::config::resolve_daemon_config_root_for_repo(repo_root)?;
+    #[cfg(test)]
+    {
+        Ok(())
+    }
 
-    crate::host::devql::watch::restart_watcher(repo_root, &daemon_config_root)
+    #[cfg(not(test))]
+    {
+        let daemon_config_root =
+            crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)?;
+        crate::host::devql::watch::restart_watcher(repo_root, &daemon_config_root)
+    }
 }
 
 #[cfg(test)]
