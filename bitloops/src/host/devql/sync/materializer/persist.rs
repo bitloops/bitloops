@@ -567,19 +567,31 @@ fn map_current_edge_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<CurrentE
     })
 }
 
-fn escape_like_prefix(prefix: &str) -> String {
-    let mut escaped = String::with_capacity(prefix.len() + 1);
-    for ch in prefix.chars() {
-        match ch {
-            '\\' | '%' | '_' => {
-                escaped.push('\\');
-                escaped.push(ch);
-            }
-            _ => escaped.push(ch),
-        }
+fn refresh_touched_current_edge_paths_temp_table(
+    connection: &Connection,
+    touched_paths: &HashSet<String>,
+) -> Result<()> {
+    connection
+        .execute_batch(
+            "DROP TABLE IF EXISTS temp_touched_current_edge_paths;
+             CREATE TEMP TABLE temp_touched_current_edge_paths (
+                 path TEXT PRIMARY KEY
+             ) WITHOUT ROWID;",
+        )
+        .context("resetting touched current edge reconciliation temp table")?;
+
+    let mut stmt = connection
+        .prepare(
+            "INSERT OR IGNORE INTO temp_touched_current_edge_paths (path)
+             VALUES (?1)",
+        )
+        .context("preparing touched current edge reconciliation temp table insert")?;
+    for path in touched_paths {
+        stmt.execute([path.as_str()])
+            .context("inserting touched current edge reconciliation temp path")?;
     }
-    escaped.push('%');
-    escaped
+
+    Ok(())
 }
 
 fn load_current_edges_for_local_reconciliation_with_connection(
@@ -602,30 +614,25 @@ fn load_current_edges_for_local_reconciliation_with_connection(
     };
 
     if !touched_paths.is_empty() {
-        let escaped_prefixes = touched_paths
-            .iter()
-            .map(|path| escape_like_prefix(path))
-            .collect::<Vec<_>>();
-        let path_predicates = escaped_prefixes
-            .iter()
-            .enumerate()
-            .map(|(index, _)| format!("to_symbol_ref LIKE ?{} ESCAPE '\\'", index + 2))
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        let sql = format!(
-            "SELECT edge_id, path, content_id, from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id, to_symbol_ref, edge_kind, language, start_line, end_line, metadata \
-             FROM artefact_edges_current \
-             WHERE repo_id = ?1 AND to_symbol_ref IS NOT NULL AND to_symbol_id IS NOT NULL AND ({path_predicates})",
-        );
-        let mut params = Vec::with_capacity(escaped_prefixes.len() + 1);
-        params.push(repo_id.to_string());
-        params.extend(escaped_prefixes);
+        refresh_touched_current_edge_paths_temp_table(connection, touched_paths)?;
 
         let mut stmt = connection
-            .prepare(&sql)
+            .prepare(
+                "SELECT e.edge_id, e.path, e.content_id, e.from_symbol_id, e.from_artefact_id, e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref, e.edge_kind, e.language, e.start_line, e.end_line, e.metadata \
+                 FROM artefact_edges_current e \
+                 INNER JOIN temp_touched_current_edge_paths touched \
+                    ON (
+                        CASE
+                            WHEN instr(e.to_symbol_ref, '::') > 0
+                                THEN substr(e.to_symbol_ref, 1, instr(e.to_symbol_ref, '::') - 1)
+                            ELSE e.to_symbol_ref
+                        END
+                    ) = touched.path \
+                 WHERE e.repo_id = ?1 AND e.to_symbol_ref IS NOT NULL AND e.to_symbol_id IS NOT NULL",
+            )
             .context("preparing touched current edge reconciliation query")?;
         let resolved_rows = stmt
-            .query_map(params_from_iter(params.iter()), map_current_edge_record)
+            .query_map([repo_id], map_current_edge_record)
             .context("querying touched current edge reconciliation rows")?
             .collect::<Result<Vec<_>, _>>()
             .context("collecting touched current edge reconciliation rows")?;
