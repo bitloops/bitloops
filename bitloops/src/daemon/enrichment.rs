@@ -228,13 +228,16 @@ impl EnrichmentCoordinator {
         if !self.state_initialised.swap(true, Ordering::AcqRel) {
             self.ensure_state_file();
             self.requeue_running_jobs();
-            let _ = compact_and_prune_workplane_jobs(&self.workplane_store);
+            if let Err(err) = compact_and_prune_workplane_jobs(&self.workplane_store) {
+                log::warn!("failed to compact enrichment workplane jobs during startup: {err:#}");
+            }
         }
         self.start_workers_if_possible();
     }
 
     fn start_workers_if_possible(self: &Arc<Self>) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            log::error!("enrichment worker activation requested without an active tokio runtime");
             return;
         };
         if self.workers_started.swap(true, Ordering::AcqRel) {
@@ -373,44 +376,63 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
     }
 
     fn ensure_state_file(&self) {
-        if self
-            .runtime_store
-            .enrichment_state_exists()
-            .unwrap_or(false)
-        {
-            return;
+        match self.runtime_store.enrichment_state_exists() {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!(
+                    "failed to check persisted enrichment queue state during startup: {err:#}"
+                );
+            }
         }
         let mut state = default_state();
-        let _ = self.save_state(&mut state);
+        if let Err(err) = self.save_state(&mut state) {
+            log::warn!("failed to initialise persisted enrichment queue state: {err:#}");
+        }
     }
 
     fn requeue_running_jobs(&self) {
-        let recovered = self
-            .workplane_store
-            .with_connection(|conn| {
-                conn.execute(
-                    "UPDATE capability_workplane_jobs
+        let recovered = match self.workplane_store.with_connection(|conn| {
+            conn.execute(
+                "UPDATE capability_workplane_jobs
                      SET status = ?1,
                          started_at_unix = NULL,
                          updated_at_unix = ?2,
                          lease_owner = NULL,
                          lease_expires_at_unix = NULL
                      WHERE status = ?3",
-                    params![
-                        WorkplaneJobStatus::Pending.as_str(),
-                        sql_i64(unix_timestamp_now())?,
-                        WorkplaneJobStatus::Running.as_str(),
-                    ],
-                )
-                .map_err(anyhow::Error::from)
-            })
-            .unwrap_or_default();
+                params![
+                    WorkplaneJobStatus::Pending.as_str(),
+                    sql_i64(unix_timestamp_now())?,
+                    WorkplaneJobStatus::Running.as_str(),
+                ],
+            )
+            .map_err(anyhow::Error::from)
+        }) {
+            Ok(recovered) => recovered,
+            Err(err) => {
+                log::warn!(
+                    "failed to recover stale running enrichment jobs during startup: {err:#}"
+                );
+                return;
+            }
+        };
         if recovered == 0 {
             return;
         }
-        let mut state = self.load_state().unwrap_or_else(|_| default_state());
+        let mut state = match self.load_state() {
+            Ok(state) => state,
+            Err(err) => {
+                log::warn!(
+                    "failed to load enrichment queue state during startup recovery: {err:#}"
+                );
+                default_state()
+            }
+        };
         state.last_action = Some("requeue_running".to_string());
-        let _ = self.save_state(&mut state);
+        if let Err(err) = self.save_state(&mut state) {
+            log::warn!("failed to persist enrichment queue recovery state: {err:#}");
+        }
         log::warn!("requeued {recovered} stale running enrichment jobs on daemon startup");
     }
 

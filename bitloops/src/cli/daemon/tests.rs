@@ -1,3 +1,4 @@
+use super::args::DaemonLogLevel;
 use super::*;
 use crate::cli::{Cli, Commands};
 use crate::daemon::{
@@ -260,6 +261,42 @@ fn daemon_logs_cli_parses_tail_follow_and_path_flags() {
     assert_eq!(args.tail, Some(25));
     assert!(args.follow);
     assert!(!args.path);
+    assert!(args.levels.is_empty());
+}
+
+#[test]
+fn daemon_logs_cli_parses_repeatable_level_filters() {
+    let parsed = Cli::try_parse_from([
+        "bitloops", "daemon", "logs", "--level", "warn", "--level", "error",
+    ])
+    .expect("daemon logs should parse repeatable levels");
+
+    let Some(Commands::Daemon(daemon)) = parsed.command else {
+        panic!("expected daemon command");
+    };
+    let Some(DaemonCommand::Logs(args)) = daemon.command else {
+        panic!("expected daemon logs command");
+    };
+
+    assert_eq!(
+        args.levels,
+        vec![DaemonLogLevel::Warn, DaemonLogLevel::Error]
+    );
+}
+
+#[test]
+fn daemon_logs_cli_normalizes_warning_alias_to_warn() {
+    let parsed = Cli::try_parse_from(["bitloops", "daemon", "logs", "--level", "warning"])
+        .expect("daemon logs should normalize warning alias");
+
+    let Some(Commands::Daemon(daemon)) = parsed.command else {
+        panic!("expected daemon command");
+    };
+    let Some(DaemonCommand::Logs(args)) = daemon.command else {
+        panic!("expected daemon logs command");
+    };
+
+    assert_eq!(args.levels, vec![DaemonLogLevel::Warn]);
 }
 
 #[test]
@@ -272,6 +309,14 @@ fn daemon_logs_cli_rejects_conflicting_path_flags() {
     let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--tail", "5"])
         .err()
         .expect("daemon logs should reject --path with --tail");
+    assert!(err.to_string().contains("--path"));
+}
+
+#[test]
+fn daemon_logs_cli_rejects_level_with_path_flag() {
+    let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--level", "error"])
+        .err()
+        .expect("daemon logs should reject --path with --level");
     assert!(err.to_string().contains("--path"));
 }
 
@@ -850,6 +895,7 @@ fn run_logs_honours_explicit_line_count() {
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: Some(3),
+                levels: vec![],
                 follow: false,
                 path: false,
             },
@@ -865,6 +911,74 @@ fn run_logs_honours_explicit_line_count() {
 }
 
 #[test]
+fn run_logs_filters_tail_output_by_exact_levels() {
+    let (_log_dir, log_path) = temp_log_path();
+    write_log_lines(
+        &log_path,
+        &[
+            "{\"line\":1,\"level\":\"ERROR\",\"message\":\"before-tail\"}".to_string(),
+            "{\"line\":2,\"level\":\"INFO\",\"message\":\"before-tail\"}".to_string(),
+            "{\"line\":3,\"level\":\"DEBUG\",\"message\":\"tail-debug\"}".to_string(),
+            "{\"line\":4,\"level\":\"WARNING\",\"message\":\"tail-warning\"}".to_string(),
+            "{\"line\":5,\"level\":\"ERROR\",\"message\":\"tail-error\"}".to_string(),
+        ],
+    );
+    let mut out = Vec::new();
+
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs {
+                tail: Some(3),
+                levels: vec![DaemonLogLevel::Warn, DaemonLogLevel::Error],
+                follow: false,
+                path: false,
+            },
+            &mut out,
+            log_path,
+        ))
+        .expect("run filtered daemon logs");
+
+    assert_eq!(
+        String::from_utf8(out).expect("utf8 output"),
+        "{\"line\":4,\"level\":\"WARNING\",\"message\":\"tail-warning\"}\n{\"line\":5,\"level\":\"ERROR\",\"message\":\"tail-error\"}\n"
+    );
+}
+
+#[test]
+fn run_logs_skips_malformed_lines_during_filtered_view() {
+    let (_log_dir, log_path) = temp_log_path();
+    write_log_lines(
+        &log_path,
+        &[
+            "{\"line\":1,\"level\":\"INFO\",\"message\":\"before-tail\"}".to_string(),
+            "not-json".to_string(),
+            "{\"line\":3,\"level\":\"ERROR\",\"message\":\"wanted\"}".to_string(),
+            "{\"line\":4,\"level\":".to_string(),
+            "{\"line\":5,\"level\":\"WARN\",\"message\":\"other\"}".to_string(),
+        ],
+    );
+    let mut out = Vec::new();
+
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs {
+                tail: Some(4),
+                levels: vec![DaemonLogLevel::Error],
+                follow: false,
+                path: false,
+            },
+            &mut out,
+            log_path,
+        ))
+        .expect("run filtered daemon logs with malformed input");
+
+    assert_eq!(
+        String::from_utf8(out).expect("utf8 output"),
+        "{\"line\":3,\"level\":\"ERROR\",\"message\":\"wanted\"}\n"
+    );
+}
+
+#[test]
 fn run_logs_prints_log_path() {
     let (_log_dir, log_path) = temp_log_path();
     let mut out = Vec::new();
@@ -873,6 +987,7 @@ fn run_logs_prints_log_path() {
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: None,
+                levels: vec![],
                 follow: false,
                 path: true,
             },
@@ -992,6 +1107,7 @@ async fn run_logs_follow_stops_when_async_shutdown_resolves() {
         run_logs_with_io_and_shutdown_at_path(
             DaemonLogsArgs {
                 tail: Some(1),
+                levels: vec![],
                 follow: true,
                 path: false,
             },
@@ -1008,4 +1124,74 @@ async fn run_logs_follow_stops_when_async_shutdown_resolves() {
     .expect("follow should stop cleanly");
 
     assert_eq!(out.contents(), "{\"line\":1}\n");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_logs_follow_filters_appended_lines_by_level() {
+    let (_log_dir, log_path) = temp_log_path();
+    write_log_lines(
+        &log_path,
+        &[
+            "{\"line\":1,\"level\":\"INFO\",\"message\":\"initial-info\"}".to_string(),
+            "{\"line\":2,\"level\":\"WARN\",\"message\":\"initial-warn\"}".to_string(),
+        ],
+    );
+    let mut out = SharedBuffer::default();
+    let append_path = log_path.clone();
+    let append_handle = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(30));
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&append_path)
+            .expect("open daemon log for filtered append");
+        writeln!(
+            file,
+            "{{\"line\":3,\"level\":\"INFO\",\"message\":\"skip\"}}"
+        )
+        .expect("append info line");
+        writeln!(
+            file,
+            "{{\"line\":4,\"level\":\"WARNING\",\"message\":\"keep-warning\"}}"
+        )
+        .expect("append warning line");
+        writeln!(
+            file,
+            "{{\"line\":5,\"level\":\"ERROR\",\"message\":\"skip-error\"}}"
+        )
+        .expect("append error line");
+        writeln!(
+            file,
+            "{{\"line\":6,\"level\":\"WARN\",\"message\":\"keep-warn\"}}"
+        )
+        .expect("append warn line");
+        file.flush().expect("flush appended daemon log");
+    });
+
+    tokio::time::timeout(
+        Duration::from_millis(250),
+        run_logs_with_io_and_shutdown_at_path(
+            DaemonLogsArgs {
+                tail: Some(2),
+                levels: vec![DaemonLogLevel::Warn],
+                follow: true,
+                path: false,
+            },
+            &mut out,
+            async {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            },
+            Duration::from_millis(10),
+            log_path,
+        ),
+    )
+    .await
+    .expect("filtered follow should not block the runtime")
+    .expect("filtered follow should stop cleanly");
+
+    append_handle.join().expect("join filtered append thread");
+
+    assert_eq!(
+        out.contents(),
+        "{\"line\":2,\"level\":\"WARN\",\"message\":\"initial-warn\"}\n{\"line\":4,\"level\":\"WARNING\",\"message\":\"keep-warning\"}\n{\"line\":6,\"level\":\"WARN\",\"message\":\"keep-warn\"}\n"
+    );
 }
