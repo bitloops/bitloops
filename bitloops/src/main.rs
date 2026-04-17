@@ -34,9 +34,14 @@ fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::Process
             args.service_name.clone(),
         )),
         cli::Commands::DevqlWatcher(args) => Some(daemon::ProcessLogContext::watcher(
-            args.repo_root
+            args.daemon_config_root
                 .as_deref()
-                .and_then(|repo_root| config::resolve_daemon_config_path_for_repo(repo_root).ok()),
+                .map(|config_root| config_root.join(config::BITLOOPS_CONFIG_RELATIVE_PATH))
+                .or_else(|| {
+                    args.repo_root.as_deref().and_then(|repo_root| {
+                        config::resolve_daemon_config_path_for_repo(repo_root).ok()
+                    })
+                }),
         )),
         cli::Commands::DaemonSupervisor(_) => Some(daemon::ProcessLogContext::supervisor()),
         cli::Commands::Start(args) => Some(daemon::ProcessLogContext::daemon_cli(
@@ -315,6 +320,7 @@ tls = true
         let command = serde_json::to_value(&context).expect("serialize process log context");
         assert_eq!(command["process"], "watcher");
         assert_eq!(command["mode"], "watcher");
+        assert_eq!(command["config_path"], "/tmp/config-root/config.toml");
     }
 
     #[test]
