@@ -38,6 +38,12 @@ search or file reads.
 4. Return the concrete rows. Summaries are optional follow-up, not substitutes.
 5. If DevQL returns nothing useful, fall back to targeted repo search or file reads.
 
+## Sandbox Execution
+
+- In sandboxed agent environments, run `bitloops devql ...` outside the sandbox by default.
+- These commands rely on Bitloops-managed daemon and runtime state under platform app directories, so they can fail inside a workspace-only sandbox even when DevQL is healthy.
+- If your platform requires approval or escalation for out-of-sandbox commands, request it immediately before running `bitloops devql ...`.
+
 ## Core Commands
 
 ```bash
