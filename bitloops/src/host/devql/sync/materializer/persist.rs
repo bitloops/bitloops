@@ -571,25 +571,32 @@ fn refresh_touched_current_edge_paths_temp_table(
     connection: &Connection,
     touched_paths: &HashSet<String>,
 ) -> Result<()> {
-    connection
-        .execute_batch(
-            "DROP TABLE IF EXISTS temp_touched_current_edge_paths;
-             CREATE TEMP TABLE temp_touched_current_edge_paths (
-                 path TEXT PRIMARY KEY
-             ) WITHOUT ROWID;",
-        )
-        .context("resetting touched current edge reconciliation temp table")?;
+    let tx = connection
+        .unchecked_transaction()
+        .context("starting touched current edge reconciliation temp table transaction")?;
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS temp_touched_current_edge_paths;
+         CREATE TEMP TABLE temp_touched_current_edge_paths (
+             path TEXT PRIMARY KEY
+         ) WITHOUT ROWID;",
+    )
+    .context("resetting touched current edge reconciliation temp table")?;
 
-    let mut stmt = connection
-        .prepare(
-            "INSERT OR IGNORE INTO temp_touched_current_edge_paths (path)
-             VALUES (?1)",
-        )
-        .context("preparing touched current edge reconciliation temp table insert")?;
-    for path in touched_paths {
-        stmt.execute([path.as_str()])
-            .context("inserting touched current edge reconciliation temp path")?;
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO temp_touched_current_edge_paths (path)
+                 VALUES (?1)",
+            )
+            .context("preparing touched current edge reconciliation temp table insert")?;
+        for path in touched_paths {
+            stmt.execute([path.as_str()])
+                .context("inserting touched current edge reconciliation temp path")?;
+        }
     }
+
+    tx.commit()
+        .context("committing touched current edge reconciliation temp table transaction")?;
 
     Ok(())
 }
