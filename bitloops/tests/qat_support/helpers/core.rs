@@ -904,6 +904,38 @@ pub fn assert_store_paths_exist(world: &QatWorld) -> Result<()> {
     Ok(())
 }
 
+pub fn assert_global_runtime_artefacts_removed(world: &QatWorld) -> Result<()> {
+    let (config_dir, data_dir, cache_dir, state_dir) = with_scenario_app_env(world, || {
+        Ok::<_, anyhow::Error>((
+            bitloops::utils::platform_dirs::bitloops_config_dir()?,
+            bitloops::utils::platform_dirs::bitloops_data_dir()?,
+            bitloops::utils::platform_dirs::bitloops_cache_dir()?,
+            bitloops::utils::platform_dirs::bitloops_state_dir()?,
+        ))
+    })?;
+    ensure!(
+        !config_dir.exists(),
+        "expected Bitloops config dir to be removed: {}",
+        config_dir.display()
+    );
+    ensure!(
+        !data_dir.exists(),
+        "expected Bitloops data dir to be removed: {}",
+        data_dir.display()
+    );
+    ensure!(
+        !cache_dir.exists(),
+        "expected Bitloops cache dir to be removed: {}",
+        cache_dir.display()
+    );
+    ensure!(
+        !state_dir.exists(),
+        "expected Bitloops state dir to be removed: {}",
+        state_dir.display()
+    );
+    Ok(())
+}
+
 pub fn assert_file_exists_in_repo(
     world: &QatWorld,
     repo_name: &str,
@@ -919,87 +951,47 @@ pub fn assert_file_exists_in_repo(
     Ok(())
 }
 
-pub fn assert_agent_hooks_installed(
+pub fn assert_file_missing_in_repo(
     world: &QatWorld,
     repo_name: &str,
-    agent_name: &str,
+    relative_path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
-    match normalised_agent_name {
-        AGENT_NAME_CODEX => {
-            let path = world.repo_dir().join(".codex").join("hooks.json");
-            ensure!(path.exists(), "expected {}", path.display());
-            let content =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            ensure!(
-                content.contains("bitloops hooks codex session-start"),
-                "missing codex session-start hook in {}",
-                path.display()
-            );
-            ensure!(
-                content.contains("bitloops hooks codex stop"),
-                "missing codex stop hook in {}",
-                path.display()
-            );
-        }
-        AGENT_NAME_CLAUDE_CODE => {
-            let path = world.repo_dir().join(".claude").join("settings.json");
-            ensure!(path.exists(), "expected {}", path.display());
-            let content =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            ensure!(
-                content.contains("bitloops hooks claude-code stop"),
-                "missing claude-code stop hook in {}",
-                path.display()
-            );
-        }
-        AGENT_NAME_CURSOR => {
-            let path = world.repo_dir().join(".cursor").join("hooks.json");
-            ensure!(path.exists(), "expected {}", path.display());
-            let content =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            ensure!(
-                content.contains("bitloops"),
-                "missing bitloops hook in {}",
-                path.display()
-            );
-        }
-        AGENT_NAME_GEMINI => {
-            let path = world.repo_dir().join(".gemini").join("settings.json");
-            ensure!(path.exists(), "expected {}", path.display());
-            let content =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            ensure!(
-                content.contains("bitloops"),
-                "missing bitloops hook in {}",
-                path.display()
-            );
-        }
-        AGENT_NAME_COPILOT => {
-            let path = world
-                .repo_dir()
-                .join(".github")
-                .join("hooks")
-                .join("bitloops.json");
-            ensure!(path.exists(), "expected {}", path.display());
-        }
-        AGENT_NAME_OPEN_CODE => {
-            let path = world
-                .repo_dir()
-                .join(".opencode")
-                .join("plugins")
-                .join("bitloops.ts");
-            ensure!(path.exists(), "expected {}", path.display());
-        }
-        other => bail!("unsupported agent for hook assertion: {other}"),
-    }
+    let full_path = world.repo_dir().join(relative_path);
+    ensure!(
+        !full_path.exists(),
+        "expected path to not exist: {}",
+        full_path.display()
+    );
+    Ok(())
+}
 
-    let post_commit_path = world
-        .repo_dir()
-        .join(".git")
-        .join("hooks")
-        .join("post-commit");
+fn agent_hooks_path(repo_root: &Path, agent_name: &str) -> Result<std::path::PathBuf> {
+    Ok(match agent_name {
+        AGENT_NAME_CLAUDE_CODE => repo_root.join(".claude").join("settings.json"),
+        AGENT_NAME_CODEX => repo_root.join(".codex").join("hooks.json"),
+        AGENT_NAME_CURSOR => repo_root.join(".cursor").join("hooks.json"),
+        AGENT_NAME_GEMINI => repo_root.join(".gemini").join("settings.json"),
+        AGENT_NAME_COPILOT => repo_root.join(".github").join("hooks").join("bitloops.json"),
+        AGENT_NAME_OPEN_CODE => repo_root.join(".opencode").join("plugins").join("bitloops.ts"),
+        other => bail!("unsupported agent for hook assertion: {other}"),
+    })
+}
+
+fn managed_agent_hook_marker(agent_name: &str) -> Result<&'static str> {
+    Ok(match agent_name {
+        AGENT_NAME_CLAUDE_CODE => "bitloops hooks claude-code ",
+        AGENT_NAME_CODEX => "bitloops hooks codex ",
+        AGENT_NAME_CURSOR => "bitloops hooks cursor ",
+        AGENT_NAME_GEMINI => "bitloops hooks gemini ",
+        AGENT_NAME_COPILOT => "bitloops hooks copilot ",
+        AGENT_NAME_OPEN_CODE => "Auto-generated by `bitloops init --agent opencode`",
+        other => bail!("unsupported agent for hook assertion: {other}"),
+    })
+}
+
+fn assert_git_post_commit_hook_installed_at(repo_root: &Path) -> Result<()> {
+    let post_commit_path = repo_root.join(".git").join("hooks").join("post-commit");
     ensure!(
         post_commit_path.exists(),
         "expected git post-commit hook at {}",
@@ -1015,6 +1007,34 @@ pub fn assert_agent_hooks_installed(
     Ok(())
 }
 
+pub fn assert_git_post_commit_hook_installed(world: &QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    assert_git_post_commit_hook_installed_at(world.repo_dir())
+}
+
+pub fn assert_agent_hooks_installed(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
+    let registration = bitloops::adapters::agents::AgentAdapterRegistry::builtin()
+        .resolve(normalised_agent_name)
+        .with_context(|| format!("resolving agent registration for `{normalised_agent_name}`"))?;
+    let hooks_path = agent_hooks_path(world.repo_dir(), normalised_agent_name)?;
+    ensure!(
+        hooks_path.exists(),
+        "expected managed agent hooks file at {}",
+        hooks_path.display()
+    );
+    ensure!(
+        registration.are_hooks_installed(world.repo_dir()),
+        "expected `{normalised_agent_name}` hooks to be installed according to the adapter registration"
+    );
+    assert_git_post_commit_hook_installed_at(world.repo_dir())
+}
+
 pub fn assert_agent_hooks_removed(
     world: &QatWorld,
     repo_name: &str,
@@ -1022,29 +1042,21 @@ pub fn assert_agent_hooks_removed(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let normalised_agent_name = normalise_smoke_agent_name(agent_name);
-    let hooks_path = match normalised_agent_name {
-        AGENT_NAME_CLAUDE_CODE => world.repo_dir().join(".claude").join("settings.json"),
-        AGENT_NAME_CODEX => world.repo_dir().join(".codex").join("hooks.json"),
-        AGENT_NAME_CURSOR => world.repo_dir().join(".cursor").join("hooks.json"),
-        AGENT_NAME_GEMINI => world.repo_dir().join(".gemini").join("settings.json"),
-        AGENT_NAME_COPILOT => world
-            .repo_dir()
-            .join(".github")
-            .join("hooks")
-            .join("bitloops.json"),
-        AGENT_NAME_OPEN_CODE => world
-            .repo_dir()
-            .join(".opencode")
-            .join("plugins")
-            .join("bitloops.ts"),
-        other => bail!("unsupported agent for hook removal assertion: {other}"),
-    };
+    let registration = bitloops::adapters::agents::AgentAdapterRegistry::builtin()
+        .resolve(normalised_agent_name)
+        .with_context(|| format!("resolving agent registration for `{normalised_agent_name}`"))?;
+    ensure!(
+        !registration.are_hooks_installed(world.repo_dir()),
+        "expected `{normalised_agent_name}` hooks to be removed according to the adapter registration"
+    );
+    let hooks_path = agent_hooks_path(world.repo_dir(), normalised_agent_name)?;
     if hooks_path.exists() {
         let content = fs::read_to_string(&hooks_path)
             .with_context(|| format!("reading {}", hooks_path.display()))?;
+        let managed_marker = managed_agent_hook_marker(normalised_agent_name)?;
         ensure!(
-            !content.contains("bitloops"),
-            "agent hooks file still contains bitloops references after uninstall: {}",
+            !content.contains(managed_marker),
+            "agent hooks file still contains managed marker `{managed_marker}` after uninstall: {}",
             hooks_path.display()
         );
     }
@@ -2514,28 +2526,85 @@ pub fn assert_agent_session_exists_for_repo(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommitCheckpointRow {
+    commit_sha: String,
+    checkpoint_id: String,
+}
+
+fn load_commit_checkpoint_rows(world: &QatWorld, repo_name: &str) -> Result<Vec<CommitCheckpointRow>> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT commit_sha, checkpoint_id
+             FROM commit_checkpoints
+             WHERE repo_id = ?1
+             ORDER BY created_at DESC, checkpoint_id DESC",
+        )
+        .context("preparing commit_checkpoints query for QAT assertions")?;
+    let rows = stmt
+        .query_map([repo_id.as_str()], |row| {
+            Ok(CommitCheckpointRow {
+                commit_sha: row.get::<_, String>(0)?.trim().to_string(),
+                checkpoint_id: row.get::<_, String>(1)?.trim().to_string(),
+            })
+        })
+        .with_context(|| format!("querying commit_checkpoints rows for repo `{repo_id}`"))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        let row = row.context("decoding commit_checkpoints row")?;
+        if row.commit_sha.is_empty()
+            || !bitloops::host::checkpoints::checkpoint_id::is_valid_checkpoint_id(
+                &row.checkpoint_id,
+            )
+        {
+            continue;
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
+fn count_commit_checkpoint_rows(rows: &[CommitCheckpointRow]) -> usize {
+    rows.len()
+}
+
+fn captured_commit_shas_with_checkpoint_rows(
+    captured_shas: &[String],
+    rows: &[CommitCheckpointRow],
+) -> Vec<String> {
+    captured_shas
+        .iter()
+        .filter(|sha| {
+            rows.iter()
+                .any(|row| row.commit_sha.as_str() == sha.as_str())
+        })
+        .cloned()
+        .collect()
+}
+
+fn checkpoint_ids_for_commit_sha(rows: &[CommitCheckpointRow], commit_sha: &str) -> Vec<String> {
+    rows.iter()
+        .filter(|row| row.commit_sha == commit_sha)
+        .map(|row| row.checkpoint_id.clone())
+        .collect()
+}
+
 pub fn assert_checkpoint_mapping_exists_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings = wait_for_qat_condition(
+    let rows = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
-        "Bitloops checkpoint mappings to be persisted",
-        || {
-            with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-                .context("reading Bitloops checkpoint mappings")
-        },
-        |mappings| !mappings.is_empty(),
-        |mappings| format!("mappings={}", mappings.len()),
+        "Bitloops commit_checkpoints rows to be persisted",
+        || load_commit_checkpoint_rows(world, repo_name),
+        |rows| !rows.is_empty(),
+        |rows| format!("rows={}", count_commit_checkpoint_rows(rows)),
     )?;
-    if mappings.is_empty() && claude_fallback_marker_exists(world) {
-        append_world_log(
-            world,
-            "Checkpoint mapping assertion bypassed because QAT Claude fallback is active.\n",
-        )?;
-        return Ok(());
-    }
-    let Some(checkpoint_id) = mappings.values().next() else {
-        bail!("expected at least one Bitloops checkpoint mapping");
+    let Some(checkpoint_id) = rows.first().map(|row| row.checkpoint_id.as_str()) else {
+        bail!("expected at least one Bitloops commit_checkpoints row");
     };
 
     let summary = with_scenario_app_env(world, || read_committed(world.repo_dir(), checkpoint_id))
@@ -2553,32 +2622,18 @@ pub fn assert_checkpoint_mapping_count_at_least_for_repo(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings = wait_for_qat_condition(
+    let rows = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
-        &format!("at least {min_count} Bitloops checkpoint mappings"),
-        || {
-            with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-                .context("reading Bitloops checkpoint mappings")
-        },
-        |mappings| mappings.len() >= min_count,
-        |mappings| format!("mappings={}", mappings.len()),
+        &format!("at least {min_count} Bitloops commit_checkpoints rows"),
+        || load_commit_checkpoint_rows(world, repo_name),
+        |rows| count_commit_checkpoint_rows(rows) >= min_count,
+        |rows| format!("rows={}", count_commit_checkpoint_rows(rows)),
     )?;
-    if mappings.len() < min_count && claude_fallback_marker_exists(world) {
-        append_world_log(
-            world,
-            &format!(
-                "Checkpoint mapping count assertion bypassed because QAT Claude fallback is active (have {}, expected at least {}).\n",
-                mappings.len(),
-                min_count
-            ),
-        )?;
-        return Ok(());
-    }
     ensure!(
-        mappings.len() >= min_count,
-        "expected at least {min_count} Bitloops checkpoint mappings, got {}",
-        mappings.len()
+        count_commit_checkpoint_rows(&rows) >= min_count,
+        "expected at least {min_count} Bitloops commit_checkpoints rows, got {}",
+        count_commit_checkpoint_rows(&rows)
     );
     Ok(())
 }
@@ -2633,6 +2688,16 @@ pub fn assert_captured_commit_history_is_ordered_for_repo(
         !world.captured_commit_shas.is_empty(),
         "expected captured commit SHAs before asserting history order"
     );
+    let rows = load_commit_checkpoint_rows(world, repo_name)?;
+    let checkpointed_captured_shas =
+        captured_commit_shas_with_checkpoint_rows(&world.captured_commit_shas, &rows);
+    ensure!(
+        checkpointed_captured_shas.len() >= 2,
+        "expected at least two captured commits with persisted commit_checkpoints rows; captured={:?} checkpointed={:?}",
+        world.captured_commit_shas,
+        checkpointed_captured_shas
+    );
+
     let output = run_command_capture(
         world,
         "git log ordered history",
@@ -2641,21 +2706,22 @@ pub fn assert_captured_commit_history_is_ordered_for_repo(
     ensure_success(&output, "git log ordered history")?;
     let commits = parse_git_timeline(String::from_utf8_lossy(&output.stdout).as_ref());
     ensure!(
-        captured_commit_history_is_ordered(&commits, &world.captured_commit_shas),
-        "expected captured commits {:?} to appear in chronological order within git log {:?}",
-        world.captured_commit_shas,
+        captured_commit_history_is_ordered(&commits, &checkpointed_captured_shas),
+        "expected checkpointed captured commits {:?} to appear in chronological order within git log {:?}; all captured commits were {:?}",
+        checkpointed_captured_shas,
         commits
             .iter()
             .map(|commit| commit.sha.as_str())
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>(),
+        world.captured_commit_shas
     );
     Ok(())
 }
 
-pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
+fn relative_day_timeline_commits_for_repo(
     world: &QatWorld,
     repo_name: &str,
-) -> Result<()> {
+) -> Result<Vec<GitTimelineCommit>> {
     ensure_bitloops_repo_name(repo_name)?;
     let output = run_command_capture(
         world,
@@ -2692,6 +2758,59 @@ pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
         }),
         "missing today checkpoint commit dated {today}"
     );
+
+    Ok(commits)
+}
+
+pub fn assert_relative_day_git_timeline_for_repo(world: &QatWorld, repo_name: &str) -> Result<()> {
+    let _ = relative_day_timeline_commits_for_repo(world, repo_name)?;
+    Ok(())
+}
+
+pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    let commits = relative_day_timeline_commits_for_repo(world, repo_name)?;
+    let rows = load_commit_checkpoint_rows(world, repo_name)?;
+    let yesterday = expected_date_for_relative_day(1)?;
+    let today = expected_date_for_relative_day(0)?;
+    let target_commits = [
+        ("test: committed yesterday", yesterday.as_str()),
+        ("test: committed today", today.as_str()),
+    ];
+
+    for (subject, day_prefix) in target_commits {
+        let commit = commits
+            .iter()
+            .find(|commit| commit.subject == subject && commit.author_iso.starts_with(day_prefix))
+            .ok_or_else(|| anyhow!("missing checkpointed commit `{subject}` dated {day_prefix}"))?;
+        let checkpoint_ids = checkpoint_ids_for_commit_sha(&rows, &commit.sha);
+        ensure!(
+            !checkpoint_ids.is_empty(),
+            "expected commit `{}` ({}) to have at least one commit_checkpoints row",
+            commit.subject,
+            commit.sha
+        );
+        let mut found_summary = false;
+        for checkpoint_id in checkpoint_ids {
+            let summary =
+                with_scenario_app_env(world, || read_committed(world.repo_dir(), &checkpoint_id))
+                    .with_context(|| {
+                        format!("reading committed checkpoint summary for {checkpoint_id}")
+                    })?;
+            if summary.is_some() {
+                found_summary = true;
+                break;
+            }
+        }
+        ensure!(
+            found_summary,
+            "expected commit `{}` ({}) to resolve to a persisted checkpoint summary",
+            commit.subject,
+            commit.sha
+        );
+    }
 
     Ok(())
 }

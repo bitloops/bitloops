@@ -1334,6 +1334,103 @@ fn collect_agent_pre_commit_interactions_ignores_checkpointed_turns() {
     assert!(snapshot.uncheckpointed_turn_ids.is_empty());
 }
 
+fn sample_commit_checkpoint_row(commit_sha: &str, checkpoint_id: &str) -> CommitCheckpointRow {
+    CommitCheckpointRow {
+        commit_sha: commit_sha.to_string(),
+        checkpoint_id: checkpoint_id.to_string(),
+    }
+}
+
+#[test]
+fn count_commit_checkpoint_rows_counts_duplicate_commit_shas_separately() {
+    let rows = vec![
+        sample_commit_checkpoint_row("sha-1", "cp-1"),
+        sample_commit_checkpoint_row("sha-1", "cp-2"),
+    ];
+
+    assert_eq!(count_commit_checkpoint_rows(&rows), 2);
+}
+
+#[test]
+fn captured_commit_shas_with_checkpoint_rows_filters_to_persisted_captured_commits() {
+    let rows = vec![sample_commit_checkpoint_row("sha-1", "cp-1")];
+    let captured = vec!["sha-1".to_string(), "sha-2".to_string()];
+
+    assert_eq!(
+        captured_commit_shas_with_checkpoint_rows(&captured, &rows),
+        vec!["sha-1".to_string()]
+    );
+}
+
+#[test]
+fn checkpoint_ids_for_commit_sha_returns_all_matching_checkpoint_ids() {
+    let rows = vec![
+        sample_commit_checkpoint_row("sha-1", "cp-1"),
+        sample_commit_checkpoint_row("sha-1", "cp-2"),
+        sample_commit_checkpoint_row("sha-2", "cp-3"),
+    ];
+
+    assert_eq!(
+        checkpoint_ids_for_commit_sha(&rows, "sha-1"),
+        vec!["cp-1".to_string(), "cp-2".to_string()]
+    );
+}
+
+fn sample_knowledge_relation(
+    source_knowledge_item_id: &str,
+    target_type: &str,
+    target_id: &str,
+) -> KnowledgeRelationAssertionRecord {
+    KnowledgeRelationAssertionRecord {
+        knowledge_item_id: source_knowledge_item_id.to_string(),
+        target_type: target_type.to_string(),
+        target_id: target_id.to_string(),
+        relation_type: "associated_with".to_string(),
+        association_method: "manual_attachment".to_string(),
+    }
+}
+
+#[test]
+fn knowledge_relation_exists_for_target_requires_expected_source_and_target() {
+    let relations = vec![
+        sample_knowledge_relation("knowledge-alpha", "knowledge_item", "knowledge-beta"),
+        sample_knowledge_relation("knowledge-alpha", "commit", "abc123"),
+    ];
+
+    assert!(knowledge_relation_exists_for_target(
+        &relations,
+        "knowledge-alpha",
+        "knowledge_item",
+        "knowledge-beta"
+    ));
+    assert!(!knowledge_relation_exists_for_target(
+        &relations,
+        "knowledge-gamma",
+        "knowledge_item",
+        "knowledge-beta"
+    ));
+    assert!(!knowledge_relation_exists_for_target(
+        &relations,
+        "knowledge-alpha",
+        "knowledge_item",
+        "knowledge-gamma"
+    ));
+}
+
+#[test]
+fn parse_association_target_from_output_extracts_expected_target_id() {
+    let stdout = "Knowledge associated\n  relation assertion: rel-123\n  target: commit:abc123\n  relation: associated_with\n  method: manual_attachment\n";
+
+    assert_eq!(
+        parse_association_target_from_output(stdout, "commit"),
+        Some("abc123".to_string())
+    );
+    assert_eq!(
+        parse_association_target_from_output(stdout, "knowledge_item"),
+        None
+    );
+}
+
 #[test]
 fn expected_smoke_transcript_path_uses_agent_specific_locations() {
     let temp = tempfile::tempdir().expect("tempdir");

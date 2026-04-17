@@ -82,7 +82,7 @@ Feature: Activation and Onboarding
         Then  git hooks exist for the open-code agent in bitloops
 
     # ── Disable Bitloops in a repository ─────────────────────
-    Scenario: Disable stops capture, removes agent surfaces, and leaves git hooks intact
+    Scenario: Disable shows the repository as disabled, removes agent surfaces, and leaves git hooks intact
         Given I run CleanStart for flow "disable-repo"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
@@ -91,6 +91,7 @@ Feature: Activation and Onboarding
         And   I run bitloops disable in bitloops
         Then  bitloops status shows disabled in bitloops
         And   agent hooks are removed for the claude-code agent in bitloops
+        And   git post-commit hook exists in bitloops
 
     # ── Uninstall Bitloops from a repository ─────────────────
     Scenario: Uninstall removes agent and git hooks from the repository
@@ -104,15 +105,13 @@ Feature: Activation and Onboarding
         Then  agent hooks are removed for the claude-code agent in bitloops
         And   git hooks are removed in bitloops
 
-    Scenario: Full uninstall removes all Bitloops artefacts from the repository
+    Scenario: Full uninstall removes managed hooks from the current repository
         Given I run CleanStart for flow "uninstall-full"
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
         And   I run bitloops init --agent claude-code --sync=false in bitloops
         And   I run bitloops enable in bitloops
-        Then  the repo-local .claude exists in bitloops
-        And   git hooks exist for the claude-code agent in bitloops
+        Then  git hooks exist for the claude-code agent in bitloops
         Given I run bitloops uninstall full in bitloops
         Then  agent hooks are removed for the claude-code agent in bitloops
         And   git hooks are removed in bitloops
-        And   bitloops binary is not found

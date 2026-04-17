@@ -22,7 +22,7 @@ Feature: Knowledge ingestion rejection handling
     Then DevQL knowledge query returns at least 2 items in bitloops
     And knowledge item has provider "confluence" and source_kind "confluence_page" in bitloops
     Given I associate knowledge "alpha" to knowledge "beta" in bitloops
-    Then the command output contains "Knowledge associated" in bitloops
+    Then knowledge "alpha" is associated to knowledge "beta" in bitloops
 
   @devql @knowledge
   Scenario: Deterministic Confluence knowledge refresh creates a new version

@@ -41,7 +41,7 @@ Feature: Agent checkpoint capture flow
     And   I committed today in bitloops
     Then  checkpoint mapping count is at least 2 in bitloops
     And   commit_checkpoints count is at least 2 in bitloops
-    And   captured commit history is ordered in bitloops
+    And   checkpointed captured commits are ordered in bitloops
 
   @agents-checkpoints @agents-checkpoints-timeline
   Scenario: Single agent checkpoint timeline stays coherent across yesterday and today
@@ -53,8 +53,8 @@ Feature: Agent checkpoint capture flow
     And   I ask claude-code to "Add a divide function to src/lib.rs that divides two i32 numbers and add a test for it" in bitloops
     And   I committed today in bitloops
     Then  checkpoint mapping count is at least 2 in bitloops
-    And   captured commit history is ordered in bitloops
-    And   commit timeline and contents are correct in bitloops
+    And   checkpointed captured commits are ordered in bitloops
+    And   checkpoint timeline and contents are correct in bitloops
 
   @agents-checkpoints @agents-checkpoints-multi
   Scenario: Multiple agents can interleave checkpoint activity without breaking history order
@@ -72,6 +72,6 @@ Feature: Agent checkpoint capture flow
     And   I committed today in bitloops
     Then  checkpoint mapping count is at least 2 in bitloops
     And   commit_checkpoints count is at least 2 in bitloops
-    And   captured commit history is ordered in bitloops
+    And   checkpointed captured commits are ordered in bitloops
     And   claude-code session exists in bitloops
     And   cursor session exists in bitloops

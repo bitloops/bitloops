@@ -103,6 +103,32 @@ pub(super) fn then_repo_local_path_exists(
     })
 }
 
+pub(super) fn then_repo_local_path_missing(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let relative_path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "the repo-local path does not exist",
+            helpers::assert_file_missing_in_repo(world, &repo_name, &relative_path),
+        );
+    })
+}
+
+pub(super) fn then_global_runtime_artefacts_removed(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "global Bitloops runtime artefacts are removed",
+            helpers::assert_global_runtime_artefacts_removed(world),
+        );
+    })
+}
+
 pub(super) fn then_agent_hooks_exist(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -131,18 +157,6 @@ pub(super) fn then_agent_hooks_removed(
     })
 }
 
-pub(super) fn then_bitloops_binary_not_found(
-    world: &mut QatWorld,
-    _ctx: cucumber::step::Context,
-) -> LocalBoxFuture<'_, ()> {
-    Box::pin(async move {
-        run_step(
-            "bitloops binary is not found",
-            helpers::assert_bitloops_binary_removed(world),
-        );
-    })
-}
-
 pub(super) fn then_git_hooks_removed(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -152,6 +166,19 @@ pub(super) fn then_git_hooks_removed(
         run_step(
             "git hooks are removed",
             helpers::assert_git_hooks_removed(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_git_post_commit_hook_exists(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "git post-commit hook exists",
+            helpers::assert_git_post_commit_hook_installed(world, &repo_name),
         );
     })
 }
@@ -193,10 +220,23 @@ pub(super) fn then_commit_timeline_is_correct(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "commit timeline and contents are correct",
+            "checkpoint timeline and contents are correct",
             helpers::assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
                 world, &repo_name,
             ),
+        );
+    })
+}
+
+pub(super) fn then_git_timeline_is_correct(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "git timeline and contents are correct",
+            helpers::assert_relative_day_git_timeline_for_repo(world, &repo_name),
         );
     })
 }
@@ -208,7 +248,7 @@ pub(super) fn then_captured_commit_history_is_ordered(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "captured commit history is ordered",
+            "checkpointed captured commits are ordered",
             helpers::assert_captured_commit_history_is_ordered_for_repo(world, &repo_name),
         );
     })
@@ -873,12 +913,30 @@ pub(super) fn then_knowledge_provider_and_kind(
 
 pub(super) fn then_knowledge_has_commit_association(
     world: &mut QatWorld,
-    _ctx: cucumber::step::Context,
+    ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
         run_step(
             "knowledge item is associated to a commit",
-            helpers::assert_knowledge_item_has_commit_association(world),
+            helpers::assert_knowledge_item_has_commit_association(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_knowledge_associated_to_knowledge(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let source = ctx.matches[1].1.clone();
+        let target = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "knowledge is associated to knowledge",
+            helpers::assert_knowledge_item_associated_to_knowledge_item(
+                world, &repo_name, &source, &target,
+            ),
         );
     })
 }

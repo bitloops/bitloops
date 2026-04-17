@@ -5,6 +5,15 @@ const KNOWLEDGE_FIXTURE_BETA: &str = "beta";
 const KNOWLEDGE_FIXTURE_ALPHA_PAGE_ID: &str = "1001";
 const KNOWLEDGE_FIXTURE_BETA_PAGE_ID: &str = "1002";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KnowledgeRelationAssertionRecord {
+    knowledge_item_id: String,
+    target_type: String,
+    target_id: String,
+    relation_type: String,
+    association_method: String,
+}
+
 pub fn configure_deterministic_confluence_knowledge_fixtures_for_repo(
     world: &mut QatWorld,
     repo_name: &str,
@@ -219,13 +228,49 @@ pub fn assert_knowledge_item_provider_and_kind(
     Ok(())
 }
 
-pub fn assert_knowledge_item_has_commit_association(world: &QatWorld) -> Result<()> {
-    let has_association = world
-        .last_knowledge_add_had_commit_association
-        .ok_or_else(|| anyhow!("no knowledge add-with-commit state captured"))?;
+pub fn assert_knowledge_item_has_commit_association(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let source_knowledge_item_id = resolve_last_command_knowledge_item_id(world)?;
+    let target_commit_sha = world
+        .last_command_stdout
+        .as_deref()
+        .and_then(|stdout| parse_association_target_from_output(stdout, "commit"))
+        .or_else(|| resolve_head_sha(world).ok())
+        .ok_or_else(|| anyhow!("could not resolve commit association target SHA"))?;
+    let relations = load_knowledge_relation_assertions(world, repo_name)?;
     ensure!(
-        has_association,
-        "expected last knowledge add-with-commit to create a commit association"
+        knowledge_relation_exists_for_target(
+            &relations,
+            &source_knowledge_item_id,
+            "commit",
+            &target_commit_sha,
+        ),
+        "expected persisted commit association for knowledge item `{source_knowledge_item_id}` and commit `{target_commit_sha}`"
+    );
+    Ok(())
+}
+
+pub fn assert_knowledge_item_associated_to_knowledge_item(
+    world: &QatWorld,
+    repo_name: &str,
+    source_input: &str,
+    target_input: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let source_knowledge_item_id = resolve_knowledge_item_id_from_input(world, source_input)?;
+    let target_knowledge_item_id = resolve_knowledge_item_id_from_input(world, target_input)?;
+    let relations = load_knowledge_relation_assertions(world, repo_name)?;
+    ensure!(
+        knowledge_relation_exists_for_target(
+            &relations,
+            &source_knowledge_item_id,
+            "knowledge_item",
+            &target_knowledge_item_id,
+        ),
+        "expected persisted knowledge association from `{source_knowledge_item_id}` to `{target_knowledge_item_id}`"
     );
     Ok(())
 }
@@ -268,6 +313,93 @@ fn mirror_knowledge_item_id_for_alias(world: &mut QatWorld, alias: &str, url: &s
             .knowledge_items_by_url
             .insert(alias.to_string(), knowledge_item_id);
     }
+}
+
+fn load_knowledge_relation_assertions(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<Vec<KnowledgeRelationAssertionRecord>> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let conn = open_relational_connection(world)?;
+    let repo_id = resolve_repo_id(&conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT knowledge_item_id, target_type, target_id, relation_type, association_method
+             FROM knowledge_relation_assertions
+             WHERE repo_id = ?1
+             ORDER BY created_at DESC, relation_assertion_id DESC",
+        )
+        .context("preparing knowledge_relation_assertions query for QAT assertions")?;
+    let rows = stmt.query_map([repo_id.as_str()], |row| {
+        Ok(KnowledgeRelationAssertionRecord {
+            knowledge_item_id: row.get::<_, String>(0)?.trim().to_string(),
+            target_type: row.get::<_, String>(1)?.trim().to_string(),
+            target_id: row.get::<_, String>(2)?.trim().to_string(),
+            relation_type: row.get::<_, String>(3)?.trim().to_string(),
+            association_method: row.get::<_, String>(4)?.trim().to_string(),
+        })
+    })?;
+
+    rows.map(|row| row.map_err(anyhow::Error::from)).collect()
+}
+
+fn knowledge_relation_exists_for_target(
+    relations: &[KnowledgeRelationAssertionRecord],
+    source_knowledge_item_id: &str,
+    target_type: &str,
+    target_id: &str,
+) -> bool {
+    relations.iter().any(|relation| {
+        relation.knowledge_item_id == source_knowledge_item_id
+            && relation.target_type == target_type
+            && relation.target_id == target_id
+            && relation.relation_type == "associated_with"
+            && relation.association_method == "manual_attachment"
+    })
+}
+
+fn resolve_knowledge_item_id_from_input(world: &QatWorld, input: &str) -> Result<String> {
+    if let Some(knowledge_item_id) = input.strip_prefix("knowledge:") {
+        return Ok(knowledge_item_id.to_string());
+    }
+
+    world
+        .knowledge_items_by_url
+        .get(input)
+        .cloned()
+        .ok_or_else(|| anyhow!("no knowledge item id captured for `{input}`"))
+}
+
+fn resolve_last_command_knowledge_item_id(world: &QatWorld) -> Result<String> {
+    if let Some(stdout) = world.last_command_stdout.as_deref()
+        && let Some(knowledge_item_id) = parse_knowledge_item_id_from_output(stdout)
+    {
+        return Ok(knowledge_item_id);
+    }
+
+    let unique_ids = world
+        .knowledge_items_by_url
+        .values()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if unique_ids.len() == 1 {
+        return unique_ids
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("expected a captured knowledge item id"));
+    }
+
+    bail!("could not resolve the last knowledge item id from captured QAT state")
+}
+
+fn parse_association_target_from_output(stdout: &str, target_type: &str) -> Option<String> {
+    stdout.lines().find_map(|line| {
+        let raw = line.trim().strip_prefix("target:")?.trim();
+        let (actual_type, target_id) = raw.split_once(':')?;
+        (actual_type.trim() == target_type)
+            .then(|| target_id.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn fixture_confluence_page_url(base_url: &str, page_id: &str, title_slug: &str) -> String {

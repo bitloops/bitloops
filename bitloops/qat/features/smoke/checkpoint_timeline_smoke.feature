@@ -11,4 +11,4 @@ Feature: Bitloops checkpoint timeline smoke suite
     And I create a Vite app project in bitloops
     And I committed yesterday in bitloops
     And I committed today in bitloops
-    Then commit timeline and contents are correct in bitloops
+    Then git timeline and contents are correct in bitloops

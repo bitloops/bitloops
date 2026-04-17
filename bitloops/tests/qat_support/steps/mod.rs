@@ -581,13 +581,18 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^git hooks exist for the (\S+) agent in (\S+)$"),
-            step_fn(then_agent_hooks_exist),
+            regex(r"^the repo-local (.+) does not exist in (\S+)$"),
+            step_fn(then_repo_local_path_missing),
         )
         .then(
             None,
-            regex(r"^bitloops binary is not found$"),
-            step_fn(then_bitloops_binary_not_found),
+            regex(r"^global Bitloops runtime artefacts are removed$"),
+            step_fn(then_global_runtime_artefacts_removed),
+        )
+        .then(
+            None,
+            regex(r"^git hooks exist for the (\S+) agent in (\S+)$"),
+            step_fn(then_agent_hooks_exist),
         )
         .then(
             None,
@@ -601,6 +606,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^git post-commit hook exists in (\S+)$"),
+            step_fn(then_git_post_commit_hook_exists),
+        )
+        .then(
+            None,
             regex(r"^bitloops status shows disabled in (\S+)$"),
             step_fn(then_status_shows_disabled),
         )
@@ -611,12 +621,17 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^commit timeline and contents are correct in (\S+)$"),
+            regex(r"^checkpoint timeline and contents are correct in (\S+)$"),
             step_fn(then_commit_timeline_is_correct),
         )
         .then(
             None,
-            regex(r"^captured commit history is ordered in (\S+)$"),
+            regex(r"^git timeline and contents are correct in (\S+)$"),
+            step_fn(then_git_timeline_is_correct),
+        )
+        .then(
+            None,
+            regex(r"^checkpointed captured commits are ordered in (\S+)$"),
             step_fn(then_captured_commit_history_is_ordered),
         )
         .then(
@@ -828,6 +843,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^knowledge item is associated to a commit in (\S+)$"),
             step_fn(then_knowledge_has_commit_association),
+        )
+        .then(
+            None,
+            regex(r#"^knowledge \"([^\"]+)\" is associated to knowledge \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_knowledge_associated_to_knowledge),
         )
         .then(
             None,

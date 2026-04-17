@@ -509,13 +509,11 @@ pub fn assert_commit_checkpoints_count(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading commit-checkpoint mappings")?;
+    let rows = load_commit_checkpoint_rows(world, repo_name)?;
     ensure!(
-        mappings.len() >= min_count,
-        "expected commit_checkpoints count >= {min_count}, got {}",
-        mappings.len()
+        count_commit_checkpoint_rows(&rows) >= min_count,
+        "expected commit_checkpoints row count >= {min_count}, got {}",
+        count_commit_checkpoint_rows(&rows)
     );
     Ok(())
 }
