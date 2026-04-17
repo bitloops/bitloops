@@ -25,7 +25,7 @@ use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_i
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
-    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_local_policy_excluded,
+    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
     maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
     should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
 };
@@ -100,13 +100,12 @@ pub(super) async fn run_for_project_root(
             bail!("failed to persist telemetry consent");
         }
     }
-    ensure_repo_local_policy_excluded(&git_root, project_root)?;
-
     let selected_agents = if !args.agent.is_empty() {
         resolve_cli_agents(&args.agent)?
     } else {
         detect_or_select_agent(project_root, out, select_fn)?
     };
+    ensure_repo_init_files_excluded(&git_root, project_root, &selected_agents)?;
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
