@@ -2,8 +2,7 @@
 
 QAT runs as dedicated Rust integration test targets, executed via `cargo-nextest`. The legacy `qat_acceptance` target has been
 split into `qat`, `qat_smoke`, `qat_devql_capabilities`, `qat_devql_ingest`, `qat_devql_sync`, `qat_onboarding`, and
-`qat_agents_checkpoints`. The focused lane is `cargo qat-agents-checkpoints`; `cargo qat-quickstart` remains only as a temporary
-compatibility alias. The production binary no longer exposes a `qat` subcommand, and the repo aliases enable the dedicated
+`qat_agents_checkpoints`. The focused lane is `cargo qat-agents-checkpoints`. The production binary no longer exposes a `qat` subcommand, and the repo aliases enable the dedicated
 `qat-tests` feature automatically.
 
 ## Where to run from
@@ -108,9 +107,9 @@ cargo nextest run --features qat-tests --test qat_onboarding --run-ignored only 
 | 8   | Agent hooks — gemini                               | `agent-hooks-gemini`           |
 | 9   | Agent hooks — copilot                              | `agent-hooks-copilot`          |
 | 10  | Agent hooks — open-code                            | `agent-hooks-open-code`        |
-| 11  | Disable stops capture and status reflects disabled | `disable-repo`                 |
+| 11  | Disable shows the repository as disabled, removes agent surfaces, and leaves git hooks intact | `disable-repo`                 |
 | 12  | Uninstall removes agent and git hooks              | `uninstall-repo`               |
-| 13  | Full uninstall removes all artefacts               | `uninstall-full`               |
+| 13  | Full uninstall removes managed hooks from the current repository | `uninstall-full`               |
 
 ### 3. DevQL Sync (`cargo qat-devql-sync`, 23 scenarios)
 
@@ -130,28 +129,32 @@ Or equivalently:
 cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact
 ```
 
-**Active scenarios:**
+**Active coverage:**
 
-| #   | Scenario                                                                  | Flow                            |
-| --- | ------------------------------------------------------------------------- | ------------------------------- |
-| 1   | Full sync indexes workspace source files                                  | `SyncFullIndex`                 |
-| 2   | Sync materializes test-harness coverage for discovered tests              | `SyncTestHarnessPopulate`       |
-| 3   | Sync removes test-harness coverage when test files are deleted            | `SyncTestHarnessDeleteTestFile` |
-| 4   | Sync detects newly added source files                                     | `SyncNewFiles`                  |
-| 5   | Sync detects and re-indexes modified source files                         | `SyncModifiedFiles`             |
-| 6   | Sync removes artefacts for deleted source files                           | `SyncDeletedFiles`              |
-| 7   | No-op sync reports zero changes                                           | `SyncNoop`                      |
-| 8   | Sync after branch checkout reflects the new branch state                  | `SyncBranchCheckout`            |
-| 9   | Sync catches up after daemon downtime with accumulated changes            | `SyncDaemonDowntime`            |
-| 10  | Sync indexes changes introduced by git pull                               | `SyncGitPull`                   |
-| 11  | Sync validate reports clean after a full sync                             | `SyncValidateClean`             |
-| 12  | Sync repair restores clean state after drift                              | `SyncRepair`                    |
-| 13  | Init with sync=true makes immediate follow-up sync report no changes      | `SyncInitSyncTrueNoop`          |
-| 14  | Init with sync=true still allows incremental sync for new files           | `SyncInitSyncTrueIncremental`   |
-| 15  | Init with sync=true keeps sync validation clean without workspace changes | `SyncInitSyncTrueValidateClean` |
-
-The helper layer still supports negative drift assertions, and the active sync set now
-includes drift validation plus accumulated-drift coverage.
+- Core reconciliation (7 scenarios)
+  - full source indexing
+  - TestHarness coverage populate and delete
+  - add / modify / delete detection
+  - no-op sync
+- Git/workspace transitions (3 scenarios)
+  - branch checkout
+  - daemon downtime catch-up
+  - git pull catch-up
+- Validation and repair (4 scenarios)
+  - validate clean
+  - repair after drift
+  - drift detection after unreconciled changes
+  - accumulated drift expected-count reporting
+- Execution modes and queue control (5 scenarios)
+  - path-scoped sync
+  - explicit full sync
+  - `--require-daemon` failure handling
+  - task queue observability
+  - task queue pause / resume / cancel behavior
+- `init --sync=true` integration (3 scenarios)
+  - immediate follow-up no-op
+  - incremental sync after new files
+  - clean validation without further workspace changes
 
 ### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 24 scenarios)
 
@@ -241,8 +244,7 @@ cargo nextest run --features qat-tests --test qat_devql_ingest --run-ignored onl
 
 This focused lane is not part of `cargo qat`. It validates checkpoint capture directly:
 first checkpoint bootstrap, pre-commit interaction visibility, single-agent progression,
-relative-day timeline integrity, and multi-agent checkpoint ordering. `cargo qat-quickstart`
-remains as a temporary compatibility alias to the same suite.
+relative-day timeline integrity, and multi-agent checkpoint ordering.
 
 ```bash
 cargo qat-agents-checkpoints
@@ -264,8 +266,8 @@ cargo nextest run --features qat-tests --test qat_agents_checkpoints --run-ignor
 
 ## Runtime notes
 
-- Smoke uses deterministic simulated agent behavior for non-Claude agents rather than
-  depending on real external agent CLIs.
+- Smoke uses deterministic simulated agent behavior for non-Claude agents, and Claude can
+  fall back to deterministic simulation when the external CLI or auth flow is unavailable.
 - The semantic-clones lane uses a fake embeddings runtime on purpose; it is validating
   the deterministic offline path, not real local-model warm-cache behavior.
 - Most DevQL QAT flows now run through `bitloops devql tasks enqueue --kind ...`
@@ -287,10 +289,13 @@ scenario teardown hook.
 
 ## Artifacts and folder layout
 
-QAT writes run artifacts under:
+QAT writes run artifacts under `<current working directory>/target/qat-runs`.
 
-- `target/qat-runs` when running from `bitloops/`
-- `bitloops/target/qat-runs` when running from repository root with `--manifest-path bitloops/Cargo.toml`
+Common cases:
+
+- repository root: `target/qat-runs`
+- `bitloops/` crate directory: `target/qat-runs` in that directory
+  - absolute path: `<repo>/bitloops/target/qat-runs`
 
 Each QAT invocation creates one suite folder:
 
@@ -321,6 +326,11 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
 - `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from bundle-level scheduling under `cargo qat`, which runs onboarding + smoke in parallel and the DevQL suites serially)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
+- `BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS` (default `15`; generic eventual-wait timeout for persistence-backed assertions)
+- `BITLOOPS_QAT_TESTLENS_EVENTUAL_TIMEOUT_SECS` (default `15`; TestHarness query eventual window)
+- `BITLOOPS_QAT_SEMANTIC_CLONES_EVENTUAL_TIMEOUT_SECS` (default `60`; semantic-clone eventual window)
+- `BITLOOPS_QAT_DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_SECS` (default `60`; sync TestHarness capability-event wait timeout)
+- `BITLOOPS_QAT_DAEMON_PORT` (force the per-scenario daemon port instead of the deterministic allocator)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
 - `BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS` (default `300`)
 - `BITLOOPS_QAT_CLAUDE_CMD` (override Claude prompt command)
