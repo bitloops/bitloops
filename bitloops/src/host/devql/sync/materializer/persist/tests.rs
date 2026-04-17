@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use rusqlite::Connection;
 
-use super::load_current_edges_for_local_reconciliation_with_connection;
+use super::current_edges::load_current_edges_for_local_reconciliation_with_connection;
 
 fn setup_edges_table(connection: &Connection) {
     connection
