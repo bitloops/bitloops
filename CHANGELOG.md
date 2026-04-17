@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`bitloops init` now keeps repo-managed agent skill files out of git status**: after resolving the selected agents, init now adds the installed repo-local DevQL skill paths for Claude Code, Codex, Gemini CLI, Copilot CLI, and OpenCode to `.git/info/exclude` alongside `.bitloops.local.toml`. This prevents the managed skill files from showing up as untracked changes in repos that bootstrap agent guidance through `bitloops init`.
+
 ## [0.0.16] - 2026-04-17
 
 ### Fixed
