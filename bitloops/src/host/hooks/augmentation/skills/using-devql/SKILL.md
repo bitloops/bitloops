@@ -47,7 +47,7 @@ bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>" }) { 
 # Concrete artefacts for a known file or line range
 bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", lines: { start: <start>, end: <end> } }) { artefacts(first: 20) { path symbolFqn canonicalKind startLine endLine } } }'
 
-# Concrete callers once the symbol is known
+# Concrete callers/usages/imports once the symbol is known
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { items(first: 50) { edgeKind startLine endLine fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'
 
 # Discover the exact row fields for the chosen stage
