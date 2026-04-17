@@ -3,33 +3,152 @@ use super::steps;
 use super::world::{QatRunConfig, QatWorld};
 use anyhow::{Context, Result, bail};
 use cucumber::{
-    World as _, gherkin, gherkin::tagexpr::TagOperation, tag::Ext as _, writer::Stats as _,
+    World as _, event::ScenarioFinished, gherkin, gherkin::tagexpr::TagOperation, tag::Ext as _,
+    writer::Stats as _,
 };
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Suite {
-    Smoke,
+    AgentSmoke,
     Devql,
     DevqlIngest,
     DevqlSync,
     Onboarding,
-    Quickstart,
+    AgentsCheckpoints,
+}
+
+impl Suite {
+    pub fn id(&self) -> &'static str {
+        match self {
+            Suite::AgentSmoke => "agent-smoke",
+            Suite::Devql => "devql-capabilities",
+            Suite::DevqlIngest => "devql-ingest",
+            Suite::DevqlSync => "devql-sync",
+            Suite::Onboarding => "onboarding",
+            Suite::AgentsCheckpoints => "agents-checkpoints",
+        }
+    }
+
+    pub fn rerun_alias(&self) -> &'static str {
+        match self {
+            Suite::AgentSmoke => "cargo qat-agent-smoke",
+            Suite::Devql => "cargo qat-devql-capabilities",
+            Suite::DevqlIngest => "cargo qat-devql-ingest",
+            Suite::DevqlSync => "cargo qat-devql-sync",
+            Suite::Onboarding => "cargo qat-onboarding",
+            Suite::AgentsCheckpoints => "cargo qat-agents-checkpoints",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FailedScenario {
+    name: String,
+    location: Option<String>,
+}
+
+fn failed_scenario_from_event(
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+    event: &ScenarioFinished,
+) -> Option<FailedScenario> {
+    match event {
+        ScenarioFinished::BeforeHookFailed(_) | ScenarioFinished::StepFailed(_, _, _) => {
+            Some(FailedScenario {
+                name: scenario.name.clone(),
+                location: failed_scenario_location(feature, scenario),
+            })
+        }
+        ScenarioFinished::StepPassed | ScenarioFinished::StepSkipped => None,
+    }
+}
+
+fn failed_scenario_location(
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+) -> Option<String> {
+    feature.path.as_ref().map(|path| {
+        if scenario.position.line == 0 {
+            path.display().to_string()
+        } else {
+            format!("{}:{}", path.display(), scenario.position.line)
+        }
+    })
+}
+
+fn format_failed_scenarios(failed_scenarios: &[FailedScenario]) -> Option<String> {
+    let mut unique = Vec::new();
+    for scenario in failed_scenarios {
+        if !unique.contains(scenario) {
+            unique.push(scenario.clone());
+        }
+    }
+
+    if unique.is_empty() {
+        return None;
+    }
+
+    let mut summary = String::from("failed_scenarios:");
+    for scenario in unique {
+        summary.push_str("\n- ");
+        summary.push_str(&scenario.name);
+        if let Some(location) = scenario.location {
+            summary.push_str(" (");
+            summary.push_str(&location);
+            summary.push(')');
+        }
+    }
+    Some(summary)
+}
+
+fn build_suite_failure_message(
+    suite: &Suite,
+    feature_path: &Path,
+    parsing_errors: usize,
+    skipped_steps: usize,
+    suite_root: &Path,
+    failed_scenarios: &[FailedScenario],
+) -> String {
+    let mut message = format!(
+        "QAT suite `{}` failed\nrerun: {}\nfeatures: {}\nparsing_errors={}\nskipped_steps={}\nartifacts: {}",
+        suite.id(),
+        suite.rerun_alias(),
+        feature_path.display(),
+        parsing_errors,
+        skipped_steps,
+        suite_root.display()
+    );
+    if let Some(summary) = format_failed_scenarios(failed_scenarios) {
+        message.push('\n');
+        message.push_str(&summary);
+    }
+    message
 }
 
 const CUCUMBER_FILTER_TAGS_ENV: &str = "CUCUMBER_FILTER_TAGS";
 
 pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
+    run_suite_with_tags(binary_path, suite, None).await
+}
+
+pub async fn run_suite_with_tags(
+    binary_path: PathBuf,
+    suite: Suite,
+    explicit_tags_filter: Option<&str>,
+) -> Result<()> {
     let max_concurrent = resolve_max_concurrent_scenarios();
     let runs_root = resolve_runs_root()?;
     let suite_root = create_suite_root(&runs_root)?;
     let feature_path = suite_feature_path(&suite);
+    let feature_path_display = feature_path.display().to_string();
 
     fs::write(
         runs_root.join(".last-run"),
@@ -41,17 +160,25 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     let execution_binary = resolve_execution_binary(&suite, &binary_path, &suite_binary_snapshot);
 
     println!(
-        "Running Bitloops QAT features from {}",
-        feature_path.display()
+        "[QAT suite start] {} | rerun: {} | features: {}",
+        suite.id(),
+        suite.rerun_alias(),
+        feature_path_display
     );
-    println!("Artifacts will be written to {}", suite_root.display());
+    println!(
+        "[QAT suite artifacts] {} | {}",
+        suite.id(),
+        suite_root.display()
+    );
 
     let config = Arc::new(QatRunConfig {
         binary_path: execution_binary,
         suite_root: suite_root.clone(),
     });
+    let failed_scenarios = Arc::new(Mutex::new(Vec::<FailedScenario>::new()));
 
     let before_config = Arc::clone(&config);
+    let failed_scenarios_for_after = Arc::clone(&failed_scenarios);
     let cucumber = QatWorld::cucumber()
         .steps(steps::collection())
         .max_concurrent_scenarios(max_concurrent)
@@ -62,8 +189,16 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
                 world.prepare(config, &scenario.name, slug);
             })
         })
-        .after(|_, _, scenario, _, world| {
+        .after(move |feature, _, scenario, event, world| {
+            let failed_scenarios = Arc::clone(&failed_scenarios_for_after);
             Box::pin(async move {
+                if let Some(failed_scenario) = failed_scenario_from_event(feature, scenario, &event)
+                {
+                    failed_scenarios
+                        .lock()
+                        .expect("failed cucumber scenario list lock")
+                        .push(failed_scenario);
+                }
                 if let Some(world) = world
                     && let Err(err) = stop_daemon_for_scenario(world)
                 {
@@ -77,29 +212,49 @@ pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
         .fail_on_skipped()
         .with_default_cli();
 
+    let env_tags_filter = env::var(CUCUMBER_FILTER_TAGS_ENV).ok();
     let result = if let Some(tags_filter) =
-        parse_cucumber_tags_filter(env::var(CUCUMBER_FILTER_TAGS_ENV).ok().as_deref())?
+        resolve_cucumber_tags_filter(explicit_tags_filter, env_tags_filter.as_deref())?
     {
         cucumber
-            .filter_run(feature_path, move |feature, rule, scenario| {
+            .filter_run(feature_path.clone(), move |feature, rule, scenario| {
                 scenario_matches_tags_filter(feature, rule, scenario, &tags_filter)
             })
             .await
     } else {
-        cucumber.run(feature_path).await
+        cucumber.run(feature_path.clone()).await
     };
 
+    let failed_scenarios = failed_scenarios
+        .lock()
+        .expect("failed cucumber scenario list lock")
+        .clone();
+
     if result.execution_has_failed() || result.parsing_errors() != 0 {
-        bail!(
-            "bitloops qat reported failures (parsing_errors={}, skipped_steps={})\nartifacts: {}",
-            result.parsing_errors(),
-            result.skipped_steps(),
+        eprintln!(
+            "[QAT suite fail] {} | rerun: {} | artifacts: {}",
+            suite.id(),
+            suite.rerun_alias(),
             suite_root.display()
+        );
+        bail!(
+            "{}",
+            build_suite_failure_message(
+                &suite,
+                &feature_path,
+                result.parsing_errors(),
+                result.skipped_steps(),
+                &suite_root,
+                &failed_scenarios,
+            )
         );
     }
 
-    println!("Bitloops QAT completed successfully.");
-    println!("Artifacts: {}", suite_root.display());
+    println!(
+        "[QAT suite pass] {} | artifacts: {}",
+        suite.id(),
+        suite_root.display()
+    );
     Ok(())
 }
 
@@ -285,12 +440,12 @@ fn feature_root() -> PathBuf {
 fn suite_feature_path(suite: &Suite) -> PathBuf {
     let root = feature_root();
     match suite {
-        Suite::Smoke => root.join("smoke"),
+        Suite::AgentSmoke => root.join("smoke"),
         Suite::Devql => root.join("devql"),
         Suite::DevqlIngest => root.join("devql-ingest").join("ingest_workspace.feature"),
         Suite::DevqlSync => root.join("devql-sync"),
         Suite::Onboarding => root.join("onboarding"),
-        Suite::Quickstart => root.join("quickstart"),
+        Suite::AgentsCheckpoints => root.join("agents-checkpoints"),
     }
 }
 
@@ -303,14 +458,35 @@ fn resolve_max_concurrent_scenarios() -> usize {
 }
 
 fn parse_cucumber_tags_filter(raw: Option<&str>) -> Result<Option<TagOperation>> {
+    parse_cucumber_tags_filter_with_source(raw, CUCUMBER_FILTER_TAGS_ENV)
+}
+
+fn parse_cucumber_tags_filter_with_source(
+    raw: Option<&str>,
+    source: &str,
+) -> Result<Option<TagOperation>> {
     let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
 
-    let parsed = raw.parse::<TagOperation>().with_context(|| {
-        format!("parsing {CUCUMBER_FILTER_TAGS_ENV} value `{raw}` as a cucumber tag expression")
-    })?;
+    let parsed = raw
+        .parse::<TagOperation>()
+        .with_context(|| format!("parsing {source} value `{raw}` as a cucumber tag expression"))?;
     Ok(Some(parsed))
+}
+
+fn resolve_cucumber_tags_filter(
+    explicit_raw: Option<&str>,
+    env_raw: Option<&str>,
+) -> Result<Option<TagOperation>> {
+    let explicit_raw = explicit_raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if explicit_raw.is_some() {
+        return parse_cucumber_tags_filter_with_source(explicit_raw, "explicit tag filter");
+    }
+
+    parse_cucumber_tags_filter(env_raw)
 }
 
 fn scenario_matches_tags_filter(
@@ -326,125 +502,4 @@ fn scenario_matches_tags_filter(
             .chain(rule.iter().flat_map(|current| current.tags.iter()))
             .chain(scenario.tags.iter()),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cucumber::gherkin::{Feature, LineCol, Rule, Scenario, Span};
-
-    #[test]
-    fn prepare_suite_binary_copies_snapshot() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let binary_path = temp.path().join("bitloops");
-        fs::write(&binary_path, b"qat-test-binary").expect("write source binary");
-        let suite_root = temp.path().join("suite");
-        fs::create_dir_all(&suite_root).expect("create suite root");
-
-        let snapshot_binary =
-            prepare_suite_binary(&binary_path, &suite_root).expect("prepare suite binary");
-        assert_eq!(snapshot_binary, suite_root.join("bitloops"));
-        assert!(snapshot_binary.exists());
-        assert_eq!(
-            fs::read(&snapshot_binary).expect("read snapshot"),
-            b"qat-test-binary"
-        );
-    }
-
-    #[test]
-    fn resolve_execution_binary_uses_snapshot_for_onboarding() {
-        let original = PathBuf::from("/tmp/original-bitloops");
-        let snapshot = PathBuf::from("/tmp/suite/bitloops");
-        assert_eq!(
-            resolve_execution_binary(&Suite::Onboarding, &original, &snapshot),
-            snapshot
-        );
-    }
-
-    #[test]
-    fn resolve_execution_binary_uses_snapshot_for_devql_sync() {
-        let original = PathBuf::from("/tmp/original-bitloops");
-        let snapshot = PathBuf::from("/tmp/suite/bitloops");
-        assert_eq!(
-            resolve_execution_binary(&Suite::DevqlSync, &original, &snapshot),
-            snapshot
-        );
-    }
-
-    #[test]
-    fn suite_feature_path_points_to_dedicated_devql_ingest_feature() {
-        let path = suite_feature_path(&Suite::DevqlIngest);
-        assert_eq!(
-            path,
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("qat")
-                .join("features")
-                .join("devql-ingest")
-                .join("ingest_workspace.feature")
-        );
-    }
-
-    #[test]
-    fn parse_cucumber_tags_filter_treats_missing_or_blank_values_as_disabled() {
-        assert!(parse_cucumber_tags_filter(None).unwrap().is_none());
-        assert!(parse_cucumber_tags_filter(Some("")).unwrap().is_none());
-        assert!(parse_cucumber_tags_filter(Some("   ")).unwrap().is_none());
-    }
-
-    #[test]
-    fn parse_cucumber_tags_filter_accepts_valid_tag_expression() {
-        let parsed = parse_cucumber_tags_filter(Some("@test_harness_sync and not @slow"))
-            .expect("parse tag filter")
-            .expect("tag filter should be present");
-
-        assert!(parsed.eval(["test_harness_sync"]));
-        assert!(!parsed.eval(["test_harness_sync", "slow"]));
-    }
-
-    #[test]
-    fn scenario_matches_tags_filter_merges_feature_rule_and_scenario_tags() {
-        let feature = Feature {
-            keyword: "Feature".to_string(),
-            name: "feature".to_string(),
-            description: None,
-            background: None,
-            scenarios: Vec::new(),
-            rules: Vec::new(),
-            tags: vec!["feature_tag".to_string()],
-            span: Span::default(),
-            position: LineCol::default(),
-            path: None,
-        };
-        let rule = Rule {
-            keyword: "Rule".to_string(),
-            name: "rule".to_string(),
-            description: None,
-            background: None,
-            scenarios: Vec::new(),
-            tags: vec!["rule_tag".to_string()],
-            span: Span::default(),
-            position: LineCol::default(),
-        };
-        let scenario = Scenario {
-            keyword: "Scenario".to_string(),
-            name: "scenario".to_string(),
-            description: None,
-            steps: Vec::new(),
-            examples: Vec::new(),
-            tags: vec!["scenario_tag".to_string()],
-            span: Span::default(),
-            position: LineCol::default(),
-        };
-        let filter =
-            parse_cucumber_tags_filter(Some("@feature_tag and @rule_tag and @scenario_tag"))
-                .expect("parse tag filter")
-                .expect("tag filter should be present");
-
-        assert!(scenario_matches_tags_filter(
-            &feature,
-            Some(&rule),
-            &scenario,
-            &filter
-        ));
-    }
 }

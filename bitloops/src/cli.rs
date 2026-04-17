@@ -26,6 +26,7 @@ pub(crate) mod telemetry_consent;
 pub(crate) mod terminal_picker;
 pub mod uninstall;
 pub mod versioncheck;
+pub(crate) mod watcher_bootstrap;
 
 /// Bitloops CLI
 #[derive(Parser)]

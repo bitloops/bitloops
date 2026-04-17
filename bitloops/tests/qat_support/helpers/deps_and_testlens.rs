@@ -110,7 +110,7 @@ pub fn add_new_caller_of_symbol(world: &mut QatWorld, symbol_alias: &str) -> Res
     };
     fs::write(&file_path, content).with_context(|| format!("writing {}", file_path.display()))?;
 
-    run_devql_ingest_for_repo(world, BITLOOPS_REPO_NAME)
+    enqueue_devql_ingest_task_with_status_for_repo(world, BITLOOPS_REPO_NAME)
 }
 
 pub fn assert_devql_deps_query(
@@ -269,7 +269,7 @@ fn count_deps_for_symbol(
 pub fn assert_devql_artefacts_count_stable(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let count_first = count_artefacts_across_source_files(world)?;
-    run_devql_ingest_for_repo(world, repo_name)?;
+    enqueue_devql_ingest_task_with_status_for_repo(world, repo_name)?;
     let count_second = count_artefacts_across_source_files(world)?;
     ensure!(
         count_first == count_second,
@@ -509,13 +509,11 @@ pub fn assert_commit_checkpoints_count(
     min_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let mappings =
-        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-            .context("reading commit-checkpoint mappings")?;
+    let rows = load_commit_checkpoint_rows(world, repo_name)?;
     ensure!(
-        mappings.len() >= min_count,
-        "expected commit_checkpoints count >= {min_count}, got {}",
-        mappings.len()
+        count_commit_checkpoint_rows(&rows) >= min_count,
+        "expected commit_checkpoints row count >= {min_count}, got {}",
+        count_commit_checkpoint_rows(&rows)
     );
     Ok(())
 }

@@ -43,7 +43,21 @@ impl SqliteConnectionPool {
                 Err(err) => Err(err).context("executing SQLite ended_at migration"),
             }
         })
-        .context("migrating SQLite checkpoint schema for sessions.ended_at")
+        .context("migrating SQLite checkpoint schema for sessions.ended_at")?;
+        self.with_connection(|conn| {
+            if !sqlite_table_exists(conn, "repo_watcher_registrations")?
+                || sqlite_table_has_column(conn, "repo_watcher_registrations", "state")?
+            {
+                return Ok(());
+            }
+
+            conn.execute_batch(
+                "ALTER TABLE repo_watcher_registrations
+                 ADD COLUMN state TEXT NOT NULL DEFAULT 'ready';",
+            )
+            .context("executing SQLite repo_watcher_registrations.state migration")
+        })
+        .context("migrating SQLite checkpoint schema for repo_watcher_registrations.state")
     }
 
     pub fn initialise_relational_checkpoint_schema(&self) -> Result<()> {

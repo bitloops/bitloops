@@ -28,6 +28,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run InitCommit without post-commit refresh for (\S+)$"),
+            step_fn(given_init_commit_without_post_commit_refresh),
+        )
+        .given(
+            None,
             regex(r"^I ran InitCommit yesterday for (\S+)$"),
             step_fn(given_init_commit_yesterday),
         )
@@ -113,6 +118,25 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r#"^I ask Claude Code to "([^"]+)" in (\S+)$"#),
             step_fn(given_claude_code_prompt),
         )
+        .when(
+            None,
+            regex(r#"^I ask Claude Code to "([^"]+)" in (\S+)$"#),
+            step_fn(given_claude_code_prompt),
+        )
+        .given(
+            None,
+            regex(
+                r#"^I ask (claude-code|cursor|gemini|copilot|codex|opencode|open-code) to "([^"]+)" in (\S+)$"#,
+            ),
+            step_fn(given_supported_agent_prompt),
+        )
+        .when(
+            None,
+            regex(
+                r#"^I ask (claude-code|cursor|gemini|copilot|codex|opencode|open-code) to "([^"]+)" in (\S+)$"#,
+            ),
+            step_fn(given_supported_agent_prompt),
+        )
         .given(
             None,
             regex(r"^I make a second change using Claude Code to (\S+)$"),
@@ -128,7 +152,17 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I committed yesterday in (\S+)$"),
             step_fn(given_commit_yesterday),
         )
+        .when(
+            None,
+            regex(r"^I committed yesterday in (\S+)$"),
+            step_fn(given_commit_yesterday),
+        )
         .given(
+            None,
+            regex(r"^I committed today in (\S+)$"),
+            step_fn(given_commit_today),
+        )
+        .when(
             None,
             regex(r"^I committed today in (\S+)$"),
             step_fn(given_commit_today),
@@ -140,18 +174,28 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run DevQL ingest in (\S+)$"),
-            step_fn(given_devql_ingest),
+            regex(r"^I enable watcher autostart in (\S+)$"),
+            step_fn(given_enable_watcher_autostart),
+        )
+        .given(
+            None,
+            regex(r"^I enqueue DevQL ingest task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_with_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL ingest in (\S+)$"),
-            step_fn(given_devql_ingest),
+            regex(r"^I enqueue DevQL ingest task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_with_status),
         )
         .then(
             None,
-            regex(r"^I run DevQL ingest in (\S+)$"),
-            step_fn(given_devql_ingest),
+            regex(r"^I enqueue DevQL ingest task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_with_status),
+        )
+        .given(
+            None,
+            regex(r"^I enqueue DevQL ingest task with backfill (\d+) and status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_with_backfill_and_status),
         )
         .given(
             None,
@@ -297,48 +341,113 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync),
+            regex(r"^I enqueue DevQL sync task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_with_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync),
+            regex(r"^I enqueue DevQL sync task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_with_status),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync without status in (\S+)$"),
-            step_fn(given_devql_sync_without_status),
+            regex(r"^I enqueue DevQL sync task without status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_without_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync without status in (\S+)$"),
-            step_fn(given_devql_sync_without_status),
+            regex(r"^I enqueue DevQL sync task without status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_task_without_status),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_validate),
+            regex(r"^I enqueue DevQL ingest task without status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_without_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync validate(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_validate),
+            regex(r"^I enqueue DevQL ingest task without status in (\S+)$"),
+            step_fn(given_enqueue_devql_ingest_task_without_status),
         )
         .given(
             None,
-            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_repair),
+            regex(r#"^I enqueue DevQL sync task with paths \"([^\"]+)\" and status in (\S+)$"#),
+            step_fn(given_enqueue_devql_sync_task_with_paths_and_status),
+        )
+        .given(
+            None,
+            regex(r"^I enqueue DevQL full sync task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_full_sync_task_with_status),
+        )
+        .given(
+            None,
+            regex(r"^I enqueue DevQL sync validate task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_validate_task_with_status),
         )
         .when(
             None,
-            regex(r"^I run DevQL sync repair(?: --status)? in (\S+)$"),
-            step_fn(given_devql_sync_repair),
+            regex(r"^I enqueue DevQL sync validate task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_validate_task_with_status),
         )
         .given(
             None,
-            regex(r"^I attempt to run DevQL sync in (\S+)$"),
-            step_fn(given_attempt_devql_sync),
+            regex(r"^I enqueue DevQL sync repair task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_repair_task_with_status),
+        )
+        .when(
+            None,
+            regex(r"^I enqueue DevQL sync repair task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_sync_repair_task_with_status),
+        )
+        .given(
+            None,
+            regex(r"^I attempt to enqueue DevQL sync task in (\S+)$"),
+            step_fn(given_attempt_to_enqueue_devql_sync_task),
+        )
+        .given(
+            None,
+            regex(r"^I attempt to enqueue DevQL sync task with require-daemon in (\S+)$"),
+            step_fn(given_attempt_to_enqueue_devql_sync_task_require_daemon),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL tasks status in (\S+)$"),
+            step_fn(given_run_devql_tasks_status),
+        )
+        .given(
+            None,
+            regex(r"^I wait for the DevQL task queue to become idle in (\S+)$"),
+            step_fn(given_wait_for_devql_task_queue_idle),
+        )
+        .given(
+            None,
+            regex(r"^I run DevQL tasks list in (\S+)$"),
+            step_fn(given_run_devql_tasks_list),
+        )
+        .given(
+            None,
+            regex(r#"^I run DevQL tasks list for status \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_run_devql_tasks_list_for_status),
+        )
+        .given(
+            None,
+            regex(r"^I watch the last DevQL task in (\S+)$"),
+            step_fn(given_watch_last_devql_task),
+        )
+        .given(
+            None,
+            regex(r#"^I pause the DevQL task queue with reason \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_pause_devql_tasks_with_reason),
+        )
+        .given(
+            None,
+            regex(r"^I resume the DevQL task queue in (\S+)$"),
+            step_fn(given_resume_devql_tasks),
+        )
+        .given(
+            None,
+            regex(r"^I cancel the last DevQL task in (\S+)$"),
+            step_fn(given_cancel_last_devql_task),
         )
         .given(
             None,
@@ -347,8 +456,23 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r#"^I add a source file \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_add_source_file_at_path),
+        )
+        .given(
+            None,
             regex(r"^I modify an existing source file in (\S+)$"),
             step_fn(given_modify_existing_source_file),
+        )
+        .given(
+            None,
+            regex(r#"^I modify a source file \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_modify_source_file_at_path),
+        )
+        .given(
+            None,
+            regex(r#"^I snapshot current-state content ids for \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_current_file_state_content_ids),
         )
         .given(
             None,
@@ -407,6 +531,21 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I configure deterministic Confluence knowledge fixtures in (\S+)$"),
+            step_fn(given_configure_deterministic_confluence_knowledge_fixtures),
+        )
+        .given(
+            None,
+            regex(r#"^I add fixture knowledge \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_fixture_knowledge_add),
+        )
+        .given(
+            None,
+            regex(r#"^I refresh fixture knowledge \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_fixture_knowledge_refresh),
+        )
+        .given(
+            None,
             regex(r#"^I attempt to add knowledge URL \"([^\"]+)\" in (\S+)$"#),
             step_fn(given_knowledge_add_expect_failure),
         )
@@ -452,13 +591,18 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^git hooks exist for the (\S+) agent in (\S+)$"),
-            step_fn(then_agent_hooks_exist),
+            regex(r"^the repo-local (.+) does not exist in (\S+)$"),
+            step_fn(then_repo_local_path_missing),
         )
         .then(
             None,
-            regex(r"^bitloops binary is not found$"),
-            step_fn(then_bitloops_binary_not_found),
+            regex(r"^global Bitloops runtime artefacts are removed$"),
+            step_fn(then_global_runtime_artefacts_removed),
+        )
+        .then(
+            None,
+            regex(r"^git hooks exist for the (\S+) agent in (\S+)$"),
+            step_fn(then_agent_hooks_exist),
         )
         .then(
             None,
@@ -472,6 +616,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^git post-commit hook exists in (\S+)$"),
+            step_fn(then_git_post_commit_hook_exists),
+        )
+        .then(
+            None,
             regex(r"^bitloops status shows disabled in (\S+)$"),
             step_fn(then_status_shows_disabled),
         )
@@ -482,13 +631,30 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
-            regex(r"^commit timeline and contents are correct in (\S+)$"),
+            regex(r"^checkpoint timeline and contents are correct in (\S+)$"),
             step_fn(then_commit_timeline_is_correct),
+        )
+        .then(
+            None,
+            regex(r"^git timeline and contents are correct in (\S+)$"),
+            step_fn(then_git_timeline_is_correct),
+        )
+        .then(
+            None,
+            regex(r"^checkpointed captured commits are ordered in (\S+)$"),
+            step_fn(then_captured_commit_history_is_ordered),
         )
         .then(
             None,
             regex(r"^claude-code session exists in (\S+)$"),
             step_fn(then_claude_session_exists),
+        )
+        .then(
+            None,
+            regex(
+                r"^(claude-code|cursor|gemini|copilot|codex|opencode|open-code) interaction exists before commit in (\S+)$",
+            ),
+            step_fn(then_agent_interaction_exists_before_commit),
         )
         .then(
             None,
@@ -690,8 +856,43 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r#"^knowledge \"([^\"]+)\" is associated to knowledge \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_knowledge_associated_to_knowledge),
+        )
+        .then(
+            None,
             regex(r#"^knowledge versions for \"([^\"]+)\" shows exactly (\d+) versions? in (\S+)$"#),
             step_fn(then_knowledge_versions_count),
+        )
+        .then(
+            None,
+            regex(r"^DevQL task id is captured in (\S+)$"),
+            step_fn(then_devql_task_id_captured),
+        )
+        .then(
+            None,
+            regex(r#"^the last DevQL task kind is \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_last_devql_task_kind_is),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL task queue state is \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_task_queue_state),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL task queue pause reason is \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_task_queue_pause_reason),
+        )
+        .then(
+            None,
+            regex(r"^DevQL tasks list includes the last task in (\S+)$"),
+            step_fn(then_devql_tasks_list_includes_last_task),
+        )
+        .then(
+            None,
+            regex(r#"^the last DevQL task has status \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_last_devql_task_has_status),
         )
         .then(
             None,
@@ -750,6 +951,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^expected paths have file_state rows for expected SHAs in (\S+)$"),
+            step_fn(then_expected_paths_have_file_state_rows_for_expected_shas),
+        )
+        .then(
+            None,
             regex(r"^exact expected SHAs were newly completed since snapshot in (\S+)$"),
             step_fn(then_exact_expected_shas_newly_completed_since_snapshot),
         )
@@ -777,6 +983,31 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r#"^artefacts_current contains path \"([^\"]+)\" in (\S+)$"#),
             step_fn(then_artefacts_current_contains_path),
+        )
+        .given(
+            None,
+            regex(r#"^artefacts_current does not contain path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_lacks_path),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current does not contain path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_lacks_path),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current eventually contains path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_contains_path_eventually),
+        )
+        .then(
+            None,
+            regex(r#"^current-state content id for \"([^\"]+)\" changed since snapshot in (\S+)$"#),
+            step_fn(then_current_file_state_content_id_changed_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^current-state content id for \"([^\"]+)\" is unchanged since snapshot in (\S+)$"#),
+            step_fn(then_current_file_state_content_id_unchanged_since_snapshot),
         )
         .then(
             None,

@@ -32,6 +32,30 @@ pub struct RepoWatcherRegistration {
     pub repo_root: PathBuf,
     pub pid: u32,
     pub restart_token: String,
+    pub state: RepoWatcherRegistrationState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RepoWatcherRegistrationState {
+    Pending,
+    Ready,
+}
+
+impl RepoWatcherRegistrationState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Ready => "ready",
+        }
+    }
+
+    pub(crate) fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "ready" => Some(Self::Ready),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

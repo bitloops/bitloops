@@ -554,29 +554,20 @@ export function buildSnapshotAuditDigest(snapshot: string, workspaceId: string):
 
 pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let output = run_command_capture(
-        world,
-        "bitloops devql tasks enqueue --kind ingest --status",
-        build_bitloops_command(
-            world,
-            &["devql", "tasks", "enqueue", "--kind", "ingest", "--status"],
-        )?,
-    )?;
-    ensure_success(&output, "bitloops devql tasks enqueue --kind ingest --status")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    enqueue_devql_ingest_task_with_status_for_repo(world, repo_name)?;
+    let stdout = world.last_command_stdout.as_deref().unwrap_or("");
     let semantic_rows = extract_ingest_metric(&stdout, "semantic_feature_rows_upserted=")
         .ok_or_else(|| {
             anyhow!(
-                "bitloops devql tasks enqueue --kind ingest --status completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
+                "DevQL ingest task enqueue with status completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
             )
         })?;
     let clone_edges = extract_ingest_metric(&stdout, "symbol_clone_edges_upserted=");
-    run_devql_sync_for_repo(world, repo_name)?;
+    enqueue_devql_sync_task_with_status_for_repo(world, repo_name)?;
     wait_for_semantic_clone_enrichments_to_drain(world, repo_name)?;
     let store_snapshot = wait_for_semantic_clone_store_snapshot(world).with_context(|| {
         format!(
-            "bitloops devql tasks enqueue --kind ingest --status reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
+            "DevQL ingest task enqueue with status reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
         )
     })?;
     let table_snapshot = load_semantic_clone_table_snapshot(world)?;
