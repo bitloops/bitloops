@@ -40,8 +40,8 @@ pub(crate) async fn resolve_repo_root_from_repo_id(
         .await
         .map_err(|err| map_resolve_repository_error(repo_id, err))?;
 
-    repository
-        .repo_root()
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("repository checkout unknown for `{repo_id}`")))
+    repository.repo_root().cloned().ok_or_else(|| {
+        log::error!("repository checkout unknown for `{repo_id}`");
+        ApiError::not_found(format!("repository checkout unknown for `{repo_id}`"))
+    })
 }

@@ -263,6 +263,7 @@ impl DevqlTaskCoordinator {
     pub(super) fn finish_task_failed(&self, task_id: &str, err: anyhow::Error) -> Result<()> {
         let task_id = task_id.to_string();
         let error = format!("{err:#}");
+        let mut task_context: Option<(String, String, DevqlTaskKind, DevqlTaskSource)> = None;
         self.mutate_state(|state| {
             let Some(task) = state.tasks.iter_mut().find(|task| task.task_id == task_id) else {
                 return Ok(());
@@ -274,10 +275,27 @@ impl DevqlTaskCoordinator {
             task.error = Some(error.clone());
             task.result = None;
             task.progress = failed_progress(&task.progress);
+            task_context = Some((
+                task.task_id.clone(),
+                task.repo_id.clone(),
+                task.kind,
+                task.source,
+            ));
             state.last_action = Some("failed".to_string());
             Ok(())
         })
-        .map(|_: ()| ())
+        .map(|_: ()| ())?;
+        if let Some((task_id, repo_id, kind, source)) = task_context {
+            log::error!(
+                "DevQL task failed: id={} repo={} kind={} source={} error={}",
+                task_id,
+                repo_id,
+                kind,
+                source,
+                error
+            );
+        }
+        Ok(())
     }
 
     pub(super) fn has_blocking_scope_exclusion_reconcile(&self, repo_id: &str) -> Result<bool> {

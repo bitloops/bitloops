@@ -33,6 +33,16 @@ fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::Process
             Some(args.config_path.clone()),
             args.service_name.clone(),
         )),
+        cli::Commands::DevqlWatcher(args) => Some(daemon::ProcessLogContext::watcher(
+            args.daemon_config_root
+                .as_deref()
+                .map(|config_root| config_root.join(config::BITLOOPS_CONFIG_RELATIVE_PATH))
+                .or_else(|| {
+                    args.repo_root.as_deref().and_then(|repo_root| {
+                        config::resolve_daemon_config_path_for_repo(repo_root).ok()
+                    })
+                }),
+        )),
         cli::Commands::DaemonSupervisor(_) => Some(daemon::ProcessLogContext::supervisor()),
         cli::Commands::Start(args) => Some(daemon::ProcessLogContext::daemon_cli(
             if args.until_stopped {
@@ -89,11 +99,30 @@ fn command_handles_ctrl_c(command: Option<&cli::Commands>) -> bool {
     )
 }
 
+fn command_requires_persistent_daemon_logging(command: Option<&cli::Commands>) -> bool {
+    match command {
+        Some(cli::Commands::DevqlWatcher(_))
+        | Some(cli::Commands::DaemonProcess(_))
+        | Some(cli::Commands::DaemonSupervisor(_)) => true,
+        Some(cli::Commands::Start(args)) => args.detached || args.until_stopped,
+        Some(cli::Commands::Daemon(args)) => matches!(
+            args.command.as_ref(),
+            Some(cli::daemon::DaemonCommand::Start(start)) if start.detached || start.until_stopped
+        ),
+        _ => false,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let cmd = cli::Cli::parse();
     if let Some(context) = daemon_log_context(cmd.command.as_ref()) {
-        if let Err(err) = daemon::init_process_logger(context) {
+        let require_log_file = command_requires_persistent_daemon_logging(cmd.command.as_ref());
+        if let Err(err) = daemon::init_process_logger(context, require_log_file) {
+            if require_log_file {
+                eprintln!("Error: failed to initialize required daemon logger: {err:#}");
+                std::process::exit(1);
+            }
             eprintln!("[bitloops] Warning: failed to initialize daemon logger: {err:#}");
             init_standard_logger();
         }
@@ -273,5 +302,120 @@ tls = true
         let command = serde_json::to_value(&context).expect("serialize process log context");
         assert_eq!(command["process"], "daemon_cli");
         assert_eq!(command["mode"], "start_detached");
+    }
+
+    #[test]
+    fn daemon_log_context_uses_watcher_process_for_internal_watcher_command() {
+        let parsed = Cli::parse_from([
+            "bitloops",
+            "__devql-watcher",
+            "--repo-root",
+            "/tmp/repo",
+            "--daemon-config-root",
+            "/tmp/config-root",
+        ]);
+        let Some(context) = daemon_log_context(parsed.command.as_ref()) else {
+            panic!("expected watcher log context");
+        };
+        let command = serde_json::to_value(&context).expect("serialize process log context");
+        assert_eq!(command["process"], "watcher");
+        assert_eq!(command["mode"], "watcher");
+        assert_eq!(command["config_path"], "/tmp/config-root/config.toml");
+    }
+
+    #[test]
+    fn daemon_logger_init_policy_requires_persistent_logging_for_internal_background_commands() {
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "__devql-watcher",
+            "--repo-root",
+            "/tmp/repo",
+            "--daemon-config-root",
+            "/tmp/config-root",
+        ])
+        .expect("internal watcher should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "__daemon-process",
+            "--config-path",
+            "/tmp/bitloops.toml",
+            "--mode",
+            "detached",
+        ])
+        .expect("internal detached daemon process should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "__daemon-process",
+            "--config-path",
+            "/tmp/bitloops.toml",
+            "--mode",
+            "service",
+        ])
+        .expect("internal service daemon process should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed = Cli::try_parse_from(["bitloops", "__daemon-supervisor"])
+            .expect("internal daemon supervisor should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+    }
+
+    #[test]
+    fn daemon_logger_init_policy_requires_persistent_logging_for_detached_and_service_starts() {
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "start", "-d"])
+            .expect("daemon detached start should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "start", "--until-stopped"])
+            .expect("daemon service start should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed = Cli::try_parse_from(["bitloops", "start", "-d"])
+            .expect("root detached start should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed = Cli::try_parse_from(["bitloops", "start", "--until-stopped"])
+            .expect("root service start should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+    }
+
+    #[test]
+    fn daemon_logger_init_policy_allows_fallback_for_foreground_and_non_daemon_commands() {
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "start"])
+            .expect("daemon foreground start should parse");
+        assert!(!super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed = Cli::try_parse_from(["bitloops", "daemon", "status"])
+            .expect("daemon status should parse");
+        assert!(!super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
+        let parsed =
+            Cli::try_parse_from(["bitloops", "version"]).expect("version command should parse");
+        assert!(!super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
     }
 }

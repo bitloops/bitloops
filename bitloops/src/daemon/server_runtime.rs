@@ -110,7 +110,9 @@ pub(super) async fn run_server(
         Ok(())
     });
     let on_shutdown = std::sync::Arc::new(move || {
-        let _ = delete_runtime_state();
+        if let Err(err) = delete_runtime_state() {
+            log::warn!("failed to clear daemon runtime state on shutdown: {err:#}");
+        }
     });
 
     api::run_with_options(
@@ -240,14 +242,24 @@ pub(super) fn install_or_update_repo_service_binding(
 
 pub(super) fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) -> Result<()> {
     if let Some(runtime) = read_runtime_state(repo_root)? {
-        let current = current_binary_fingerprint().unwrap_or_default();
+        let current = match current_binary_fingerprint() {
+            Ok(fingerprint) => fingerprint,
+            Err(err) => {
+                log::warn!(
+                    "failed to determine current daemon binary fingerprint while checking repo runtime state: {err:#}"
+                );
+                String::new()
+            }
+        };
         if !runtime.binary_fingerprint.is_empty()
             && !current.is_empty()
             && runtime.binary_fingerprint != current
             && !matches!(runtime.mode, DaemonMode::Service)
         {
             terminate_process(runtime.pid)?;
-            let _ = delete_runtime_state();
+            if let Err(err) = delete_runtime_state() {
+                log::warn!("failed to clear stale daemon runtime state before restart: {err:#}");
+            }
         } else {
             bail!(
                 "Bitloops daemon is already running for this repository at {}. Use `bitloops daemon restart` if you need to replace it.",
@@ -256,10 +268,20 @@ pub(super) fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) ->
         }
     }
 
+    let supervisor_running = match supervisor_available() {
+        Ok(running) => running,
+        Err(err) => {
+            log::warn!(
+                "failed to determine daemon supervisor availability while checking repo runtime state: {err:#}"
+            );
+            false
+        }
+    };
+
     if !allow_stopped_service
         && let Some(metadata) = read_service_metadata(repo_root)?
         && metadata.service_name == GLOBAL_SUPERVISOR_SERVICE_NAME
-        && supervisor_available().unwrap_or(false)
+        && supervisor_running
     {
         bail!(
             "Bitloops daemon is already running as an always-on service ({}) for this repository.",

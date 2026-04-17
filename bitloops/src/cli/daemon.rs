@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use serde_json::Value;
 use tokio::{sync::mpsc, task};
 
 use crate::api::DashboardServerConfig;
@@ -29,7 +30,7 @@ const LOG_FOLLOW_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const TAIL_SCAN_BLOCK_SIZE: usize = 8 * 1024;
 
 pub use args::{
-    DaemonArgs, DaemonCommand, DaemonLogsArgs, DaemonRestartArgs, DaemonStartArgs,
+    DaemonArgs, DaemonCommand, DaemonLogLevel, DaemonLogsArgs, DaemonRestartArgs, DaemonStartArgs,
     DaemonStatusArgs, DaemonStopArgs, EnrichmentArgs, EnrichmentCommand, EnrichmentPauseArgs,
     EnrichmentResumeArgs, EnrichmentRetryFailedArgs, EnrichmentStatusArgs,
     MISSING_SUBCOMMAND_MESSAGE,
@@ -349,12 +350,15 @@ where
 
     ensure_log_file_exists(&log_path)?;
     let tail_lines = args.tail.unwrap_or(DEFAULT_LOG_TAIL_LINES);
-    for line in read_tail_lines(log_path.clone(), tail_lines).await? {
-        writeln!(out, "{line}").context("writing daemon log output")?;
-    }
+    write_filtered_log_lines(
+        out,
+        read_tail_lines(log_path.clone(), tail_lines).await?,
+        &args.levels,
+    )?;
     out.flush().context("flushing daemon log output")?;
     if args.follow {
-        follow_log_file_until_shutdown(&log_path, out, shutdown, poll_interval).await?;
+        follow_log_file_until_shutdown(&log_path, out, shutdown, poll_interval, args.levels)
+            .await?;
     }
     Ok(())
 }
@@ -512,6 +516,49 @@ async fn read_tail_lines(path: std::path::PathBuf, lines: usize) -> Result<Vec<S
         .context("joining daemon log tail task")?
 }
 
+fn write_filtered_log_lines(
+    out: &mut dyn Write,
+    lines: Vec<String>,
+    levels: &[DaemonLogLevel],
+) -> Result<()> {
+    for line in lines {
+        if !should_emit_log_line(&line, levels) {
+            continue;
+        }
+
+        writeln!(out, "{line}").context("writing daemon log output")?;
+    }
+    Ok(())
+}
+
+fn should_emit_log_line(line: &str, levels: &[DaemonLogLevel]) -> bool {
+    if levels.is_empty() {
+        return true;
+    }
+
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    let Some(level) = value.get("level").and_then(Value::as_str) else {
+        return false;
+    };
+
+    let Some(level) = parse_log_level_value(level) else {
+        return false;
+    };
+    levels.contains(&level)
+}
+
+fn parse_log_level_value(value: &str) -> Option<DaemonLogLevel> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "DEBUG" => Some(DaemonLogLevel::Debug),
+        "INFO" => Some(DaemonLogLevel::Info),
+        "WARN" | "WARNING" => Some(DaemonLogLevel::Warn),
+        "ERROR" => Some(DaemonLogLevel::Error),
+        _ => None,
+    }
+}
+
 fn tail_log_file(path: &Path, lines: usize) -> Result<Vec<String>> {
     if lines == 0 {
         return Ok(Vec::new());
@@ -592,6 +639,7 @@ async fn follow_log_file_until_shutdown<S>(
     out: &mut dyn Write,
     shutdown: S,
     poll_interval: Duration,
+    levels: Vec<DaemonLogLevel>,
 ) -> Result<()>
 where
     S: Future<Output = ()>,
@@ -604,6 +652,9 @@ where
         follow_log_file(
             &path,
             |chunk| {
+                if !should_emit_log_line(chunk, &levels) {
+                    return Ok(());
+                }
                 tx.send(chunk.to_owned())
                     .map_err(|_| anyhow::anyhow!("daemon log follow channel closed"))?;
                 Ok(())

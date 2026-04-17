@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use rusqlite::Connection;
 
-use super::load_current_edges_for_local_reconciliation_with_connection;
+use super::current_edges::load_current_edges_for_local_reconciliation_with_connection;
 
 fn setup_edges_table(connection: &Connection) {
     connection
@@ -111,7 +111,7 @@ fn load_current_edges_for_local_reconciliation_only_fetches_relevant_rows() {
 }
 
 #[test]
-fn load_current_edges_for_local_reconciliation_escapes_like_wildcards_in_touched_paths() {
+fn load_current_edges_for_local_reconciliation_matches_touched_paths_exactly() {
     let connection = Connection::open_in_memory().expect("open in-memory sqlite");
     setup_edges_table(&connection);
 
@@ -143,4 +143,43 @@ fn load_current_edges_for_local_reconciliation_escapes_like_wildcards_in_touched
         .map(|edge| edge.edge_id)
         .collect::<Vec<_>>();
     assert_eq!(edge_ids, vec!["resolved-exact".to_string()]);
+}
+
+#[test]
+fn load_current_edges_for_local_reconciliation_handles_large_touched_path_sets() {
+    let connection = Connection::open_in_memory().expect("open in-memory sqlite");
+    setup_edges_table(&connection);
+
+    insert_edge(
+        &connection,
+        "resolved-large-set",
+        Some("helper-symbol"),
+        Some("src/utils.ts::helper"),
+        "typescript",
+    );
+    insert_edge(
+        &connection,
+        "resolved-untouched",
+        Some("other-symbol"),
+        Some("src/other.ts::helper"),
+        "typescript",
+    );
+
+    let mut touched_paths = (0..1_200)
+        .map(|index| format!("src/generated_{index}.ts"))
+        .collect::<HashSet<_>>();
+    touched_paths.insert("src/utils.ts".to_string());
+
+    let rows = load_current_edges_for_local_reconciliation_with_connection(
+        &connection,
+        "repo",
+        &touched_paths,
+    )
+    .expect("load current reconciliation edges for a large touched path set");
+
+    let edge_ids = rows
+        .into_iter()
+        .map(|edge| edge.edge_id)
+        .collect::<Vec<_>>();
+    assert_eq!(edge_ids, vec!["resolved-large-set".to_string()]);
 }
