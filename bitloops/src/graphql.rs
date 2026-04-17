@@ -187,6 +187,11 @@ pub(crate) async fn slim_graphql_handler(
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
+        log::error!(
+            "devql slim GraphQL request failed to register repo checkout: repo_root={} branch={:?} error={err:#}",
+            scope.repo_root.display(),
+            scope.branch_name
+        );
         let response = graphql_error_response(err).into_response();
         track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),
@@ -344,6 +349,11 @@ pub(crate) async fn slim_graphql_ws_handler(
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
+        log::error!(
+            "devql slim GraphQL websocket failed to register repo checkout: repo_root={} branch={:?} error={err:#}",
+            scope.repo_root.display(),
+            scope.branch_name
+        );
         let response = graphql_error_response(err).into_response();
         track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),

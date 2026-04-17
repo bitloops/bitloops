@@ -41,13 +41,6 @@ impl DaemonLogSink {
         Ok(())
     }
 
-    fn rotate_after_append(&mut self) -> io::Result<()> {
-        if active_file_len(&self.log_path).map_err(to_io_error)? > DAEMON_LOG_ROTATION_BYTES {
-            self.rotate()?;
-        }
-        Ok(())
-    }
-
     fn rotate(&mut self) -> io::Result<()> {
         self.file_mut()?.flush()?;
         let current_file = self
@@ -69,8 +62,7 @@ impl DaemonLogSink {
 
     fn append(&mut self, buf: &[u8]) -> io::Result<()> {
         self.rotate_before_append(buf.len())?;
-        self.file_mut()?.write_all(buf)?;
-        self.rotate_after_append()
+        self.file_mut()?.write_all(buf)
     }
 
     fn file_mut(&mut self) -> io::Result<&mut File> {
@@ -270,5 +262,39 @@ mod tests {
         assert_eq!(read_file(&archive_path(temp.path(), 4)), "archive-3\n");
         assert_eq!(read_file(&archive_path(temp.path(), 5)), "archive-4\n");
         assert!(!archive_path(temp.path(), 6).exists());
+    }
+
+    #[test]
+    fn daemon_log_sink_keeps_oversized_append_in_active_file_until_next_write() {
+        let temp = TempDir::new().expect("temp dir");
+        let current_log = log_path(temp.path());
+        let archive_1 = archive_path(temp.path(), 1);
+        let oversized_entry = vec![b'x'; DAEMON_LOG_ROTATION_BYTES as usize + 1];
+
+        let mut sink = open_daemon_log_sink(&current_log).expect("open daemon log sink");
+        sink.write_all(&oversized_entry)
+            .expect("write oversized daemon log entry");
+        sink.flush().expect("flush oversized daemon log entry");
+
+        assert_eq!(
+            fs::metadata(&current_log)
+                .expect("active daemon log metadata")
+                .len(),
+            oversized_entry.len() as u64
+        );
+        assert!(!archive_1.exists());
+
+        sink.write_all(b"next-entry\n")
+            .expect("write rollover boundary daemon log entry");
+        sink.flush()
+            .expect("flush rollover boundary daemon log entry");
+
+        assert_eq!(
+            fs::metadata(&archive_1)
+                .expect("rotated daemon log archive metadata")
+                .len(),
+            oversized_entry.len() as u64
+        );
+        assert_eq!(read_file(&current_log), "next-entry\n");
     }
 }

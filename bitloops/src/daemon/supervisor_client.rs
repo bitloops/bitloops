@@ -4,7 +4,15 @@ const SUPERVISOR_READY_REQUEST_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub(super) async fn ensure_supervisor_available() -> Result<SupervisorRuntimeState> {
     let metadata = install_or_update_supervisor_service()?;
-    let current = current_binary_fingerprint().unwrap_or_default();
+    let current = match current_binary_fingerprint() {
+        Ok(fingerprint) => fingerprint,
+        Err(err) => {
+            log::warn!(
+                "failed to determine current daemon binary fingerprint while checking supervisor runtime: {err:#}"
+            );
+            String::new()
+        }
+    };
     if let Some(runtime) = read_supervisor_runtime_state()?
         && supervisor_http_ready(&runtime).await
         && (runtime.binary_fingerprint == current || current.is_empty())

@@ -313,6 +313,14 @@ fn daemon_logs_cli_rejects_conflicting_path_flags() {
 }
 
 #[test]
+fn daemon_logs_cli_rejects_level_with_path_flag() {
+    let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--level", "error"])
+        .err()
+        .expect("daemon logs should reject --path with --level");
+    assert!(err.to_string().contains("--path"));
+}
+
+#[test]
 fn daemon_logs_cli_rejects_lines_flag() {
     let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--lines", "5"])
         .err()

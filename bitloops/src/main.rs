@@ -33,6 +33,11 @@ fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::Process
             Some(args.config_path.clone()),
             args.service_name.clone(),
         )),
+        cli::Commands::DevqlWatcher(args) => Some(daemon::ProcessLogContext::watcher(
+            args.repo_root
+                .as_deref()
+                .and_then(|repo_root| config::resolve_daemon_config_path_for_repo(repo_root).ok()),
+        )),
         cli::Commands::DaemonSupervisor(_) => Some(daemon::ProcessLogContext::supervisor()),
         cli::Commands::Start(args) => Some(daemon::ProcessLogContext::daemon_cli(
             if args.until_stopped {
@@ -91,7 +96,9 @@ fn command_handles_ctrl_c(command: Option<&cli::Commands>) -> bool {
 
 fn command_requires_persistent_daemon_logging(command: Option<&cli::Commands>) -> bool {
     match command {
-        Some(cli::Commands::DaemonProcess(_)) | Some(cli::Commands::DaemonSupervisor(_)) => true,
+        Some(cli::Commands::DevqlWatcher(_))
+        | Some(cli::Commands::DaemonProcess(_))
+        | Some(cli::Commands::DaemonSupervisor(_)) => true,
         Some(cli::Commands::Start(args)) => args.detached || args.until_stopped,
         Some(cli::Commands::Daemon(args)) => matches!(
             args.command.as_ref(),
@@ -293,7 +300,38 @@ tls = true
     }
 
     #[test]
+    fn daemon_log_context_uses_watcher_process_for_internal_watcher_command() {
+        let parsed = Cli::parse_from([
+            "bitloops",
+            "__devql-watcher",
+            "--repo-root",
+            "/tmp/repo",
+            "--daemon-config-root",
+            "/tmp/config-root",
+        ]);
+        let Some(context) = daemon_log_context(parsed.command.as_ref()) else {
+            panic!("expected watcher log context");
+        };
+        let command = serde_json::to_value(&context).expect("serialize process log context");
+        assert_eq!(command["process"], "watcher");
+        assert_eq!(command["mode"], "watcher");
+    }
+
+    #[test]
     fn daemon_logger_init_policy_requires_persistent_logging_for_internal_background_commands() {
+        let parsed = Cli::try_parse_from([
+            "bitloops",
+            "__devql-watcher",
+            "--repo-root",
+            "/tmp/repo",
+            "--daemon-config-root",
+            "/tmp/config-root",
+        ])
+        .expect("internal watcher should parse");
+        assert!(super::command_requires_persistent_daemon_logging(
+            parsed.command.as_ref()
+        ));
+
         let parsed = Cli::try_parse_from([
             "bitloops",
             "__daemon-process",

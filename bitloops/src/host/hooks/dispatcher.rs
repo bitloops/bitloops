@@ -493,6 +493,19 @@ where
     let result = handler();
     clear_current_hook_agent_name();
 
+    if let Err(err) = result.as_ref() {
+        logging::warn(
+            &ctx,
+            "hook failed",
+            &[
+                logging::string_attr("hook", hook_name),
+                logging::string_attr("hook_type", hook_type),
+                logging::string_attr("strategy", strategy_name),
+                logging::string_attr("error", &format!("{err:#}")),
+            ],
+        );
+    }
+
     logging::log_duration(
         &ctx,
         logging::LogLevel::Debug,
@@ -942,3 +955,7 @@ fn read_stdin() -> Result<String> {
 #[cfg(test)]
 #[path = "dispatcher_telemetry_tests.rs"]
 mod telemetry_tests;
+
+#[cfg(test)]
+#[path = "dispatcher_logging_tests.rs"]
+mod logging_tests;

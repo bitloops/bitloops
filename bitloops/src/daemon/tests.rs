@@ -4,6 +4,7 @@ use crate::config::{
     ENV_DAEMON_CONFIG_PATH_OVERRIDE, bootstrap_default_daemon_environment, load_daemon_settings,
     persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
+use crate::test_support::log_capture::capture_logs_async;
 use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
 
@@ -33,6 +34,51 @@ fn write_daemon_config(config_root: &Path, content: &str) -> PathBuf {
     fs::create_dir_all(parent).expect("create config parent");
     fs::write(&config_path, content).expect("write daemon config");
     config_path
+}
+
+#[tokio::test]
+async fn daemon_lifecycle_logs_terminal_start_failure() {
+    let temp = TempDir::new().expect("temp dir");
+    let missing_config = temp.path().join("missing-config.toml");
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+
+    let (result, logs) = capture_logs_async(run_internal_process(InternalDaemonProcessArgs {
+        config_path: missing_config,
+        mode: DaemonProcessModeArg::Detached,
+        service_name: None,
+        host: None,
+        port: crate::api::DEFAULT_DASHBOARD_PORT,
+        http: false,
+        recheck_local_dashboard_net: false,
+        bundle_dir: None,
+        telemetry: None,
+    }))
+    .await;
+
+    assert!(
+        result.is_err(),
+        "missing config should fail daemon process start"
+    );
+    assert!(
+        logs.iter().any(|entry| entry.level == log::Level::Error
+            && entry.message.contains("daemon process start failed")),
+        "expected lifecycle owner to log terminal start failure, got logs: {logs:?}"
+    );
+}
+
+#[tokio::test]
+async fn daemon_lifecycle_logs_terminal_restart_failure() {
+    let temp = TempDir::new().expect("temp dir");
+    let _guard = enter_process_state(Some(temp.path()), &[]);
+
+    let (result, logs) = capture_logs_async(restart(None)).await;
+
+    assert!(result.is_err(), "restart without runtime should fail");
+    assert!(
+        logs.iter().any(|entry| entry.level == log::Level::Error
+            && entry.message.contains("daemon restart failed")),
+        "expected lifecycle owner to log terminal restart failure, got logs: {logs:?}"
+    );
 }
 
 #[test]

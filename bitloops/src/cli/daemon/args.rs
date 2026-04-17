@@ -147,7 +147,7 @@ pub struct DaemonLogsArgs {
     pub follow: bool,
 
     /// Print the daemon log file path and exit.
-    #[arg(long, default_value_t = false, conflicts_with_all = ["follow", "tail"])]
+    #[arg(long, default_value_t = false, conflicts_with_all = ["follow", "tail", "levels"])]
     pub path: bool,
 }
 

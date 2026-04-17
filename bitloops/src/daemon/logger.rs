@@ -72,6 +72,15 @@ impl ProcessLogContext {
             service_name: Some(super::GLOBAL_SUPERVISOR_SERVICE_NAME.to_string()),
         }
     }
+
+    pub fn watcher(config_path: Option<PathBuf>) -> Self {
+        Self {
+            process: "watcher",
+            mode: "watcher",
+            config_path,
+            service_name: None,
+        }
+    }
 }
 
 pub fn daemon_log_file_path() -> PathBuf {
