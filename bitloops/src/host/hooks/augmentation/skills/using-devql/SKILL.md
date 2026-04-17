@@ -1,9 +1,9 @@
 ---
 name: using-devql
 description: >
-  Use when understanding code structure, resolving artefacts in a file or line
-  range, finding callers/usages/imports/tests/checkpoints, or answering
-  architecture questions in a repo.
+  Use when understanding code structure, resolving artefacts by path or line
+  range, finding callers/usages/imports/tests/checkpoints/clones/dependencies,
+  or answering architecture questions in a repo with DevQL enabled.
 ---
 
 # Using DevQL
@@ -11,13 +11,16 @@ description: >
 ## Prime Directive
 
 This repo has DevQL, a semantic code index. For code understanding and repo
-exploration, use DevQL first before broad repo search, file reads, or
-directory crawling.
+exploration, you MUST use DevQL first before falling back to broad repo search,
+file reads, or directory crawling.
 
 Use `summary` only for first-pass orientation when you do not yet know whether
 the selector matched anything or which stage to expand. If the artefact or
 question is already known, query concrete rows with `artefacts(first: ...)` or
 stage `items(first: ...)`.
+
+If DevQL returns no useful artefacts or stage rows, fall back to targeted repo
+search or file reads.
 
 ## Use DevQL When
 
@@ -30,9 +33,10 @@ stage `items(first: ...)`.
 ## Agent Flow
 
 1. Select the target with `symbolFqn`, `path`, or `path + lines`.
-2. Ask for `summary` if you need orientation or to discover which stage to expand.
+2. Ask for `summary` only if you need orientation or to discover which stage to expand.
 3. Rerun with `artefacts(first: ...)` or the relevant stage `items(first: ...)`.
 4. Return the concrete rows. Summaries are optional follow-up, not substitutes.
+5. If DevQL returns nothing useful, fall back to targeted repo search or file reads.
 
 ## Sandbox Execution
 
@@ -55,7 +59,7 @@ bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { dep
 # Discover the exact row fields for the chosen stage
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { schema } } }'
 
-bitloops devql schema --global
+bitloops devql schema
 ```
 
 ## Do Not Use DevQL For
