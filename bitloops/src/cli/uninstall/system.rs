@@ -95,6 +95,7 @@ pub(super) fn uninstall_binaries(
 ) -> Result<()> {
     let candidates = binary_candidates()?;
     let mut removed = 0usize;
+    let runtime_candidates = duckdb_runtime_candidates(&candidates);
 
     for candidate in candidates {
         if !candidate.exists() {
@@ -104,6 +105,17 @@ pub(super) fn uninstall_binaries(
         fs::remove_file(&candidate)
             .with_context(|| format!("removing binary {}", candidate.display()))?;
         writeln!(out, "  Removed binary {}", candidate.display())?;
+        removed += 1;
+    }
+
+    for candidate in runtime_candidates {
+        if !candidate.exists() {
+            continue;
+        }
+
+        fs::remove_file(&candidate)
+            .with_context(|| format!("removing DuckDB runtime {}", candidate.display()))?;
+        writeln!(out, "  Removed DuckDB runtime {}", candidate.display())?;
         removed += 1;
     }
 
@@ -185,6 +197,25 @@ pub(super) fn known_binary_candidates() -> Result<Vec<PathBuf>> {
     }
 
     Ok(candidates.into_iter().collect())
+}
+
+fn duckdb_runtime_candidates(binary_candidates: &[PathBuf]) -> Vec<PathBuf> {
+    let runtime_name = if cfg!(windows) {
+        "duckdb.dll"
+    } else if cfg!(target_os = "macos") {
+        "libduckdb.dylib"
+    } else {
+        "libduckdb.so"
+    };
+
+    let mut candidates = BTreeSet::new();
+    for binary_candidate in binary_candidates {
+        if let Some(parent) = binary_candidate.parent() {
+            candidates.insert(parent.join(runtime_name));
+        }
+    }
+
+    candidates.into_iter().collect()
 }
 
 fn remove_dir_if_exists(path: &Path) -> Result<bool> {

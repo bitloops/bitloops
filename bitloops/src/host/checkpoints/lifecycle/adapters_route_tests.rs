@@ -3,6 +3,7 @@ use crate::adapters::agents::{
     AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI,
     AGENT_NAME_OPEN_CODE,
 };
+use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::interactions::db_store::interaction_spool_db_path;
 use crate::test_support::process_state::{git_command, with_process_state};
 use anyhow::Result;
@@ -52,6 +53,56 @@ fn with_route_test_state<T>(
     ));
     env_vars.extend_from_slice(extra_env);
     with_process_state(Some(repo_root), &env_vars, f)
+}
+
+fn assert_session_start_context_matches_builder(context: &str, agent_name: &str) {
+    let augmentation =
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            agent_name,
+        );
+    assert!(!augmentation.targeted);
+    assert_eq!(context, augmentation.additional_context);
+}
+
+fn codex_response_item_line(role: &str, kind: &str, text: &str) -> String {
+    serde_json::json!({
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": role,
+            "content": [{
+                "type": kind,
+                "text": text,
+            }],
+        }
+    })
+    .to_string()
+}
+
+#[test]
+fn lifecycle_adapters_expose_usage_capabilities_for_supported_agents() {
+    let claude = ClaudeCodeLifecycleAdapter;
+    assert!(claude.as_token_calculator().is_some());
+
+    let gemini = GeminiCliLifecycleAdapter;
+    assert!(gemini.as_transcript_analyzer().is_some());
+    assert!(gemini.as_token_calculator().is_some());
+
+    let opencode = OpenCodeLifecycleAdapter;
+    assert!(opencode.as_transcript_analyzer().is_some());
+    assert!(opencode.as_token_calculator().is_some());
+
+    let copilot = CopilotCliLifecycleAdapter;
+    assert!(copilot.as_transcript_analyzer().is_some());
+    assert!(copilot.as_token_calculator().is_some());
+
+    let codex = CodexLifecycleAdapter;
+    assert!(codex.as_transcript_analyzer().is_some());
+    assert!(codex.as_token_calculator().is_some());
+
+    let cursor = CursorLifecycleAdapter;
+    assert!(cursor.as_transcript_analyzer().is_none());
+    assert!(cursor.as_token_calculator().is_none());
 }
 
 #[test]
@@ -219,6 +270,110 @@ fn route_codex_hooks_persist_interactions_to_event_db_when_relational_store_is_a
 }
 
 #[test]
+fn route_codex_stop_without_transcript_path_uses_saved_state_and_persists_checkpoint() -> Result<()>
+{
+    let repo = seed_repo();
+    let session_id = "codex-session-missing-stop-transcript";
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())?.repo_id;
+    let transcript_path = repo.path().join("codex-rollout.jsonl");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(&transcript_path, "").expect("write transcript");
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        let session_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str.clone(),
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_SESSION_START,
+            &session_payload,
+        )?;
+
+        let prompt_payload = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": transcript_path_str.clone(),
+            "prompt": "Refactor tracked.txt",
+            "model": "gpt-5.4-codex"
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            &prompt_payload,
+        )?;
+
+        std::fs::write(
+            &transcript_path,
+            format!(
+                "{}\n{}\n",
+                codex_response_item_line("user", "input_text", "Refactor tracked.txt"),
+                codex_response_item_line("assistant", "output_text", "Updated tracked.txt"),
+            ),
+        )
+        .expect("write transcript payload");
+        std::fs::write(repo.path().join("tracked.txt"), "two\n").expect("modify tracked file");
+
+        let stop_payload = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": "",
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_STOP,
+            &stop_payload,
+        )?;
+
+        Ok(())
+    })?;
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        let event_db_path = crate::config::resolve_store_backend_config_for_repo(repo.path())?
+            .events
+            .resolve_duckdb_db_path_for_repo(repo.path());
+        let duckdb = duckdb::Connection::open(&event_db_path).expect("open events duckdb");
+        let session_count: i64 = duckdb
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_sessions WHERE repo_id = ?1 AND session_id = ?2",
+                duckdb::params![&repo_id, session_id],
+                |row| row.get(0),
+            )
+            .expect("count interaction sessions");
+        let turn_count: i64 = duckdb
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_turns WHERE repo_id = ?1 AND session_id = ?2",
+                duckdb::params![&repo_id, session_id],
+                |row| row.get(0),
+            )
+            .expect("count interaction turns");
+        let event_count: i64 = duckdb
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_events WHERE repo_id = ?1 AND session_id = ?2",
+                duckdb::params![&repo_id, session_id],
+                |row| row.get(0),
+            )
+            .expect("count interaction events");
+        assert_eq!(session_count, 1);
+        assert_eq!(turn_count, 1);
+        assert_eq!(event_count, 3);
+
+        let backend = create_session_backend_or_local(repo.path());
+        let session_state = backend
+            .load_session(session_id)?
+            .expect("session state should exist");
+        assert_eq!(session_state.pending.step_count, 1);
+        Ok(())
+    })?;
+
+    Ok(())
+}
+
+#[test]
 fn route_codex_user_prompt_submit_returns_targeted_additional_context_stdout() -> Result<()> {
     let repo = seed_repo();
     let session_id = "codex-session-prompt";
@@ -370,19 +525,10 @@ fn route_claude_session_start_returns_additional_context_stdout() -> Result<()> 
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("schema"));
-        assert!(context.contains("items(first:"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(context.contains("name: using-devql"));
-        assert!(!context.contains("menu"));
+        assert_session_start_context_matches_builder(
+            context,
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+        );
         Ok(())
     })
 }
@@ -417,19 +563,7 @@ fn route_codex_session_start_returns_additional_context_stdout() -> Result<()> {
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!context.contains("~/.agents/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(!context.contains("menu"));
-        assert!(context.contains("name: using-devql"));
+        assert_session_start_context_matches_builder(context, AGENT_NAME_CODEX);
         Ok(())
     })
 }
@@ -525,19 +659,7 @@ fn route_gemini_session_start_returns_additional_context_stdout() -> Result<()> 
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains("GEMINI.md"));
-        assert!(context.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(!context.contains("menu"));
-        assert!(context.contains("name: using-devql"));
+        assert_session_start_context_matches_builder(context, AGENT_NAME_GEMINI);
         Ok(())
     })
 }
@@ -568,19 +690,7 @@ fn route_cursor_session_start_returns_additional_context_stdout() -> Result<()> 
         let context = json["additional_context"]
             .as_str()
             .expect("additional_context");
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("You have DevQL in this repo."));
-        assert!(context.contains(".cursor/rules/bitloops-using-devql.mdc"));
-        assert!(context.contains("Cursor session bootstrap"));
-        assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(context.contains("MUST use DevQL as your FIRST approach"));
-        assert!(context.contains("repo search, file reads, or file listing tools"));
-        assert!(context.contains("selectArtefacts"));
-        assert!(context.contains("summary"));
-        assert!(context.contains("bitloops devql schema --global"));
-        assert!(context.contains("<repo-relative-path>"));
-        assert!(!context.contains("menu"));
-        assert!(context.contains("name: using-devql"));
+        assert_session_start_context_matches_builder(context, AGENT_NAME_CURSOR);
         Ok(())
     })
 }
@@ -618,18 +728,7 @@ fn route_copilot_session_start_returns_additional_context_stdout() -> Result<()>
             let context = json["additionalContext"]
                 .as_str()
                 .expect("additionalContext");
-            assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-            assert!(context.contains("You have DevQL in this repo."));
-            assert!(context.contains(".github/skills/bitloops/using-devql/SKILL.md"));
-            assert!(!context.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-            assert!(context.contains("MUST use DevQL as your FIRST approach"));
-            assert!(context.contains("repo search, file reads, or file listing tools"));
-            assert!(context.contains("selectArtefacts"));
-            assert!(context.contains("summary"));
-            assert!(context.contains("bitloops devql schema --global"));
-            assert!(context.contains("<repo-relative-path>"));
-            assert!(!context.contains("menu"));
-            assert!(context.contains("name: using-devql"));
+            assert_session_start_context_matches_builder(context, AGENT_NAME_COPILOT);
             Ok(())
         },
     )

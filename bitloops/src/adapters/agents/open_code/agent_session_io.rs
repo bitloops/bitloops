@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use uuid::Uuid;
 
-use crate::adapters::agents::TokenUsage;
+use crate::adapters::agents::{TokenCalculator, TokenUsage, TranscriptAnalyzer};
 
 use super::agent_api::OpenCodeAgent;
 use super::cli_commands::{run_opencode_import, run_opencode_session_delete};
@@ -164,6 +164,37 @@ impl OpenCodeAgent {
         drop(temp_file);
 
         run_opencode_import(temp_file_path.to_string_lossy().as_ref())
+    }
+}
+
+impl TranscriptAnalyzer for OpenCodeAgent {
+    fn get_transcript_position(&self, path: &str) -> Result<usize> {
+        OpenCodeAgent::get_transcript_position(self, path)
+    }
+
+    fn extract_modified_files_from_offset(
+        &self,
+        path: &str,
+        start_offset: usize,
+    ) -> Result<(Vec<String>, usize)> {
+        OpenCodeAgent::extract_modified_files_from_offset(self, path, start_offset)
+    }
+
+    fn extract_prompts(&self, session_ref: &str, from_offset: usize) -> Result<Vec<String>> {
+        OpenCodeAgent::extract_prompts(self, session_ref, from_offset)
+    }
+
+    fn extract_summary(&self, session_ref: &str) -> Result<String> {
+        OpenCodeAgent::extract_summary(self, session_ref)
+    }
+}
+
+impl TokenCalculator for OpenCodeAgent {
+    fn calculate_token_usage(&self, session_ref: &str, from_offset: usize) -> Result<TokenUsage> {
+        Ok(
+            OpenCodeAgent::calculate_token_usage(self, session_ref, from_offset)?
+                .unwrap_or_default(),
+        )
     }
 }
 

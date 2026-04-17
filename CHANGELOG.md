@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.0.16] - 2026-04-17
+
+### Fixed
+
+- **Interaction GraphQL date filters now treat equivalent UTC offsets as the same instant**: interaction browse and search filters no longer fall back to raw string ordering after successfully parsing RFC 3339 timestamps. This fixes inclusive `since` / `until` boundaries when GraphQL normalises `Z` inputs to `+00:00`, restoring slim and global `interactionSessions` queries that would otherwise drop matching sessions at the time-window edge.
+- **Codex interaction and checkpoint persistence now survive missing `Stop.transcriptPath` payloads**: the lifecycle-routed Codex hook path now resolves real Codex rollout transcripts from saved pre-prompt/session state and the date-sharded `~/.codex/sessions` store before failing turn-end capture. This restores persistence of `interaction_sessions`, `interaction_turns`, `interaction_events`, and checkpoint save-step data for Codex sessions, keeps later turns scoped to their new transcript fragment instead of replaying from offset `0`, and teaches transcript metadata extraction to read real Codex `response_item` payloads for prompt and summary capture.
+- **Lifecycle token usage now persists for Claude Code, Codex, and OpenCode sessions**: Claude Code and OpenCode lifecycle routing now expose their existing transcript-backed token calculators, so turn-end capture can persist token usage into checkpoint save-step metadata, `interaction_turns`, and the downstream Event DB sync instead of leaving relational and event-side token fields empty. Codex token accounting now computes per-turn deltas from cumulative `event_msg` `token_count` records, separates cached prompt tokens from regular input tokens, and counts multiple model calls within the same turn correctly. Gemini CLI and Copilot CLI remain covered by lifecycle token capture, while Cursor still cannot emit token usage until upstream adds token counters to its local session artefacts.
+
 ## [0.0.15] - 2026-04-16
 
 ### Added
@@ -46,6 +54,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Standalone `bitloops-inference` startup without Bitloops cloud auth**: platform gateway bearer tokens are now injected into text-generation runtime launches only when a valid CLI session exists, so local Ollama and other non-platform summary profiles continue to start cleanly without requiring a Bitloops login.
 - **Repo-scoped exclusion reconciliation now ignores daemon config directories that are not repositories**: the coordinator only seeds reconciliation from the current path when that path is itself a Git repository, and registry-driven reconciliation now keeps only repositories bound to the active daemon config. This prevents exclusion updates from spilling into unrelated daemon config roots or repos registered under a different binding.
 - **Test-harness current-state parity for Rust linkage discovery**: automatic sync now schedules and materializes `test_harness.current_state` through the generic cursor queue, closes the Ruff-style static-linkage gap, and documents legacy `ingest-tests` as commit-scoped historical ingestion rather than the default workspace-validation path.
+- **Late local dependency resolution now survives sync order and resolves cross-file imports**: DevQL current-state writes no longer rely on prepare-time visibility to resolve repo-local dependency edges. An authoritative post-sync reconciliation pass now resolves unresolved local edges against fully materialized current-state artefacts, refreshes canonical local targets when the target path changes or disappears, and keeps historical edge building aligned through the same shared resolver. This now resolves cross-file local calls, references, relationships, and imports across Rust, TS/JS, Python, Java, and C#, including Ruff-style Rust `super::super::...` paths and Rust grouped `use ...::{...}` imports. Go same-package refs continue to resolve, while Go imported package-path edges remain intentionally unresolved until module-path facts from `go.mod` are available to the late resolver.
 
 ## [0.0.14] - 2026-04-12
 

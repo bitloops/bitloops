@@ -73,7 +73,7 @@ pub(crate) fn cleanup_project_agent_surfaces(
     for agent in configured_agents
         .iter()
         .cloned()
-        .chain(registry.installed_agents(project_root).into_iter())
+        .chain(registry.installed_agents(project_root))
     {
         if seen.insert(agent.clone()) {
             candidates.push(agent);

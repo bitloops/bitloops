@@ -30,7 +30,7 @@ impl ClickHouseInteractionRepository {
             )
             .with_context(|| format!("ensuring ClickHouse interaction schema: {name}"))?;
         }
-        for sql in TURN_MIGRATIONS {
+        for sql in SCHEMA_MIGRATIONS {
             blocking_exec(
                 &self.endpoint,
                 self.user.as_deref(),
@@ -46,17 +46,24 @@ impl ClickHouseInteractionRepository {
         super::ensure_repo_id(&self.repo_id, &session.repo_id, "interaction session")?;
         let sql = format!(
             "INSERT INTO interaction_sessions (
-                session_id, repo_id, agent_type, model, first_prompt,
+                session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
+                agent_type, model, first_prompt,
                 transcript_path, worktree_path, worktree_id, started_at,
                 ended_at, last_event_at, updated_at
              ) VALUES (
-                '{session_id}', '{repo_id}', '{agent_type}', '{model}', '{first_prompt}',
+                '{session_id}', '{repo_id}', '{branch}', '{actor_id}', '{actor_name}',
+                '{actor_email}', '{actor_source}', '{agent_type}', '{model}', '{first_prompt}',
                 '{transcript_path}', '{worktree_path}', '{worktree_id}', '{started_at}',
                 '{ended_at}', '{last_event_at}',
                 coalesce(parseDateTime64BestEffortOrNull('{updated_at}'), now64(3))
              )",
             session_id = esc_ch(&session.session_id),
             repo_id = esc_ch(&self.repo_id),
+            branch = esc_ch(&session.branch),
+            actor_id = esc_ch(&session.actor_id),
+            actor_name = esc_ch(&session.actor_name),
+            actor_email = esc_ch(&session.actor_email),
+            actor_source = esc_ch(&session.actor_source),
             agent_type = esc_ch(&session.agent_type),
             model = esc_ch(&session.model),
             first_prompt = esc_ch(&session.first_prompt),
@@ -84,14 +91,16 @@ impl ClickHouseInteractionRepository {
         let files_modified = format_array(&turn.files_modified);
         let sql = format!(
             "INSERT INTO interaction_turns (
-                turn_id, session_id, repo_id, turn_number, prompt,
+                turn_id, session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                actor_source, turn_number, prompt,
                 agent_type, model, started_at, ended_at, has_token_usage,
                 input_tokens, cache_creation_tokens, cache_read_tokens,
                 output_tokens, api_call_count, summary, prompt_count,
                 transcript_offset_start, transcript_offset_end, transcript_fragment,
                 files_modified, checkpoint_id, updated_at
              ) VALUES (
-                '{turn_id}', '{session_id}', '{repo_id}', {turn_number}, '{prompt}',
+                '{turn_id}', '{session_id}', '{repo_id}', '{branch}', '{actor_id}',
+                '{actor_name}', '{actor_email}', '{actor_source}', {turn_number}, '{prompt}',
                 '{agent_type}', '{model}', '{started_at}', '{ended_at}', {has_token_usage},
                 {input_tokens}, {cache_creation_tokens}, {cache_read_tokens},
                 {output_tokens}, {api_call_count}, '{summary}', {prompt_count},
@@ -102,6 +111,11 @@ impl ClickHouseInteractionRepository {
             turn_id = esc_ch(&turn.turn_id),
             session_id = esc_ch(&turn.session_id),
             repo_id = esc_ch(&self.repo_id),
+            branch = esc_ch(&turn.branch),
+            actor_id = esc_ch(&turn.actor_id),
+            actor_name = esc_ch(&turn.actor_name),
+            actor_email = esc_ch(&turn.actor_email),
+            actor_source = esc_ch(&turn.actor_source),
             turn_number = turn.turn_number,
             prompt = esc_ch(&turn.prompt),
             agent_type = esc_ch(&turn.agent_type),
@@ -138,21 +152,34 @@ impl ClickHouseInteractionRepository {
         let payload = serde_json::to_string(&event.payload).context("serialising event payload")?;
         let sql = format!(
             "INSERT INTO interaction_events (
-                event_id, event_time, repo_id, session_id, turn_id,
-                event_type, agent_type, model, payload
+                event_id, event_time, repo_id, session_id, turn_id, branch,
+                actor_id, actor_name, actor_email, actor_source,
+                event_type, agent_type, model, tool_use_id, tool_kind,
+                task_description, subagent_id, payload
              ) VALUES (
                 '{event_id}', coalesce(parseDateTime64BestEffortOrNull('{event_time}'), now64(3)),
-                '{repo_id}', '{session_id}', '{turn_id}',
-                '{event_type}', '{agent_type}', '{model}', '{payload}'
+                '{repo_id}', '{session_id}', '{turn_id}', '{branch}',
+                '{actor_id}', '{actor_name}', '{actor_email}', '{actor_source}',
+                '{event_type}', '{agent_type}', '{model}', '{tool_use_id}', '{tool_kind}',
+                '{task_description}', '{subagent_id}', '{payload}'
              )",
             event_id = esc_ch(&event.event_id),
             event_time = esc_ch(&event.event_time),
             repo_id = esc_ch(&self.repo_id),
             session_id = esc_ch(&event.session_id),
             turn_id = esc_ch(event.turn_id.as_deref().unwrap_or("")),
+            branch = esc_ch(&event.branch),
+            actor_id = esc_ch(&event.actor_id),
+            actor_name = esc_ch(&event.actor_name),
+            actor_email = esc_ch(&event.actor_email),
+            actor_source = esc_ch(&event.actor_source),
             event_type = esc_ch(event.event_type.as_str()),
             agent_type = esc_ch(&event.agent_type),
             model = esc_ch(&event.model),
+            tool_use_id = esc_ch(&event.tool_use_id),
+            tool_kind = esc_ch(&event.tool_kind),
+            task_description = esc_ch(&event.task_description),
+            subagent_id = esc_ch(&event.subagent_id),
             payload = esc_ch(&payload),
         );
         blocking_exec(
@@ -197,6 +224,11 @@ impl ClickHouseInteractionRepository {
                 SELECT
                     sessions.session_id AS session_id,
                     argMax(sessions.repo_id, sessions.updated_at) AS repo_id,
+                    argMax(sessions.branch, sessions.updated_at) AS branch,
+                    argMax(sessions.actor_id, sessions.updated_at) AS actor_id,
+                    argMax(sessions.actor_name, sessions.updated_at) AS actor_name,
+                    argMax(sessions.actor_email, sessions.updated_at) AS actor_email,
+                    argMax(sessions.actor_source, sessions.updated_at) AS actor_source,
                     argMax(sessions.agent_type, sessions.updated_at) AS agent_type,
                     argMax(sessions.model, sessions.updated_at) AS model,
                     argMax(sessions.first_prompt, sessions.updated_at) AS first_prompt,
@@ -236,6 +268,11 @@ impl ClickHouseInteractionRepository {
                     SELECT
                         sessions.session_id AS session_id,
                         argMax(sessions.repo_id, sessions.updated_at) AS repo_id,
+                        argMax(sessions.branch, sessions.updated_at) AS branch,
+                        argMax(sessions.actor_id, sessions.updated_at) AS actor_id,
+                        argMax(sessions.actor_name, sessions.updated_at) AS actor_name,
+                        argMax(sessions.actor_email, sessions.updated_at) AS actor_email,
+                        argMax(sessions.actor_source, sessions.updated_at) AS actor_source,
                         argMax(sessions.agent_type, sessions.updated_at) AS agent_type,
                         argMax(sessions.model, sessions.updated_at) AS model,
                         argMax(sessions.first_prompt, sessions.updated_at) AS first_prompt,
@@ -272,6 +309,11 @@ impl ClickHouseInteractionRepository {
                         turns.turn_id AS turn_id,
                         argMax(turns.session_id, turns.updated_at) AS session_id,
                         argMax(turns.repo_id, turns.updated_at) AS repo_id,
+                        argMax(turns.branch, turns.updated_at) AS branch,
+                        argMax(turns.actor_id, turns.updated_at) AS actor_id,
+                        argMax(turns.actor_name, turns.updated_at) AS actor_name,
+                        argMax(turns.actor_email, turns.updated_at) AS actor_email,
+                        argMax(turns.actor_source, turns.updated_at) AS actor_source,
                         argMax(turns.turn_number, turns.updated_at) AS turn_number,
                         argMax(turns.prompt, turns.updated_at) AS prompt,
                         argMax(turns.agent_type, turns.updated_at) AS agent_type,
@@ -315,6 +357,11 @@ impl ClickHouseInteractionRepository {
                     turns.turn_id AS turn_id,
                     argMax(turns.session_id, turns.updated_at) AS session_id,
                     argMax(turns.repo_id, turns.updated_at) AS repo_id,
+                    argMax(turns.branch, turns.updated_at) AS branch,
+                    argMax(turns.actor_id, turns.updated_at) AS actor_id,
+                    argMax(turns.actor_name, turns.updated_at) AS actor_name,
+                    argMax(turns.actor_email, turns.updated_at) AS actor_email,
+                    argMax(turns.actor_source, turns.updated_at) AS actor_source,
                     argMax(turns.turn_number, turns.updated_at) AS turn_number,
                     argMax(turns.prompt, turns.updated_at) AS prompt,
                     argMax(turns.agent_type, turns.updated_at) AS agent_type,
@@ -376,8 +423,10 @@ impl ClickHouseInteractionRepository {
             self.user.as_deref(),
             self.password.as_deref(),
             &format!(
-                "SELECT event_id, session_id, turn_id, repo_id, event_type,
-                        toString(event_time) AS event_time, agent_type, model, payload
+                "SELECT event_id, session_id, turn_id, repo_id, branch,
+                        actor_id, actor_name, actor_email, actor_source, event_type,
+                        toString(event_time) AS event_time, agent_type, model, tool_use_id,
+                        tool_kind, task_description, subagent_id, payload
                  FROM interaction_events
                  WHERE {}
                  ORDER BY event_time DESC, event_id DESC
@@ -405,6 +454,11 @@ impl ClickHouseInteractionRepository {
                         turns.turn_id AS turn_id,
                         argMax(turns.session_id, turns.updated_at) AS session_id,
                         argMax(turns.repo_id, turns.updated_at) AS repo_id,
+                        argMax(turns.branch, turns.updated_at) AS branch,
+                        argMax(turns.actor_id, turns.updated_at) AS actor_id,
+                        argMax(turns.actor_name, turns.updated_at) AS actor_name,
+                        argMax(turns.actor_email, turns.updated_at) AS actor_email,
+                        argMax(turns.actor_source, turns.updated_at) AS actor_source,
                         argMax(turns.turn_number, turns.updated_at) AS turn_number,
                         argMax(turns.prompt, turns.updated_at) AS prompt,
                         argMax(turns.agent_type, turns.updated_at) AS agent_type,
@@ -441,6 +495,11 @@ const INTERACTION_SESSIONS_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
     session_id String,
     repo_id String,
+    branch String,
+    actor_id String,
+    actor_name String,
+    actor_email String,
+    actor_source String,
     agent_type String,
     model String,
     first_prompt String,
@@ -461,6 +520,11 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     turn_id String,
     session_id String,
     repo_id String,
+    branch String,
+    actor_id String,
+    actor_name String,
+    actor_email String,
+    actor_source String,
     turn_number UInt32,
     prompt String,
     agent_type String,
@@ -493,9 +557,18 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     repo_id String,
     session_id String,
     turn_id String,
+    branch String,
+    actor_id String,
+    actor_name String,
+    actor_email String,
+    actor_source String,
     event_type String,
     agent_type String,
     model String,
+    tool_use_id String,
+    tool_kind String,
+    task_description String,
+    subagent_id String,
     payload String
 )
 ENGINE = ReplacingMergeTree(event_time)
@@ -508,12 +581,31 @@ const SCHEMA_STATEMENTS: &[(&str, &str)] = &[
     ("interaction_events", INTERACTION_EVENTS_SCHEMA),
 ];
 
-const TURN_MIGRATIONS: &[&str] = &[
+const SCHEMA_MIGRATIONS: &[&str] = &[
+    "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS branch String AFTER repo_id",
+    "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS actor_id String AFTER branch",
+    "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS actor_name String AFTER actor_id",
+    "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS actor_email String AFTER actor_name",
+    "ALTER TABLE interaction_sessions ADD COLUMN IF NOT EXISTS actor_source String AFTER actor_email",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS branch String AFTER repo_id",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS actor_id String AFTER branch",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS actor_name String AFTER actor_id",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS actor_email String AFTER actor_name",
+    "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS actor_source String AFTER actor_email",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS summary String AFTER api_call_count",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS prompt_count UInt32 AFTER summary",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_offset_start Nullable(Int64) AFTER prompt_count",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_offset_end Nullable(Int64) AFTER transcript_offset_start",
     "ALTER TABLE interaction_turns ADD COLUMN IF NOT EXISTS transcript_fragment String AFTER transcript_offset_end",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS branch String AFTER turn_id",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS actor_id String AFTER branch",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS actor_name String AFTER actor_id",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS actor_email String AFTER actor_name",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS actor_source String AFTER actor_email",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS tool_use_id String AFTER model",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS tool_kind String AFTER tool_use_id",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS task_description String AFTER tool_kind",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS subagent_id String AFTER task_description",
 ];
 
 fn format_array(values: &[String]) -> String {
@@ -605,6 +697,7 @@ mod tests {
             agent_type: "codex".into(),
             model: "gpt-5.4".into(),
             payload: serde_json::json!({"token_usage": {"input_tokens": 11}}),
+            ..Default::default()
         };
         repository.append_event(&event).expect("append event");
         assert!(!repository.list_sessions(None, 10).unwrap().is_empty());

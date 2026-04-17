@@ -615,6 +615,55 @@ fn binaries_target_removes_managed_embeddings_binary_and_metadata() {
 }
 
 #[test]
+fn binaries_target_removes_adjacent_duckdb_runtime() {
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let binary_dir = tempfile::tempdir().unwrap();
+
+    with_platform_dirs(&config, &data, &cache, &state, &home, None, || {
+        let binary_name = if cfg!(windows) {
+            "bitloops.exe"
+        } else {
+            "bitloops"
+        };
+        let runtime_name = if cfg!(windows) {
+            "duckdb.dll"
+        } else if cfg!(target_os = "macos") {
+            "libduckdb.dylib"
+        } else {
+            "libduckdb.so"
+        };
+
+        let binary_path = binary_dir.path().join(binary_name);
+        let runtime_path = binary_dir.path().join(runtime_name);
+        let binary_path_for_closure = binary_path.clone();
+
+        fs::write(&binary_path, "binary").unwrap();
+        fs::write(&runtime_path, "runtime").unwrap();
+
+        run_uninstall_for_test(
+            UninstallArgs {
+                binaries: true,
+                force: true,
+                ..UninstallArgs::default()
+            },
+            None,
+            None,
+            &|| Box::pin(async { Ok(()) }),
+            &|| Ok(()),
+            &move || Ok(vec![binary_path_for_closure.clone()]),
+        )
+        .unwrap();
+
+        assert!(!binary_path.exists());
+        assert!(!runtime_path.exists());
+    });
+}
+
+#[test]
 fn full_uninstall_removes_supported_temp_artefacts() {
     let repo = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();

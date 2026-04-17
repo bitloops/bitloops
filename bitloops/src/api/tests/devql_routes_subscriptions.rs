@@ -221,6 +221,11 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("telemetry(eventType: String, agent: String"));
     assert!(body.contains("knowledge(provider: KnowledgeProvider"));
     assert!(body.contains("clones(filter:"));
+    assert!(body.contains("interactionSessions("));
+    assert!(body.contains("interactionTurns("));
+    assert!(body.contains("interactionEvents("));
+    assert!(body.contains("searchInteractionSessions(input: InteractionSearchInputObject!)"));
+    assert!(body.contains("searchInteractionTurns(input: InteractionSearchInputObject!)"));
     assert!(body.contains("chatHistory"));
     assert!(body.contains("selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
@@ -249,6 +254,11 @@ async fn devql_global_routes_serve_full_schema_and_playground() {
     assert!(sdl_body.contains("repo(name: String!): Repository!"));
     assert!(sdl_body.contains("branch(name: String!): Repository!"));
     assert!(sdl_body.contains("project(path: String!): Project!"));
+    assert!(sdl_body.contains("interactionSessions("));
+    assert!(sdl_body.contains("interactionTurns("));
+    assert!(sdl_body.contains("interactionEvents("));
+    assert!(sdl_body.contains("searchInteractionSessions(input: InteractionSearchInputObject!)"));
+    assert!(sdl_body.contains("searchInteractionTurns(input: InteractionSearchInputObject!)"));
     assert!(!sdl_body.contains("selectArtefacts(by: ArtefactSelectorInput!)"));
 }
 
@@ -525,6 +535,189 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
     );
     assert_eq!(payload["data"]["deps"]["totalCount"], 0);
     assert_eq!(payload["data"]["deps"]["edges"], json!([]));
+}
+
+#[tokio::test]
+async fn devql_interaction_queries_work_in_slim_and_global_scopes() {
+    let repo = seed_dashboard_repo();
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (slim_status, slim_payload) = request_slim_query(
+        app.clone(),
+        repo.path(),
+        r#"
+        {
+          interactionSessions(
+            first: 10
+            filter: {
+              actorEmail: "alice@example.com"
+              since: "2026-02-27T12:00:00Z"
+              until: "2026-02-27T12:05:00Z"
+            }
+          ) {
+            totalCount
+            edges {
+              node {
+                id
+                branch
+                actor {
+                  email
+                }
+                checkpointCount
+                turnCount
+                toolUses {
+                  toolKind
+                  taskDescription
+                }
+                latestCommitAuthor {
+                  checkpointId
+                  email
+                }
+              }
+            }
+          }
+          searchInteractionTurns(
+            input: {
+              query: "dashboard"
+              filter: { path: "app.rs" }
+            }
+          ) {
+            score
+            matchedFields
+            turn {
+              id
+              sessionId
+              summary
+            }
+            session {
+              id
+              actor {
+                email
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(slim_status, StatusCode::OK);
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["totalCount"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["id"],
+        "session-1"
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["branch"],
+        "main"
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["actor"]["email"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["checkpointCount"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["turnCount"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["toolUses"][0]["toolKind"],
+        "edit"
+    );
+    assert_eq!(
+        slim_payload["data"]["searchInteractionTurns"][0]["turn"]["id"],
+        "turn-1"
+    );
+    assert_eq!(
+        slim_payload["data"]["searchInteractionTurns"][0]["session"]["id"],
+        "session-1"
+    );
+    assert!(
+        slim_payload["data"]["searchInteractionTurns"][0]["matchedFields"]
+            .as_array()
+            .is_some_and(|fields| !fields.is_empty())
+    );
+
+    let (global_status, global_payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/global",
+        "application/json",
+        Body::from(
+            json!({
+                "query": r#"
+                {
+                  repo(name: "demo") {
+                    interactionEvents(first: 10, filter: { toolKind: "edit" }) {
+                      totalCount
+                      edges {
+                        node {
+                          eventType
+                          toolKind
+                          toolUseId
+                          taskDescription
+                          subagentId
+                          actor {
+                            email
+                          }
+                        }
+                      }
+                    }
+                    searchInteractionSessions(
+                      input: {
+                        query: "dashboard"
+                        filter: { branch: "main" }
+                      }
+                    ) {
+                      score
+                      matchedFields
+                      session {
+                        id
+                        turnCount
+                        checkpointCount
+                      }
+                    }
+                  }
+                }
+                "#
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(global_status, StatusCode::OK);
+    assert_eq!(
+        global_payload["data"]["repo"]["interactionEvents"]["totalCount"].as_u64(),
+        Some(2)
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["interactionEvents"]["edges"][0]["node"]["toolKind"],
+        "edit"
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["interactionEvents"]["edges"][0]["node"]["actor"]["email"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["searchInteractionSessions"][0]["session"]["id"],
+        "session-1"
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["searchInteractionSessions"][0]["session"]["checkpointCount"]
+            .as_u64(),
+        Some(1)
+    );
 }
 
 #[tokio::test]

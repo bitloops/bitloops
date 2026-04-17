@@ -362,6 +362,7 @@ async fn execute_sync_inner(
         .context("opening persistent SQLite sync writer")?;
     let current_projection = build_current_projection_context(cfg)?;
     let mut current_projection_changed = false;
+    let mut touched_paths = HashSet::<String>::new();
     let removals = classified
         .iter()
         .filter(|path| matches!(path.action, sync::types::PathAction::Removed))
@@ -392,6 +393,9 @@ async fn execute_sync_inner(
         }
         if !outcome.removed_paths.is_empty() {
             current_projection_changed = true;
+        }
+        for path in &outcome.removed_paths {
+            touched_paths.insert(path.clone());
         }
         for artefact in outcome.pre_artefacts.clone() {
             diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
@@ -511,6 +515,7 @@ async fn execute_sync_inner(
                                 &mut materialized_completed,
                                 &mut paths_completed,
                                 &mut current_projection_changed,
+                                &mut touched_paths,
                             )
                             .await?;
                         }
@@ -536,6 +541,7 @@ async fn execute_sync_inner(
                             &mut materialized_completed,
                             &mut paths_completed,
                             &mut current_projection_changed,
+                            &mut touched_paths,
                         )
                         .await?;
                     }
@@ -590,6 +596,7 @@ async fn execute_sync_inner(
                         &mut materialized_completed,
                         &mut paths_completed,
                         &mut current_projection_changed,
+                        &mut touched_paths,
                     )
                     .await?;
                 }
@@ -617,6 +624,7 @@ async fn execute_sync_inner(
         &mut materialized_completed,
         &mut paths_completed,
         &mut current_projection_changed,
+        &mut touched_paths,
     )
     .await?;
 
@@ -630,6 +638,15 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_commits,
         touch_outcome.sqlite_rows_written,
     );
+
+    let touched_paths = touched_paths.into_iter().collect::<Vec<_>>();
+    sync::materializer::reconcile_current_local_edges_for_paths(
+        relational,
+        &cfg.repo.repo_id,
+        &touched_paths,
+    )
+    .await
+    .context("reconciling current local dependency edges after sync")?;
 
     finalize_semantic_clone_projection_after_sync(
         cfg,
@@ -845,6 +862,7 @@ async fn flush_pending_materialisations(
     materialized_completed: &mut usize,
     paths_completed: &mut usize,
     current_projection_changed: &mut bool,
+    touched_paths: &mut HashSet<String>,
 ) -> Result<()> {
     if !writer.has_pending_items() {
         return Ok(());
@@ -877,6 +895,7 @@ async fn flush_pending_materialisations(
     apply_writer_duration(stats, flush_duration, &outcome);
 
     for path in outcome.materialized_paths {
+        touched_paths.insert(path.clone());
         *materialized_completed += 1;
         *paths_completed = estimate_sync_progress_paths_completed(
             unchanged_total,

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
 use super::SqliteInteractionSpool;
+use super::projections;
 use super::row_mapping::{append_event_filter_sql, map_event_row, map_session_row, map_turn_row};
 use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
 use crate::host::interactions::types::{
@@ -41,15 +42,35 @@ impl SqliteInteractionSpool {
         super::ensure_repo_id(&self.repo_id, &session.repo_id, "interaction session")?;
         conn.execute(
             "INSERT INTO interaction_sessions (
-                session_id, repo_id, agent_type, model, first_prompt,
-                transcript_path, worktree_path, worktree_id, started_at,
-                ended_at, last_event_at, updated_at
+                session_id, repo_id, branch, actor_id, actor_name, actor_email, actor_source,
+                agent_type, model, first_prompt, transcript_path, worktree_path, worktree_id,
+                started_at, ended_at, last_event_at, updated_at
              ) VALUES (
-                ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, ?8, ?9,
-                ?10, ?11, ?12
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                ?8, ?9, ?10, ?11, ?12, ?13,
+                ?14, ?15, ?16, ?17
              )
              ON CONFLICT(repo_id, session_id) DO UPDATE SET
+                branch = CASE
+                    WHEN excluded.branch = '' THEN interaction_sessions.branch
+                    ELSE excluded.branch
+                END,
+                actor_id = CASE
+                    WHEN excluded.actor_id = '' THEN interaction_sessions.actor_id
+                    ELSE excluded.actor_id
+                END,
+                actor_name = CASE
+                    WHEN excluded.actor_name = '' THEN interaction_sessions.actor_name
+                    ELSE excluded.actor_name
+                END,
+                actor_email = CASE
+                    WHEN excluded.actor_email = '' THEN interaction_sessions.actor_email
+                    ELSE excluded.actor_email
+                END,
+                actor_source = CASE
+                    WHEN excluded.actor_source = '' THEN interaction_sessions.actor_source
+                    ELSE excluded.actor_source
+                END,
                 agent_type = CASE
                     WHEN excluded.agent_type = '' THEN interaction_sessions.agent_type
                     ELSE excluded.agent_type
@@ -90,6 +111,11 @@ impl SqliteInteractionSpool {
             rusqlite::params![
                 session.session_id,
                 self.repo_id,
+                session.branch,
+                session.actor_id,
+                session.actor_name,
+                session.actor_email,
+                session.actor_source,
                 session.agent_type,
                 session.model,
                 session.first_prompt,
@@ -103,6 +129,7 @@ impl SqliteInteractionSpool {
             ],
         )
         .context("upserting interaction session in local spool")?;
+        projections::refresh_session_after_upsert(conn, &self.repo_id, &session.session_id)?;
         Ok(())
     }
 
@@ -115,21 +142,40 @@ impl SqliteInteractionSpool {
         let checkpoint_id = turn.checkpoint_id.clone().unwrap_or_default();
         conn.execute(
             "INSERT INTO interaction_turns (
-                turn_id, session_id, repo_id, turn_number, prompt,
-                agent_type, model, started_at, ended_at, has_token_usage,
-                input_tokens, cache_creation_tokens, cache_read_tokens,
-                output_tokens, api_call_count, summary, prompt_count,
-                transcript_offset_start, transcript_offset_end, transcript_fragment,
-                files_modified, checkpoint_id, updated_at
+                turn_id, session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                actor_source, turn_number, prompt, agent_type, model, started_at, ended_at,
+                has_token_usage, input_tokens, cache_creation_tokens, cache_read_tokens,
+                output_tokens, api_call_count, summary, prompt_count, transcript_offset_start,
+                transcript_offset_end, transcript_fragment, files_modified, checkpoint_id,
+                updated_at
              ) VALUES (
-                ?1, ?2, ?3, ?4, ?5,
-                ?6, ?7, ?8, ?9, ?10,
-                ?11, ?12, ?13,
-                ?14, ?15, ?16, ?17,
-                ?18, ?19, ?20, ?21, ?22, ?23
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+                ?24, ?25, ?26, ?27, ?28
              )
              ON CONFLICT(repo_id, turn_id) DO UPDATE SET
                 session_id = excluded.session_id,
+                branch = CASE
+                    WHEN excluded.branch = '' THEN interaction_turns.branch
+                    ELSE excluded.branch
+                END,
+                actor_id = CASE
+                    WHEN excluded.actor_id = '' THEN interaction_turns.actor_id
+                    ELSE excluded.actor_id
+                END,
+                actor_name = CASE
+                    WHEN excluded.actor_name = '' THEN interaction_turns.actor_name
+                    ELSE excluded.actor_name
+                END,
+                actor_email = CASE
+                    WHEN excluded.actor_email = '' THEN interaction_turns.actor_email
+                    ELSE excluded.actor_email
+                END,
+                actor_source = CASE
+                    WHEN excluded.actor_source = '' THEN interaction_turns.actor_source
+                    ELSE excluded.actor_source
+                END,
                 turn_number = CASE
                     WHEN excluded.turn_number = 0 THEN interaction_turns.turn_number
                     ELSE excluded.turn_number
@@ -208,6 +254,11 @@ impl SqliteInteractionSpool {
                 turn.turn_id,
                 turn.session_id,
                 self.repo_id,
+                turn.branch,
+                turn.actor_id,
+                turn.actor_name,
+                turn.actor_email,
+                turn.actor_source,
                 i64::from(turn.turn_number),
                 turn.prompt,
                 turn.agent_type,
@@ -231,6 +282,12 @@ impl SqliteInteractionSpool {
             ],
         )
         .context("upserting interaction turn in local spool")?;
+        projections::refresh_turn_after_upsert(
+            conn,
+            &self.repo_id,
+            &turn.session_id,
+            &turn.turn_id,
+        )?;
         Ok(())
     }
 
@@ -243,22 +300,33 @@ impl SqliteInteractionSpool {
         let payload = serde_json::to_string(&event.payload).context("serialising event payload")?;
         conn.execute(
             "INSERT OR IGNORE INTO interaction_events (
-                event_id, session_id, turn_id, repo_id, event_type,
-                event_time, agent_type, model, payload
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                event_id, session_id, turn_id, repo_id, branch, actor_id, actor_name,
+                actor_email, actor_source, event_type, event_time, agent_type, model,
+                tool_use_id, tool_kind, task_description, subagent_id, payload
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             rusqlite::params![
                 event.event_id,
                 event.session_id,
                 event.turn_id,
                 self.repo_id,
+                event.branch,
+                event.actor_id,
+                event.actor_name,
+                event.actor_email,
+                event.actor_source,
                 event.event_type.as_str(),
                 event.event_time,
                 event.agent_type,
                 event.model,
+                event.tool_use_id,
+                event.tool_kind,
+                event.task_description,
+                event.subagent_id,
                 payload,
             ],
         )
         .context("inserting interaction event in local spool")?;
+        projections::refresh_after_event(conn, &self.repo_id, event)?;
         Ok(())
     }
 }
@@ -362,14 +430,32 @@ impl InteractionSpool for SqliteInteractionSpool {
             conn.execute_batch("BEGIN IMMEDIATE;")
                 .context("starting checkpoint assignment spool transaction")?;
             let result = (|| -> Result<()> {
-                let placeholders: Vec<String> = (1..=turn_ids.len())
+                let session_lookup_placeholders: Vec<String> = (1..=turn_ids.len())
+                    .map(|idx| format!("?{}", idx + 1))
+                    .collect();
+                let session_lookup_sql = format!(
+                    "SELECT DISTINCT session_id
+                     FROM interaction_turns
+                     WHERE repo_id = ?1 AND turn_id IN ({})",
+                    session_lookup_placeholders.join(", ")
+                );
+                let mut session_stmt = conn.prepare(&session_lookup_sql)?;
+                let mut session_params: Vec<&dyn rusqlite::types::ToSql> = vec![&self.repo_id];
+                for turn_id in turn_ids {
+                    session_params.push(turn_id);
+                }
+                let session_ids = session_stmt
+                    .query_map(session_params.as_slice(), |row| row.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .context("reading affected interaction session ids")?;
+                let update_placeholders: Vec<String> = (1..=turn_ids.len())
                     .map(|idx| format!("?{}", idx + 3))
                     .collect();
                 let sql = format!(
                     "UPDATE interaction_turns
                      SET checkpoint_id = ?1, updated_at = ?2
                      WHERE repo_id = ?3 AND turn_id IN ({})",
-                    placeholders.join(", ")
+                    update_placeholders.join(", ")
                 );
                 let mut params: Vec<&dyn rusqlite::types::ToSql> =
                     vec![&checkpoint_id, &assigned_at, &self.repo_id];
@@ -378,6 +464,11 @@ impl InteractionSpool for SqliteInteractionSpool {
                 }
                 conn.execute(&sql, params.as_slice())
                     .context("updating local turn checkpoint ids")?;
+                projections::refresh_after_checkpoint_assignment(
+                    conn,
+                    &self.repo_id,
+                    &session_ids,
+                )?;
                 self.enqueue_mutation(conn, &mutation)?;
                 Ok(())
             })();
@@ -483,9 +574,10 @@ impl InteractionSpool for SqliteInteractionSpool {
                 if let Some(agent) = agent.map(str::trim).filter(|value| !value.is_empty()) {
                     (
                         format!(
-                            "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                                    transcript_path, worktree_path, worktree_id, started_at,
-                                    ended_at, last_event_at, updated_at
+                            "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                                    actor_source, agent_type, model, first_prompt, transcript_path,
+                                    worktree_path, worktree_id, started_at, ended_at, last_event_at,
+                                    updated_at
                              FROM interaction_sessions
                              WHERE repo_id = ?1 AND agent_type = ?2
                              ORDER BY COALESCE(NULLIF(last_event_at, ''), started_at) DESC, session_id DESC
@@ -496,9 +588,10 @@ impl InteractionSpool for SqliteInteractionSpool {
                 } else {
                     (
                         format!(
-                            "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                                    transcript_path, worktree_path, worktree_id, started_at,
-                                    ended_at, last_event_at, updated_at
+                            "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                                    actor_source, agent_type, model, first_prompt, transcript_path,
+                                    worktree_path, worktree_id, started_at, ended_at, last_event_at,
+                                    updated_at
                              FROM interaction_sessions
                              WHERE repo_id = ?1
                              ORDER BY COALESCE(NULLIF(last_event_at, ''), started_at) DESC, session_id DESC
@@ -520,9 +613,9 @@ impl InteractionSpool for SqliteInteractionSpool {
     fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
         self.sqlite.with_connection(|conn| {
             conn.query_row(
-                "SELECT session_id, repo_id, agent_type, model, first_prompt,
-                        transcript_path, worktree_path, worktree_id, started_at,
-                        ended_at, last_event_at, updated_at
+                "SELECT session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                        actor_source, agent_type, model, first_prompt, transcript_path,
+                        worktree_path, worktree_id, started_at, ended_at, last_event_at, updated_at
                  FROM interaction_sessions
                  WHERE session_id = ?1 AND repo_id = ?2
                  LIMIT 1",
@@ -542,9 +635,9 @@ impl InteractionSpool for SqliteInteractionSpool {
         let limit = limit.max(1);
         self.sqlite.with_connection(|conn| {
             let sql = format!(
-                "SELECT turn_id, session_id, repo_id, turn_number, prompt,
-                        agent_type, model, started_at, ended_at, has_token_usage,
-                        input_tokens, cache_creation_tokens, cache_read_tokens,
+                "SELECT turn_id, session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                        actor_source, turn_number, prompt, agent_type, model, started_at, ended_at,
+                        has_token_usage, input_tokens, cache_creation_tokens, cache_read_tokens,
                         output_tokens, api_call_count, summary, prompt_count,
                         transcript_offset_start, transcript_offset_end, transcript_fragment,
                         files_modified, checkpoint_id, updated_at
@@ -563,9 +656,9 @@ impl InteractionSpool for SqliteInteractionSpool {
     fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT turn_id, session_id, repo_id, turn_number, prompt,
-                        agent_type, model, started_at, ended_at, has_token_usage,
-                        input_tokens, cache_creation_tokens, cache_read_tokens,
+                "SELECT turn_id, session_id, repo_id, branch, actor_id, actor_name, actor_email,
+                        actor_source, turn_number, prompt, agent_type, model, started_at, ended_at,
+                        has_token_usage, input_tokens, cache_creation_tokens, cache_read_tokens,
                         output_tokens, api_call_count, summary, prompt_count,
                         transcript_offset_start, transcript_offset_end, transcript_fragment,
                         files_modified, checkpoint_id, updated_at
@@ -587,8 +680,9 @@ impl InteractionSpool for SqliteInteractionSpool {
         let limit = limit.max(1);
         self.sqlite.with_connection(|conn| {
             let mut sql = String::from(
-                "SELECT event_id, session_id, turn_id, repo_id, event_type,
-                        event_time, agent_type, model, payload
+                "SELECT event_id, session_id, turn_id, repo_id, branch, actor_id, actor_name,
+                        actor_email, actor_source, event_type, event_time, agent_type, model,
+                        tool_use_id, tool_kind, task_description, subagent_id, payload
                  FROM interaction_events
                  WHERE repo_id = ?1",
             );
