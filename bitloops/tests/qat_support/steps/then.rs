@@ -970,6 +970,19 @@ pub(super) fn then_devql_task_id_captured(
     })
 }
 
+pub(super) fn then_last_devql_task_kind_is(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_kind = ctx.matches[1].1.clone();
+        run_step(
+            "last DevQL task kind matches",
+            helpers::assert_last_task_id_matches_kind(world, &expected_kind),
+        );
+    })
+}
+
 pub(super) fn then_devql_task_queue_state(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

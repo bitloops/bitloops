@@ -698,7 +698,7 @@ fn run_devql_task_enqueue_for_repo(
     let output = run_command_capture(world, &label, build_bitloops_command(world, &arg_refs)?)?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    update_last_task_id_from_output(world, &stdout);
+    update_last_task_id_from_output(world, &stdout, TaskIdCaptureMode::CaptureSubmission);
     world.last_command_stdout = Some(stdout);
     ensure_success(&output, &label)
 }
@@ -716,7 +716,7 @@ fn run_devql_tasks_command_for_repo(
     let output = run_command_capture(world, &label, build_bitloops_command(world, &arg_refs)?)?;
     world.last_command_exit_code = Some(output.status.code().unwrap_or(-1));
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    update_last_task_id_from_output(world, &stdout);
+    update_last_task_id_from_output(world, &stdout, TaskIdCaptureMode::PreserveExisting);
     world.last_command_stdout = Some(stdout);
     if expect_success {
         ensure_success(&output, &label)?;
@@ -1440,6 +1440,42 @@ pub fn attempt_to_enqueue_devql_sync_task_require_daemon_for_repo(
 
 pub fn run_devql_tasks_status_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     run_devql_tasks_command_for_repo(world, repo_name, &["status"], true)
+}
+
+fn devql_task_queue_status_is_idle(snapshot: &DevqlTaskQueueStatusSnapshot) -> bool {
+    snapshot.queued == 0 && snapshot.running == 0
+}
+
+pub fn wait_for_devql_task_queue_idle_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let status = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        "DevQL task queue to become idle",
+        || {
+            run_devql_tasks_status_for_repo(world, repo_name)?;
+            parse_task_queue_status(world.last_command_stdout.as_deref().unwrap_or(""))
+        },
+        devql_task_queue_status_is_idle,
+        |snapshot| {
+            format!(
+                "queued={}, running={}, failed={}, current_repo_tasks={}",
+                snapshot.queued,
+                snapshot.running,
+                snapshot.failed,
+                snapshot.current_repo_tasks.len()
+            )
+        },
+    )?;
+    world.last_command_exit_code = Some(0);
+    world.last_command_stdout = Some(format!(
+        "DevQL task queue reached idle state: queued={}, running={}",
+        status.queued, status.running
+    ));
+    Ok(())
 }
 
 pub fn run_devql_tasks_list_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
@@ -2269,13 +2305,34 @@ pub fn parse_task_queue_status(stdout: &str) -> Result<DevqlTaskQueueStatusSnaps
     })
 }
 
-fn update_last_task_id_from_output(world: &mut QatWorld, stdout: &str) {
-    if let Some(task_id) = parse_task_id_from_submission(stdout) {
-        world.last_task_id = Some(task_id);
-        return;
-    }
-    if let Some(task) = parse_task_briefs(stdout).into_iter().next() {
-        world.last_task_id = Some(task.task_id);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskIdCaptureMode {
+    CaptureSubmission,
+    PreserveExisting,
+}
+
+fn update_last_task_id_from_output(
+    world: &mut QatWorld,
+    stdout: &str,
+    mode: TaskIdCaptureMode,
+) {
+    match mode {
+        TaskIdCaptureMode::CaptureSubmission => {
+            if let Some(task_id) = parse_task_id_from_submission(stdout) {
+                world.last_task_id = Some(task_id);
+                return;
+            }
+            if let Some(task) = parse_task_briefs(stdout).into_iter().next() {
+                world.last_task_id = Some(task.task_id);
+            }
+        }
+        TaskIdCaptureMode::PreserveExisting => {
+            if world.last_task_id.is_none()
+                && let Some(task) = parse_task_briefs(stdout).into_iter().next()
+            {
+                world.last_task_id = Some(task.task_id);
+            }
+        }
     }
 }
 
@@ -3850,6 +3907,19 @@ pub fn assert_last_task_id_captured(world: &QatWorld) -> Result<()> {
     ensure!(
         !task_id.trim().is_empty(),
         "expected non-empty captured DevQL task id"
+    );
+    Ok(())
+}
+
+pub fn assert_last_task_id_matches_kind(world: &QatWorld, expected_kind: &str) -> Result<()> {
+    let task_id = world
+        .last_task_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("expected a captured DevQL task id"))?;
+    let expected_prefix = format!("{expected_kind}-task-");
+    ensure!(
+        task_id.starts_with(&expected_prefix),
+        "expected tracked DevQL task kind `{expected_kind}`, got `{task_id}`"
     );
     Ok(())
 }

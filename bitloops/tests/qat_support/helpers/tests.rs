@@ -312,6 +312,51 @@ fn parse_task_id_from_submission_extracts_queue_id() {
 }
 
 #[test]
+fn update_last_task_id_from_output_preserves_existing_task_for_read_only_task_output() {
+    let mut world = QatWorld {
+        last_task_id: Some("ingest-task-123".to_string()),
+        ..Default::default()
+    };
+
+    update_last_task_id_from_output(
+        &mut world,
+        "task sync-task-999: kind=sync status=running repo=bitloops",
+        TaskIdCaptureMode::PreserveExisting,
+    );
+
+    assert_eq!(world.last_task_id.as_deref(), Some("ingest-task-123"));
+}
+
+#[test]
+fn update_last_task_id_from_output_captures_new_submission_ids() {
+    let mut world = QatWorld {
+        last_task_id: Some("sync-task-old".to_string()),
+        ..Default::default()
+    };
+
+    update_last_task_id_from_output(
+        &mut world,
+        "task queued: task=ingest-task-456 repo=bitloops kind=ingest",
+        TaskIdCaptureMode::CaptureSubmission,
+    );
+
+    assert_eq!(world.last_task_id.as_deref(), Some("ingest-task-456"));
+}
+
+#[test]
+fn update_last_task_id_from_output_read_only_mode_can_seed_empty_world_once() {
+    let mut world = QatWorld::default();
+
+    update_last_task_id_from_output(
+        &mut world,
+        "task ingest-task-456: kind=ingest status=queued repo=bitloops",
+        TaskIdCaptureMode::PreserveExisting,
+    );
+
+    assert_eq!(world.last_task_id.as_deref(), Some("ingest-task-456"));
+}
+
+#[test]
 fn parse_task_briefs_reads_task_summary_lines() {
     let stdout = "task task-123: kind=sync status=completed repo=bitloops\n\
 task task-456: kind=ingest status=queued repo=bitloops";
@@ -365,6 +410,52 @@ task task-123: kind=sync status=queued repo=bitloops\n";
             }],
         }
     );
+}
+
+#[test]
+fn devql_task_queue_status_is_idle_requires_zero_queued_and_running_tasks() {
+    let busy = DevqlTaskQueueStatusSnapshot {
+        state: "running".to_string(),
+        queued: 1,
+        running: 0,
+        failed: 0,
+        completed_recent: 0,
+        pause_reason: None,
+        last_action: Some("enqueue".to_string()),
+        current_repo_tasks: vec![],
+    };
+    let idle = DevqlTaskQueueStatusSnapshot {
+        queued: 0,
+        running: 0,
+        ..busy.clone()
+    };
+
+    assert!(!devql_task_queue_status_is_idle(&busy));
+    assert!(devql_task_queue_status_is_idle(&idle));
+}
+
+#[test]
+fn assert_last_task_id_matches_kind_accepts_matching_ingest_id() {
+    let world = QatWorld {
+        last_task_id: Some("ingest-task-123".to_string()),
+        ..Default::default()
+    };
+
+    assert!(assert_last_task_id_matches_kind(&world, "ingest").is_ok());
+}
+
+#[test]
+fn assert_last_task_id_matches_kind_rejects_mismatched_kind() {
+    let world = QatWorld {
+        last_task_id: Some("sync-task-999".to_string()),
+        ..Default::default()
+    };
+
+    let err = assert_last_task_id_matches_kind(&world, "ingest")
+        .expect_err("mismatched kind should fail");
+    assert!(err
+        .to_string()
+        .contains("expected tracked DevQL task kind `ingest`"));
 }
 
 #[test]
