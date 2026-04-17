@@ -34,6 +34,12 @@ stage `items(first: ...)`.
 3. Rerun with `artefacts(first: ...)` or the relevant stage `items(first: ...)`.
 4. Return the concrete rows. Summaries are optional follow-up, not substitutes.
 
+## Sandbox Execution
+
+- In sandboxed agent environments, run `bitloops devql ...` outside the sandbox by default.
+- These commands rely on Bitloops-managed daemon and runtime state under platform app directories, so they can fail inside a workspace-only sandbox even when DevQL is healthy.
+- If your platform requires approval or escalation for out-of-sandbox commands, request it immediately before running `bitloops devql ...`.
+
 ## Core Commands
 
 ```bash
