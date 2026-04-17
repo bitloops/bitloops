@@ -237,7 +237,9 @@ pub(super) fn then_agent_interaction_exists_before_commit(
         run_step(
             "agent interaction exists before commit",
             helpers::assert_agent_interaction_exists_before_commit_for_repo(
-                world, &repo_name, &agent_name,
+                world,
+                &repo_name,
+                &agent_name,
             ),
         );
     })

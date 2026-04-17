@@ -9,6 +9,7 @@ use crate::qat_support::world::QatRunConfig;
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::daemon::CapabilityEventRunStatus;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
+use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
 use bitloops::host::runtime_store::DaemonSqliteRuntimeStore;
 
 #[test]
@@ -278,7 +279,12 @@ fn build_devql_task_enqueue_args_builds_ingest_command_with_status() {
 fn build_devql_task_enqueue_args_supports_paths_and_require_daemon_flags() {
     let args = build_devql_task_enqueue_args(
         DevqlTaskEnqueueKind::Sync,
-        &["--paths", "src/main.rs,src/lib.rs", "--require-daemon", "--status"],
+        &[
+            "--paths",
+            "src/main.rs,src/lib.rs",
+            "--require-daemon",
+            "--status",
+        ],
     );
     assert_eq!(
         args,
@@ -1227,6 +1233,108 @@ fn smoke_session_id_uses_agent_and_run_slug() {
         "claude-code-run"
     );
     assert_eq!(smoke_session_id(&world, AGENT_NAME_CODEX), "codex-run");
+}
+
+fn sample_interaction_session(session_id: &str, agent_type: &str) -> InteractionSession {
+    InteractionSession {
+        session_id: session_id.to_string(),
+        repo_id: "repo-test".to_string(),
+        agent_type: agent_type.to_string(),
+        transcript_path: format!("/tmp/{session_id}.jsonl"),
+        started_at: "2026-04-17T10:00:00Z".to_string(),
+        last_event_at: "2026-04-17T10:00:00Z".to_string(),
+        updated_at: "2026-04-17T10:00:00Z".to_string(),
+        ..Default::default()
+    }
+}
+
+fn sample_interaction_turn(
+    turn_id: &str,
+    session_id: &str,
+    agent_type: &str,
+    checkpoint_id: Option<&str>,
+) -> InteractionTurn {
+    InteractionTurn {
+        turn_id: turn_id.to_string(),
+        session_id: session_id.to_string(),
+        repo_id: "repo-test".to_string(),
+        turn_number: 1,
+        prompt: "make the requested change".to_string(),
+        agent_type: agent_type.to_string(),
+        model: "gpt-5.4".to_string(),
+        started_at: "2026-04-17T10:00:01Z".to_string(),
+        ended_at: Some("2026-04-17T10:00:02Z".to_string()),
+        files_modified: vec!["src/lib.rs".to_string()],
+        checkpoint_id: checkpoint_id.map(str::to_string),
+        updated_at: "2026-04-17T10:00:02Z".to_string(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn collect_agent_pre_commit_interactions_returns_matching_session_and_uncheckpointed_turns() {
+    let sessions = vec![
+        sample_interaction_session("claude-session", AGENT_NAME_CLAUDE_CODE),
+        sample_interaction_session("cursor-session", AGENT_NAME_CURSOR),
+    ];
+    let turns = vec![
+        sample_interaction_turn(
+            "claude-turn-1",
+            "claude-session",
+            AGENT_NAME_CLAUDE_CODE,
+            None,
+        ),
+        sample_interaction_turn("cursor-turn-1", "cursor-session", AGENT_NAME_CURSOR, None),
+    ];
+
+    let snapshot =
+        collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
+
+    assert_eq!(snapshot.session_ids, vec!["claude-session".to_string()]);
+    assert_eq!(
+        snapshot.uncheckpointed_turn_ids,
+        vec!["claude-turn-1".to_string()]
+    );
+}
+
+#[test]
+fn collect_agent_pre_commit_interactions_ignores_turns_for_other_sessions() {
+    let sessions = vec![sample_interaction_session(
+        "claude-session",
+        AGENT_NAME_CLAUDE_CODE,
+    )];
+    let turns = vec![sample_interaction_turn(
+        "cursor-turn-1",
+        "cursor-session",
+        AGENT_NAME_CURSOR,
+        None,
+    )];
+
+    let snapshot =
+        collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
+
+    assert_eq!(snapshot.session_ids, vec!["claude-session".to_string()]);
+    assert!(snapshot.uncheckpointed_turn_ids.is_empty());
+}
+
+#[test]
+fn collect_agent_pre_commit_interactions_ignores_checkpointed_turns() {
+    let sessions = vec![sample_interaction_session(
+        "claude-session",
+        AGENT_NAME_CLAUDE_CODE,
+    )];
+    let turns = vec![sample_interaction_turn(
+        "claude-turn-1",
+        "claude-session",
+        AGENT_NAME_CLAUDE_CODE,
+        Some("checkpoint-1"),
+    )];
+
+    let snapshot =
+        collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
+
+    assert_eq!(snapshot.session_ids, vec!["claude-session".to_string()]);
+    assert!(snapshot.uncheckpointed_turn_ids.is_empty());
 }
 
 #[test]

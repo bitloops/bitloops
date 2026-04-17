@@ -2341,20 +2341,104 @@ pub fn assert_claude_session_exists_for_repo(world: &QatWorld, repo_name: &str) 
     assert_agent_session_exists_for_repo(world, repo_name, AGENT_NAME_CLAUDE_CODE)
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct AgentPreCommitInteractionSnapshot {
+    session_ids: Vec<String>,
+    uncheckpointed_turn_ids: Vec<String>,
+}
+
+fn collect_agent_pre_commit_interactions(
+    sessions: &[InteractionSession],
+    turns: &[InteractionTurn],
+    agent_name: &str,
+) -> AgentPreCommitInteractionSnapshot {
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
+    let session_ids: Vec<String> = sessions
+        .iter()
+        .filter(|session| session.agent_type == normalised_agent_name)
+        .map(|session| session.session_id.clone())
+        .collect();
+
+    let uncheckpointed_turn_ids = turns
+        .iter()
+        .filter(|turn| {
+            turn.checkpoint_id.is_none()
+                && session_ids
+                    .iter()
+                    .any(|session_id| session_id == &turn.session_id)
+        })
+        .map(|turn| turn.turn_id.clone())
+        .collect();
+
+    AgentPreCommitInteractionSnapshot {
+        session_ids,
+        uncheckpointed_turn_ids,
+    }
+}
+
+fn load_agent_pre_commit_interactions(
+    world: &QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+) -> Result<AgentPreCommitInteractionSnapshot> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
+    let (sessions, turns) = with_scenario_app_env(world, || {
+        let runtime_store = RepoSqliteRuntimeStore::open(world.repo_dir())?;
+        let spool = runtime_store.interaction_spool()?;
+        let sessions = spool.list_sessions(Some(normalised_agent_name), 100)?;
+        let turns = spool.list_uncheckpointed_turns()?;
+        Ok::<_, anyhow::Error>((sessions, turns))
+    })
+    .context("listing Bitloops interaction spool state before commit")?;
+
+    Ok(collect_agent_pre_commit_interactions(
+        &sessions,
+        &turns,
+        normalised_agent_name,
+    ))
+}
+
 pub fn assert_agent_interaction_exists_before_commit_for_repo(
     world: &QatWorld,
     repo_name: &str,
     agent_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    assert_agent_session_exists_for_repo(world, repo_name, agent_name)?;
+    let normalised_agent_name = normalise_smoke_agent_name(agent_name);
+    let snapshot = load_agent_pre_commit_interactions(world, repo_name, normalised_agent_name)?;
+
+    ensure!(
+        !snapshot.session_ids.is_empty(),
+        "expected persisted {normalised_agent_name} interaction session before commit, found none"
+    );
+    ensure!(
+        snapshot.session_ids.iter().all(|session_id| !session_id.trim().is_empty()),
+        "expected persisted {normalised_agent_name} interaction sessions to have non-empty ids, found {:?}",
+        snapshot.session_ids
+    );
+    ensure!(
+        !snapshot.uncheckpointed_turn_ids.is_empty(),
+        "expected uncheckpointed {normalised_agent_name} interaction turns before commit for sessions {:?}, found none",
+        snapshot.session_ids
+    );
+    ensure!(
+        snapshot
+            .uncheckpointed_turn_ids
+            .iter()
+            .all(|turn_id| !turn_id.trim().is_empty()),
+        "expected persisted {normalised_agent_name} interaction turns to have non-empty ids, found {:?}",
+        snapshot.uncheckpointed_turn_ids
+    );
 
     let mappings = with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
         .context("reading Bitloops checkpoint mappings before commit")?;
     ensure!(
         mappings.is_empty(),
-        "expected no checkpoint mappings before commit, found {}",
-        mappings.len()
+        "expected no checkpoint mappings before commit, found {} with interaction sessions {:?} and turns {:?}",
+        mappings.len(),
+        snapshot.session_ids,
+        snapshot.uncheckpointed_turn_ids
     );
     Ok(())
 }

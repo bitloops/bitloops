@@ -1014,9 +1014,7 @@ pub(super) fn given_attempt_to_enqueue_devql_sync_task_require_daemon(
         let repo_name = ctx.matches[1].1.clone();
         run_step(
             "I attempt to enqueue DevQL sync task with require-daemon",
-            helpers::attempt_to_enqueue_devql_sync_task_require_daemon_for_repo(
-                world, &repo_name,
-            ),
+            helpers::attempt_to_enqueue_devql_sync_task_require_daemon_for_repo(world, &repo_name),
         );
     })
 }
