@@ -453,9 +453,10 @@ fn assert_last_task_id_matches_kind_rejects_mismatched_kind() {
 
     let err = assert_last_task_id_matches_kind(&world, "ingest")
         .expect_err("mismatched kind should fail");
-    assert!(err
-        .to_string()
-        .contains("expected tracked DevQL task kind `ingest`"));
+    assert!(
+        err.to_string()
+            .contains("expected tracked DevQL task kind `ingest`")
+    );
 }
 
 #[test]
