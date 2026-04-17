@@ -4,14 +4,19 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::adapters::agents::AgentAdapterRegistry;
-use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
+use crate::capability_packs::semantic_clones::workplane::{
+    activate_deferred_pipeline_mailboxes, activate_embedding_pipeline_mailboxes,
+    activate_summary_refresh_mailbox,
+};
 use crate::cli::embeddings::{
-    EmbeddingsRuntime, install_or_bootstrap_embeddings, install_or_configure_platform_embeddings,
+    install_or_bootstrap_embeddings, install_or_configure_platform_embeddings,
+    platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
     PreparedSummarySetupAction, SummarySetupSelection, configure_cloud_summary_generation,
     configure_local_summary_generation, platform_summary_gateway_url_override,
     prepare_cloud_summary_generation_plan, prepare_local_summary_generation_plan,
+    summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -23,10 +28,10 @@ use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_i
 
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
-    AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, choose_summary_setup_during_init,
-    detect_or_select_agent, ensure_repo_local_policy_excluded, maybe_install_default_daemon,
-    normalize_cli_exclusions, normalize_exclude_from_paths, should_install_embeddings_during_init,
-    should_run_initial_ingest, should_run_initial_sync,
+    AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, InitEmbeddingsSetupSelection,
+    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_local_policy_excluded,
+    maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
+    should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
 };
 
 fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
@@ -138,38 +143,31 @@ pub(super) async fn run_for_project_root(
         args.force,
         out,
     )?;
-    if args.install_default_daemon {
-        activate_deferred_pipeline_mailboxes(&git_root, "init")
-            .context("activating semantic clones deferred mailboxes for init")?;
-    }
-
     let mut embeddings_bootstrap = None;
     let mut prepared_summary_setup = None;
-    let should_install_embeddings = should_install_embeddings_during_init(
-        project_root,
-        args.install_default_daemon,
-        out,
-        input,
-    )?;
-    if should_install_embeddings {
-        if args.embeddings_runtime == EmbeddingsRuntime::Platform {
-            let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "`bitloops init --embeddings-runtime platform` requires `--embeddings-gateway-url`"
-                )
-            })?;
+    let embeddings_selection =
+        should_install_embeddings_during_init(project_root, &args, out, input)?;
+    match embeddings_selection {
+        InitEmbeddingsSetupSelection::Existing => {}
+        InitEmbeddingsSetupSelection::Cloud => {
+            let gateway_url =
+                platform_embeddings_gateway_url_override(args.embeddings_gateway_url.as_deref());
             for line in install_or_configure_platform_embeddings(
                 project_root,
-                gateway_url,
+                gateway_url.as_deref(),
                 &args.embeddings_api_key_env,
             )? {
                 writeln!(out, "{line}")?;
             }
-        } else if args.install_default_daemon {
-            embeddings_bootstrap = Some(resolve_embeddings_bootstrap_request(project_root)?);
-        } else {
-            install_embeddings_during_init(project_root, out)?;
         }
+        InitEmbeddingsSetupSelection::Local => {
+            if args.install_default_daemon {
+                embeddings_bootstrap = Some(resolve_embeddings_bootstrap_request(project_root)?);
+            } else {
+                install_embeddings_during_init(project_root, out)?;
+            }
+        }
+        InitEmbeddingsSetupSelection::Skip => {}
     }
     match choose_summary_setup_during_init(project_root, args.install_default_daemon, out, input)
         .await?
@@ -223,6 +221,18 @@ pub(super) async fn run_for_project_root(
             }
         }
         SummarySetupSelection::Skip => {}
+    }
+    if args.install_default_daemon {
+        activate_selected_init_mailboxes(
+            &git_root,
+            matches!(
+                embeddings_selection,
+                InitEmbeddingsSetupSelection::Existing
+                    | InitEmbeddingsSetupSelection::Cloud
+                    | InitEmbeddingsSetupSelection::Local
+            ),
+            prepared_summary_setup.is_some() || summary_generation_configured(project_root),
+        )?;
     }
     let should_sync = should_run_initial_sync(args.sync, out, input)?;
     let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
@@ -330,6 +340,22 @@ fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> R
         Err(err) => {
             bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
         }
+    }
+}
+
+fn activate_selected_init_mailboxes(
+    repo_root: &Path,
+    embeddings_enabled: bool,
+    summaries_enabled: bool,
+) -> Result<()> {
+    match (embeddings_enabled, summaries_enabled) {
+        (true, true) => activate_deferred_pipeline_mailboxes(repo_root, "init")
+            .context("activating semantic clones deferred mailboxes for init"),
+        (true, false) => activate_embedding_pipeline_mailboxes(repo_root, "init")
+            .context("activating semantic clones embedding mailboxes for init"),
+        (false, true) => activate_summary_refresh_mailbox(repo_root, "init")
+            .context("activating semantic clones summary mailboxes for init"),
+        (false, false) => Ok(()),
     }
 }
 

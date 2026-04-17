@@ -6,6 +6,7 @@ mod profiles;
 mod tests;
 
 pub(crate) use args::enqueue_embeddings_bootstrap_task;
+pub(crate) use args::platform_embeddings_gateway_url_override;
 pub(crate) use args::run_async;
 pub use args::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsDoctorArgs,
@@ -26,7 +27,8 @@ pub(crate) use profiles::{
 
 #[cfg(test)]
 pub(crate) use managed::{
-    ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+    ManagedEmbeddingsBinaryInstallOutcome, ManagedPlatformEmbeddingsBinaryInstallOutcome,
+    with_managed_embeddings_install_hook, with_managed_platform_embeddings_install_hook,
 };
 
 #[cfg(test)]

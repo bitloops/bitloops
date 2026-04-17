@@ -13,6 +13,9 @@ use crate::cli::inference::{
     SummarySetupSelection, prompt_summary_setup_selection, summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
+use crate::cli::terminal_picker::{
+    SingleSelectOption, can_use_terminal_picker, prompt_single_select,
+};
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment};
 
 #[path = "init/agent_hooks.rs"]
@@ -28,6 +31,7 @@ pub use agent_selection::detect_or_select_agent;
 
 pub type AgentSelector = dyn Fn(&[String]) -> std::result::Result<Vec<String>, String>;
 const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
+const NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR: &str = "`bitloops init --install-default-daemon` requires an explicit embeddings choice when not running interactively. Pass `--embeddings-runtime local`, `--embeddings-runtime platform`, or `--no-embeddings`.";
 
 #[cfg(test)]
 type InstallDefaultDaemonHook = dyn Fn(bool) -> Result<()> + 'static;
@@ -36,6 +40,14 @@ type InstallDefaultDaemonHook = dyn Fn(bool) -> Result<()> + 'static;
 thread_local! {
     static INSTALL_DEFAULT_DAEMON_HOOK: RefCell<Option<Rc<InstallDefaultDaemonHook>>> =
         RefCell::new(None);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InitEmbeddingsSetupSelection {
+    Existing,
+    Cloud,
+    Local,
+    Skip,
 }
 
 #[derive(Args)]
@@ -95,8 +107,18 @@ pub struct InitArgs {
     pub exclude_from: Vec<String>,
 
     /// Select which embeddings runtime to configure when embeddings are installed during init.
-    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
-    pub embeddings_runtime: EmbeddingsRuntime,
+    #[arg(long, value_enum)]
+    pub embeddings_runtime: Option<EmbeddingsRuntime>,
+
+    /// Skip embeddings setup during init.
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with = "embeddings_runtime",
+        conflicts_with = "embeddings_gateway_url",
+        conflicts_with = "embeddings_api_key_env"
+    )]
+    pub no_embeddings: bool,
 
     /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
     #[arg(long)]
@@ -157,26 +179,49 @@ async fn run_with_io_async_for_project_root(
 
 fn should_install_embeddings_during_init(
     repo_root: &Path,
-    explicit_install: bool,
+    args: &InitArgs,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
-) -> Result<bool> {
-    if explicit_install {
-        return Ok(true);
-    }
-
-    if !telemetry_consent::can_prompt_interactively() {
-        return Ok(false);
-    }
-
+) -> Result<InitEmbeddingsSetupSelection> {
     if !matches!(
         inspect_embeddings_install_state(repo_root),
         EmbeddingsInstallState::NotConfigured
     ) {
-        return Ok(false);
+        return Ok(InitEmbeddingsSetupSelection::Existing);
     }
 
-    prompt_install_embeddings(out, input)
+    if args.install_default_daemon {
+        if args.no_embeddings {
+            return Ok(InitEmbeddingsSetupSelection::Skip);
+        }
+
+        if let Some(runtime) = args.embeddings_runtime {
+            return Ok(match runtime {
+                EmbeddingsRuntime::Local => InitEmbeddingsSetupSelection::Local,
+                EmbeddingsRuntime::Platform => InitEmbeddingsSetupSelection::Cloud,
+            });
+        }
+
+        if !telemetry_consent::can_prompt_interactively() {
+            bail!(NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR);
+        }
+        return prompt_install_embeddings_setup_selection(out, input);
+    }
+
+    if !telemetry_consent::can_prompt_interactively() {
+        return Ok(InitEmbeddingsSetupSelection::Skip);
+    }
+
+    Ok(if args.no_embeddings {
+        InitEmbeddingsSetupSelection::Skip
+    } else if prompt_install_embeddings(out, input)? {
+        match args.embeddings_runtime {
+            Some(EmbeddingsRuntime::Platform) => InitEmbeddingsSetupSelection::Cloud,
+            Some(EmbeddingsRuntime::Local) | None => InitEmbeddingsSetupSelection::Local,
+        }
+    } else {
+        InitEmbeddingsSetupSelection::Skip
+    })
 }
 
 fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
@@ -200,6 +245,90 @@ fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Re
             "" | "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
             _ => writeln!(out, "Please answer yes or no.")?,
+        }
+    }
+}
+
+fn prompt_install_embeddings_setup_selection(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<InitEmbeddingsSetupSelection> {
+    if can_use_terminal_picker() {
+        return prompt_install_embeddings_setup_selection_with_picker(out);
+    }
+
+    prompt_install_embeddings_setup_selection_with_text_input(out, input)
+}
+
+fn prompt_install_embeddings_setup_selection_with_picker(
+    out: &mut dyn Write,
+) -> Result<InitEmbeddingsSetupSelection> {
+    let options = vec![
+        SingleSelectOption::new(
+            "Bitloops cloud (recommended)",
+            vec![
+                "Uses the hosted Bitloops embeddings runtime and avoids a local model download."
+                    .to_string(),
+            ],
+        ),
+        SingleSelectOption::new(
+            "Local runtime",
+            vec!["Downloads and manages the local embeddings runtime on this machine.".to_string()],
+        ),
+        SingleSelectOption::new("Skip for now", Vec::new()),
+    ];
+
+    writeln!(out)?;
+    let selection = prompt_single_select(
+        out,
+        "How would you like Bitloops to configure embeddings?",
+        &options,
+        0,
+        &[],
+    )?;
+
+    Ok(match selection {
+        0 => InitEmbeddingsSetupSelection::Cloud,
+        1 => InitEmbeddingsSetupSelection::Local,
+        2 => InitEmbeddingsSetupSelection::Skip,
+        _ => unreachable!("terminal picker returned invalid embeddings selection"),
+    })
+}
+
+fn prompt_install_embeddings_setup_selection_with_text_input(
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<InitEmbeddingsSetupSelection> {
+    writeln!(out)?;
+    writeln!(out, "How would you like Bitloops to configure embeddings?")?;
+    writeln!(out, "1. Bitloops cloud (recommended)")?;
+    writeln!(
+        out,
+        "   Uses the hosted Bitloops embeddings runtime and avoids a local model download."
+    )?;
+    writeln!(out, "2. Local runtime")?;
+    writeln!(
+        out,
+        "   Downloads and manages the local embeddings runtime on this machine."
+    )?;
+    writeln!(out, "3. Skip for now")?;
+
+    loop {
+        writeln!(out, "Select an option [1/2/3]")?;
+        write!(out, "> ")?;
+        out.flush()?;
+
+        let mut line = String::new();
+        input
+            .read_line(&mut line)
+            .context("reading init embeddings setup selection")?;
+        match line.trim().to_ascii_lowercase().as_str() {
+            "" | "1" | "cloud" | "bitloops" => return Ok(InitEmbeddingsSetupSelection::Cloud),
+            "2" | "local" => return Ok(InitEmbeddingsSetupSelection::Local),
+            "3" | "skip" | "later" | "none" => {
+                return Ok(InitEmbeddingsSetupSelection::Skip);
+            }
+            _ => writeln!(out, "Please choose 1, 2, or 3.")?,
         }
     }
 }

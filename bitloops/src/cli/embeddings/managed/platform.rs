@@ -7,6 +7,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(test)]
+use std::cell::RefCell;
+#[cfg(test)]
+use std::rc::Rc;
+
 use crate::config::{
     prepare_daemon_platform_embeddings_install, resolve_daemon_config_path_for_repo,
 };
@@ -36,10 +41,10 @@ enum ManagedPlatformEmbeddingsReleaseRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ManagedPlatformEmbeddingsBinaryInstallOutcome {
-    version: String,
-    binary_path: PathBuf,
-    freshly_installed: bool,
+pub(crate) struct ManagedPlatformEmbeddingsBinaryInstallOutcome {
+    pub(crate) version: String,
+    pub(crate) binary_path: PathBuf,
+    pub(crate) freshly_installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,9 +72,19 @@ struct ManagedPlatformEmbeddingsAssetSpec {
     archive_kind: ManagedEmbeddingsArchiveKind,
 }
 
+#[cfg(test)]
+type ManagedPlatformEmbeddingsInstallHook =
+    dyn Fn() -> Result<ManagedPlatformEmbeddingsBinaryInstallOutcome> + 'static;
+
+#[cfg(test)]
+thread_local! {
+    static MANAGED_PLATFORM_EMBEDDINGS_INSTALL_HOOK:
+        RefCell<Option<Rc<ManagedPlatformEmbeddingsInstallHook>>> = RefCell::new(None);
+}
+
 pub(crate) fn install_or_configure_platform_embeddings(
     repo_root: &Path,
-    gateway_url: &str,
+    gateway_url: Option<&str>,
     api_key_env: &str,
 ) -> Result<Vec<String>> {
     let config_path = resolve_daemon_config_path_for_repo(repo_root)?;
@@ -113,6 +128,12 @@ pub(crate) fn install_or_configure_platform_embeddings(
 
 fn install_managed_platform_embeddings_binary()
 -> Result<ManagedPlatformEmbeddingsBinaryInstallOutcome> {
+    #[cfg(test)]
+    if let Some(hook) = MANAGED_PLATFORM_EMBEDDINGS_INSTALL_HOOK.with(|cell| cell.borrow().clone())
+    {
+        return hook();
+    }
+
     let binary_path = managed_platform_embeddings_binary_path()?;
     let install_metadata = load_managed_platform_embeddings_install_metadata()?;
     let release_request = managed_platform_embeddings_release_request();
@@ -134,6 +155,25 @@ fn install_managed_platform_embeddings_binary()
 
     let release = fetch_managed_platform_embeddings_release(&release_request)?;
     install_managed_platform_embeddings_binary_from_release(&release)
+}
+
+#[cfg(test)]
+pub(crate) fn with_managed_platform_embeddings_install_hook<T>(
+    hook: impl Fn() -> Result<ManagedPlatformEmbeddingsBinaryInstallOutcome> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    MANAGED_PLATFORM_EMBEDDINGS_INSTALL_HOOK.with(|cell| {
+        assert!(
+            cell.borrow().is_none(),
+            "managed platform embeddings install hook already installed"
+        );
+        *cell.borrow_mut() = Some(Rc::new(hook));
+    });
+    let result = f();
+    MANAGED_PLATFORM_EMBEDDINGS_INSTALL_HOOK.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
 }
 
 fn managed_platform_embeddings_binary_name() -> &'static str {

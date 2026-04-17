@@ -823,6 +823,28 @@ type SubscriptionRoot {
 	taskProgress(taskId: String!): TaskProgressEvent!
 }
 
+type SummaryBootstrapProgress {
+	phase: String!
+	assetName: String
+	bytesDownloaded: Int!
+	bytesTotal: Int
+	version: String
+	message: String
+}
+
+type SummaryBootstrapResult {
+	outcomeKind: String!
+	modelName: String
+	message: String!
+}
+
+type SummaryBootstrapTaskSpec {
+	action: String!
+	message: String
+	modelName: String
+	gatewayUrlOverride: String
+}
+
 type SyncResult {
 	success: Boolean!
 	mode: String!
@@ -904,18 +926,22 @@ type Task {
 	syncSpec: SyncTaskSpec
 	ingestSpec: IngestTaskSpec
 	embeddingsBootstrapSpec: EmbeddingsBootstrapTaskSpec
+	summaryBootstrapSpec: SummaryBootstrapTaskSpec
 	syncProgress: SyncTaskProgress
 	ingestProgress: IngestionProgressEvent
 	embeddingsBootstrapProgress: EmbeddingsBootstrapProgress
+	summaryBootstrapProgress: SummaryBootstrapProgress
 	syncResult: SyncResult
 	ingestResult: IngestResult
 	embeddingsBootstrapResult: EmbeddingsBootstrapResult
+	summaryBootstrapResult: SummaryBootstrapResult
 }
 
 enum TaskKind {
 	SYNC
 	INGEST
 	EMBEDDINGS_BOOTSTRAP
+	SUMMARY_BOOTSTRAP
 }
 
 type TaskKindCounts {

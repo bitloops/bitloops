@@ -211,7 +211,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
 
 pub(crate) fn prepare_daemon_platform_embeddings_install(
     config_path: &Path,
-    gateway_url: &str,
+    gateway_url: Option<&str>,
     api_key_env: &str,
 ) -> Result<DaemonEmbeddingsInstallPlan> {
     const DEFAULT_PLATFORM_PROFILE: &str = "platform_code";
@@ -264,8 +264,10 @@ pub(crate) fn prepare_daemon_platform_embeddings_install(
         runtime["command"] = Item::Value("bitloops-platform-embeddings".into());
 
         let mut args = Array::new();
-        args.push("--gateway-url");
-        args.push(gateway_url);
+        if let Some(gateway_url) = gateway_url {
+            args.push("--gateway-url");
+            args.push(gateway_url);
+        }
         args.push("--api-key-env");
         args.push(api_key_env);
         runtime["args"] = Item::Value(TomlValue::Array(args));

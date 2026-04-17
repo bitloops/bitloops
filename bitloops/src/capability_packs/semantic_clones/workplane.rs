@@ -94,6 +94,16 @@ pub fn activate_embedding_pipeline_mailboxes(repo_root: &Path, source: &str) -> 
     )
 }
 
+pub fn activate_summary_refresh_mailbox(repo_root: &Path, source: &str) -> Result<()> {
+    let store = open_workplane_store_for_repo(repo_root)?;
+    store.set_capability_workplane_mailbox_intents(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        std::iter::once(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX),
+        true,
+        Some(source),
+    )
+}
+
 pub fn resolve_effective_mailbox_intent(
     workplane: &dyn CapabilityWorkplaneGateway,
     config: &SemanticClonesConfig,

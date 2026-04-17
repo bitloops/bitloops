@@ -20,3 +20,7 @@ pub(crate) use platform::install_or_configure_platform_embeddings;
 pub(crate) use install::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
 };
+#[cfg(test)]
+pub(crate) use platform::{
+    ManagedPlatformEmbeddingsBinaryInstallOutcome, with_managed_platform_embeddings_install_hook,
+};

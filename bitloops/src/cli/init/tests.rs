@@ -5,7 +5,8 @@ use super::*;
 use crate::adapters::agents::{AGENT_NAME_COPILOT, AGENT_NAME_OPEN_CODE};
 use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::embeddings::{
-    ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+    ManagedEmbeddingsBinaryInstallOutcome, ManagedPlatformEmbeddingsBinaryInstallOutcome,
+    with_managed_embeddings_install_hook, with_managed_platform_embeddings_install_hook,
 };
 use crate::cli::inference::{
     OllamaAvailability, with_ollama_probe_hook, with_summary_generation_configured_hook,
@@ -14,6 +15,7 @@ use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
     with_test_assume_daemon_running, with_test_tty_override,
 };
+use crate::cli::terminal_picker::with_single_select_hook;
 use crate::cli::{Cli, Commands};
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ensure_daemon_config_exists};
 use crate::test_support::process_state::{with_env_vars, with_process_state};
@@ -78,8 +80,18 @@ fn with_temp_app_dirs<T>(
     assume_daemon_running: bool,
     f: impl FnOnce() -> T,
 ) -> T {
+    with_temp_app_dirs_and_summary_configured(temp, tty, assume_daemon_running, true, f)
+}
+
+fn with_temp_app_dirs_and_summary_configured<T>(
+    temp: &TempDir,
+    tty: bool,
+    assume_daemon_running: bool,
+    summary_configured: bool,
+    f: impl FnOnce() -> T,
+) -> T {
     with_summary_generation_configured_hook(
-        |_| true,
+        move |_| summary_configured,
         || {
             with_test_platform_dir_overrides(app_dir_overrides(temp), || {
                 with_test_tty_override(tty, || {
@@ -414,6 +426,59 @@ fn init_args_supports_install_default_daemon_flag() {
 }
 
 #[test]
+fn init_args_leave_embeddings_choice_unset_when_flags_are_omitted() {
+    let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(args.embeddings_runtime, None);
+    assert!(!args.no_embeddings);
+}
+
+#[test]
+fn init_args_support_explicit_platform_embeddings_runtime() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--embeddings-runtime", "platform"])
+        .expect("parse init platform embeddings runtime");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(
+        args.embeddings_runtime,
+        Some(crate::cli::embeddings::EmbeddingsRuntime::Platform)
+    );
+    assert!(!args.no_embeddings);
+}
+
+#[test]
+fn init_args_support_no_embeddings_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--no-embeddings"])
+        .expect("parse init no-embeddings flag");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert!(args.no_embeddings);
+    assert_eq!(args.embeddings_runtime, None);
+}
+
+#[test]
+fn init_args_reject_conflicting_no_embeddings_and_runtime_flags() {
+    let err = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--no-embeddings",
+        "--embeddings-runtime",
+        "platform",
+    ])
+    .err()
+    .expect("conflicting embeddings flags should fail");
+
+    assert!(err.to_string().contains("--no-embeddings"));
+}
+
+#[test]
 fn init_args_supports_skip_baseline_flag() {
     let parsed = Cli::try_parse_from(["bitloops", "init", "--skip-baseline"]).expect("parse init");
     let Some(Commands::Init(args)) = parsed.command else {
@@ -499,6 +564,51 @@ fn init_args_support_repeated_exclusion_flags() {
 }
 
 #[test]
+fn init_embeddings_prompt_defaults_to_cloud_in_picker_mode() {
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+
+    let selection = with_single_select_hook(
+        |_options, default_index| Ok(default_index),
+        || prompt_install_embeddings_setup_selection(&mut out, &mut input),
+    )
+    .expect("pick default embeddings selection");
+
+    assert_eq!(selection, InitEmbeddingsSetupSelection::Cloud);
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("How would you like Bitloops to configure embeddings?"));
+    assert!(rendered.contains("Bitloops cloud (recommended)"));
+    assert!(rendered.contains("Local runtime"));
+    assert!(rendered.contains("Skip for now"));
+}
+
+#[test]
+fn init_embeddings_prompt_accepts_text_input_variants() {
+    let mut out = Vec::new();
+    let mut input = Cursor::new("2\n");
+
+    let selection = prompt_install_embeddings_setup_selection(&mut out, &mut input)
+        .expect("read text embeddings selection");
+
+    assert_eq!(selection, InitEmbeddingsSetupSelection::Local);
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Select an option [1/2/3]"));
+}
+
+#[test]
+fn init_embeddings_prompt_reprompts_after_invalid_input() {
+    let mut out = Vec::new();
+    let mut input = Cursor::new("wat\n3\n");
+
+    let selection = prompt_install_embeddings_setup_selection(&mut out, &mut input)
+        .expect("read fallback embeddings selection");
+
+    assert_eq!(selection, InitEmbeddingsSetupSelection::Skip);
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.contains("Please choose 1, 2, or 3."));
+}
+
+#[test]
 fn init_args_reject_zero_backfill() {
     let err = Cli::try_parse_from(["bitloops", "init", "--backfill=0"])
         .err()
@@ -545,7 +655,8 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -609,7 +720,8 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -661,7 +773,8 @@ keep = true
                 backfill: None,
                 exclude: vec!["docs/**".to_string(), "**/third_party/**".to_string()],
                 exclude_from: vec![".bitloopsignore".to_string()],
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -713,7 +826,8 @@ fn run_init_binds_repo_to_running_daemon_config() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -762,7 +876,8 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: vec![outside_path.display().to_string()],
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -810,7 +925,8 @@ fn run_init_rewrites_existing_daemon_binding() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -866,7 +982,8 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -918,7 +1035,8 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                         backfill: None,
                         exclude: Vec::new(),
                         exclude_from: Vec::new(),
-                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        no_embeddings: false,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -966,7 +1084,8 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1008,7 +1127,8 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1048,7 +1168,8 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1088,7 +1209,8 @@ fn run_init_with_invalid_explicit_agent_errors() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1324,7 +1446,10 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_runtime: Some(
+                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            ),
+                            no_embeddings: false,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -1380,7 +1505,10 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_runtime: Some(
+                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            ),
+                            no_embeddings: false,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -1422,7 +1550,8 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                     backfill: None,
                     exclude: Vec::new(),
                     exclude_from: Vec::new(),
-                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                    no_embeddings: false,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -1476,7 +1605,10 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_runtime: Some(
+                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            ),
+                            no_embeddings: false,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -1545,8 +1677,10 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
                                     backfill: None,
                                     exclude: Vec::new(),
                                     exclude_from: Vec::new(),
-                                    embeddings_runtime:
+                                    embeddings_runtime: Some(
                                         crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                    ),
+                                    no_embeddings: false,
                                     embeddings_gateway_url: None,
                                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                         .to_string(),
@@ -1711,7 +1845,8 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             backfill: None,
                                                                             exclude: Vec::new(),
                                                                             exclude_from: Vec::new(),
-                                                                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                            embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                                                                            no_embeddings: false,
                                                                             embeddings_gateway_url: None,
                                                                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                         },
@@ -1868,8 +2003,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                             backfill: None,
                                             exclude: Vec::new(),
                                             exclude_from: Vec::new(),
-                                            embeddings_runtime:
+                                            embeddings_runtime: Some(
                                                 crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            ),
+                                            no_embeddings: false,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -1920,6 +2057,494 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
         *saw_start_init.borrow(),
         "init should start a runtime session for embeddings bootstrap"
     );
+}
+
+#[test]
+fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when_noninteractive() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        let err = runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    install_default_daemon: true,
+                                    force: false,
+                                    agent: Vec::new(),
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime: None,
+                                    no_embeddings: false,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect_err("non-interactive init should require an embeddings choice");
+
+                        assert!(
+                            format!("{err:#}")
+                                .contains(NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR)
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        let run_result = runtime.block_on(run_with_io_async_for_project_root(
+                            InitArgs {
+                                install_default_daemon: true,
+                                force: false,
+                                agent: vec![DEFAULT_AGENT.to_string()],
+                                telemetry: Some(false),
+                                no_telemetry: false,
+                                skip_baseline: false,
+                                sync: Some(false),
+                                ingest: Some(false),
+                                backfill: None,
+                                exclude: Vec::new(),
+                                exclude_from: Vec::new(),
+                                embeddings_runtime: None,
+                                no_embeddings: true,
+                                embeddings_gateway_url: None,
+                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                    .to_string(),
+                            },
+                            repo.path(),
+                            &mut out,
+                            &mut input,
+                            None,
+                        ));
+                        std::mem::forget(runtime);
+                        run_result.expect("run init without embeddings");
+
+                        let _ = String::from_utf8(out).expect("utf8 output");
+
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(daemon_config).expect("read daemon config");
+                        assert!(
+                            !daemon_config.contains("code_embeddings = "),
+                            "skip should leave embeddings unconfigured:\n{daemon_config}"
+                        );
+                        assert!(
+                            !daemon_config.contains("summary_embeddings = "),
+                            "skip should leave summary embeddings unconfigured:\n{daemon_config}"
+                        );
+
+                        let config_root = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init")
+                            .parent()
+                            .expect("daemon config parent")
+                            .to_path_buf();
+                        let store =
+                            crate::host::runtime_store::RepoSqliteRuntimeStore::open_for_roots(
+                                &config_root,
+                                repo.path(),
+                            )
+                            .expect("open repo runtime store");
+                        let status = store
+                            .load_capability_workplane_mailbox_status(
+                                crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID,
+                                crate::capability_packs::semantic_clones::workplane::SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES
+                                    .iter()
+                                    .copied(),
+                            )
+                            .expect("load mailbox status");
+                        assert!(
+                            !status
+                                .get(crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX)
+                                .is_some_and(|status| status.intent_active),
+                            "skip should not activate code embeddings mailbox: {status:#?}"
+                        );
+                        assert!(
+                            !status
+                                .get(crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX)
+                                .is_some_and(|status| status.intent_active),
+                            "skip should not activate summary embeddings mailbox: {status:#?}"
+                        );
+                        assert!(
+                            !status
+                                .get(crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
+                                .is_some_and(|status| status.intent_active),
+                            "skip should not activate clone rebuild mailbox: {status:#?}"
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gateway_env() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-cloud-embeddings";
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_env_vars(
+                    &[(
+                        "BITLOOPS_PLATFORM_GATEWAY_URL",
+                        Some("https://platform.example"),
+                    )],
+                    || {
+                        with_global_graphql_executor_hook(
+                            |_runtime_root, _query, variables| {
+                                assert_eq!(variables["telemetry"], serde_json::json!(false));
+                                Ok(serde_json::json!({
+                                    "updateCliTelemetryConsent": {
+                                        "telemetry": false,
+                                        "needsPrompt": false
+                                    }
+                                }))
+                            },
+                            || {
+                                with_managed_platform_embeddings_install_hook(
+                                    {
+                                        let repo_root = repo.path().to_path_buf();
+                                        move || {
+                                            Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                                                version: "v0.2.0".to_string(),
+                                                binary_path: repo_root
+                                                    .join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                                                freshly_installed: true,
+                                            })
+                                        }
+                                    },
+                                    || {
+                                        with_graphql_executor_hook(
+                                            {
+                                                let repo_id = repo_id.clone();
+                                                move |_repo_root, query, variables| {
+                                                    if query.contains("startInit(") {
+                                                        assert_eq!(variables["repoId"], repo_id);
+                                                        assert_eq!(
+                                                            variables["input"]["embeddingsBootstrap"],
+                                                            serde_json::Value::Null
+                                                        );
+                                                        assert_eq!(
+                                                            variables["input"]["summariesBootstrap"],
+                                                            serde_json::Value::Null
+                                                        );
+                                                        return Ok(runtime_start_init_result_json(
+                                                            session_id,
+                                                        ));
+                                                    }
+
+                                                    if query.contains("runtimeSnapshot(") {
+                                                        return Ok(runtime_snapshot_json(
+                                                            repo_id.as_str(),
+                                                            session_id,
+                                                            RuntimeSessionSnapshotFixture {
+                                                                status: "COMPLETED",
+                                                                top_lane_status: "COMPLETED",
+                                                                ..RuntimeSessionSnapshotFixture::default()
+                                                            },
+                                                        ));
+                                                    }
+
+                                                    panic!("unexpected repo-scoped query: {query}");
+                                                }
+                                            },
+                                            || {
+                                                let mut out = Vec::new();
+                                                let mut input = Cursor::new("1\n3\n");
+                                                let runtime = test_runtime();
+                                                runtime
+                                                    .block_on(run_with_io_async_for_project_root(
+                                                        InitArgs {
+                                                            install_default_daemon: true,
+                                                            force: false,
+                                                            agent: vec![DEFAULT_AGENT.to_string()],
+                                                            telemetry: Some(false),
+                                                            no_telemetry: false,
+                                                            skip_baseline: false,
+                                                            sync: Some(false),
+                                                            ingest: Some(false),
+                                                            backfill: None,
+                                                            exclude: Vec::new(),
+                                                            exclude_from: Vec::new(),
+                                                            embeddings_runtime: None,
+                                                            no_embeddings: false,
+                                                            embeddings_gateway_url: None,
+                                                            embeddings_api_key_env:
+                                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                    .to_string(),
+                                                        },
+                                                        repo.path(),
+                                                        &mut out,
+                                                        &mut input,
+                                                        None,
+                                                    ))
+                                                    .expect("run init with cloud embeddings");
+
+                                                let rendered =
+                                                    String::from_utf8(out).expect("utf8 output");
+                                                assert!(rendered.contains(
+                                                    "How would you like Bitloops to configure embeddings?"
+                                                ));
+                                                assert!(
+                                                    rendered.contains(
+                                                        "Configured platform embeddings in"
+                                                    )
+                                                );
+                                                assert!(rendered.contains(
+                                                    "Installed managed standalone `bitloops-platform-embeddings` runtime"
+                                                ));
+
+                                                let daemon_config = ensure_daemon_config_exists()
+                                                    .expect("resolve daemon config after init");
+                                                let daemon_config =
+                                                    std::fs::read_to_string(daemon_config)
+                                                        .expect("read daemon config");
+                                                assert!(daemon_config.contains(
+                                                    "code_embeddings = \"platform_code\""
+                                                ));
+                                                assert!(daemon_config.contains(
+                                                    "summary_embeddings = \"platform_code\""
+                                                ));
+                                                assert!(daemon_config.contains(
+                                                    "[inference.runtimes.bitloops_platform_embeddings]"
+                                                ));
+                                                assert!(daemon_config.contains(
+                                                    "https://platform.example/v1/embeddings"
+                                                ));
+
+                                                let config = crate::config::resolve_semantic_clones_config_for_repo(
+                                                    repo.path(),
+                                                );
+                                                let intent = crate::capability_packs::semantic_clones::workplane::load_effective_mailbox_intent_for_repo(repo.path(), &config)
+                                                    .expect("load mailbox intent");
+                                                assert!(intent.code_embeddings_active);
+                                                assert!(intent.summary_embeddings_active);
+                                                assert!(intent.clone_rebuild_active);
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_gateway_override() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-cloud-embeddings-default-gateway";
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_env_vars(&[("BITLOOPS_PLATFORM_GATEWAY_URL", None)], || {
+                    with_global_graphql_executor_hook(
+                        |_runtime_root, _query, variables| {
+                            assert_eq!(variables["telemetry"], serde_json::json!(false));
+                            Ok(serde_json::json!({
+                                "updateCliTelemetryConsent": {
+                                    "telemetry": false,
+                                    "needsPrompt": false
+                                }
+                            }))
+                        },
+                        || {
+                            with_managed_platform_embeddings_install_hook(
+                                {
+                                    let repo_root = repo.path().to_path_buf();
+                                    move || {
+                                        Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                                            version: "v0.2.0".to_string(),
+                                            binary_path: repo_root.join(
+                                                ".bitloops/test-bin/bitloops-platform-embeddings",
+                                            ),
+                                            freshly_installed: true,
+                                        })
+                                    }
+                                },
+                                || {
+                                    with_graphql_executor_hook(
+                                        {
+                                            let repo_id = repo_id.clone();
+                                            move |_repo_root, query, variables| {
+                                                if query.contains("startInit(") {
+                                                    assert_eq!(variables["repoId"], repo_id);
+                                                    assert_eq!(
+                                                        variables["input"]["embeddingsBootstrap"],
+                                                        serde_json::Value::Null
+                                                    );
+                                                    assert_eq!(
+                                                        variables["input"]["summariesBootstrap"],
+                                                        serde_json::Value::Null
+                                                    );
+                                                    return Ok(runtime_start_init_result_json(
+                                                        session_id,
+                                                    ));
+                                                }
+
+                                                if query.contains("runtimeSnapshot(") {
+                                                    return Ok(runtime_snapshot_json(
+                                                        repo_id.as_str(),
+                                                        session_id,
+                                                        RuntimeSessionSnapshotFixture {
+                                                            status: "COMPLETED",
+                                                            top_lane_status: "COMPLETED",
+                                                            ..RuntimeSessionSnapshotFixture::default(
+                                                            )
+                                                        },
+                                                    ));
+                                                }
+
+                                                panic!("unexpected repo-scoped query: {query}");
+                                            }
+                                        },
+                                        || {
+                                            let mut out = Vec::new();
+                                            let mut input = Cursor::new("1\n3\n");
+                                            let runtime = test_runtime();
+                                            runtime
+                                                .block_on(run_with_io_async_for_project_root(
+                                                    InitArgs {
+                                                        install_default_daemon: true,
+                                                        force: false,
+                                                        agent: vec![DEFAULT_AGENT.to_string()],
+                                                        telemetry: Some(false),
+                                                        no_telemetry: false,
+                                                        skip_baseline: false,
+                                                        sync: Some(false),
+                                                        ingest: Some(false),
+                                                        backfill: None,
+                                                        exclude: Vec::new(),
+                                                        exclude_from: Vec::new(),
+                                                        embeddings_runtime: None,
+                                                        no_embeddings: false,
+                                                        embeddings_gateway_url: None,
+                                                        embeddings_api_key_env:
+                                                            "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                .to_string(),
+                                                    },
+                                                    repo.path(),
+                                                    &mut out,
+                                                    &mut input,
+                                                    None,
+                                                ))
+                                                .expect(
+                                                    "cloud embeddings without a gateway override should succeed",
+                                                );
+
+                                            let daemon_config = ensure_daemon_config_exists()
+                                                .expect("resolve daemon config after init");
+                                            let daemon_config =
+                                                std::fs::read_to_string(daemon_config)
+                                                    .expect("read daemon config");
+                                            assert!(daemon_config.contains(
+                                                "args = [\"--api-key-env\", \"BITLOOPS_PLATFORM_GATEWAY_TOKEN\"]"
+                                            ));
+                                            assert!(
+                                                !daemon_config.contains("--gateway-url"),
+                                                "did not expect an explicit gateway override:\n{daemon_config}"
+                                            );
+                                        },
+                                    );
+                                },
+                            );
+                        },
+                    );
+                });
+            },
+        );
+    });
 }
 
 #[test]
@@ -2022,7 +2647,8 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                     backfill: None,
                                                     exclude: Vec::new(),
                                                     exclude_from: Vec::new(),
-                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                                                no_embeddings: false,
                                                 embeddings_gateway_url: None,
                                                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                 },
@@ -2181,7 +2807,8 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                                     exclude: Vec::new(),
                                                     exclude_from: Vec::new(),
                                                     embeddings_runtime:
-                                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                        Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                                                    no_embeddings: false,
                                                     embeddings_gateway_url: None,
                                                     embeddings_api_key_env:
                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -2335,7 +2962,8 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                     exclude: Vec::new(),
                                                     exclude_from: Vec::new(),
                                                     embeddings_runtime:
-                                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                        Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                                                    no_embeddings: false,
                                                     embeddings_gateway_url: None,
                                                     embeddings_api_key_env:
                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -2477,7 +3105,8 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                             backfill: None,
                                                                             exclude: Vec::new(),
                                                                             exclude_from: Vec::new(),
-                                                                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                            embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                                                                            no_embeddings: false,
                                                                             embeddings_gateway_url: None,
                                                                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                         },
@@ -2560,7 +3189,10 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            embeddings_runtime: Some(
+                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                            ),
+                            no_embeddings: false,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -2619,7 +3251,8 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     backfill: None,
                     exclude: Vec::new(),
                     exclude_from: Vec::new(),
-                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                    no_embeddings: false,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -2728,8 +3361,10 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             backfill: None,
                                             exclude: Vec::new(),
                                             exclude_from: Vec::new(),
-                                            embeddings_runtime:
+                                            embeddings_runtime: Some(
                                                 crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            ),
+                                            no_embeddings: false,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -2849,8 +3484,10 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             backfill: Some(10),
                                             exclude: Vec::new(),
                                             exclude_from: Vec::new(),
-                                            embeddings_runtime:
+                                            embeddings_runtime: Some(
                                                 crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            ),
+                                            no_embeddings: false,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),

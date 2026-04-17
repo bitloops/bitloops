@@ -14,6 +14,7 @@ use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipe
 use crate::cli::embeddings::{
     EmbeddingsInstallState, EmbeddingsRuntime, enqueue_embeddings_bootstrap_task,
     inspect_embeddings_install_state, install_or_configure_platform_embeddings,
+    platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
     SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
@@ -275,14 +276,12 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
                 }
             }
             EmbeddingsRuntime::Platform => {
-                let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "`bitloops enable --install-embeddings --embeddings-runtime platform` requires `--embeddings-gateway-url`"
-                    )
-                })?;
+                let gateway_url = platform_embeddings_gateway_url_override(
+                    args.embeddings_gateway_url.as_deref(),
+                );
                 for line in install_or_configure_platform_embeddings(
                     &cwd,
-                    gateway_url,
+                    gateway_url.as_deref(),
                     &args.embeddings_api_key_env,
                 )? {
                     writeln!(out, "{line}")?;

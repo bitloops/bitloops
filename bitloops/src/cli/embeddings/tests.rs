@@ -11,12 +11,12 @@ use super::managed::install::{
 use super::{
     EmbeddingsCommand, EmbeddingsInstallState, EmbeddingsRuntime,
     ManagedEmbeddingsBinaryInstallOutcome, clear_cache_for_profile, doctor_profile,
-    inspect_embeddings_install_state, install_or_bootstrap_embeddings, pull_profile,
-    with_managed_embeddings_install_hook,
+    inspect_embeddings_install_state, install_or_bootstrap_embeddings,
+    platform_embeddings_gateway_url_override, pull_profile, with_managed_embeddings_install_hook,
 };
 use crate::cli::Cli;
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_embedding_capability_config_for_repo};
-use crate::test_support::process_state::enter_process_state;
+use crate::test_support::process_state::{enter_process_state, with_env_vars};
 use clap::Parser;
 use std::fs;
 use std::io::{Cursor, Write};
@@ -415,6 +415,48 @@ fn embeddings_install_supports_platform_runtime_flags() {
         Some("https://gateway.example/v1/embeddings")
     );
     assert_eq!(args.api_key_env, "BITLOOPS_PLATFORM_GATEWAY_TOKEN");
+}
+
+#[test]
+fn platform_embeddings_gateway_url_override_prefers_explicit_flag() {
+    with_env_vars(
+        &[(
+            "BITLOOPS_PLATFORM_GATEWAY_URL",
+            Some("https://platform.example"),
+        )],
+        || {
+            assert_eq!(
+                platform_embeddings_gateway_url_override(Some(
+                    "https://override.example/v1/embeddings"
+                ))
+                .as_deref(),
+                Some("https://override.example/v1/embeddings")
+            );
+        },
+    );
+}
+
+#[test]
+fn platform_embeddings_gateway_url_override_derives_from_platform_gateway_env() {
+    with_env_vars(
+        &[(
+            "BITLOOPS_PLATFORM_GATEWAY_URL",
+            Some("https://platform.example"),
+        )],
+        || {
+            assert_eq!(
+                platform_embeddings_gateway_url_override(None).as_deref(),
+                Some("https://platform.example/v1/embeddings")
+            );
+        },
+    );
+}
+
+#[test]
+fn platform_embeddings_gateway_url_override_is_optional() {
+    with_env_vars(&[("BITLOOPS_PLATFORM_GATEWAY_URL", None)], || {
+        assert_eq!(platform_embeddings_gateway_url_override(None), None);
+    });
 }
 
 #[test]

@@ -37,6 +37,7 @@ impl BitloopsEmbeddingsIpcService {
         runtime: &InferenceRuntimeConfig,
         model: &str,
         cache_dir: Option<&Path>,
+        platform_backed: bool,
     ) -> Result<Self> {
         let session_config = PythonEmbeddingsSessionConfig {
             command: runtime.command.clone(),
@@ -45,6 +46,7 @@ impl BitloopsEmbeddingsIpcService {
             request_timeout_secs: runtime.request_timeout_secs,
             model: model.to_string(),
             cache_dir: cache_dir.map(Path::to_path_buf),
+            platform_backed,
             launch_artifact_fingerprint: embeddings_runtime_launch_artifact_fingerprint(
                 &runtime.command,
                 &runtime.args,
@@ -124,6 +126,7 @@ struct PythonEmbeddingsSessionConfig {
     request_timeout_secs: u64,
     model: String,
     cache_dir: Option<PathBuf>,
+    platform_backed: bool,
     launch_artifact_fingerprint: String,
     process_environment_fingerprint: String,
 }
@@ -294,6 +297,31 @@ fn shared_bitloops_embeddings_session_registry()
     })
 }
 
+#[cfg(test)]
+type PlatformRuntimeAuthEnvironmentHook = dyn Fn(&str) -> Result<Vec<(String, String)>>;
+#[cfg(test)]
+type PlatformRuntimeAuthEnvironmentHookCell =
+    std::cell::RefCell<Option<std::rc::Rc<PlatformRuntimeAuthEnvironmentHook>>>;
+
+#[cfg(test)]
+thread_local! {
+    static PLATFORM_RUNTIME_AUTH_ENVIRONMENT_HOOK: PlatformRuntimeAuthEnvironmentHookCell =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn with_platform_runtime_auth_environment_hook<T>(
+    hook: impl Fn(&str) -> Result<Vec<(String, String)>> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    PLATFORM_RUNTIME_AUTH_ENVIRONMENT_HOOK.with(|cell| {
+        let previous = cell.replace(Some(std::rc::Rc::new(hook)));
+        let output = f();
+        cell.replace(previous);
+        output
+    })
+}
+
 fn process_environment_fingerprint() -> String {
     let mut vars = std::env::vars_os()
         .map(|(key, value)| format!("{}={}", key.to_string_lossy(), value.to_string_lossy()))
@@ -367,6 +395,58 @@ fn sha256_hex(data: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn platform_runtime_api_key_env(args: &[String]) -> &str {
+    args.windows(2)
+        .find(|window| window[0] == "--api-key-env")
+        .and_then(|window| {
+            let value = window[1].trim();
+            (!value.is_empty()).then_some(value)
+        })
+        .unwrap_or(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV)
+}
+
+fn platform_runtime_auth_environment(
+    config: &PythonEmbeddingsSessionConfig,
+) -> Vec<(String, String)> {
+    let api_key_env = platform_runtime_api_key_env(&config.args);
+
+    #[cfg(test)]
+    if let Some(result) = PLATFORM_RUNTIME_AUTH_ENVIRONMENT_HOOK
+        .with(|cell| cell.borrow().clone())
+        .map(|hook| hook(api_key_env))
+    {
+        return result.unwrap_or_else(|err| {
+            log::debug!("skipping platform gateway auth injection via test hook: {err:#}");
+            Vec::new()
+        });
+    }
+
+    match crate::daemon::platform_gateway_bearer_token() {
+        Ok(Some(token)) => vec![(api_key_env.to_string(), token)],
+        Ok(None) => Vec::new(),
+        Err(err) => {
+            log::debug!("skipping platform gateway auth injection: {err:#}");
+            Vec::new()
+        }
+    }
+}
+
+fn ensure_platform_runtime_auth_environment_available(
+    config: &PythonEmbeddingsSessionConfig,
+) -> Result<()> {
+    if !config.platform_backed {
+        return Ok(());
+    }
+
+    if !platform_runtime_auth_environment(config).is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "platform-backed embeddings profile requires an authenticated Bitloops session; run `bitloops login`"
+    );
+}
+
 fn resolve_effective_embeddings_cache_dir(explicit_cache_dir: Option<&Path>) -> Option<PathBuf> {
     explicit_cache_dir
         .map(Path::to_path_buf)
@@ -419,12 +499,14 @@ fn evict_idle_embeddings_sessions_for_tests(idle_timeout: Duration) {
 
 impl PythonEmbeddingsSession {
     fn start(config: &PythonEmbeddingsSessionConfig) -> Result<Self> {
+        ensure_platform_runtime_auth_environment_available(config)?;
         let effective_cache_dir =
             resolve_effective_embeddings_cache_dir(config.cache_dir.as_deref());
         let mut command = Command::new(&config.command);
         command.args(&config.args);
         command.arg("daemon");
         command.arg("--model").arg(&config.model);
+        command.envs(platform_runtime_auth_environment(config));
         if let Some(cache_dir) = effective_cache_dir.as_ref() {
             command.arg("--cache-dir").arg(cache_dir);
         }
@@ -700,6 +782,8 @@ mod tests {
                 format!(
                     r#"printf 'HF_HUB_OFFLINE=%s\n' "${{HF_HUB_OFFLINE:-}}" > "{path}"
 printf 'TRANSFORMERS_OFFLINE=%s\n' "${{TRANSFORMERS_OFFLINE:-}}" >> "{path}"
+printf 'BITLOOPS_PLATFORM_GATEWAY_TOKEN=%s\n' "${{BITLOOPS_PLATFORM_GATEWAY_TOKEN:-}}" >> "{path}"
+printf 'BITLOOPS_CUSTOM_PLATFORM_TOKEN=%s\n' "${{BITLOOPS_CUSTOM_PLATFORM_TOKEN:-}}" >> "{path}"
 "#,
                     path = path.display()
                 )
@@ -788,6 +872,88 @@ done
     }
 
     #[test]
+    fn platform_ipc_service_requires_authenticated_session() {
+        let temp = TempDir::new().expect("temp dir");
+        let script_path = temp.path().join("fake_embeddings_runtime.sh");
+        let launch_log = temp.path().join("launches.log");
+        write_fake_runtime_script(&script_path, None, None);
+
+        let mut runtime = fake_runtime_config(&script_path, &launch_log);
+        runtime.args.push("--api-key-env".to_string());
+        runtime
+            .args
+            .push("BITLOOPS_CUSTOM_PLATFORM_TOKEN".to_string());
+        let err = with_platform_runtime_auth_environment_hook(
+            |_| Ok(Vec::new()),
+            || match BitloopsEmbeddingsIpcService::new(
+                "platform_code",
+                &runtime,
+                "test-model",
+                None,
+                true,
+            ) {
+                Ok(_) => panic!("platform embeddings service without auth must fail"),
+                Err(err) => err,
+            },
+        );
+
+        assert!(
+            format!("{err:#}").contains("requires an authenticated Bitloops session"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !launch_log.exists(),
+            "platform embeddings runtime should not be spawned without an auth token"
+        );
+    }
+
+    #[test]
+    fn platform_ipc_service_injects_logged_in_token_into_requested_env_var() {
+        let temp = TempDir::new().expect("temp dir");
+        let script_path = temp.path().join("fake_embeddings_runtime.sh");
+        let launch_log = temp.path().join("launches.log");
+        let env_log = temp.path().join("env.log");
+        write_fake_runtime_script(&script_path, None, Some(&env_log));
+
+        let mut runtime = fake_runtime_config(&script_path, &launch_log);
+        runtime.args.push("--api-key-env".to_string());
+        runtime
+            .args
+            .push("BITLOOPS_CUSTOM_PLATFORM_TOKEN".to_string());
+        let service = with_platform_runtime_auth_environment_hook(
+            |api_key_env| {
+                assert_eq!(api_key_env, "BITLOOPS_CUSTOM_PLATFORM_TOKEN");
+                Ok(vec![(
+                    api_key_env.to_string(),
+                    "token-from-login".to_string(),
+                )])
+            },
+            || {
+                BitloopsEmbeddingsIpcService::new(
+                    "platform_code",
+                    &runtime,
+                    "test-model",
+                    None,
+                    true,
+                )
+            },
+        )
+        .expect("build platform ipc service");
+        assert_eq!(
+            service
+                .embed("hello world", EmbeddingInputType::Document)
+                .expect("embedding request"),
+            vec![1.0, 2.0]
+        );
+
+        let env = fs::read_to_string(&env_log).expect("read env log");
+        assert!(
+            env.contains("BITLOOPS_CUSTOM_PLATFORM_TOKEN=token-from-login"),
+            "expected injected custom platform token env var, got: {env}"
+        );
+    }
+
+    #[test]
     fn ipc_service_restarts_after_request_timeout() {
         let temp = TempDir::new().expect("temp dir");
         let script_path = temp.path().join("fake_embeddings_runtime.sh");
@@ -796,8 +962,9 @@ done
         write_fake_runtime_script(&script_path, Some(&timeout_marker), None);
 
         let runtime = fake_runtime_config(&script_path, &launch_log);
-        let service = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-            .expect("build ipc service");
+        let service =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+                .expect("build ipc service");
 
         let vector = service
             .embed("hello world", EmbeddingInputType::Document)
@@ -818,8 +985,9 @@ done
         write_fake_runtime_script(&script_path, None, None);
 
         let runtime = fake_runtime_config(&script_path, &launch_log);
-        let first = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-            .expect("build first ipc service");
+        let first =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+                .expect("build first ipc service");
         assert_eq!(
             first
                 .embed("hello world", EmbeddingInputType::Document)
@@ -828,8 +996,9 @@ done
         );
         drop(first);
 
-        let second = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-            .expect("build second ipc service");
+        let second =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+                .expect("build second ipc service");
         assert_eq!(
             second
                 .embed("goodbye world", EmbeddingInputType::Document)
@@ -853,8 +1022,9 @@ done
         write_fake_runtime_script(&script_path, None, None);
 
         let runtime = fake_runtime_config(&script_path, &launch_log);
-        let first = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-            .expect("build first ipc service");
+        let first =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+                .expect("build first ipc service");
         assert_eq!(
             first
                 .embed("hello world", EmbeddingInputType::Document)
@@ -864,8 +1034,9 @@ done
 
         evict_idle_embeddings_sessions_for_tests(Duration::ZERO);
 
-        let second = BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None)
-            .expect("build second ipc service");
+        let second =
+            BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+                .expect("build second ipc service");
         assert_eq!(
             second
                 .embed("goodbye world", EmbeddingInputType::Document)
@@ -900,6 +1071,7 @@ done
             &runtime,
             "test-model",
             Some(cache_root.as_path()),
+            false,
         )
         .expect("build ipc service");
         assert_eq!(
@@ -937,6 +1109,7 @@ done
             &runtime,
             "test-model",
             Some(cache_root.as_path()),
+            false,
         )
         .expect("build ipc service");
         assert_eq!(

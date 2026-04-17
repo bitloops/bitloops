@@ -1122,6 +1122,9 @@ fn embeddings_follow_up_pending(
     _follow_up_sync: Option<&DevqlTaskRecord>,
     embeddings_task: Option<&DevqlTaskRecord>,
 ) -> bool {
+    if !session.follow_up_sync_required {
+        return false;
+    }
     if session.selections.embeddings_bootstrap.is_none() {
         return false;
     }
@@ -1143,6 +1146,9 @@ fn summaries_follow_up_pending(
     _follow_up_sync: Option<&DevqlTaskRecord>,
     summary_run: Option<&SummaryBootstrapRunRecord>,
 ) -> bool {
+    if !session.follow_up_sync_required {
+        return false;
+    }
     if session.selections.summaries_bootstrap.is_none() {
         return false;
     }

@@ -122,7 +122,7 @@ temperature = "0.1"
 max_output_tokens = 200
 ```
 
-`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create the default local embeddings profile for you. `bitloops inference install` installs or repairs the managed summary runtime, and `bitloops init --install-default-daemon` or interactive `bitloops enable` can bind summaries to Ollama automatically when it is available. Edit the daemon config manually only when you need a different profile name, model, or hosted provider.
+`bitloops enable --install-embeddings` can create the default local embeddings profile for you. `bitloops init --install-default-daemon` can configure Bitloops cloud, the default local profile, or skip embeddings during onboarding, and `bitloops inference install` installs or repairs the managed summary runtime. `bitloops init --install-default-daemon` or interactive `bitloops enable` can also bind summaries to Ollama automatically when it is available. Edit the daemon config manually only when you need a different profile name, model, or hosted provider.
 
 When Bitloops installs a managed runtime, it writes an absolute path under the Bitloops data directory, as shown above. Use `command = "bitloops-local-embeddings"` or `command = "bitloops-inference"` only when you are managing those standalone binaries yourself on `PATH`.
 
