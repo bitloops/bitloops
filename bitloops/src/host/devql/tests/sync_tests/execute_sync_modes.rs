@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use tempfile::tempdir;
 
 use super::fixtures::{
@@ -141,6 +142,38 @@ model = "sync-test-model"
         ),
     )
     .expect("write sync semantic clone config");
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CapturedSyncEvent {
+    Progress(crate::host::devql::SyncProgressPhase),
+    Batch,
+}
+
+#[derive(Default)]
+struct CapturingBatchObserver {
+    events: Mutex<Vec<CapturedSyncEvent>>,
+    batches: Mutex<Vec<crate::host::devql::SyncCurrentStateBatchUpdate>>,
+}
+
+impl crate::host::devql::SyncObserver for CapturingBatchObserver {
+    fn on_progress(&self, update: crate::host::devql::SyncProgressUpdate) {
+        self.events
+            .lock()
+            .expect("lock progress events")
+            .push(CapturedSyncEvent::Progress(update.phase));
+    }
+
+    fn on_current_state_batch(&self, update: crate::host::devql::SyncCurrentStateBatchUpdate) {
+        self.events
+            .lock()
+            .expect("lock batch events")
+            .push(CapturedSyncEvent::Batch);
+        self.batches
+            .lock()
+            .expect("lock batch updates")
+            .push(update);
+    }
 }
 
 fn ruff_e501_4_python_fixture_bytes() -> &'static [u8] {
@@ -1494,21 +1527,71 @@ async fn full_sync_refreshes_and_clears_canonical_typescript_targets_when_target
 #[tokio::test]
 async fn execute_sync_with_stats_reports_batched_sqlite_writes() {
     let repo = seed_full_sync_repo();
+    let generated_dir = repo.path().join("src/generated");
+    fs::create_dir_all(&generated_dir).expect("create generated source dir");
+    for index in 0..40 {
+        fs::write(
+            generated_dir.join(format!("module_{index}.rs")),
+            format!("pub fn generated_{index}() -> usize {{\n    {index}\n}}\n"),
+        )
+        .expect("write generated rust source");
+    }
     let cfg = sync_test_cfg_for_repo(repo.path());
     let sqlite_path = repo.path().join("devql.sqlite");
     let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+    let observer = CapturingBatchObserver::default();
 
-    let (summary, stats) = crate::host::devql::execute_sync_with_stats(
-        &cfg,
-        &relational,
-        crate::host::devql::sync::types::SyncMode::Full,
-    )
-    .await
-    .expect("execute full sync with stats");
+    let (summary, stats, _file_diff, _artefact_diff) =
+        crate::host::devql::execute_sync_with_observer_and_stats_and_diffs(
+            &cfg,
+            &relational,
+            crate::host::devql::sync::types::SyncMode::Full,
+            Some(&observer),
+        )
+        .await
+        .expect("execute full sync with observer and stats");
+
+    let events = observer
+        .events
+        .lock()
+        .expect("lock captured events")
+        .clone();
+    let batches = observer
+        .batches
+        .lock()
+        .expect("lock captured batches")
+        .clone();
 
     assert!(summary.paths_added > 0);
     assert_eq!(stats.prepare_worker_count, summary.paths_added.min(8));
     assert!(stats.sqlite_commits > 0);
+    assert!(
+        batches.len() >= 2,
+        "expected more than one streamed current-state batch for >32 paths"
+    );
+    let complete_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                CapturedSyncEvent::Progress(crate::host::devql::SyncProgressPhase::Complete)
+            )
+        })
+        .expect("complete progress event");
+    assert!(
+        events[..complete_index]
+            .iter()
+            .any(|event| matches!(event, CapturedSyncEvent::Batch)),
+        "expected at least one current-state batch before sync completion"
+    );
+    let batch_path_total = batches
+        .iter()
+        .map(|batch| batch.file_upserts.len() + batch.file_removals.len())
+        .sum::<usize>();
+    assert_eq!(
+        batch_path_total,
+        summary.paths_added + summary.paths_changed + summary.paths_removed
+    );
     assert!(
         stats.sqlite_commits < summary.paths_added.saturating_mul(2),
         "batched writer should use fewer commits than per-file cache+materialise writes"
@@ -1646,17 +1729,17 @@ async fn sync_populates_current_semantic_tables_with_current_embeddings_and_clon
         feature_rows > 0,
         "current semantic features should be populated"
     );
-    assert!(
-        code_embedding_rows > 0,
-        "current code embeddings should be populated during sync"
+    assert_eq!(
+        code_embedding_rows, 0,
+        "sync should leave current code embeddings for async enrichment"
     );
-    assert!(
-        summary_embedding_rows > 0,
-        "current summary embeddings should be populated during sync"
+    assert_eq!(
+        summary_embedding_rows, 0,
+        "sync should leave current summary embeddings for async enrichment"
     );
-    assert!(
-        current_clone_edge_rows > 0,
-        "current clone edges should be rebuilt from current projection during sync"
+    assert_eq!(
+        current_clone_edge_rows, 0,
+        "sync should leave current clone edges for async enrichment"
     );
 }
 
@@ -1761,17 +1844,17 @@ async fn sync_rehydrates_current_semantic_clone_tables_for_unchanged_repo_withou
         historical_summary_embedding_rows, 0,
         "unchanged sync should not repopulate historical summary embeddings"
     );
-    assert!(
-        current_code_embedding_rows > 0,
-        "unchanged sync should repopulate current code embeddings"
+    assert_eq!(
+        current_code_embedding_rows, 0,
+        "unchanged sync should not repopulate current code embeddings inline"
     );
-    assert!(
-        current_summary_embedding_rows > 0,
-        "unchanged sync should repopulate current summary embeddings"
+    assert_eq!(
+        current_summary_embedding_rows, 0,
+        "unchanged sync should not repopulate current summary embeddings inline"
     );
-    assert!(
-        current_clone_edge_rows > 0,
-        "unchanged sync should rebuild current clone edges"
+    assert_eq!(
+        current_clone_edge_rows, 0,
+        "unchanged sync should not rebuild current clone edges inline"
     );
 }
 
@@ -1897,8 +1980,8 @@ async fn sync_skips_current_semantic_projection_for_decode_degraded_file_only_pa
         good_feature_rows > 0,
         "good.rs should still populate semantic features"
     );
-    assert!(
-        good_embedding_rows > 0,
-        "good.rs should still populate current embeddings"
+    assert_eq!(
+        good_embedding_rows, 0,
+        "good.rs embeddings should be left for async enrichment"
     );
 }

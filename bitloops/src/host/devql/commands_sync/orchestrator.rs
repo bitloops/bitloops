@@ -14,8 +14,11 @@ use self::semantic_projection::{
     build_current_projection_context, finalize_semantic_clone_projection_after_sync,
     project_materialized_items,
 };
-use super::diff_collector::SyncDiffCollector;
-use super::progress::{SyncObserver, SyncProgressPhase, emit_progress};
+use super::diff_collector::{DiffArtefactRecord, SyncDiffCollector};
+use super::progress::{
+    SyncCurrentStateBatchUpdate, SyncObserver, SyncProgressPhase, emit_current_state_batch,
+    emit_progress,
+};
 use super::shared::{
     is_missing_sync_schema_error, load_stored_manifest_for_paths, requested_paths,
     resolve_pack_versions, sync_reason,
@@ -89,6 +92,7 @@ pub(crate) async fn execute_sync(
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) async fn execute_sync_with_stats(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
@@ -400,6 +404,15 @@ async fn execute_sync_inner(
         for artefact in outcome.pre_artefacts.clone() {
             diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
         }
+        emit_current_state_batch_for_outcome(
+            observer,
+            build_current_state_batch_from_removals(
+                cfg,
+                workspace.active_branch.clone(),
+                workspace.head_commit_sha.clone(),
+                &outcome,
+            ),
+        );
         stats.materialisation_total += remove_started.elapsed();
         stats.add_writer_commit(outcome.sqlite_commits, outcome.sqlite_rows_written);
         for path in outcome.removed_paths {
@@ -516,6 +529,8 @@ async fn execute_sync_inner(
                                 &mut paths_completed,
                                 &mut current_projection_changed,
                                 &mut touched_paths,
+                                workspace.active_branch.clone(),
+                                workspace.head_commit_sha.clone(),
                             )
                             .await?;
                         }
@@ -542,6 +557,8 @@ async fn execute_sync_inner(
                             &mut paths_completed,
                             &mut current_projection_changed,
                             &mut touched_paths,
+                            workspace.active_branch.clone(),
+                            workspace.head_commit_sha.clone(),
                         )
                         .await?;
                     }
@@ -597,6 +614,8 @@ async fn execute_sync_inner(
                         &mut paths_completed,
                         &mut current_projection_changed,
                         &mut touched_paths,
+                        workspace.active_branch.clone(),
+                        workspace.head_commit_sha.clone(),
                     )
                     .await?;
                 }
@@ -625,6 +644,8 @@ async fn execute_sync_inner(
         &mut paths_completed,
         &mut current_projection_changed,
         &mut touched_paths,
+        workspace.active_branch.clone(),
+        workspace.head_commit_sha.clone(),
     )
     .await?;
 
@@ -862,7 +883,8 @@ async fn flush_pending_materialisations(
     materialized_completed: &mut usize,
     paths_completed: &mut usize,
     current_projection_changed: &mut bool,
-    touched_paths: &mut HashSet<String>,
+    active_branch: Option<String>,
+    head_commit_sha: Option<String>,
 ) -> Result<()> {
     if !writer.has_pending_items() {
         return Ok(());
@@ -890,6 +912,15 @@ async fn flush_pending_materialisations(
     for artefact in outcome.post_artefacts.clone() {
         diff_collector.record_post_artefacts(artefact.path.clone(), vec![artefact]);
     }
+    emit_current_state_batch_for_outcome(
+        observer,
+        build_current_state_batch_from_materialisations(
+            cfg,
+            active_branch,
+            head_commit_sha,
+            &outcome,
+        ),
+    );
     let flush_duration = flush_started.elapsed();
     stats.add_writer_commit(outcome.sqlite_commits, outcome.sqlite_rows_written);
     apply_writer_duration(stats, flush_duration, &outcome);
@@ -914,6 +945,135 @@ async fn flush_pending_materialisations(
         );
     }
     Ok(())
+}
+
+fn emit_current_state_batch_for_outcome(
+    observer: Option<&dyn SyncObserver>,
+    update: SyncCurrentStateBatchUpdate,
+) {
+    if update.is_empty() {
+        return;
+    }
+    emit_current_state_batch(observer, update);
+}
+
+fn build_current_state_batch_from_removals(
+    cfg: &DevqlConfig,
+    active_branch: Option<String>,
+    head_commit_sha: Option<String>,
+    outcome: &WriterCommitOutcome,
+) -> SyncCurrentStateBatchUpdate {
+    SyncCurrentStateBatchUpdate {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        active_branch,
+        head_commit_sha,
+        file_upserts: Vec::new(),
+        file_removals: outcome
+            .removed_paths
+            .iter()
+            .map(|path| crate::host::capability_host::RemovedFile { path: path.clone() })
+            .collect(),
+        artefact_upserts: Vec::new(),
+        artefact_removals: outcome
+            .pre_artefacts
+            .iter()
+            .map(|artefact| crate::host::capability_host::RemovedArtefact {
+                artefact_id: artefact.artefact_id.clone(),
+                symbol_id: artefact.symbol_id.clone(),
+                path: artefact.path.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn build_current_state_batch_from_materialisations(
+    cfg: &DevqlConfig,
+    active_branch: Option<String>,
+    head_commit_sha: Option<String>,
+    outcome: &WriterCommitOutcome,
+) -> SyncCurrentStateBatchUpdate {
+    let (artefact_upserts, artefact_removals) =
+        merge_batch_artefact_changes(&outcome.pre_artefacts, &outcome.post_artefacts);
+    SyncCurrentStateBatchUpdate {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        active_branch,
+        head_commit_sha,
+        file_upserts: outcome
+            .materialized_items
+            .iter()
+            .map(|item| crate::host::capability_host::ChangedFile {
+                path: item.desired.path.clone(),
+                language: item.desired.language.clone(),
+                content_id: item.desired.effective_content_id.clone(),
+            })
+            .collect(),
+        file_removals: Vec::new(),
+        artefact_upserts,
+        artefact_removals,
+    }
+}
+
+fn merge_batch_artefact_changes(
+    pre_artefacts: &[DiffArtefactRecord],
+    post_artefacts: &[DiffArtefactRecord],
+) -> (
+    Vec<crate::host::capability_host::ChangedArtefact>,
+    Vec<crate::host::capability_host::RemovedArtefact>,
+) {
+    use std::collections::BTreeMap;
+
+    let pre_by_symbol = pre_artefacts
+        .iter()
+        .map(|artefact| (artefact.symbol_id.clone(), artefact))
+        .collect::<BTreeMap<_, _>>();
+    let post_by_symbol = post_artefacts
+        .iter()
+        .map(|artefact| (artefact.symbol_id.clone(), artefact))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut upserts = Vec::new();
+    let mut removals = Vec::new();
+    for (symbol_id, post) in &post_by_symbol {
+        if pre_by_symbol.get(symbol_id).is_some_and(|pre| {
+            pre.artefact_id == post.artefact_id
+                && pre.path == post.path
+                && pre.canonical_kind == post.canonical_kind
+                && pre.name == post.name
+        }) {
+            continue;
+        }
+        upserts.push(crate::host::capability_host::ChangedArtefact {
+            artefact_id: post.artefact_id.clone(),
+            symbol_id: post.symbol_id.clone(),
+            path: post.path.clone(),
+            canonical_kind: post.canonical_kind.clone(),
+            name: post.name.clone(),
+        });
+    }
+    for (symbol_id, pre) in &pre_by_symbol {
+        if post_by_symbol.contains_key(symbol_id) {
+            continue;
+        }
+        removals.push(crate::host::capability_host::RemovedArtefact {
+            artefact_id: pre.artefact_id.clone(),
+            symbol_id: pre.symbol_id.clone(),
+            path: pre.path.clone(),
+        });
+    }
+
+    upserts.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.symbol_id.cmp(&right.symbol_id))
+    });
+    removals.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.symbol_id.cmp(&right.symbol_id))
+    });
+    (upserts, removals)
 }
 
 fn apply_writer_duration(

@@ -1784,7 +1784,7 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
 }
 
 #[test]
-fn run_init_with_install_default_daemon_auto_installs_embeddings() {
+fn run_init_with_install_default_daemon_stages_embeddings_config_before_async_bootstrap() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
@@ -1862,8 +1862,21 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                         let daemon_config =
                             std::fs::read_to_string(daemon_config).expect("read daemon config");
                         assert!(
-                            !daemon_config.contains("code_embeddings = \"local_code\""),
-                            "embeddings config should now be applied asynchronously by the daemon task:\n{daemon_config}"
+                            daemon_config.contains("code_embeddings = \"local_code\""),
+                            "expected init to stage embeddings bindings before bootstrap runs:\n{daemon_config}"
+                        );
+                        assert!(
+                            daemon_config.contains("summary_embeddings = \"local_code\""),
+                            "expected init to stage summary embedding bindings before bootstrap runs:\n{daemon_config}"
+                        );
+                        assert!(
+                            daemon_config.contains("[inference.profiles.local_code]"),
+                            "expected init to stage the managed embeddings profile before bootstrap runs:\n{daemon_config}"
+                        );
+                        assert!(
+                            daemon_config
+                                .contains("[inference.runtimes.bitloops_local_embeddings]"),
+                            "expected init to stage the managed embeddings runtime before bootstrap runs:\n{daemon_config}"
                         );
                         let queued = crate::daemon::devql_tasks(
                             None,

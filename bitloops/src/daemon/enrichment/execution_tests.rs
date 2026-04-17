@@ -411,6 +411,46 @@ fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
     .expect("count clone edges")
 }
 
+fn load_current_feature_count(sqlite_path: &Path, repo_id: &str) -> i64 {
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
+    conn.query_row(
+        "SELECT COUNT(*) FROM symbol_features_current WHERE repo_id = ?1",
+        [repo_id],
+        |row| row.get(0),
+    )
+    .expect("count current semantic features")
+}
+
+fn load_current_semantics_count(sqlite_path: &Path, repo_id: &str) -> i64 {
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
+    conn.query_row(
+        "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1",
+        [repo_id],
+        |row| row.get(0),
+    )
+    .expect("count current semantics")
+}
+
+fn load_current_embedding_representation_counts(
+    sqlite_path: &Path,
+    repo_id: &str,
+) -> BTreeMap<String, i64> {
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
+    let mut stmt = conn
+        .prepare(
+            "SELECT representation_kind, COUNT(*)
+             FROM symbol_embeddings_current
+             WHERE repo_id = ?1
+             GROUP BY representation_kind
+             ORDER BY representation_kind",
+        )
+        .expect("prepare current embedding representation query");
+    stmt.query_map([repo_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query current embedding representation counts")
+        .collect::<std::result::Result<BTreeMap<_, _>, _>>()
+        .expect("collect current embedding representation counts")
+}
+
 fn hash_by_symbol(rows: &[CurrentEmbeddingRow]) -> BTreeMap<String, String> {
     rows.iter()
         .map(|row| (row.symbol_fqn.clone(), row.embedding_input_hash.clone()))
@@ -528,6 +568,66 @@ async fn seed_current_state_and_semantics(
         .collect::<BTreeMap<_, _>>();
 
     (cfg, relational, inputs, input_hashes)
+}
+
+async fn seed_sync_only_current_inputs(
+    repo_root: &Path,
+    profile_name: &str,
+    model: &str,
+    dimension: &str,
+) -> (
+    DevqlConfig,
+    RelationalStorage,
+    Vec<semantic_features::SemanticFeatureInput>,
+) {
+    let dimension = dimension
+        .parse::<usize>()
+        .expect("parse daemon test dimension");
+    write_daemon_embedding_config(
+        repo_root,
+        profile_name,
+        TEST_EMBEDDINGS_DRIVER,
+        model,
+        dimension,
+    );
+    let sqlite_path = daemon_relational_sqlite_path(repo_root);
+    if let Some(parent) = sqlite_path.parent() {
+        fs::create_dir_all(parent).expect("create daemon relational db parent");
+    }
+    rusqlite::Connection::open(&sqlite_path).expect("create daemon relational db file");
+
+    let cfg = daemon_test_cfg_for_repo(repo_root);
+    crate::host::devql::execute_init_schema(&cfg, "daemon sync-only test")
+        .await
+        .expect("initialise devql schema for daemon sync-only test");
+    let backends = resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config for daemon sync-only test");
+    let relational =
+        RelationalStorage::connect(&cfg, &backends.relational, "daemon sync-only test")
+            .await
+            .expect("connect relational storage for daemon sync-only test");
+    execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("seed current state for daemon sync-only test");
+
+    let inputs =
+        crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
+            &relational,
+            repo_root,
+            &cfg.repo.repo_id,
+        )
+        .await
+        .expect("load current semantic inputs for sync-only test");
+    assert!(
+        !inputs.is_empty(),
+        "expected current semantic inputs after sync for daemon sync-only test"
+    );
+
+    (cfg, relational, inputs)
 }
 
 fn build_embedding_job(
@@ -936,6 +1036,10 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
         .iter()
         .find(|input| input.path == "src/invoice.ts")
         .expect("invoice artefact input");
+    let selected_path_count = inputs
+        .iter()
+        .filter(|input| input.path == selected.path && input.blob_sha == selected.blob_sha)
+        .count();
     let job = WorkplaneJobRecord {
         job_id: "workplane-job-1".to_string(),
         repo_id: cfg.repo.repo_id.clone(),
@@ -970,11 +1074,11 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
     ));
     assert_eq!(
         rows.len(),
-        1,
-        "workplane job should only embed the selected artefact"
+        selected_path_count,
+        "workplane job should hydrate the full current path for the selected artefact"
     );
-    assert_eq!(rows[0].path, "src/invoice.ts");
-    assert_eq!(rows[0].model, "mailbox-model");
+    assert!(rows.iter().all(|row| row.path == "src/invoice.ts"));
+    assert!(rows.iter().all(|row| row.model == "mailbox-model"));
     assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);
 }
 
@@ -1136,6 +1240,401 @@ async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
 }
 
 #[tokio::test]
+async fn repo_backfill_embedding_workplane_job_refreshes_current_repo_state() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-repo-backfill-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+    let rows = load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id);
+    let active_setup = load_active_setup_row(&sqlite_path, &cfg.repo.repo_id);
+
+    assert!(outcome.error.is_none());
+    assert!(
+        !rows.is_empty(),
+        "repo backfill should refresh current embedding rows, not just historical rows"
+    );
+    assert_eq!(rows[0].model, "repo-backfill-model");
+    assert!(
+        active_setup.is_some(),
+        "repo backfill should restore the active embedding setup"
+    );
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "repo backfill should rebuild current clone edges when refreshing the current repo"
+    );
+}
+
+#[tokio::test]
+async fn workplane_clone_rebuild_job_refreshes_current_clone_edges() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "clone-rebuild-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+
+    let embedding_job = WorkplaneJobRecord {
+        job_id: "workplane-clone-rebuild-seed-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+    let seed_outcome = execute_workplane_job(&embedding_job).await;
+    assert!(seed_outcome.error.is_none());
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "seed embedding refresh should populate current clone edges before rebuild test"
+    );
+
+    crate::capability_packs::semantic_clones::pipeline::delete_repo_current_symbol_clone_edges(
+        &relational,
+        &cfg.repo.repo_id,
+    )
+    .await
+    .expect("clear current clone edges before rebuild test");
+    assert_eq!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id), 0);
+
+    let rebuild_job = WorkplaneJobRecord {
+        job_id: "workplane-clone-rebuild-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize clone rebuild payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let rebuild_outcome = execute_workplane_job(&rebuild_job).await;
+
+    assert!(rebuild_outcome.error.is_none());
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "clone rebuild workplane jobs should rebuild current clone edges, not only historical rows"
+    );
+}
+
+#[tokio::test]
+async fn sync_only_artefact_workplane_jobs_fill_all_current_semantic_tables() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs) =
+        seed_sync_only_current_inputs(repo.path(), "alpha", "mailbox-model", "3").await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let expected_embedding_count =
+        i64::try_from(inputs.len()).expect("current input count fits in i64");
+    let feature_count_before = load_current_feature_count(&sqlite_path, &cfg.repo.repo_id);
+    let semantics_count_before = load_current_semantics_count(&sqlite_path, &cfg.repo.repo_id);
+
+    assert!(
+        feature_count_before > 0,
+        "sync should populate current semantic feature rows before async enrichment runs"
+    );
+    assert!(
+        semantics_count_before > 0,
+        "sync should populate current semantic summary rows before async enrichment runs"
+    );
+
+    for input in &inputs {
+        for mailbox_name in [
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+        ] {
+            let job = WorkplaneJobRecord {
+                job_id: format!("workplane-fill-current-{mailbox_name}-{}", input.artefact_id),
+                repo_id: cfg.repo.repo_id.clone(),
+                repo_root: cfg.repo_root.clone(),
+                config_root: cfg.daemon_config_root.clone(),
+                capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+                mailbox_name: mailbox_name.to_string(),
+                dedupe_key: Some(format!("{mailbox_name}:{}", input.artefact_id)),
+                payload: serde_json::json!({ "artefact_id": input.artefact_id }),
+                status: WorkplaneJobStatus::Pending,
+                attempts: 0,
+                available_at_unix: 1,
+                submitted_at_unix: 1,
+                started_at_unix: None,
+                updated_at_unix: 1,
+                completed_at_unix: None,
+                lease_owner: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            };
+
+            let outcome = execute_workplane_job(&job).await;
+
+            assert!(
+                outcome.error.is_none(),
+                "{mailbox_name} artefact workplane job should succeed for {}",
+                input.path
+            );
+            assert_eq!(
+                outcome.follow_ups.len(),
+                1,
+                "{mailbox_name} artefact workplane job should request a clone rebuild follow-up"
+            );
+            assert!(matches!(
+                outcome.follow_ups.first(),
+                Some(FollowUpJob::CloneEdgesRebuild { .. })
+            ));
+        }
+    }
+
+    let rebuild_job = WorkplaneJobRecord {
+        job_id: "workplane-fill-current-clone-rebuild".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize clone rebuild payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let rebuild_outcome = execute_workplane_job(&rebuild_job).await;
+    let embedding_counts =
+        load_current_embedding_representation_counts(&sqlite_path, &cfg.repo.repo_id);
+
+    assert!(rebuild_outcome.error.is_none());
+    assert_eq!(
+        embedding_counts.get("code"),
+        Some(&expected_embedding_count),
+        "artefact embedding workplane jobs should fill current code embeddings for every current artefact"
+    );
+    assert_eq!(
+        embedding_counts.get("summary"),
+        Some(&expected_embedding_count),
+        "artefact embedding workplane jobs should fill current summary embeddings for every current artefact"
+    );
+    assert_eq!(
+        load_current_feature_count(&sqlite_path, &cfg.repo.repo_id),
+        feature_count_before,
+        "async enrichment should not drop current semantic feature rows"
+    );
+    assert_eq!(
+        load_current_semantics_count(&sqlite_path, &cfg.repo.repo_id),
+        semantics_count_before,
+        "async enrichment should not drop current semantic summary rows"
+    );
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "the async semantic-clones pipeline should leave current clone edges populated once follow-up rebuild runs"
+    );
+}
+
+#[tokio::test]
+async fn sync_only_current_path_workplane_jobs_fill_all_current_semantic_tables() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs) =
+        seed_sync_only_current_inputs(repo.path(), "alpha", "path-mailbox-model", "3").await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let expected_embedding_count =
+        i64::try_from(inputs.len()).expect("current input count fits in i64");
+    let current_paths = inputs
+        .iter()
+        .map(|input| (input.path.clone(), input.blob_sha.clone()))
+        .collect::<std::collections::BTreeSet<_>>();
+
+    for (path, blob_sha) in current_paths {
+        for mailbox_name in [
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+        ] {
+            let job = WorkplaneJobRecord {
+                job_id: format!("workplane-fill-current-{mailbox_name}-{path}"),
+                repo_id: cfg.repo.repo_id.clone(),
+                repo_root: cfg.repo_root.clone(),
+                config_root: cfg.daemon_config_root.clone(),
+                capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+                mailbox_name: mailbox_name.to_string(),
+                dedupe_key: Some(format!("{mailbox_name}:path:{blob_sha}:{path}")),
+                payload: serde_json::to_value(
+                    crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::CurrentPath {
+                        path: path.clone(),
+                        content_id: blob_sha.clone(),
+                    },
+                )
+                .expect("serialize current path payload"),
+                status: WorkplaneJobStatus::Pending,
+                attempts: 0,
+                available_at_unix: 1,
+                submitted_at_unix: 1,
+                started_at_unix: None,
+                updated_at_unix: 1,
+                completed_at_unix: None,
+                lease_owner: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            };
+
+            let outcome = execute_workplane_job(&job).await;
+
+            assert!(
+                outcome.error.is_none(),
+                "{mailbox_name} current-path workplane job should succeed for {path}"
+            );
+            assert_eq!(
+                outcome.follow_ups.len(),
+                1,
+                "{mailbox_name} current-path workplane job should request a clone rebuild follow-up"
+            );
+            assert!(matches!(
+                outcome.follow_ups.first(),
+                Some(FollowUpJob::CloneEdgesRebuild { .. })
+            ));
+        }
+    }
+
+    let rebuild_job = WorkplaneJobRecord {
+        job_id: "workplane-fill-current-clone-rebuild-from-path-jobs".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+        )
+        .expect("serialize clone rebuild payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let rebuild_outcome = execute_workplane_job(&rebuild_job).await;
+    let embedding_counts =
+        load_current_embedding_representation_counts(&sqlite_path, &cfg.repo.repo_id);
+
+    assert!(rebuild_outcome.error.is_none());
+    assert_eq!(
+        embedding_counts.get("code"),
+        Some(&expected_embedding_count),
+        "current-path embedding workplane jobs should fill current code embeddings for every current artefact"
+    );
+    assert_eq!(
+        embedding_counts.get("summary"),
+        Some(&expected_embedding_count),
+        "current-path embedding workplane jobs should fill current summary embeddings for every current artefact"
+    );
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "the async semantic-clones pipeline should leave current clone edges populated once path-job follow-up rebuild runs"
+    );
+}
+
+#[tokio::test]
 async fn workplane_summary_embedding_mailbox_job_enqueues_clone_rebuild_follow_up() {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
@@ -1181,4 +1680,126 @@ async fn workplane_summary_embedding_mailbox_job_enqueues_clone_rebuild_follow_u
         outcome.follow_ups.first(),
         Some(FollowUpJob::CloneEdgesRebuild { .. })
     ));
+}
+
+#[tokio::test]
+async fn workplane_summary_refresh_current_path_job_enqueues_current_path_summary_embedding_follow_up()
+ {
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-summary-refresh-path-job-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: "/tmp/repo-1".into(),
+        config_root: "/tmp/repo-1".into(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+                .to_string(),
+        dedupe_key: Some(format!(
+            "{}:path:{}:{}",
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            "blob-1",
+            "src/invoice.ts"
+        )),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::CurrentPath {
+                path: "src/invoice.ts".to_string(),
+                content_id: "blob-1".to_string(),
+            },
+        )
+        .expect("serialize current path summary refresh payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let follow_up = symbol_embeddings_follow_up_from_path(
+        &job,
+        "src/invoice.ts",
+        "blob-1",
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+    );
+
+    assert!(matches!(
+        &follow_up,
+        FollowUpJob::Workplane { target, job }
+            if target.repo_root == std::path::PathBuf::from("/tmp/repo-1")
+                && job.mailbox_name
+                    == crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+                && job.dedupe_key.as_deref()
+                    == Some("semantic_clones.embedding.summary:path:blob-1:src/invoice.ts")
+                && job.payload
+                    == serde_json::to_value(
+                        crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::CurrentPath {
+                            path: "src/invoice.ts".to_string(),
+                            content_id: "blob-1".to_string(),
+                        },
+                    )
+                    .expect("serialize current path summary embedding payload")
+    ));
+}
+
+#[tokio::test]
+async fn workplane_summary_refresh_loader_uses_current_inputs_for_sync_only_repo() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs) =
+        seed_sync_only_current_inputs(repo.path(), "alpha", "mailbox-model", "3").await;
+    let selected = inputs
+        .iter()
+        .find(|input| input.path == "src/invoice.ts")
+        .expect("invoice artefact input");
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-summary-refresh-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+                .to_string(),
+        dedupe_key: Some(selected.artefact_id.clone()),
+        payload: serde_json::json!({ "artefact_id": selected.artefact_id }),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let (scope, path, content_id, hydrated_inputs) =
+        load_workplane_summary_refresh_inputs(&relational, &job)
+            .await
+            .expect("load workplane inputs for sync-only summary refresh");
+    let selected_path_inputs = inputs
+        .iter()
+        .filter(|input| input.path == selected.path && input.blob_sha == selected.blob_sha)
+        .map(|input| input.artefact_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        !hydrated_inputs.is_empty(),
+        "summary refresh should hydrate current inputs even before historical ingest exists"
+    );
+    assert_eq!(scope, SemanticFeaturesRefreshScope::CurrentPath);
+    assert_eq!(path.as_deref(), Some(selected.path.as_str()));
+    assert_eq!(content_id.as_deref(), Some(selected.blob_sha.as_str()));
+    assert_eq!(
+        hydrated_inputs
+            .iter()
+            .map(|input| input.artefact_id.as_str())
+            .collect::<Vec<_>>(),
+        selected_path_inputs,
+        "summary refresh should hydrate the entire current path so path-scoped writes do not drop sibling artefacts"
+    );
 }

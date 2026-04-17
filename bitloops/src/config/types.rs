@@ -84,7 +84,7 @@ impl fmt::Display for SemanticCloneEmbeddingMode {
     }
 }
 
-pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 1;
+pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 2;
 pub const DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 5;
 pub const MIN_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 1;
 pub const MAX_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 50;

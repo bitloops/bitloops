@@ -31,22 +31,33 @@ impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
                     .context("loading semantic_clones config view")?,
             );
             let options = clone_rebuild_scoring_options(&config);
-            let build = crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges_with_options(
-                relational,
-                &repo_id,
-                options,
-            )
-            .await
-            .context("rebuilding symbol clone edges")?;
+            let build =
+                crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges_with_options(
+                    relational,
+                    &repo_id,
+                    options,
+                )
+                .await
+                .context("rebuilding historical symbol clone edges")?;
+            let current_build =
+                crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges_with_options(
+                    relational,
+                    &repo_id,
+                    options,
+                )
+                .await
+                .context("rebuilding current symbol clone edges")?;
             Ok(IngestResult::new(
                 json!({
                     "symbol_clone_edges_upserted": build.edges.len(),
                     "symbol_clone_sources_scored": build.sources_considered,
+                    "symbol_clone_edges_current_upserted": current_build.edges.len(),
+                    "symbol_clone_current_sources_scored": current_build.sources_considered,
                 }),
                 format!(
-                    "rebuilt {} clone edges ({} sources scored)",
+                    "rebuilt {} historical clone edges / {} current clone edges",
                     build.edges.len(),
-                    build.sources_considered
+                    current_build.edges.len(),
                 ),
             ))
         })

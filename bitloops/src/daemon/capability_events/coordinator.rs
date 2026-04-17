@@ -169,6 +169,27 @@ impl CapabilityEventCoordinator {
         artefact_diff: SyncArtefactDiff,
         source_task_id: Option<&str>,
     ) -> Result<CapabilityEventEnqueueResult> {
+        self.record_sync_generation_with_options(
+            host,
+            cfg,
+            summary,
+            file_diff,
+            artefact_diff,
+            source_task_id,
+            None,
+        )
+    }
+
+    pub(crate) fn record_sync_generation_with_options(
+        &self,
+        host: &DevqlCapabilityHost,
+        cfg: &DevqlConfig,
+        summary: &SyncSummary,
+        file_diff: SyncFileDiff,
+        artefact_diff: SyncArtefactDiff,
+        source_task_id: Option<&str>,
+        requires_full_reconcile_override: Option<bool>,
+    ) -> Result<CapabilityEventEnqueueResult> {
         if !summary.success || summary.mode == "validate" {
             return Ok(CapabilityEventEnqueueResult { runs: Vec::new() });
         }
@@ -185,7 +206,8 @@ impl CapabilityEventCoordinator {
         let repo_id = cfg.repo.repo_id.clone();
         let repo_root = cfg.repo_root.clone();
         let source_task_id = source_task_id.map(str::to_string);
-        let requires_full_reconcile = matches!(summary.mode.as_str(), "full" | "repair");
+        let requires_full_reconcile = requires_full_reconcile_override
+            .unwrap_or(matches!(summary.mode.as_str(), "full" | "repair"));
 
         let _guard = self
             .lock
@@ -484,6 +506,7 @@ impl CapabilityEventCoordinator {
                                 run.run_id
                             )
                         })?;
+                        schedule_successor_run_if_needed(conn, &run, now)?;
                     }
                     RunCompletion::Completed {
                         run,
@@ -520,6 +543,7 @@ impl CapabilityEventCoordinator {
                         .with_context(|| {
                             format!("marking current-state consumer run `{}` complete", run.run_id)
                         })?;
+                        schedule_successor_run_if_needed(conn, &run, now)?;
                     }
                     RunCompletion::RetryableFailure { run, error } => {
                         conn.execute(
@@ -722,6 +746,26 @@ fn retry_backoff_seconds(attempts: u32) -> u64 {
     }
 }
 
+fn schedule_successor_run_if_needed(
+    conn: &rusqlite::Connection,
+    run: &CapabilityEventRunRecord,
+    now: u64,
+) -> Result<()> {
+    let Some(stored_run) = load_run_by_id(conn, &run.run_id)? else {
+        return Ok(());
+    };
+    let _ = ensure_consumer_run(
+        conn,
+        &run.repo_id,
+        &stored_run.repo_root,
+        &run.capability_id,
+        &run.consumer_id,
+        &run.handler_id,
+        now,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -814,6 +858,31 @@ mod tests {
                 Ok(())
             })
             .expect("insert run row");
+    }
+
+    fn insert_generation_row(
+        store: &DaemonSqliteRuntimeStore,
+        repo_id: &str,
+        generation_seq: u64,
+        requires_full_reconcile: bool,
+    ) {
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO capability_workplane_cursor_generations (repo_id, generation_seq, source_task_id, sync_mode, active_branch, head_commit_sha, requires_full_reconcile, created_at_unix) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        repo_id,
+                        sql_i64(generation_seq)?,
+                        "auto",
+                        "main",
+                        "abc123",
+                        if requires_full_reconcile { 1_i64 } else { 0_i64 },
+                        sql_i64(100 + generation_seq)?,
+                    ],
+                )?;
+                Ok(())
+            })
+            .expect("insert generation row");
     }
 
     fn test_cfg(repo_root: &std::path::Path) -> DevqlConfig {
@@ -952,6 +1021,53 @@ mod tests {
         assert_eq!(persisted.started_at_unix, None);
         assert_eq!(persisted.completed_at_unix, None);
         assert_eq!(persisted.error.as_deref(), Some("temporary failure"));
+    }
+
+    #[test]
+    fn apply_completion_schedules_successor_for_late_generation() {
+        let temp = TempDir::new().expect("tempdir");
+        let store = test_runtime_store(&temp);
+        let coordinator = CapabilityEventCoordinator::new_shared_instance(store.clone());
+        let run = sample_run(CapabilityEventRunStatus::Running);
+        insert_consumer_row(
+            &store,
+            &run.repo_id,
+            &run.capability_id,
+            &run.consumer_id,
+            Some(2),
+            None,
+            29,
+        );
+        insert_run_row(&store, &run);
+        insert_generation_row(&store, &run.repo_id, 3, false);
+        insert_generation_row(&store, &run.repo_id, 4, false);
+
+        coordinator
+            .apply_completion(RunCompletion::Completed {
+                run: run.clone(),
+                applied_to_generation_seq: 3,
+            })
+            .expect("apply completion");
+
+        let persisted = coordinator
+            .run(&run.run_id)
+            .expect("load completed run")
+            .expect("completed run exists");
+        assert_eq!(persisted.status, CapabilityEventRunStatus::Completed);
+
+        let queued = store
+            .with_connection(|conn| {
+                load_runs(
+                    conn,
+                    "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC",
+                    params![&run.repo_id, CapabilityEventRunStatus::Queued.to_string()],
+                )
+            })
+            .expect("load queued runs");
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].record.from_generation_seq, 3);
+        assert_eq!(queued[0].record.to_generation_seq, 4);
+        assert_eq!(queued[0].repo_root, PathBuf::from("/tmp/repo"));
     }
 
     #[test]

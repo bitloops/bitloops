@@ -82,9 +82,9 @@ pub use self::commands_refresh::{
     run_post_merge_artefact_refresh,
 };
 pub use self::commands_sync::{
-    SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary, SyncValidationFileDrift,
-    SyncValidationSummary, run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
-    run_sync_with_summary_and_observer_and_diffs,
+    SyncCurrentStateBatchUpdate, SyncObserver, SyncProgressPhase, SyncProgressUpdate, SyncSummary,
+    SyncValidationFileDrift, SyncValidationSummary, run_sync, run_sync_with_summary,
+    run_sync_with_summary_and_observer, run_sync_with_summary_and_observer_and_diffs,
 };
 pub use self::connection_status::run_connection_status;
 pub(crate) use self::plain_text::{

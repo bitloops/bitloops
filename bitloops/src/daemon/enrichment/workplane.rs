@@ -428,7 +428,11 @@ pub(super) fn claim_next_workplane_job(
             .context("starting capability workplane job claim transaction")?;
         let result = (|| {
             let now = unix_timestamp_now();
-            let jobs = load_workplane_jobs_by_status(conn, WorkplaneJobStatus::Pending)?;
+            let running_by_mailbox = workplane_running_job_counts_by_mailbox(conn)?;
+            let jobs = sort_workplane_jobs_for_claim(
+                load_workplane_jobs_by_status(conn, WorkplaneJobStatus::Pending)?,
+                &running_by_mailbox,
+            );
             let mut readiness_cache = BTreeMap::new();
             for mut job in jobs {
                 if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
@@ -477,6 +481,63 @@ pub(super) fn claim_next_workplane_job(
             }
         }
     })
+}
+
+fn sort_workplane_jobs_for_claim(
+    mut jobs: Vec<WorkplaneJobRecord>,
+    running_by_mailbox: &BTreeMap<String, u64>,
+) -> Vec<WorkplaneJobRecord> {
+    jobs.sort_by(|left, right| {
+        running_by_mailbox
+            .get(&left.mailbox_name)
+            .copied()
+            .unwrap_or_default()
+            .cmp(
+                &running_by_mailbox
+                    .get(&right.mailbox_name)
+                    .copied()
+                    .unwrap_or_default(),
+            )
+            .then_with(|| {
+                mailbox_claim_priority(&left.mailbox_name)
+                    .cmp(&mailbox_claim_priority(&right.mailbox_name))
+            })
+            .then_with(|| left.available_at_unix.cmp(&right.available_at_unix))
+            .then_with(|| left.submitted_at_unix.cmp(&right.submitted_at_unix))
+            .then_with(|| left.updated_at_unix.cmp(&right.updated_at_unix))
+            .then_with(|| left.job_id.cmp(&right.job_id))
+    });
+    jobs
+}
+
+fn workplane_running_job_counts_by_mailbox(
+    conn: &rusqlite::Connection,
+) -> Result<BTreeMap<String, u64>> {
+    let mut stmt = conn.prepare(
+        "SELECT mailbox_name, COUNT(*)
+         FROM capability_workplane_jobs
+         WHERE status = ?1
+         GROUP BY mailbox_name",
+    )?;
+    let rows = stmt.query_map(params![WorkplaneJobStatus::Running.as_str()], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut counts = BTreeMap::new();
+    for row in rows {
+        let (mailbox_name, count) = row?;
+        counts.insert(mailbox_name, u64::try_from(count).unwrap_or_default());
+    }
+    Ok(counts)
+}
+
+fn mailbox_claim_priority(mailbox_name: &str) -> u8 {
+    match mailbox_name {
+        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => 0,
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => 1,
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => 2,
+        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => 3,
+        _ => 4,
+    }
 }
 
 pub(super) fn persist_workplane_job_completion(
@@ -950,5 +1011,105 @@ pub(super) fn fallback_repo_identity(repo_root: &Path, repo_id: &str) -> RepoIde
         name: name.clone(),
         identity: format!("git/local/{name}"),
         repo_id: repo_id.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(
+        mailbox_name: &str,
+        available_at_unix: u64,
+        submitted_at_unix: u64,
+    ) -> WorkplaneJobRecord {
+        WorkplaneJobRecord {
+            job_id: format!("{mailbox_name}-{submitted_at_unix}"),
+            repo_id: "repo-1".to_string(),
+            repo_root: PathBuf::from("/tmp/repo"),
+            config_root: PathBuf::from("/tmp/config"),
+            capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+            mailbox_name: mailbox_name.to_string(),
+            dedupe_key: None,
+            payload: serde_json::json!({}),
+            status: WorkplaneJobStatus::Pending,
+            attempts: 0,
+            available_at_unix,
+            submitted_at_unix,
+            started_at_unix: None,
+            updated_at_unix: submitted_at_unix,
+            completed_at_unix: None,
+            lease_owner: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn sort_workplane_jobs_for_claim_prioritizes_summary_refresh_before_embedding_jobs() {
+        let sorted = sort_workplane_jobs_for_claim(
+            vec![
+                job(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, 1, 1),
+                job(SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, 1, 2),
+                job(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, 1, 3),
+                job(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX, 1, 4),
+            ],
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(
+            sorted
+                .into_iter()
+                .map(|job| job.mailbox_name)
+                .collect::<Vec<_>>(),
+            vec![
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX.to_string(),
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX.to_string(),
+                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX.to_string(),
+                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_workplane_jobs_for_claim_keeps_fifo_within_a_mailbox() {
+        let sorted = sort_workplane_jobs_for_claim(
+            vec![
+                job(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, 1, 5),
+                job(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, 1, 2),
+                job(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, 1, 3),
+            ],
+            &BTreeMap::new(),
+        );
+
+        assert_eq!(
+            sorted
+                .into_iter()
+                .map(|job| job.submitted_at_unix)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 5]
+        );
+    }
+
+    #[test]
+    fn sort_workplane_jobs_for_claim_prefers_mailboxes_without_running_jobs() {
+        let sorted = sort_workplane_jobs_for_claim(
+            vec![
+                job(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX, 1, 1),
+                job(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, 1, 2),
+            ],
+            &BTreeMap::from([(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX.to_string(), 1)]),
+        );
+
+        assert_eq!(
+            sorted
+                .into_iter()
+                .map(|job| job.mailbox_name)
+                .collect::<Vec<_>>(),
+            vec![
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX.to_string(),
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX.to_string(),
+            ]
+        );
     }
 }

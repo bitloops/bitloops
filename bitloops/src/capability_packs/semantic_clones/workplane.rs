@@ -7,7 +7,7 @@ use crate::config::{
     SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
     resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
 };
-use crate::host::capability_host::gateways::CapabilityWorkplaneGateway;
+use crate::host::capability_host::gateways::{CapabilityWorkplaneGateway, CapabilityWorkplaneJob};
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 use super::runtime_config::{embedding_slot_for_representation, resolve_selected_summary_slot};
@@ -36,6 +36,7 @@ const REPO_BACKFILL_DEDUPE_SUFFIX: &str = "repo_backfill";
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SemanticClonesMailboxPayload {
     Artefact { artefact_id: String },
+    CurrentPath { path: String, content_id: String },
     RepoBackfill,
 }
 
@@ -151,9 +152,21 @@ pub fn payload_artefact_id(payload: &serde_json::Value) -> Option<String> {
             SemanticClonesMailboxPayload::Artefact { artefact_id },
         ) => Some(artefact_id),
         LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::CurrentPath { .. },
+        ) => None,
+        LegacySemanticClonesMailboxPayload::Structured(
             SemanticClonesMailboxPayload::RepoBackfill,
         ) => None,
         LegacySemanticClonesMailboxPayload::LegacyArtefact { artefact_id } => Some(artefact_id),
+    }
+}
+
+pub fn payload_current_path(payload: &serde_json::Value) -> Option<(String, String)> {
+    match serde_json::from_value::<LegacySemanticClonesMailboxPayload>(payload.clone()).ok()? {
+        LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::CurrentPath { path, content_id },
+        ) => Some((path, content_id)),
+        _ => None,
     }
 }
 
@@ -176,6 +189,48 @@ pub fn payload_representation_kind(mailbox_name: &str) -> Option<EmbeddingRepres
 
 pub fn repo_backfill_dedupe_key(mailbox_name: &str) -> String {
     format!("{mailbox_name}:{REPO_BACKFILL_DEDUPE_SUFFIX}")
+}
+
+pub fn artefact_dedupe_key(mailbox_name: &str, artefact_id: &str) -> String {
+    format!("{mailbox_name}:{artefact_id}")
+}
+
+pub fn build_artefact_job(mailbox_name: &str, artefact_id: &str) -> Result<CapabilityWorkplaneJob> {
+    Ok(CapabilityWorkplaneJob::new(
+        mailbox_name,
+        Some(artefact_dedupe_key(mailbox_name, artefact_id)),
+        serde_json::to_value(SemanticClonesMailboxPayload::Artefact {
+            artefact_id: artefact_id.to_string(),
+        })?,
+    ))
+}
+
+pub fn build_current_path_job(
+    mailbox_name: &str,
+    path: &str,
+    content_id: &str,
+) -> Result<CapabilityWorkplaneJob> {
+    Ok(CapabilityWorkplaneJob::new(
+        mailbox_name,
+        Some(format!("{mailbox_name}:path:{content_id}:{path}")),
+        serde_json::to_value(SemanticClonesMailboxPayload::CurrentPath {
+            path: path.to_string(),
+            content_id: content_id.to_string(),
+        })?,
+    ))
+}
+
+pub fn build_repo_backfill_job(mailbox_name: &str) -> Result<CapabilityWorkplaneJob> {
+    let dedupe_key = if mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX {
+        Some(mailbox_name.to_string())
+    } else {
+        Some(repo_backfill_dedupe_key(mailbox_name))
+    };
+    Ok(CapabilityWorkplaneJob::new(
+        mailbox_name,
+        dedupe_key,
+        serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill)?,
+    ))
 }
 
 fn open_workplane_store_for_repo(repo_root: &Path) -> Result<RepoSqliteRuntimeStore> {

@@ -1,5 +1,26 @@
 use super::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncCurrentStateBatchUpdate {
+    pub repo_id: String,
+    pub repo_root: std::path::PathBuf,
+    pub active_branch: Option<String>,
+    pub head_commit_sha: Option<String>,
+    pub file_upserts: Vec<crate::host::capability_host::ChangedFile>,
+    pub file_removals: Vec<crate::host::capability_host::RemovedFile>,
+    pub artefact_upserts: Vec<crate::host::capability_host::ChangedArtefact>,
+    pub artefact_removals: Vec<crate::host::capability_host::RemovedArtefact>,
+}
+
+impl SyncCurrentStateBatchUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.file_upserts.is_empty()
+            && self.file_removals.is_empty()
+            && self.artefact_upserts.is_empty()
+            && self.artefact_removals.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncProgressPhase {
@@ -74,6 +95,8 @@ impl Default for SyncProgressUpdate {
 
 pub trait SyncObserver: Send + Sync {
     fn on_progress(&self, update: SyncProgressUpdate);
+
+    fn on_current_state_batch(&self, _update: SyncCurrentStateBatchUpdate) {}
 }
 
 pub(super) fn emit_progress(
@@ -99,5 +122,14 @@ pub(super) fn emit_progress(
             cache_misses: counters.cache_misses,
             parse_errors: counters.parse_errors,
         });
+    }
+}
+
+pub(super) fn emit_current_state_batch(
+    observer: Option<&dyn SyncObserver>,
+    update: SyncCurrentStateBatchUpdate,
+) {
+    if let Some(observer) = observer {
+        observer.on_current_state_batch(update);
     }
 }

@@ -8,7 +8,6 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, sleep};
 
-#[cfg(test)]
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::features as semantic_features;
@@ -150,6 +149,10 @@ enum FollowUpJob {
         artefact_ids: Vec<String>,
         input_hashes: BTreeMap<String, String>,
         representation_kind: EmbeddingRepresentationKind,
+    },
+    Workplane {
+        target: EnrichmentJobTarget,
+        job: crate::host::runtime_store::CapabilityWorkplaneJobInsert,
     },
     CloneEdgesRebuild {
         target: EnrichmentJobTarget,
@@ -480,6 +483,15 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
                     representation_kind,
                 )
                 .await
+            }
+            FollowUpJob::Workplane { target, job } => {
+                let store = crate::host::runtime_store::RepoSqliteRuntimeStore::open_for_roots(
+                    &target.config_root,
+                    &target.repo_root,
+                )?;
+                let _ = store
+                    .enqueue_capability_workplane_jobs(SEMANTIC_CLONES_CAPABILITY_ID, vec![job])?;
+                Ok(())
             }
             FollowUpJob::CloneEdgesRebuild { target } => {
                 self.enqueue_clone_edges_rebuild(target).await

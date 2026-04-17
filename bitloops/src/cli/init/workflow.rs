@@ -19,7 +19,9 @@ use crate::config::settings::{
     DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
     write_project_bootstrap_settings_with_daemon_binding,
 };
-use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists};
+use crate::config::{
+    REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists, prepare_daemon_embeddings_install,
+};
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
 
 use super::progress::{InitProgressOptions, run_dual_init_progress};
@@ -167,6 +169,7 @@ pub(super) async fn run_for_project_root(
                 writeln!(out, "{line}")?;
             }
         } else if args.install_default_daemon {
+            stage_init_embeddings_config(&daemon_config_path)?;
             queued_embeddings_bootstrap =
                 Some(enqueue_embeddings_bootstrap_during_init(project_root, out).await?);
         } else {
@@ -374,6 +377,16 @@ async fn enqueue_embeddings_bootstrap_during_init(
     Ok(QueuedEmbeddingsBootstrapTask {
         scope,
         task_id: queued.task.task_id,
+    })
+}
+
+fn stage_init_embeddings_config(config_path: &Path) -> Result<()> {
+    let plan = prepare_daemon_embeddings_install(config_path)?;
+    plan.apply().with_context(|| {
+        format!(
+            "staging embeddings config in {} before async bootstrap",
+            config_path.display()
+        )
     })
 }
 

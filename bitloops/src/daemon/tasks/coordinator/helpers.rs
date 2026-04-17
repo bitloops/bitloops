@@ -5,7 +5,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::daemon::CapabilityEventCoordinator;
 use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
-use crate::host::devql::{DevqlConfig, IngestionProgressPhase, SyncSummary};
+use crate::host::devql::{
+    DevqlConfig, IngestionProgressPhase, SyncCurrentStateBatchUpdate, SyncSummary,
+};
 
 use super::super::super::types::{
     DevqlTaskKind, DevqlTaskProgress, DevqlTaskSpec, EmbeddingsBootstrapProgress,
@@ -87,6 +89,44 @@ pub(super) fn enqueue_sync_completed_runs(
         return Ok(0);
     }
     Ok(runs.runs.len())
+}
+
+pub(super) fn enqueue_sync_current_state_batch_runs(
+    coordinator: &CapabilityEventCoordinator,
+    host: &DevqlCapabilityHost,
+    cfg: &DevqlConfig,
+    source_task_id: &str,
+    sync_mode: &str,
+    batch: SyncCurrentStateBatchUpdate,
+) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+
+    let _ = coordinator.record_sync_generation_with_options(
+        host,
+        cfg,
+        &SyncSummary {
+            success: true,
+            mode: sync_mode.to_string(),
+            active_branch: batch.active_branch,
+            head_commit_sha: batch.head_commit_sha,
+            ..SyncSummary::default()
+        },
+        SyncFileDiff {
+            added: Vec::new(),
+            changed: batch.file_upserts,
+            removed: batch.file_removals,
+        },
+        SyncArtefactDiff {
+            added: Vec::new(),
+            changed: batch.artefact_upserts,
+            removed: batch.artefact_removals,
+        },
+        Some(source_task_id),
+        Some(false),
+    )?;
+    Ok(())
 }
 
 pub(super) fn should_persist_progress<T: PartialEq>(

@@ -47,12 +47,12 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn enrichment_worker_count_defaults_to_ten_for_missing_or_invalid_values() {
-        assert_eq!(resolve_enrichment_worker_count(None), 1);
-        assert_eq!(resolve_enrichment_worker_count(Some("")), 1);
-        assert_eq!(resolve_enrichment_worker_count(Some("0")), 1);
-        assert_eq!(resolve_enrichment_worker_count(Some("-1")), 1);
-        assert_eq!(resolve_enrichment_worker_count(Some("nope")), 1);
+    fn enrichment_worker_count_defaults_to_two_for_missing_or_invalid_values() {
+        assert_eq!(resolve_enrichment_worker_count(None), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("")), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("0")), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("-1")), 2);
+        assert_eq!(resolve_enrichment_worker_count(Some("nope")), 2);
     }
 
     #[test]

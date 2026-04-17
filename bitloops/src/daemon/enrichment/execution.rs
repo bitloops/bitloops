@@ -15,8 +15,8 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
-    load_effective_mailbox_intent_for_repo, payload_artefact_id, payload_is_repo_backfill,
-    payload_representation_kind,
+    load_effective_mailbox_intent_for_repo, payload_artefact_id, payload_current_path,
+    payload_is_repo_backfill, payload_representation_kind,
 };
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
@@ -140,20 +140,18 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
             if !mailbox_intent.summary_refresh_active {
                 return JobExecutionOutcome::ok();
             }
-            if payload_is_repo_backfill(&job.payload) {
-                return JobExecutionOutcome::ok();
-            }
-            let inputs = match load_workplane_job_inputs(&relational, job).await {
-                Ok(inputs) => inputs,
-                Err(err) => return JobExecutionOutcome::failed(err),
-            };
+            let (scope, path, content_id, inputs) =
+                match load_workplane_summary_refresh_inputs(&relational, job).await {
+                    Ok(inputs) => inputs,
+                    Err(err) => return JobExecutionOutcome::failed(err),
+                };
             if inputs.is_empty() {
                 return JobExecutionOutcome::ok();
             }
             let payload = SemanticFeaturesRefreshPayload {
-                scope: SemanticFeaturesRefreshScope::Historical,
-                path: None,
-                content_id: None,
+                scope,
+                path,
+                content_id,
                 inputs,
                 mode: SemanticSummaryRefreshMode::ConfiguredStrict,
             };
@@ -177,6 +175,14 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                                 job,
                                 crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
                             ));
+                        } else if let Some((path, content_id)) = payload_current_path(&job.payload)
+                        {
+                            outcome.follow_ups.push(symbol_embeddings_follow_up_from_path(
+                                job,
+                                &path,
+                                &content_id,
+                                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+                            ));
                         } else if let Some(artefact_id) = payload_artefact_id(&job.payload) {
                             outcome.follow_ups.push(symbol_embeddings_follow_up_from_artefact_ids(
                                 job,
@@ -197,9 +203,6 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                     job.mailbox_name
                 ));
             };
-            if payload_is_repo_backfill(&job.payload) {
-                return JobExecutionOutcome::ok();
-            }
             let (scope, path, content_id, inputs) =
                 match load_workplane_embedding_refresh_inputs(&relational, job).await {
                     Ok(inputs) => inputs,
@@ -216,7 +219,7 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                 expected_input_hashes: BTreeMap::new(),
                 representation_kind,
                 mode: EmbeddingRefreshMode::ConfiguredStrict,
-                manage_active_state: false,
+                manage_active_state: payload_is_repo_backfill(&job.payload),
             };
             match capability_host
                 .invoke_ingester_with_relational(
@@ -424,6 +427,45 @@ fn symbol_embeddings_follow_up_from_artefact_ids(
     }
 }
 
+fn symbol_embeddings_follow_up_from_path(
+    job: &WorkplaneJobRecord,
+    path: &str,
+    content_id: &str,
+    representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
+) -> FollowUpJob {
+    FollowUpJob::Workplane {
+        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone()),
+        job: crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+            match representation_kind {
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code => {
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                }
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary => {
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+                }
+            },
+            Some(format!(
+                "{}:path:{content_id}:{path}",
+                match representation_kind {
+                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code => {
+                        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                    }
+                    crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary => {
+                        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+                    }
+                }
+            )),
+            serde_json::to_value(
+                crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::CurrentPath {
+                    path: path.to_string(),
+                    content_id: content_id.to_string(),
+                },
+            )
+            .expect("current path workplane payload should serialize"),
+        ),
+    }
+}
+
 fn symbol_embeddings_repo_backfill_follow_up(
     job: &WorkplaneJobRecord,
     representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
@@ -436,23 +478,66 @@ fn symbol_embeddings_repo_backfill_follow_up(
     }
 }
 
-async fn load_workplane_job_inputs(
+async fn load_workplane_summary_refresh_inputs(
     relational: &RelationalStorage,
     job: &WorkplaneJobRecord,
-) -> Result<Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>> {
+) -> Result<(
+    SemanticFeaturesRefreshScope,
+    Option<String>,
+    Option<String>,
+    Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>,
+)> {
     if payload_is_repo_backfill(&job.payload) {
-        return load_repo_backfill_inputs(relational, job).await;
+        return Ok((
+            SemanticFeaturesRefreshScope::Historical,
+            None,
+            None,
+            load_repo_backfill_inputs(relational, job).await?,
+        ));
+    }
+    if let Some((path, content_id)) = payload_current_path(&job.payload) {
+        let path_inputs =
+            load_current_workplane_inputs_for_path(relational, job, &path, &content_id).await?;
+        return Ok((
+            SemanticFeaturesRefreshScope::CurrentPath,
+            Some(path),
+            Some(content_id),
+            path_inputs,
+        ));
     }
 
     let Some(artefact_id) = payload_artefact_id(&job.payload) else {
         anyhow::bail!("workplane mailbox job missing artefact id");
     };
-    load_semantic_feature_inputs_for_artefacts(
-        relational,
-        &job.repo_root,
-        std::slice::from_ref(&artefact_id),
-    )
-    .await
+    let current_inputs =
+        load_current_workplane_inputs_for_artefact(relational, job, &artefact_id).await?;
+    if let Some(first) = current_inputs.first() {
+        let single_path = current_inputs
+            .iter()
+            .all(|input| input.path == first.path && input.blob_sha == first.blob_sha);
+        if single_path {
+            let path_inputs = load_current_workplane_inputs_for_path(
+                relational,
+                job,
+                &first.path,
+                &first.blob_sha,
+            )
+            .await?;
+            return Ok((
+                SemanticFeaturesRefreshScope::CurrentPath,
+                Some(first.path.clone()),
+                Some(first.blob_sha.clone()),
+                path_inputs,
+            ));
+        }
+    }
+
+    Ok((
+        SemanticFeaturesRefreshScope::Historical,
+        None,
+        None,
+        load_workplane_historical_inputs(relational, job, &artefact_id).await?,
+    ))
 }
 
 async fn load_workplane_embedding_refresh_inputs(
@@ -472,26 +557,39 @@ async fn load_workplane_embedding_refresh_inputs(
             load_repo_backfill_inputs(relational, job).await?,
         ));
     }
+    if let Some((path, content_id)) = payload_current_path(&job.payload) {
+        let path_inputs =
+            load_current_workplane_inputs_for_path(relational, job, &path, &content_id).await?;
+        return Ok((
+            SymbolEmbeddingsRefreshScope::CurrentPath,
+            Some(path),
+            Some(content_id),
+            path_inputs,
+        ));
+    }
 
     let Some(artefact_id) = payload_artefact_id(&job.payload) else {
         anyhow::bail!("workplane mailbox job missing artefact id");
     };
     let current_inputs =
-        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
-            .await?
-            .into_iter()
-            .filter(|input| input.artefact_id == artefact_id)
-            .collect::<Vec<_>>();
+        load_current_workplane_inputs_for_artefact(relational, job, &artefact_id).await?;
     if let Some(first) = current_inputs.first() {
         let single_path = current_inputs
             .iter()
             .all(|input| input.path == first.path && input.blob_sha == first.blob_sha);
         if single_path {
+            let path_inputs = load_current_workplane_inputs_for_path(
+                relational,
+                job,
+                &first.path,
+                &first.blob_sha,
+            )
+            .await?;
             return Ok((
                 SymbolEmbeddingsRefreshScope::CurrentPath,
                 Some(first.path.clone()),
                 Some(first.blob_sha.clone()),
-                current_inputs,
+                path_inputs,
             ));
         }
     }
@@ -500,8 +598,51 @@ async fn load_workplane_embedding_refresh_inputs(
         SymbolEmbeddingsRefreshScope::Historical,
         None,
         None,
-        load_workplane_job_inputs(relational, job).await?,
+        load_workplane_historical_inputs(relational, job, &artefact_id).await?,
     ))
+}
+
+async fn load_current_workplane_inputs_for_artefact(
+    relational: &RelationalStorage,
+    job: &WorkplaneJobRecord,
+    artefact_id: &str,
+) -> Result<Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>> {
+    Ok(
+        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
+            .await?
+            .into_iter()
+            .filter(|input| input.artefact_id == artefact_id)
+            .collect::<Vec<_>>(),
+    )
+}
+
+async fn load_current_workplane_inputs_for_path(
+    relational: &RelationalStorage,
+    job: &WorkplaneJobRecord,
+    path: &str,
+    content_id: &str,
+) -> Result<Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>> {
+    Ok(
+        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
+            .await?
+            .into_iter()
+            .filter(|input| input.path == path && input.blob_sha == content_id)
+            .collect::<Vec<_>>(),
+    )
+}
+
+async fn load_workplane_historical_inputs(
+    relational: &RelationalStorage,
+    job: &WorkplaneJobRecord,
+    artefact_id: &str,
+) -> Result<Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>> {
+    let artefact_id = artefact_id.to_string();
+    load_semantic_feature_inputs_for_artefacts(
+        relational,
+        &job.repo_root,
+        std::slice::from_ref(&artefact_id),
+    )
+    .await
 }
 
 async fn load_repo_backfill_inputs(

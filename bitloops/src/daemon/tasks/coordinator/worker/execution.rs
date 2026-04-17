@@ -16,7 +16,7 @@ use crate::host::devql::{
 use super::super::DevqlTaskCoordinator;
 use super::super::helpers::{enqueue_sync_completed_runs, receive_embeddings_bootstrap_outcome};
 use super::super::observers::{
-    IngestCoordinatorObserver, ProgressPersistState, SyncCoordinatorObserver,
+    IngestCoordinatorObserver, ProgressPersistState, SyncBatchDispatch, SyncCoordinatorObserver,
 };
 use super::reconcile::persist_scope_exclusions_fingerprint;
 
@@ -124,15 +124,9 @@ impl DevqlTaskCoordinator {
             None
         };
 
-        let observer = SyncCoordinatorObserver {
-            coordinator: Arc::clone(&self),
-            task_id: task.task_id.clone(),
-            progress_state: std::sync::Mutex::new(ProgressPersistState::default()),
-        };
-
         let host = match crate::host::devql::build_capability_host(&cfg.repo_root, cfg.repo.clone())
         {
-            Ok(host) => Some(host),
+            Ok(host) => Some(Arc::new(host)),
             Err(err) => {
                 log::warn!(
                     "failed to build capability host for sync event dispatch (task_id={}): {err:#}",
@@ -140,6 +134,28 @@ impl DevqlTaskCoordinator {
                 );
                 None
             }
+        };
+        let capability_event_coordinator = host
+            .as_ref()
+            .map(|_| crate::daemon::shared_capability_event_coordinator());
+        if let Some(coordinator) = capability_event_coordinator.as_ref() {
+            coordinator.activate_worker();
+        }
+        let observer = SyncCoordinatorObserver {
+            coordinator: Arc::clone(&self),
+            task_id: task.task_id.clone(),
+            progress_state: std::sync::Mutex::new(ProgressPersistState::default()),
+            batch_dispatch: capability_event_coordinator
+                .as_ref()
+                .zip(host.as_ref())
+                .map(|(capability_event_coordinator, host)| SyncBatchDispatch {
+                    capability_event_coordinator: Arc::clone(capability_event_coordinator),
+                    host: Arc::clone(host),
+                    cfg: cfg.clone(),
+                    task_id: task.task_id.clone(),
+                    sync_mode: effective_spec.to_string(),
+                    state: std::sync::Mutex::new(Default::default()),
+                }),
         };
 
         match crate::host::devql::run_sync_with_summary_and_observer_and_diffs(
@@ -173,19 +189,27 @@ impl DevqlTaskCoordinator {
                     self.finish_task_failed(&task.task_id, err)?;
                     return Ok(());
                 }
-                if let Some(host) = host.as_ref() {
-                    let capability_event_coordinator =
-                        crate::daemon::shared_capability_event_coordinator();
-                    capability_event_coordinator.activate_worker();
-                    if let Err(err) = enqueue_sync_completed_runs(
-                        capability_event_coordinator.as_ref(),
-                        host,
-                        &cfg,
-                        &task.task_id,
-                        &summary,
-                        file_diff,
-                        artefact_diff,
-                    ) {
+                let batch_dispatch_snapshot = observer
+                    .batch_dispatch
+                    .as_ref()
+                    .map(SyncBatchDispatch::snapshot)
+                    .unwrap_or_default();
+                if let Some(host) = host.as_ref()
+                    && (batch_dispatch_snapshot.streamed_batches == 0
+                        || batch_dispatch_snapshot.dispatch_failures > 0)
+                {
+                    if let Some(capability_event_coordinator) =
+                        capability_event_coordinator.as_ref()
+                        && let Err(err) = enqueue_sync_completed_runs(
+                            capability_event_coordinator.as_ref(),
+                            host,
+                            &cfg,
+                            &task.task_id,
+                            &summary,
+                            file_diff,
+                            artefact_diff,
+                        )
+                    {
                         log::warn!(
                             "failed to enqueue sync current-state consumer runs (task_id={}): {err:#}",
                             task.task_id

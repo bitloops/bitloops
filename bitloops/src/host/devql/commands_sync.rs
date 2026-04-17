@@ -22,7 +22,9 @@ pub use self::orchestrator::{
     run_sync, run_sync_with_summary, run_sync_with_summary_and_observer,
     run_sync_with_summary_and_observer_and_diffs,
 };
-pub use self::progress::{SyncObserver, SyncProgressPhase, SyncProgressUpdate};
+pub use self::progress::{
+    SyncCurrentStateBatchUpdate, SyncObserver, SyncProgressPhase, SyncProgressUpdate,
+};
 pub use self::summary::{SyncSummary, SyncValidationFileDrift, SyncValidationSummary};
 
 pub(crate) use self::orchestrator::execute_sync;

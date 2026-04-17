@@ -1,20 +1,23 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::daemon::CapabilityEventCoordinator;
 use crate::graphql::Checkpoint;
+use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::devql::{
-    IngestedCheckpointNotification, IngestionObserver, IngestionProgressUpdate, SyncObserver,
-    SyncProgressUpdate,
+    DevqlConfig, IngestedCheckpointNotification, IngestionObserver, IngestionProgressUpdate,
+    SyncCurrentStateBatchUpdate, SyncObserver, SyncProgressUpdate,
 };
 
 use super::super::super::types::DevqlTaskProgress;
 use super::DevqlTaskCoordinator;
-use super::helpers::should_persist_progress;
+use super::helpers::{enqueue_sync_current_state_batch_runs, should_persist_progress};
 
 pub(super) struct SyncCoordinatorObserver {
     pub(super) coordinator: Arc<DevqlTaskCoordinator>,
     pub(super) task_id: String,
     pub(super) progress_state: Mutex<ProgressPersistState<SyncProgressUpdate>>,
+    pub(super) batch_dispatch: Option<SyncBatchDispatch>,
 }
 
 pub(super) struct IngestCoordinatorObserver {
@@ -36,6 +39,27 @@ impl<T> Default for ProgressPersistState<T> {
             last_persisted: None,
             last_persisted_at: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct SyncBatchDispatchSnapshot {
+    pub(super) streamed_batches: usize,
+    pub(super) dispatch_failures: usize,
+}
+
+pub(super) struct SyncBatchDispatch {
+    pub(super) capability_event_coordinator: Arc<CapabilityEventCoordinator>,
+    pub(super) host: Arc<DevqlCapabilityHost>,
+    pub(super) cfg: DevqlConfig,
+    pub(super) task_id: String,
+    pub(super) sync_mode: String,
+    pub(super) state: Mutex<SyncBatchDispatchSnapshot>,
+}
+
+impl SyncBatchDispatch {
+    pub(super) fn snapshot(&self) -> SyncBatchDispatchSnapshot {
+        self.state.lock().map(|state| *state).unwrap_or_default()
     }
 }
 
@@ -69,6 +93,44 @@ impl SyncObserver for SyncCoordinatorObserver {
         {
             log::warn!(
                 "failed to persist sync progress for task `{}`: {err:#}",
+                self.task_id
+            );
+        }
+    }
+
+    fn on_current_state_batch(&self, update: SyncCurrentStateBatchUpdate) {
+        let Some(batch_dispatch) = self.batch_dispatch.as_ref() else {
+            return;
+        };
+
+        let result = enqueue_sync_current_state_batch_runs(
+            batch_dispatch.capability_event_coordinator.as_ref(),
+            batch_dispatch.host.as_ref(),
+            &batch_dispatch.cfg,
+            &batch_dispatch.task_id,
+            &batch_dispatch.sync_mode,
+            update,
+        );
+
+        match batch_dispatch.state.lock() {
+            Ok(mut state) => {
+                if result.is_ok() {
+                    state.streamed_batches += 1;
+                } else {
+                    state.dispatch_failures += 1;
+                }
+            }
+            Err(_) => {
+                log::warn!(
+                    "failed to acquire sync batch dispatch state for task `{}`",
+                    self.task_id
+                );
+            }
+        }
+
+        if let Err(err) = result {
+            log::warn!(
+                "failed to enqueue streamed current-state batch for task `{}`: {err:#}",
                 self.task_id
             );
         }

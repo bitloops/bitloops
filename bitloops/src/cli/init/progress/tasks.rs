@@ -6,6 +6,7 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::devql_transport::SlimCliRepoScope;
+use crate::host::capability_host::gateways::CapabilityMailboxStatus;
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 use super::EmbeddingQueueSnapshot;
@@ -18,7 +19,7 @@ pub(super) async fn current_embedding_queue_snapshot(
         return Ok(None);
     };
 
-    let completed = RepoSqliteRuntimeStore::open(repo_root)
+    let repo_snapshot = RepoSqliteRuntimeStore::open(repo_root)
         .ok()
         .and_then(|store| {
             store
@@ -31,19 +32,17 @@ pub(super) async fn current_embedding_queue_snapshot(
                 )
                 .ok()
         })
-        .map(|status_by_mailbox| {
-            status_by_mailbox
-                .into_values()
-                .map(|status| status.completed_recent_jobs)
-                .sum()
-        })
-        .unwrap_or_default();
+        .map(|status_by_mailbox| snapshot_from_mailbox_statuses(status_by_mailbox.into_values()));
+
+    if let Some(snapshot) = repo_snapshot {
+        return Ok(Some(snapshot));
+    }
 
     Ok(Some(EmbeddingQueueSnapshot {
         pending: enrichment.state.pending_embedding_jobs,
         running: enrichment.state.running_embedding_jobs,
         failed: enrichment.state.failed_embedding_jobs,
-        completed,
+        completed: 0,
     }))
 }
 
@@ -55,7 +54,7 @@ pub(super) async fn current_summary_queue_snapshot(
         return Ok(None);
     };
 
-    let completed = RepoSqliteRuntimeStore::open(repo_root)
+    let repo_snapshot = RepoSqliteRuntimeStore::open(repo_root)
         .ok()
         .and_then(|store| {
             store
@@ -65,20 +64,39 @@ pub(super) async fn current_summary_queue_snapshot(
                 )
                 .ok()
         })
-        .map(|status_by_mailbox| {
-            status_by_mailbox
-                .into_values()
-                .map(|status| status.completed_recent_jobs)
-                .sum()
-        })
-        .unwrap_or_default();
+        .map(|status_by_mailbox| snapshot_from_mailbox_statuses(status_by_mailbox.into_values()));
+
+    if let Some(snapshot) = repo_snapshot {
+        return Ok(Some(snapshot));
+    }
 
     Ok(Some(EmbeddingQueueSnapshot {
         pending: enrichment.state.pending_semantic_jobs,
         running: enrichment.state.running_semantic_jobs,
         failed: enrichment.state.failed_semantic_jobs,
-        completed,
+        completed: 0,
     }))
+}
+
+fn snapshot_from_mailbox_statuses(
+    status_by_mailbox: impl IntoIterator<Item = CapabilityMailboxStatus>,
+) -> EmbeddingQueueSnapshot {
+    status_by_mailbox.into_iter().fold(
+        EmbeddingQueueSnapshot {
+            pending: 0,
+            running: 0,
+            failed: 0,
+            completed: 0,
+        },
+        |mut snapshot, status| {
+            snapshot.pending += status.pending_jobs + status.pending_cursor_runs;
+            snapshot.running += status.running_jobs + status.running_cursor_runs;
+            snapshot.failed += status.failed_jobs + status.failed_cursor_runs;
+            snapshot.completed +=
+                status.completed_recent_jobs + status.completed_recent_cursor_runs;
+            snapshot
+        },
+    )
 }
 
 pub(super) async fn refresh_init_progress_task(
@@ -110,4 +128,45 @@ pub(super) async fn refresh_init_progress_task(
     Ok(tasks
         .into_iter()
         .find(|task| task.task_id == current.task_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snapshot_from_mailbox_statuses;
+    use crate::host::capability_host::gateways::CapabilityMailboxStatus;
+
+    #[test]
+    fn mailbox_status_snapshot_uses_repo_scoped_job_and_cursor_counts() {
+        let snapshot = snapshot_from_mailbox_statuses([
+            CapabilityMailboxStatus {
+                pending_jobs: 10,
+                running_jobs: 2,
+                failed_jobs: 1,
+                completed_recent_jobs: 30,
+                pending_cursor_runs: 3,
+                running_cursor_runs: 4,
+                failed_cursor_runs: 0,
+                completed_recent_cursor_runs: 5,
+                intent_active: true,
+                blocked_reason: None,
+            },
+            CapabilityMailboxStatus {
+                pending_jobs: 7,
+                running_jobs: 1,
+                failed_jobs: 2,
+                completed_recent_jobs: 11,
+                pending_cursor_runs: 0,
+                running_cursor_runs: 1,
+                failed_cursor_runs: 1,
+                completed_recent_cursor_runs: 2,
+                intent_active: true,
+                blocked_reason: None,
+            },
+        ]);
+
+        assert_eq!(snapshot.pending, 20);
+        assert_eq!(snapshot.running, 8);
+        assert_eq!(snapshot.failed, 4);
+        assert_eq!(snapshot.completed, 48);
+    }
 }

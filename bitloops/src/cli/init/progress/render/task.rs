@@ -1,7 +1,7 @@
 use super::terminal::{
     fit_init_status_text, format_count_i32, format_megabytes, humanise_init_bootstrap_phase,
     humanise_init_ingest_phase, humanise_init_sync_phase, render_init_determinate_progress_bar,
-    render_init_indeterminate_progress_bar,
+    render_init_indeterminate_progress_bar, visible_init_progress_percent,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +137,7 @@ pub(super) fn format_init_task_progress_bar_line(
     let summary = if let Some((ratio, done, total, unit)) = init_task_progress_ratio(task) {
         format!(
             " {:>3}% {done}/{total} {unit}",
-            (ratio * 100.0).round() as usize,
+            visible_init_progress_percent(ratio),
         )
     } else {
         format!(" {} ", init_task_progress_phase_summary(task))

@@ -52,10 +52,23 @@ fn visible_terminal_width(text: &str) -> usize {
 
 pub(super) fn render_init_determinate_progress_bar(width: usize, ratio: f64) -> String {
     let filled = ((width as f64) * ratio).round() as usize;
-    let filled = filled.min(width);
+    let filled = if ratio > 0.0 && ratio < 1.0 {
+        filled.clamp(1, width)
+    } else {
+        filled.min(width)
+    };
     let fill = color_hex_if_enabled(&"█".repeat(filled), BITLOOPS_PURPLE_HEX);
     let empty = "░".repeat(width.saturating_sub(filled));
     format!("{fill}{empty}")
+}
+
+pub(super) fn visible_init_progress_percent(ratio: f64) -> usize {
+    let percent = (ratio * 100.0).round() as usize;
+    if ratio > 0.0 && ratio < 1.0 {
+        percent.clamp(1, 99)
+    } else {
+        percent.min(100)
+    }
 }
 
 pub(super) fn render_init_indeterminate_progress_bar(width: usize, spinner_index: usize) -> String {
@@ -201,5 +214,25 @@ pub(super) fn humanise_summary_setup_phase(
         crate::cli::inference::SummarySetupPhase::ExtractingRuntime => "extracting runtime",
         crate::cli::inference::SummarySetupPhase::RewritingRuntime => "updating runtime config",
         crate::cli::inference::SummarySetupPhase::WritingProfile => "writing summary profile",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_init_determinate_progress_bar, visible_init_progress_percent};
+
+    #[test]
+    fn determinate_progress_bar_shows_visible_progress_once_work_has_started() {
+        let bar = render_init_determinate_progress_bar(10, 0.0005);
+        assert_eq!(bar.chars().filter(|ch| *ch == '█').count(), 1);
+        assert_eq!(bar.chars().filter(|ch| *ch == '░').count(), 9);
+    }
+
+    #[test]
+    fn visible_progress_percent_avoids_sticky_zero_for_tiny_non_zero_progress() {
+        assert_eq!(visible_init_progress_percent(0.0), 0);
+        assert_eq!(visible_init_progress_percent(0.0005), 1);
+        assert_eq!(visible_init_progress_percent(0.999), 99);
+        assert_eq!(visible_init_progress_percent(1.0), 100);
     }
 }

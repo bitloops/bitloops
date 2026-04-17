@@ -2,7 +2,7 @@ use super::super::{EmbeddingQueueSnapshot, InitChecklistState, SummaryProgressSt
 use super::terminal::{
     fit_init_status_text, format_count_u64, format_megabytes, humanise_summary_setup_phase,
     remaining_init_dependencies, render_init_determinate_progress_bar,
-    render_init_indeterminate_progress_bar,
+    render_init_indeterminate_progress_bar, visible_init_progress_percent,
 };
 
 pub(super) fn format_embedding_queue_status_line(
@@ -10,7 +10,7 @@ pub(super) fn format_embedding_queue_status_line(
     spinner: &str,
 ) -> String {
     let mut line = format!(
-        "{spinner} Embedding queue · {} remaining · {} running",
+        "{spinner} Embedding queue · {} jobs remaining · {} running",
         format_count_u64(snapshot.remaining()),
         format_count_u64(snapshot.running),
     );
@@ -31,8 +31,8 @@ pub(super) fn format_embedding_queue_progress_bar_line(
     let summary = if baseline_total > 0 {
         let ratio = (done as f64 / baseline_total as f64).clamp(0.0, 1.0);
         format!(
-            " {:>3}% {}/{} artefacts",
-            (ratio * 100.0).round() as usize,
+            " {:>3}% {}/{} jobs",
+            visible_init_progress_percent(ratio),
             format_count_u64(done),
             format_count_u64(baseline_total),
         )
@@ -80,7 +80,7 @@ pub(super) fn format_embedding_queue_complete_progress_bar_line(
 ) -> String {
     let available_width = terminal_width.unwrap_or(80).max(16);
     let summary = format!(
-        " 100% {}/{} artefacts",
+        " 100% {}/{} jobs",
         format_count_u64(baseline_total),
         format_count_u64(baseline_total),
     );
@@ -103,7 +103,7 @@ pub(super) fn format_embedding_waiting_status_line(
 ) -> String {
     let prefix = if completed_jobs > 0 {
         format!(
-            "bitloops-local-embeddings processed {} artefacts",
+            "bitloops-local-embeddings processed {} jobs",
             format_count_u64(completed_jobs)
         )
     } else {
@@ -140,8 +140,8 @@ pub(super) fn format_summary_progress_bar_line(
             if *baseline_total > 0 {
                 let ratio = (done as f64 / *baseline_total as f64).clamp(0.0, 1.0);
                 format!(
-                    " {:>3}% {}/{} summaries",
-                    (ratio * 100.0).round() as usize,
+                    " {:>3}% {}/{} jobs",
+                    visible_init_progress_percent(ratio),
                     format_count_u64(done),
                     format_count_u64(*baseline_total),
                 )
@@ -156,7 +156,7 @@ pub(super) fn format_summary_progress_bar_line(
             if let Some((ratio, done, total, unit)) = summary_progress_ratio(progress) {
                 format!(
                     " {:>3}% {done}/{total} {unit}",
-                    (ratio * 100.0).round() as usize,
+                    visible_init_progress_percent(ratio),
                 )
             } else {
                 format!(" {} ", humanise_summary_setup_phase(progress.phase))
@@ -254,7 +254,7 @@ pub(super) fn format_summary_status_line(
         }
         SummaryProgressState::Queue { snapshot, .. } => {
             let mut line = format!(
-                "Semantic summary queue · {} remaining · {} running",
+                "Semantic summary queue · {} jobs remaining · {} running",
                 format_count_u64(snapshot.remaining()),
                 format_count_u64(snapshot.running),
             );
@@ -274,7 +274,7 @@ pub(super) fn format_summary_status_line(
         } => {
             let prefix = if *completed_jobs > 0 {
                 format!(
-                    "bitloops-inference processed {} summaries",
+                    "bitloops-inference processed {} jobs",
                     format_count_u64(*completed_jobs)
                 )
             } else {
@@ -329,5 +329,98 @@ pub(super) fn format_summary_status_line(
             format!("✖ {fitted}")
         }
         SummaryProgressState::Hidden => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedding_queue_labels_completed_jobs_honestly() {
+        let waiting = format_embedding_waiting_status_line(
+            InitChecklistState {
+                show_sync: true,
+                show_ingest: false,
+                show_embeddings: true,
+                show_summaries: false,
+                sync_complete: true,
+                ingest_complete: true,
+            },
+            44,
+            0,
+            "⠋",
+            None,
+        );
+        let progress = format_embedding_queue_progress_bar_line(
+            EmbeddingQueueSnapshot {
+                pending: 20,
+                running: 3,
+                failed: 0,
+                completed: 44,
+            },
+            100,
+            0,
+            None,
+        );
+
+        assert!(waiting.contains("processed 44 jobs"));
+        assert!(!waiting.contains("processed 44 artefacts"));
+        assert!(progress.contains("44/100 jobs"));
+        assert!(!progress.contains("44/100 artefacts"));
+    }
+
+    #[test]
+    fn summary_queue_labels_completed_jobs_honestly() {
+        let waiting = format_summary_status_line(
+            &SummaryProgressState::WaitingForQueue {
+                result: crate::cli::inference::SummarySetupExecutionResult {
+                    outcome: crate::cli::inference::SummarySetupOutcome::Configured {
+                        model_name: "ministral-3:3b".to_string(),
+                    },
+                    message: "Configured semantic summaries.".to_string(),
+                },
+                baseline_total: 0,
+                completed_floor: 0,
+                completed_jobs: 44,
+                failed_jobs: 0,
+            },
+            InitChecklistState {
+                show_sync: true,
+                show_ingest: false,
+                show_embeddings: false,
+                show_summaries: true,
+                sync_complete: true,
+                ingest_complete: true,
+            },
+            "⠋",
+            "✓",
+            None,
+        );
+        let progress = format_summary_progress_bar_line(
+            &SummaryProgressState::Queue {
+                result: crate::cli::inference::SummarySetupExecutionResult {
+                    outcome: crate::cli::inference::SummarySetupOutcome::Configured {
+                        model_name: "ministral-3:3b".to_string(),
+                    },
+                    message: "Configured semantic summaries.".to_string(),
+                },
+                snapshot: EmbeddingQueueSnapshot {
+                    pending: 20,
+                    running: 3,
+                    failed: 0,
+                    completed: 44,
+                },
+                baseline_total: 100,
+                completed_floor: 0,
+            },
+            0,
+            None,
+        );
+
+        assert!(waiting.contains("processed 44 jobs"));
+        assert!(!waiting.contains("processed 44 summaries"));
+        assert!(progress.contains("44/100 jobs"));
+        assert!(!progress.contains("44/100 summaries"));
     }
 }
