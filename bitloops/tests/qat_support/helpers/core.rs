@@ -686,6 +686,12 @@ fn run_devql_task_enqueue_for_repo(
     flags: &[&str],
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    if matches!(kind, DevqlTaskEnqueueKind::Sync) {
+        let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+            .context("resolving repo_id for TestHarness sync baseline")?;
+        world.last_test_harness_run_baseline =
+            load_latest_test_harness_capability_event_run(world, &repo_id)?.map(|(_, run)| run);
+    }
     let args = build_devql_task_enqueue_args(kind, flags);
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     let label = format!("bitloops {}", args.join(" "));
@@ -972,8 +978,14 @@ fn agent_hooks_path(repo_root: &Path, agent_name: &str) -> Result<std::path::Pat
         AGENT_NAME_CODEX => repo_root.join(".codex").join("hooks.json"),
         AGENT_NAME_CURSOR => repo_root.join(".cursor").join("hooks.json"),
         AGENT_NAME_GEMINI => repo_root.join(".gemini").join("settings.json"),
-        AGENT_NAME_COPILOT => repo_root.join(".github").join("hooks").join("bitloops.json"),
-        AGENT_NAME_OPEN_CODE => repo_root.join(".opencode").join("plugins").join("bitloops.ts"),
+        AGENT_NAME_COPILOT => repo_root
+            .join(".github")
+            .join("hooks")
+            .join("bitloops.json"),
+        AGENT_NAME_OPEN_CODE => repo_root
+            .join(".opencode")
+            .join("plugins")
+            .join("bitloops.ts"),
         other => bail!("unsupported agent for hook assertion: {other}"),
     })
 }
@@ -1345,7 +1357,10 @@ pub fn enqueue_devql_sync_task_with_paths_and_status_for_repo(
     repo_name: &str,
     paths: &[String],
 ) -> Result<()> {
-    ensure!(!paths.is_empty(), "expected at least one path for scoped sync");
+    ensure!(
+        !paths.is_empty(),
+        "expected at least one path for scoped sync"
+    );
     let joined = paths.join(",");
     run_devql_task_enqueue_for_repo(
         world,
@@ -1412,8 +1427,7 @@ pub fn attempt_to_enqueue_devql_sync_task_require_daemon_for_repo(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let args =
-        build_devql_task_enqueue_args(DevqlTaskEnqueueKind::Sync, &["--require-daemon"]);
+    let args = build_devql_task_enqueue_args(DevqlTaskEnqueueKind::Sync, &["--require-daemon"]);
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
     let label = "bitloops devql tasks enqueue --kind sync --require-daemon (expect failure)";
     let output = run_command_capture(world, label, build_bitloops_command(world, &arg_refs)?)?;
@@ -1614,6 +1628,8 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo_id while waiting for TestHarness capability-event completion")?;
     let timeout = parse_timeout_seconds(
         std::env::var(DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_ENV)
             .ok()
@@ -1623,6 +1639,7 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
     let started = Instant::now();
     let mut attempts = 0_usize;
     let mut last_payload = serde_json::json!({});
+    let baseline = world.last_test_harness_run_baseline.clone();
 
     loop {
         attempts += 1;
@@ -1646,41 +1663,63 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
                     .get("capability_id")
                     .and_then(serde_json::Value::as_str)
                     == Some("test_harness")
+                    && current_repo_run
+                        .get("repo_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(repo_id.as_str())
             })
         {
-            match current_repo_run
+            if current_repo_run
                 .get("status")
                 .and_then(serde_json::Value::as_str)
+                == Some("failed")
             {
-                Some("completed") => return Ok(()),
-                Some("failed") => {
-                    let run_id = current_repo_run
-                        .get("run_id")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("<unknown>");
-                    let handler_id = current_repo_run
-                        .get("handler_id")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("<unknown>");
-                    let event_kind = current_repo_run
-                        .get("event_kind")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("<unknown>");
-                    let error = current_repo_run
-                        .get("error")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("<no error>");
-                    bail!(
-                        "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
-                    );
-                }
-                _ => {}
+                let run_id = current_repo_run
+                    .get("run_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<unknown>");
+                let handler_id = current_repo_run
+                    .get("handler_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<unknown>");
+                let event_kind = current_repo_run
+                    .get("event_kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<unknown>");
+                let error = current_repo_run
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("<no error>");
+                bail!(
+                    "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
+                );
             }
         }
 
-        if let Some((_, persisted_run)) = load_latest_test_harness_capability_event_run(world)? {
+        if let Some((_, persisted_run)) =
+            load_latest_test_harness_capability_event_run(world, &repo_id)?
+        {
+            if !capability_event_run_is_newer_than_baseline(&persisted_run, baseline.as_ref()) {
+                last_payload = payload;
+                if started.elapsed() >= timeout {
+                    let last_payload = serde_json::to_string(&last_payload)
+                        .unwrap_or_else(|_| "<failed to serialize payload>".to_string());
+                    bail!(
+                        "timed out after {}s waiting for test_harness capability-event completion in {}; attempts={attempts}; last payload={last_payload}",
+                        timeout.as_secs(),
+                        repo_name
+                    );
+                }
+                std::thread::sleep(StdDuration::from_millis(
+                    DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS,
+                ));
+                continue;
+            }
             match persisted_run.status {
-                bitloops::daemon::CapabilityEventRunStatus::Completed => return Ok(()),
+                bitloops::daemon::CapabilityEventRunStatus::Completed => {
+                    world.last_test_harness_run_baseline = Some(persisted_run);
+                    return Ok(());
+                }
                 bitloops::daemon::CapabilityEventRunStatus::Failed => {
                     let run_id = persisted_run.run_id;
                     let handler_id = persisted_run.handler_id;
@@ -1714,6 +1753,7 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
 
 fn load_latest_test_harness_capability_event_run(
     world: &QatWorld,
+    repo_id: &str,
 ) -> Result<
     Option<(
         std::path::PathBuf,
@@ -1734,8 +1774,8 @@ fn load_latest_test_harness_capability_event_run(
         let store = bitloops::host::runtime_store::DaemonSqliteRuntimeStore::open_at(path.clone())
             .with_context(|| format!("opening daemon runtime store {}", path.display()))?;
         let Some(run) = latest_capability_event_run(
-            load_latest_test_harness_current_state_run(&store)?,
-            load_latest_test_harness_pack_reconcile_run(&store)?,
+            load_latest_test_harness_current_state_run(&store, repo_id)?,
+            load_latest_test_harness_pack_reconcile_run(&store, repo_id)?,
         ) else {
             continue;
         };
@@ -1781,8 +1821,34 @@ fn capability_event_run_sort_key(
     )
 }
 
+fn capability_event_run_progress_key(
+    run: &bitloops::daemon::CapabilityEventRunRecord,
+) -> (u64, u64, u64, u64) {
+    (
+        run.to_generation_seq,
+        run.submitted_at_unix,
+        run.updated_at_unix,
+        run.completed_at_unix.unwrap_or_default(),
+    )
+}
+
+fn capability_event_run_is_newer_than_baseline(
+    run: &bitloops::daemon::CapabilityEventRunRecord,
+    baseline: Option<&bitloops::daemon::CapabilityEventRunRecord>,
+) -> bool {
+    match baseline {
+        None => true,
+        Some(baseline) => {
+            run.repo_id == baseline.repo_id
+                && capability_event_run_progress_key(run)
+                    > capability_event_run_progress_key(baseline)
+        }
+    }
+}
+
 fn load_latest_test_harness_current_state_run(
     store: &bitloops::host::runtime_store::DaemonSqliteRuntimeStore,
+    repo_id: &str,
 ) -> Result<Option<bitloops::daemon::CapabilityEventRunRecord>> {
     use rusqlite::OptionalExtension;
 
@@ -1790,10 +1856,10 @@ fn load_latest_test_harness_current_state_run(
         conn.query_row(
             "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
              FROM capability_workplane_cursor_runs \
-             WHERE capability_id = ?1 AND mailbox_name = ?2 \
+             WHERE capability_id = ?1 AND mailbox_name = ?2 AND repo_id = ?3 \
              ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
              LIMIT 1",
-            rusqlite::params!["test_harness", "test_harness.current_state"],
+            rusqlite::params!["test_harness", "test_harness.current_state", repo_id],
             |row| {
                 let as_u64 = |index| -> rusqlite::Result<u64> {
                     row.get::<_, i64>(index)
@@ -1836,6 +1902,7 @@ fn load_latest_test_harness_current_state_run(
 
 fn load_latest_test_harness_pack_reconcile_run(
     store: &bitloops::host::runtime_store::DaemonSqliteRuntimeStore,
+    repo_id: &str,
 ) -> Result<Option<bitloops::daemon::CapabilityEventRunRecord>> {
     use rusqlite::OptionalExtension;
 
@@ -1843,10 +1910,10 @@ fn load_latest_test_harness_pack_reconcile_run(
         conn.query_row(
             "SELECT run_id, repo_id, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
              FROM pack_reconcile_runs \
-             WHERE capability_id = ?1 AND consumer_id = ?2 \
+             WHERE capability_id = ?1 AND consumer_id = ?2 AND repo_id = ?3 \
              ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
              LIMIT 1",
-            rusqlite::params!["test_harness", "test_harness.current_state"],
+            rusqlite::params!["test_harness", "test_harness.current_state", repo_id],
             |row| {
                 let as_u64 = |index| -> rusqlite::Result<u64> {
                     row.get::<_, i64>(index)
@@ -2425,7 +2492,10 @@ pub fn assert_agent_interaction_exists_before_commit_for_repo(
         "expected persisted {normalised_agent_name} interaction session before commit, found none"
     );
     ensure!(
-        snapshot.session_ids.iter().all(|session_id| !session_id.trim().is_empty()),
+        snapshot
+            .session_ids
+            .iter()
+            .all(|session_id| !session_id.trim().is_empty()),
         "expected persisted {normalised_agent_name} interaction sessions to have non-empty ids, found {:?}",
         snapshot.session_ids
     );
@@ -2443,8 +2513,9 @@ pub fn assert_agent_interaction_exists_before_commit_for_repo(
         snapshot.uncheckpointed_turn_ids
     );
 
-    let mappings = with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
-        .context("reading Bitloops checkpoint mappings before commit")?;
+    let mappings =
+        with_scenario_app_env(world, || read_commit_checkpoint_mappings(world.repo_dir()))
+            .context("reading Bitloops checkpoint mappings before commit")?;
     ensure!(
         mappings.is_empty(),
         "expected no checkpoint mappings before commit, found {} with interaction sessions {:?} and turns {:?}",
@@ -2532,7 +2603,10 @@ struct CommitCheckpointRow {
     checkpoint_id: String,
 }
 
-fn load_commit_checkpoint_rows(world: &QatWorld, repo_name: &str) -> Result<Vec<CommitCheckpointRow>> {
+fn load_commit_checkpoint_rows(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<Vec<CommitCheckpointRow>> {
     ensure_bitloops_repo_name(repo_name)?;
     let conn = open_relational_connection(world)?;
     let repo_id = resolve_repo_id(&conn)?;
@@ -2701,7 +2775,11 @@ pub fn assert_captured_commit_history_is_ordered_for_repo(
     let output = run_command_capture(
         world,
         "git log ordered history",
-        build_git_command(world, &["log", "--pretty=format:%H|%s|%aI", "-n", "50"], &[]),
+        build_git_command(
+            world,
+            &["log", "--pretty=format:%H|%s|%aI", "-n", "50"],
+            &[],
+        ),
     )?;
     ensure_success(&output, "git log ordered history")?;
     let commits = parse_git_timeline(String::from_utf8_lossy(&output.stdout).as_ref());
@@ -2726,7 +2804,11 @@ fn relative_day_timeline_commits_for_repo(
     let output = run_command_capture(
         world,
         "git log timeline",
-        build_git_command(world, &["log", "--pretty=format:%H|%s|%aI", "-n", "30"], &[]),
+        build_git_command(
+            world,
+            &["log", "--pretty=format:%H|%s|%aI", "-n", "30"],
+            &[],
+        ),
     )?;
     ensure_success(&output, "git log timeline")?;
     let commits = parse_git_timeline(String::from_utf8_lossy(&output.stdout).as_ref());
@@ -2797,8 +2879,8 @@ pub fn assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
             let summary =
                 with_scenario_app_env(world, || read_committed(world.repo_dir(), &checkpoint_id))
                     .with_context(|| {
-                        format!("reading committed checkpoint summary for {checkpoint_id}")
-                    })?;
+                    format!("reading committed checkpoint summary for {checkpoint_id}")
+                })?;
             if summary.is_some() {
                 found_summary = true;
                 break;
@@ -3140,10 +3222,7 @@ fn artefacts_current_count_for_path(world: &QatWorld, path: &str) -> Result<usiz
     usize::try_from(count).context("converting artefacts_current path count to usize")
 }
 
-fn current_file_state_effective_content_id(
-    world: &QatWorld,
-    path: &str,
-) -> Result<Option<String>> {
+fn current_file_state_effective_content_id(world: &QatWorld, path: &str) -> Result<Option<String>> {
     let conn = open_relational_connection(world)?;
     let repo_id = resolve_repo_id(&conn)?;
     use rusqlite::OptionalExtension;
@@ -3775,7 +3854,10 @@ pub fn assert_last_task_id_captured(world: &QatWorld) -> Result<()> {
     Ok(())
 }
 
-pub fn assert_task_queue_state_in_last_output(world: &QatWorld, expected_state: &str) -> Result<()> {
+pub fn assert_task_queue_state_in_last_output(
+    world: &QatWorld,
+    expected_state: &str,
+) -> Result<()> {
     let stdout = world.last_command_stdout.as_deref().unwrap_or("");
     let status = parse_task_queue_status(stdout)?;
     ensure!(
@@ -3812,12 +3894,18 @@ pub fn assert_task_list_in_last_output_contains_last_task(world: &QatWorld) -> R
     ensure!(
         tasks.iter().any(|task| task.task_id == expected_task_id),
         "expected task list to include `{expected_task_id}`, observed {:?}\nstdout: {stdout}",
-        tasks.iter().map(|task| task.task_id.as_str()).collect::<Vec<_>>()
+        tasks
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect::<Vec<_>>()
     );
     Ok(())
 }
 
-pub fn assert_last_task_status_in_last_output(world: &QatWorld, expected_status: &str) -> Result<()> {
+pub fn assert_last_task_status_in_last_output(
+    world: &QatWorld,
+    expected_status: &str,
+) -> Result<()> {
     let expected_task_id = world
         .last_task_id
         .as_deref()
@@ -4002,32 +4090,64 @@ pub fn assert_only_latest_reachable_shas_completed_in_ledger(
     latest_count: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        "bounded backfill ingest ledger to match latest reachable commits",
+        || {
+            let reachable = git_reachable_shas(world, None)?;
+            let completed = completed_ledger_shas(world)?;
+            latest_reachable_ledger_snapshot(&reachable, &completed, latest_count)
+        },
+        |snapshot| snapshot.completed_reachable == snapshot.expected_latest,
+        |snapshot| {
+            format!(
+                "expected_latest={:?}; completed_reachable={:?}; reachable_total={}; completed_total={}",
+                snapshot.expected_latest,
+                snapshot.completed_reachable,
+                snapshot.reachable_total,
+                snapshot.completed_total
+            )
+        },
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LatestReachableLedgerSnapshot {
+    expected_latest: std::collections::BTreeSet<String>,
+    completed_reachable: std::collections::BTreeSet<String>,
+    reachable_total: usize,
+    completed_total: usize,
+}
+
+fn latest_reachable_ledger_snapshot(
+    reachable: &[String],
+    completed: &[String],
+    latest_count: usize,
+) -> Result<LatestReachableLedgerSnapshot> {
     ensure!(
         latest_count > 0,
         "latest reachable SHA count must be greater than zero"
     );
-    let reachable = git_reachable_shas(world, None)?;
     ensure!(
         reachable.len() >= latest_count,
         "expected at least {latest_count} reachable commits, found {}",
         reachable.len()
     );
-    let expected_latest: std::collections::BTreeSet<String> =
-        reachable.iter().take(latest_count).cloned().collect();
-    let completed_set: std::collections::BTreeSet<String> =
-        completed_ledger_shas(world)?.into_iter().collect();
-    let reachable_set: std::collections::BTreeSet<String> = reachable.into_iter().collect();
-    let completed_reachable: std::collections::BTreeSet<String> = completed_set
+    let expected_latest = reachable.iter().take(latest_count).cloned().collect();
+    let reachable_set: std::collections::BTreeSet<String> = reachable.iter().cloned().collect();
+    let completed_set: std::collections::BTreeSet<String> = completed.iter().cloned().collect();
+    let completed_reachable = completed_set
         .intersection(&reachable_set)
         .cloned()
         .collect();
-    ensure!(
-        completed_reachable == expected_latest,
-        "expected completed reachable SHAs {:?}, got {:?}",
+    Ok(LatestReachableLedgerSnapshot {
         expected_latest,
-        completed_reachable
-    );
-    Ok(())
+        completed_reachable,
+        reachable_total: reachable.len(),
+        completed_total: completed.len(),
+    })
 }
 
 pub fn assert_rewrite_new_shas_count(

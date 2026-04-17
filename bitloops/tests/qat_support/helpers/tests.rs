@@ -7,7 +7,7 @@ use std::time::Duration as StdDuration;
 
 use crate::qat_support::world::QatRunConfig;
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
-use bitloops::daemon::CapabilityEventRunStatus;
+use bitloops::daemon::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
 use bitloops::host::runtime_store::DaemonSqliteRuntimeStore;
@@ -701,7 +701,7 @@ fn load_latest_test_harness_capability_event_run_reads_macos_current_state_store
         ..Default::default()
     };
 
-    let (_, run) = load_latest_test_harness_capability_event_run(&world)
+    let (_, run) = load_latest_test_harness_capability_event_run(&world, "repo-1")
         .expect("load latest run")
         .expect("completed run should be found");
 
@@ -793,7 +793,7 @@ fn load_latest_test_harness_capability_event_run_prefers_newer_legacy_run() {
         ..Default::default()
     };
 
-    let (_, run) = load_latest_test_harness_capability_event_run(&world)
+    let (_, run) = load_latest_test_harness_capability_event_run(&world, "repo-1")
         .expect("load latest run")
         .expect("completed run should be found");
 
@@ -801,6 +801,235 @@ fn load_latest_test_harness_capability_event_run_prefers_newer_legacy_run() {
     assert_eq!(run.status, CapabilityEventRunStatus::Completed);
     assert_eq!(run.capability_id, "test_harness");
     assert_eq!(run.consumer_id, "test_harness.current_state");
+}
+
+#[test]
+fn load_latest_test_harness_capability_event_run_filters_to_requested_repo() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = temp.path().join("repo");
+    let bin_dir = temp.path().join("bin");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let runtime_path = run_dir
+        .join("home")
+        .join("Library")
+        .join("Application Support")
+        .join("bitloops")
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+    let runtime_parent = runtime_path.parent().expect("runtime parent");
+    fs::create_dir_all(runtime_parent).expect("create runtime parent");
+    let store = DaemonSqliteRuntimeStore::open_at(runtime_path).expect("open runtime store");
+    store
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-other-current",
+                    "repo-other",
+                    "/tmp/other",
+                    "test_harness.current_state",
+                    "test_harness",
+                    9_i64,
+                    10_i64,
+                    "full_reconcile",
+                    "completed",
+                    1_i64,
+                    500_i64,
+                    501_i64,
+                    502_i64,
+                    503_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-requested",
+                    "repo-1",
+                    "/tmp/repo",
+                    "test_harness.current_state",
+                    "test_harness",
+                    1_i64,
+                    2_i64,
+                    "full_reconcile",
+                    "completed",
+                    1_i64,
+                    100_i64,
+                    101_i64,
+                    102_i64,
+                    103_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO pack_reconcile_runs (run_id, repo_id, repo_root, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    "run-other-legacy",
+                    "repo-other",
+                    "/tmp/other",
+                    "test_harness",
+                    "test_harness.current_state",
+                    11_i64,
+                    12_i64,
+                    "merged_delta",
+                    "completed",
+                    1_i64,
+                    600_i64,
+                    601_i64,
+                    602_i64,
+                    603_i64,
+                    Option::<String>::None,
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("insert mixed-repo runs");
+
+    let world = QatWorld {
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        ..Default::default()
+    };
+
+    let (_, run) = load_latest_test_harness_capability_event_run(&world, "repo-1")
+        .expect("load latest run")
+        .expect("completed run should be found");
+
+    assert_eq!(run.run_id, "run-requested");
+    assert_eq!(run.repo_id, "repo-1");
+}
+
+fn sample_capability_event_run(
+    run_id: &str,
+    repo_id: &str,
+    status: CapabilityEventRunStatus,
+    from_generation_seq: u64,
+    to_generation_seq: u64,
+    submitted_at_unix: u64,
+    updated_at_unix: u64,
+    completed_at_unix: Option<u64>,
+) -> CapabilityEventRunRecord {
+    CapabilityEventRunRecord {
+        run_id: run_id.to_string(),
+        repo_id: repo_id.to_string(),
+        capability_id: "test_harness".to_string(),
+        consumer_id: "test_harness.current_state".to_string(),
+        handler_id: "test_harness.current_state".to_string(),
+        from_generation_seq,
+        to_generation_seq,
+        reconcile_mode: "full_reconcile".to_string(),
+        event_kind: "current_state_consumer".to_string(),
+        lane_key: format!("{repo_id}:test_harness.current_state"),
+        event_payload_json: String::new(),
+        status,
+        attempts: 1,
+        submitted_at_unix,
+        started_at_unix: Some(submitted_at_unix.saturating_add(1)),
+        updated_at_unix,
+        completed_at_unix,
+        error: None,
+    }
+}
+
+#[test]
+fn capability_event_run_is_newer_than_baseline_requires_progress() {
+    let baseline = sample_capability_event_run(
+        "run-1",
+        "repo-1",
+        CapabilityEventRunStatus::Completed,
+        1,
+        2,
+        100,
+        102,
+        Some(103),
+    );
+    let observed = sample_capability_event_run(
+        "run-2",
+        "repo-1",
+        CapabilityEventRunStatus::Completed,
+        1,
+        2,
+        100,
+        102,
+        Some(103),
+    );
+
+    assert!(!capability_event_run_is_newer_than_baseline(
+        &observed,
+        Some(&baseline)
+    ));
+}
+
+#[test]
+fn capability_event_run_is_newer_than_baseline_accepts_advanced_generation() {
+    let baseline = sample_capability_event_run(
+        "run-1",
+        "repo-1",
+        CapabilityEventRunStatus::Completed,
+        1,
+        2,
+        100,
+        102,
+        Some(103),
+    );
+    let observed = sample_capability_event_run(
+        "run-2",
+        "repo-1",
+        CapabilityEventRunStatus::Completed,
+        2,
+        3,
+        200,
+        202,
+        Some(203),
+    );
+
+    assert!(capability_event_run_is_newer_than_baseline(
+        &observed,
+        Some(&baseline)
+    ));
+}
+
+#[test]
+fn capability_event_run_is_newer_than_baseline_rejects_other_repo_runs() {
+    let baseline = sample_capability_event_run(
+        "run-1",
+        "repo-1",
+        CapabilityEventRunStatus::Completed,
+        1,
+        2,
+        100,
+        102,
+        Some(103),
+    );
+    let observed = sample_capability_event_run(
+        "run-2",
+        "repo-other",
+        CapabilityEventRunStatus::Completed,
+        2,
+        3,
+        200,
+        202,
+        Some(203),
+    );
+
+    assert!(!capability_event_run_is_newer_than_baseline(
+        &observed,
+        Some(&baseline)
+    ));
 }
 
 #[test]
@@ -1349,6 +1578,34 @@ fn count_commit_checkpoint_rows_counts_duplicate_commit_shas_separately() {
     ];
 
     assert_eq!(count_commit_checkpoint_rows(&rows), 2);
+}
+
+#[test]
+fn latest_reachable_ledger_snapshot_uses_only_latest_reachable_commits() {
+    let reachable = vec![
+        "sha-3".to_string(),
+        "sha-2".to_string(),
+        "sha-1".to_string(),
+    ];
+    let completed = vec![
+        "sha-3".to_string(),
+        "sha-1".to_string(),
+        "sha-old".to_string(),
+    ];
+
+    let snapshot = latest_reachable_ledger_snapshot(reachable.as_slice(), completed.as_slice(), 1)
+        .expect("snapshot should be collected");
+
+    assert_eq!(
+        snapshot.expected_latest,
+        std::collections::BTreeSet::from(["sha-3".to_string()])
+    );
+    assert_eq!(
+        snapshot.completed_reachable,
+        std::collections::BTreeSet::from(["sha-3".to_string(), "sha-1".to_string()])
+    );
+    assert_eq!(snapshot.reachable_total, 3);
+    assert_eq!(snapshot.completed_total, 3);
 }
 
 #[test]
