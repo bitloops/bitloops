@@ -687,10 +687,7 @@ fn run_devql_task_enqueue_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     if matches!(kind, DevqlTaskEnqueueKind::Sync) {
-        let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
-            .context("resolving repo_id for TestHarness sync baseline")?;
-        world.last_test_harness_run_baseline =
-            load_latest_test_harness_capability_event_run(world, &repo_id)?.map(|(_, run)| run);
+        world.last_test_harness_target_generation = None;
     }
     let args = build_devql_task_enqueue_args(kind, flags);
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -700,7 +697,17 @@ fn run_devql_task_enqueue_for_repo(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     update_last_task_id_from_output(world, &stdout, TaskIdCaptureMode::CaptureSubmission);
     world.last_command_stdout = Some(stdout);
-    ensure_success(&output, &label)
+    ensure_success(&output, &label)?;
+
+    if matches!(kind, DevqlTaskEnqueueKind::Sync) && flags.contains(&"--status") {
+        let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+            .context("resolving repo_id for TestHarness sync target generation")?;
+        world.last_test_harness_target_generation =
+            load_latest_test_harness_generation_state(world, &repo_id)?
+                .map(|(_, state)| state.latest_generation_seq);
+    }
+
+    Ok(())
 }
 
 fn run_devql_tasks_command_for_repo(
@@ -1666,6 +1673,12 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
     ensure_bitloops_repo_name(repo_name)?;
     let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
         .context("resolving repo_id while waiting for TestHarness capability-event completion")?;
+    let target_generation = world.last_test_harness_target_generation.ok_or_else(|| {
+        anyhow!(
+            "missing TestHarness target generation in {}; run DevQL sync with status before waiting for capability-event completion",
+            repo_name
+        )
+    })?;
     let timeout = parse_timeout_seconds(
         std::env::var(DAEMON_CAPABILITY_EVENT_STATUS_TIMEOUT_ENV)
             .ok()
@@ -1675,7 +1688,6 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
     let started = Instant::now();
     let mut attempts = 0_usize;
     let mut last_payload = serde_json::json!({});
-    let baseline = world.last_test_harness_run_baseline.clone();
 
     loop {
         attempts += 1;
@@ -1732,42 +1744,32 @@ pub fn wait_for_test_harness_capability_event_completion_for_repo(
             }
         }
 
-        if let Some((_, persisted_run)) =
-            load_latest_test_harness_capability_event_run(world, &repo_id)?
-        {
-            if !capability_event_run_is_newer_than_baseline(&persisted_run, baseline.as_ref()) {
-                last_payload = payload;
-                if started.elapsed() >= timeout {
-                    let last_payload = serde_json::to_string(&last_payload)
-                        .unwrap_or_else(|_| "<failed to serialize payload>".to_string());
-                    bail!(
-                        "timed out after {}s waiting for test_harness capability-event completion in {}; attempts={attempts}; last payload={last_payload}",
-                        timeout.as_secs(),
-                        repo_name
-                    );
-                }
-                std::thread::sleep(StdDuration::from_millis(
-                    DAEMON_CAPABILITY_EVENT_STATUS_POLL_INTERVAL_MILLIS,
-                ));
-                continue;
+        if let Some((_, state)) = load_latest_test_harness_generation_state(world, &repo_id)? {
+            if test_harness_generation_state_reached_target(&state, target_generation) {
+                return Ok(());
             }
-            match persisted_run.status {
-                bitloops::daemon::CapabilityEventRunStatus::Completed => {
-                    world.last_test_harness_run_baseline = Some(persisted_run);
-                    return Ok(());
+
+            if let Some(last_error) = state.last_error.as_deref() {
+                if let Some((_, persisted_run)) =
+                    load_latest_test_harness_capability_event_run(world, &repo_id)?
+                {
+                    if persisted_run.status == bitloops::daemon::CapabilityEventRunStatus::Failed
+                        && persisted_run.to_generation_seq >= target_generation
+                    {
+                        let run_id = persisted_run.run_id;
+                        let handler_id = persisted_run.handler_id;
+                        let event_kind = persisted_run.event_kind;
+                        let error = persisted_run
+                            .error
+                            .unwrap_or_else(|| last_error.to_string());
+                        bail!(
+                            "test_harness capability event run failed while waiting for generation {target_generation}: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
+                        );
+                    }
                 }
-                bitloops::daemon::CapabilityEventRunStatus::Failed => {
-                    let run_id = persisted_run.run_id;
-                    let handler_id = persisted_run.handler_id;
-                    let event_kind = persisted_run.event_kind;
-                    let error = persisted_run
-                        .error
-                        .unwrap_or_else(|| "<no error>".to_string());
-                    bail!(
-                        "test_harness capability event run failed while waiting for completion: run_id={run_id}; handler_id={handler_id}; event_kind={event_kind}; error={error}"
-                    );
-                }
-                _ => {}
+                bail!(
+                    "test_harness current-state cursor failed while waiting for generation {target_generation}: error={last_error}"
+                );
             }
         }
 
@@ -1859,29 +1861,99 @@ fn capability_event_run_sort_key(
     )
 }
 
-fn capability_event_run_progress_key(
-    run: &bitloops::daemon::CapabilityEventRunRecord,
-) -> (u64, u64, u64, u64) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestHarnessGenerationState {
+    latest_generation_seq: u64,
+    last_applied_generation_seq: Option<u64>,
+    last_error: Option<String>,
+}
+
+fn load_latest_test_harness_generation_state(
+    world: &QatWorld,
+    repo_id: &str,
+) -> Result<Option<(std::path::PathBuf, TestHarnessGenerationState)>> {
+    let candidates = daemon_runtime_store_candidate_paths(world.run_dir());
+
+    let mut latest: Option<(std::path::PathBuf, TestHarnessGenerationState)> = None;
+    for path in &candidates {
+        if !path.exists() {
+            continue;
+        }
+
+        let store = bitloops::host::runtime_store::DaemonSqliteRuntimeStore::open_at(path.clone())
+            .with_context(|| format!("opening daemon runtime store {}", path.display()))?;
+        let Some(state) = load_test_harness_generation_state(&store, repo_id)? else {
+            continue;
+        };
+
+        let replace = latest.as_ref().is_none_or(|(_, current)| {
+            test_harness_generation_state_sort_key(&state)
+                > test_harness_generation_state_sort_key(current)
+        });
+        if replace {
+            latest = Some((path.clone(), state));
+        }
+    }
+
+    Ok(latest)
+}
+
+fn test_harness_generation_state_sort_key(state: &TestHarnessGenerationState) -> (u64, u64) {
     (
-        run.to_generation_seq,
-        run.submitted_at_unix,
-        run.updated_at_unix,
-        run.completed_at_unix.unwrap_or_default(),
+        state.latest_generation_seq,
+        state.last_applied_generation_seq.unwrap_or_default(),
     )
 }
 
-fn capability_event_run_is_newer_than_baseline(
-    run: &bitloops::daemon::CapabilityEventRunRecord,
-    baseline: Option<&bitloops::daemon::CapabilityEventRunRecord>,
+fn test_harness_generation_state_reached_target(
+    state: &TestHarnessGenerationState,
+    target_generation: u64,
 ) -> bool {
-    match baseline {
-        None => true,
-        Some(baseline) => {
-            run.repo_id == baseline.repo_id
-                && capability_event_run_progress_key(run)
-                    > capability_event_run_progress_key(baseline)
-        }
-    }
+    state.last_applied_generation_seq.unwrap_or_default() >= target_generation
+}
+
+fn load_test_harness_generation_state(
+    store: &bitloops::host::runtime_store::DaemonSqliteRuntimeStore,
+    repo_id: &str,
+) -> Result<Option<TestHarnessGenerationState>> {
+    use rusqlite::OptionalExtension;
+
+    store.with_connection(|conn| {
+        let Some(latest_generation_seq) = conn
+            .query_row(
+                "SELECT MAX(generation_seq) FROM capability_workplane_cursor_generations WHERE repo_id = ?1",
+                rusqlite::params![repo_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map(|value| value.and_then(|value| u64::try_from(value).ok()))?
+        else {
+            return Ok(None);
+        };
+
+        let mailbox = conn
+            .query_row(
+                "SELECT last_applied_generation_seq, last_error \
+                 FROM capability_workplane_cursor_mailboxes \
+                 WHERE repo_id = ?1 AND capability_id = ?2 AND mailbox_name = ?3",
+                rusqlite::params![repo_id, "test_harness", "test_harness.current_state"],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?
+                            .and_then(|value| u64::try_from(value).ok()),
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let (last_applied_generation_seq, last_error) =
+            mailbox.unwrap_or((None, None));
+        Ok(Some(TestHarnessGenerationState {
+            latest_generation_seq,
+            last_applied_generation_seq,
+            last_error,
+        }))
+    })
 }
 
 fn load_latest_test_harness_current_state_run(
@@ -2313,11 +2385,7 @@ enum TaskIdCaptureMode {
     PreserveExisting,
 }
 
-fn update_last_task_id_from_output(
-    world: &mut QatWorld,
-    stdout: &str,
-    mode: TaskIdCaptureMode,
-) {
+fn update_last_task_id_from_output(world: &mut QatWorld, stdout: &str, mode: TaskIdCaptureMode) {
     match mode {
         TaskIdCaptureMode::CaptureSubmission => {
             if let Some(task_id) = parse_task_id_from_submission(stdout) {
