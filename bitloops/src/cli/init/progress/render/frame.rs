@@ -10,10 +10,10 @@ use super::super::{
     SummaryProgressState,
 };
 use super::queue::{
-    format_embedding_queue_complete_progress_bar_line, format_embedding_queue_progress_bar_line,
-    format_embedding_queue_status_line, format_embedding_waiting_status_line,
-    format_queue_waiting_progress_bar_line, format_summary_progress_bar_line,
-    format_summary_status_line,
+    format_embedding_queue_complete_progress_bar_line, format_embedding_queue_complete_status_line,
+    format_embedding_queue_progress_bar_line, format_embedding_queue_status_line,
+    format_embedding_waiting_status_line, format_queue_waiting_progress_bar_line,
+    format_summary_progress_bar_line, format_summary_status_line,
 };
 use super::task::{
     InitTaskLaneKind, format_init_complete_progress_bar_line, format_init_task_progress_bar_line,
@@ -321,6 +321,7 @@ impl InitProgressRenderer {
             BottomProgressState::QueueComplete {
                 failed_jobs,
                 baseline_total,
+                completion_source,
             } => {
                 if rendered_top_section {
                     lines.push(String::new());
@@ -339,7 +340,12 @@ impl InitProgressRenderer {
                         format_count_u64(*failed_jobs)
                     ));
                 } else {
-                    lines.push("✓ Embedding queue complete".to_string());
+                    lines.push(format_embedding_queue_complete_status_line(
+                        *completion_source,
+                        *baseline_total,
+                        tick.as_str(),
+                        self.terminal_width,
+                    ));
                 }
             }
             BottomProgressState::Hidden => {}

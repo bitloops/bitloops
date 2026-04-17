@@ -248,6 +248,7 @@ fn should_run_initial_sync(
         );
     }
 
+    writeln!(out)?;
     writeln!(out, "Would you like to sync your codebase now (Y/n)?")?;
     write!(out, "> ")?;
     out.flush()?;

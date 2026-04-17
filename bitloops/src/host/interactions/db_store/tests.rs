@@ -129,6 +129,73 @@ fn test_spool() -> (tempfile::TempDir, SqliteInteractionSpool) {
     )
 }
 
+#[test]
+fn initialising_spool_migrates_legacy_event_schema_before_creating_indexes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sqlite =
+        SqliteConnectionPool::connect(dir.path().join("interaction-spool.sqlite")).expect("sqlite");
+    sqlite
+        .execute_batch(
+            r#"
+CREATE TABLE interaction_sessions (
+    session_id TEXT PRIMARY KEY
+);
+CREATE TABLE interaction_turns (
+    turn_id TEXT PRIMARY KEY
+);
+CREATE TABLE interaction_events (
+    event_id TEXT PRIMARY KEY
+);
+"#,
+        )
+        .expect("create legacy interaction tables");
+
+    let spool =
+        SqliteInteractionSpool::new(sqlite.clone(), "repo-test".into()).expect("initialise spool");
+
+    spool
+        .with_connection(|conn| {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(interaction_events)")
+                .expect("prepare pragma");
+            let mut rows = stmt.query([]).expect("query pragma");
+            let mut saw_tool_use_id = false;
+            while let Some(row) = rows.next().expect("next pragma row") {
+                let column_name: String = row.get(1).expect("column name");
+                if column_name == "tool_use_id" {
+                    saw_tool_use_id = true;
+                    break;
+                }
+            }
+            assert!(saw_tool_use_id, "expected interaction_events.tool_use_id");
+
+            let tool_use_index_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM sqlite_master
+                     WHERE type = 'index' AND name = 'interaction_events_tool_use_idx'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("tool-use index count");
+            assert_eq!(tool_use_index_count, 1);
+
+            let tool_use_table_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM sqlite_master
+                     WHERE type = 'table' AND name = 'interaction_tool_uses'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("tool-use table count");
+            assert_eq!(tool_use_table_count, 1);
+
+            Ok(())
+        })
+        .expect("inspect migrated spool schema");
+}
+
 fn sample_session() -> InteractionSession {
     InteractionSession {
         session_id: "session-1".into(),

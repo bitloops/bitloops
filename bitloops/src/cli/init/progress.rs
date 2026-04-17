@@ -15,7 +15,8 @@ mod tasks;
 
 use render::InitProgressRenderer;
 use tasks::{
-    current_embedding_queue_snapshot, current_summary_queue_snapshot, refresh_init_progress_task,
+    current_code_embedding_artefact_count, current_embedding_queue_snapshot,
+    current_summary_queue_snapshot, refresh_init_progress_task,
 };
 
 const INIT_PROGRESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -63,9 +64,17 @@ enum BottomProgressState {
     QueueComplete {
         failed_jobs: u64,
         baseline_total: u64,
+        completion_source: EmbeddingCompletionSource,
     },
     BootstrapFailed(crate::cli::devql::graphql::TaskGraphqlRecord),
     Hidden,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmbeddingCompletionSource {
+    Queue,
+    InlineSync,
+    NoneRequired,
 }
 
 struct SummarySetupRunner {
@@ -116,6 +125,14 @@ pub(super) async fn run_dual_init_progress(
     mut top_task: Option<crate::cli::devql::graphql::TaskGraphqlRecord>,
     options: InitProgressOptions,
 ) -> Result<()> {
+    let initial_code_embedding_artefact_count = if options.queued_embeddings_bootstrap.is_some() {
+        current_code_embedding_artefact_count(&scope.repo_root, &scope.repo.repo_id)
+            .await
+            .unwrap_or_default()
+    } else {
+        0
+    };
+    let mut latest_code_embedding_artefact_count = initial_code_embedding_artefact_count;
     let bootstrap_scope = options
         .queued_embeddings_bootstrap
         .as_ref()
@@ -286,6 +303,15 @@ pub(super) async fn run_dual_init_progress(
                     && (!top_pipeline_has_work
                         || top_pipeline_completed_at
                             .is_some_and(|started| started.elapsed() >= INIT_POST_TOP_QUEUE_GRACE_PERIOD));
+                if checklist.show_embeddings
+                    && let Ok(count) =
+                        current_code_embedding_artefact_count(&scope.repo_root, &scope.repo.repo_id)
+                            .await
+                {
+                    latest_code_embedding_artefact_count = count;
+                }
+                let inline_completed_embedding_artefacts = latest_code_embedding_artefact_count
+                    .saturating_sub(initial_code_embedding_artefact_count);
 
                 if let Some(runner) = summary_runner.as_mut() {
                     loop {
@@ -363,6 +389,7 @@ pub(super) async fn run_dual_init_progress(
                                         completed_floor,
                                         0,
                                         0,
+                                        inline_completed_embedding_artefacts,
                                     )
                                 } else {
                                     BottomProgressState::BootstrapFailed(refreshed)
@@ -382,6 +409,7 @@ pub(super) async fn run_dual_init_progress(
                                     completed_floor,
                                     0,
                                     0,
+                                    inline_completed_embedding_artefacts,
                                 )
                             }
                         }
@@ -397,6 +425,7 @@ pub(super) async fn run_dual_init_progress(
                         completed_floor,
                         snapshot.completed,
                         snapshot.failed,
+                        inline_completed_embedding_artefacts,
                     ),
                     BottomProgressState::WaitingForQueue {
                         baseline_total,
@@ -410,6 +439,7 @@ pub(super) async fn run_dual_init_progress(
                         completed_floor,
                         completed_jobs,
                         failed_jobs,
+                        inline_completed_embedding_artefacts,
                     ),
                     other => other,
                 };
@@ -548,6 +578,7 @@ fn update_embeddings_queue_state(
     completed_floor: u64,
     completed_jobs: u64,
     failed_jobs: u64,
+    inline_completed_artefacts: u64,
 ) -> BottomProgressState {
     match snapshot {
         Some(snapshot) => {
@@ -564,10 +595,7 @@ fn update_embeddings_queue_state(
                     completed_floor,
                 }
             } else if allow_empty_completion {
-                BottomProgressState::QueueComplete {
-                    failed_jobs,
-                    baseline_total,
-                }
+                completed_embeddings_state(failed_jobs, baseline_total, inline_completed_artefacts)
             } else {
                 BottomProgressState::WaitingForQueue {
                     baseline_total,
@@ -577,15 +605,38 @@ fn update_embeddings_queue_state(
                 }
             }
         }
-        None if allow_empty_completion => BottomProgressState::QueueComplete {
-            failed_jobs,
-            baseline_total,
-        },
+        None if allow_empty_completion => {
+            completed_embeddings_state(failed_jobs, baseline_total, inline_completed_artefacts)
+        }
         None => BottomProgressState::WaitingForQueue {
             baseline_total,
             completed_floor,
             completed_jobs,
             failed_jobs,
+        },
+    }
+}
+
+fn completed_embeddings_state(
+    failed_jobs: u64,
+    baseline_total: u64,
+    inline_completed_artefacts: u64,
+) -> BottomProgressState {
+    if baseline_total == 0 && failed_jobs == 0 && inline_completed_artefacts > 0 {
+        return BottomProgressState::QueueComplete {
+            failed_jobs,
+            baseline_total: inline_completed_artefacts,
+            completion_source: EmbeddingCompletionSource::InlineSync,
+        };
+    }
+
+    BottomProgressState::QueueComplete {
+        failed_jobs,
+        baseline_total,
+        completion_source: if baseline_total > 0 || failed_jobs > 0 {
+            EmbeddingCompletionSource::Queue
+        } else {
+            EmbeddingCompletionSource::NoneRequired
         },
     }
 }
@@ -687,11 +738,30 @@ mod tests {
 
     #[test]
     fn embeddings_wait_for_top_pipeline_before_marking_complete() {
-        let state = update_embeddings_queue_state(None, false, 0, 0, 0, 0);
+        let state = update_embeddings_queue_state(None, false, 0, 0, 0, 0, 0);
         assert!(matches!(state, BottomProgressState::WaitingForQueue { .. }));
 
-        let state = update_embeddings_queue_state(None, true, 0, 0, 0, 0);
-        assert!(matches!(state, BottomProgressState::QueueComplete { .. }));
+        let state = update_embeddings_queue_state(None, true, 0, 0, 0, 0, 0);
+        assert!(matches!(
+            state,
+            BottomProgressState::QueueComplete {
+                completion_source: EmbeddingCompletionSource::NoneRequired,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn embeddings_can_report_inline_sync_work_when_queue_stays_empty() {
+        let state = update_embeddings_queue_state(None, true, 0, 0, 0, 0, 12);
+        assert!(matches!(
+            state,
+            BottomProgressState::QueueComplete {
+                baseline_total: 12,
+                completion_source: EmbeddingCompletionSource::InlineSync,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -47,6 +47,19 @@ pub(super) async fn current_embedding_queue_snapshot(
     }))
 }
 
+pub(super) async fn current_code_embedding_artefact_count(
+    repo_root: &std::path::Path,
+    repo_id: &str,
+) -> Result<u64> {
+    let relational =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(
+            repo_root,
+        )?;
+    relational
+        .count_distinct_current_symbol_embedding_artefacts(repo_id, "code")
+        .await
+}
+
 pub(super) async fn current_summary_queue_snapshot(
     repo_root: &std::path::Path,
 ) -> Result<Option<EmbeddingQueueSnapshot>> {

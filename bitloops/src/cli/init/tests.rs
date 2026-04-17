@@ -2580,6 +2580,23 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
 }
 
 #[test]
+fn should_run_initial_sync_renders_blank_line_before_prompt() {
+    with_test_tty_override(true, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("n\n");
+
+        let should_sync =
+            should_run_initial_sync(None, &mut out, &mut input).expect("render sync prompt");
+
+        assert!(!should_sync);
+        assert_eq!(
+            String::from_utf8(out).expect("utf8 output"),
+            "\nWould you like to sync your codebase now (Y/n)?\n> "
+        );
+    });
+}
+
+#[test]
 fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();

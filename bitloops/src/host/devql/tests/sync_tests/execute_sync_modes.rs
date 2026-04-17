@@ -104,6 +104,110 @@ while (($line = $stdin.ReadLine()) -ne $null) {
     )
 }
 
+#[cfg(unix)]
+fn fake_summary_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-sync-summary-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake summary runtime dir");
+    }
+    let script = r#"#!/bin/sh
+while IFS= read -r line; do
+  request_id=$(printf '%s\n' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"sync-summary-model","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}\n' "$request_id"
+      ;;
+    *'"type":"infer"'*)
+      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"sync-summary-model"}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
+      exit 0
+      ;;
+  esac
+done
+"#;
+    fs::write(&script_path, script).expect("write fake summary runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat fake summary runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod fake summary runtime script");
+    ("sh".to_string(), vec![script_path.display().to_string()])
+}
+
+#[cfg(windows)]
+fn fake_summary_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-sync-summary-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake summary runtime dir");
+    }
+    let script = r#"
+$stdin = [Console]::In
+while (($line = $stdin.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.type) {
+    "describe" {
+      $response = @{
+        type = "describe"
+        request_id = $request.request_id
+        protocol_version = 1
+        runtime_name = "bitloops-inference"
+        runtime_version = "0.1.0"
+        profile_name = "summary_local"
+        provider = @{
+          kind = "ollama_chat"
+          provider_name = "ollama"
+          model_name = "sync-summary-model"
+          endpoint = "http://127.0.0.1:11434"
+          capabilities = @("text", "json_object")
+        }
+      }
+    }
+    "infer" {
+      $response = @{
+        type = "infer"
+        request_id = $request.request_id
+        text = ""
+        parsed_json = @{
+          summary = "Summarises the symbol."
+          confidence = 0.91
+        }
+        provider_name = "ollama"
+        model_name = "sync-summary-model"
+      }
+    }
+    "shutdown" {
+      $response = @{
+        type = "shutdown"
+        request_id = $request.request_id
+      }
+      $response | ConvertTo-Json -Compress
+      break
+    }
+    default {
+      continue
+    }
+  }
+  $response | ConvertTo-Json -Compress
+}
+"#;
+    fs::write(&script_path, script).expect("write fake summary runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.display().to_string(),
+        ],
+    )
+}
+
 fn write_sync_semantic_clone_config(repo_root: &Path) {
     let (command, args) = fake_runtime_command_and_args(repo_root);
     let runtime_args = args
@@ -141,6 +245,94 @@ model = "sync-test-model"
         ),
     )
     .expect("write sync semantic clone config");
+}
+
+fn write_sync_semantic_clone_config_with_local_summary(repo_root: &Path) {
+    let (embedding_command, embedding_args) = fake_runtime_command_and_args(repo_root);
+    let embedding_runtime_args = embedding_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (summary_command, summary_args) = fake_summary_runtime_command_and_args(repo_root);
+    let summary_runtime_args = summary_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).expect("create daemon config dir");
+    }
+    fs::write(
+        config_path,
+        format!(
+            r#"[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "deterministic"
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+code_embeddings = "alpha"
+summary_embeddings = "alpha"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = {embedding_command:?}
+args = [{embedding_runtime_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+
+[inference.runtimes.bitloops_inference]
+command = {summary_command:?}
+args = [{summary_runtime_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+
+[inference.profiles.alpha]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "sync-test-model"
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "sync-summary-model"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#
+        ),
+    )
+    .expect("write sync semantic clone config with local summary");
+}
+
+fn write_sync_semantic_clone_config_with_broken_summary_provider(repo_root: &Path) {
+    let config_path = repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).expect("create daemon config dir");
+    }
+    fs::write(
+        config_path,
+        r#"[semantic_clones]
+summary_mode = "auto"
+embedding_mode = "off"
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "sync-summary-model"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    )
+    .expect("write sync semantic clone config with broken summary provider");
 }
 
 fn ruff_e501_4_python_fixture_bytes() -> &'static [u8] {
@@ -1657,6 +1849,125 @@ async fn sync_populates_current_semantic_tables_with_current_embeddings_and_clon
     assert!(
         current_clone_edge_rows > 0,
         "current clone edges should be rebuilt from current projection during sync"
+    );
+}
+
+#[tokio::test]
+async fn sync_rehydrates_current_semantic_tables_with_model_backed_summaries_when_summary_generation_is_configured()
+ {
+    let repo = seed_full_sync_repo();
+    write_sync_semantic_clone_config_with_local_summary(repo.path());
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute baseline sync with local summary runtime");
+
+    let db = Connection::open(&sqlite_path).expect("open sqlite db");
+    db.execute(
+        "DELETE FROM symbol_semantics_current WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete current semantic rows");
+    db.execute(
+        "DELETE FROM symbol_features_current WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete current semantic feature rows");
+    db.execute(
+        "DELETE FROM symbol_embeddings_current WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete current embedding rows");
+    db.execute(
+        "DELETE FROM symbol_clone_edges_current WHERE repo_id = ?1",
+        [cfg.repo.repo_id.as_str()],
+    )
+    .expect("delete current clone edge rows");
+
+    let result = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("rehydrate current semantic projection with configured summary runtime");
+    let db = Connection::open(&sqlite_path).expect("reopen sqlite db after sync");
+
+    let semantic_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count current semantic rows");
+    let llm_summary_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1 AND llm_summary IS NOT NULL AND trim(llm_summary) <> ''",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count model-backed semantic rows");
+    let source_model_rows: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM symbol_semantics_current WHERE repo_id = ?1 AND source_model IS NOT NULL AND trim(source_model) <> ''",
+            [cfg.repo.repo_id.as_str()],
+            |row| row.get(0),
+        )
+        .expect("count semantic rows with source model");
+
+    assert!(result.success, "unchanged sync should still succeed");
+    assert_eq!(result.paths_added, 0);
+    assert_eq!(result.paths_changed, 0);
+    assert!(
+        result.paths_unchanged > 0,
+        "rehydration test should run against an unchanged repo"
+    );
+    assert!(
+        semantic_rows > 0,
+        "current semantic rows should be repopulated"
+    );
+    assert_eq!(
+        llm_summary_rows, semantic_rows,
+        "configured summary generation should populate model-backed summaries for every current semantic row"
+    );
+    assert_eq!(
+        source_model_rows, semantic_rows,
+        "configured summary generation should record source_model for every current semantic row"
+    );
+}
+
+#[tokio::test]
+async fn sync_fails_when_summary_generation_is_configured_but_current_projection_cannot_resolve_provider()
+ {
+    let repo = seed_full_sync_repo();
+    write_sync_semantic_clone_config_with_broken_summary_provider(repo.path());
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    let err = crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect_err("configured summary generation should not silently degrade during sync");
+    let message = format!("{err:#}");
+
+    assert!(
+        message.contains("resolving semantic summary provider for slot `summary_generation`"),
+        "unexpected sync failure: {message}"
+    );
+    assert!(
+        message.contains("runtime `bitloops_inference` is not defined"),
+        "unexpected sync failure: {message}"
     );
 }
 

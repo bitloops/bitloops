@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use crate::config::{RelationalBackendConfig, resolve_store_backend_config_for_repo};
+use crate::config::{
+    RelationalBackendConfig, resolve_bound_store_backend_config_for_repo,
+    resolve_store_backend_config_for_repo,
+};
 use crate::host::devql::{DevqlConfig, RelationalDialect, RelationalStorage};
 use crate::storage::SqliteConnectionPool;
 
@@ -76,6 +79,13 @@ impl DefaultRelationalStore {
         Self::open_local_for_roots(repo_root, repo_root)
     }
 
+    pub fn open_local_for_repo_root_preferring_bound_config(repo_root: &Path) -> Result<Self> {
+        let backends = resolve_bound_store_backend_config_for_repo(repo_root)
+            .or_else(|_| resolve_store_backend_config_for_repo(repo_root))
+            .context("resolving backend config for relational store")?;
+        Self::open_local_for_backend_config(repo_root, &backends.relational)
+    }
+
     pub fn open_local_for_backend_config(
         repo_root: &Path,
         relational: &RelationalBackendConfig,
@@ -133,6 +143,43 @@ impl DefaultRelationalStore {
             .execute_batch(sql)
             .context("executing local SQLite batch via relational store")
     }
+
+    pub async fn count_distinct_current_symbol_embedding_artefacts(
+        &self,
+        repo_id: &str,
+        representation_kind: &str,
+    ) -> Result<u64> {
+        let rows = self
+            .query_rows(&format!(
+                "SELECT COUNT(DISTINCT artefact_id) AS total \
+                 FROM symbol_embeddings_current \
+                 WHERE repo_id = '{}' AND representation_kind = '{}'",
+                escape_sql_string(repo_id),
+                escape_sql_string(representation_kind),
+            ))
+            .await;
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(err) if missing_current_embedding_table(&err) => return Ok(0),
+            Err(err) => return Err(err),
+        };
+
+        Ok(rows
+            .first()
+            .and_then(|row| row.get("total"))
+            .and_then(Value::as_u64)
+            .unwrap_or_default())
+    }
+}
+
+fn missing_current_embedding_table(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("no such table: symbol_embeddings_current")
+        || message.contains("relation \"symbol_embeddings_current\" does not exist")
+}
+
+fn escape_sql_string(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 impl RelationalStore for DefaultRelationalStore {

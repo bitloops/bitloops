@@ -65,7 +65,7 @@ pub(super) async fn project_materialized_items(
                     path: Some(item.desired.path.clone()),
                     content_id: Some(item.desired.effective_content_id.clone()),
                     inputs: inputs.clone(),
-                    mode: SemanticSummaryRefreshMode::ConfiguredDegrade,
+                    mode: SemanticSummaryRefreshMode::ConfiguredStrict,
                 })?,
                 Some(relational),
             )
@@ -236,7 +236,7 @@ async fn rehydrate_current_projection_if_needed(
                     path: Some(path.clone()),
                     content_id: Some(content_id.clone()),
                     inputs: inputs.clone(),
-                    mode: SemanticSummaryRefreshMode::ConfiguredDegrade,
+                    mode: SemanticSummaryRefreshMode::ConfiguredStrict,
                 })?,
                 Some(relational),
             )
