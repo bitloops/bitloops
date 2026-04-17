@@ -1287,8 +1287,7 @@ fn collect_agent_pre_commit_interactions_returns_matching_session_and_uncheckpoi
         sample_interaction_turn("cursor-turn-1", "cursor-session", AGENT_NAME_CURSOR, None),
     ];
 
-    let snapshot =
-        collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
+    let snapshot = collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
 
     assert_eq!(snapshot.session_ids, vec!["claude-session".to_string()]);
     assert_eq!(
@@ -1310,8 +1309,7 @@ fn collect_agent_pre_commit_interactions_ignores_turns_for_other_sessions() {
         None,
     )];
 
-    let snapshot =
-        collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
+    let snapshot = collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
 
     assert_eq!(snapshot.session_ids, vec!["claude-session".to_string()]);
     assert!(snapshot.uncheckpointed_turn_ids.is_empty());
@@ -1330,8 +1328,7 @@ fn collect_agent_pre_commit_interactions_ignores_checkpointed_turns() {
         Some("checkpoint-1"),
     )];
 
-    let snapshot =
-        collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
+    let snapshot = collect_agent_pre_commit_interactions(&sessions, &turns, AGENT_NAME_CLAUDE_CODE);
 
     assert_eq!(snapshot.session_ids, vec!["claude-session".to_string()]);
     assert!(snapshot.uncheckpointed_turn_ids.is_empty());
