@@ -1849,8 +1849,10 @@ fn latest_capability_event_run(
 
 fn capability_event_run_sort_key(
     run: &bitloops::daemon::CapabilityEventRunRecord,
-) -> (u64, u64, u64) {
+) -> (u64, u64, u64, u64, u64) {
     (
+        run.to_generation_seq,
+        run.from_generation_seq,
         run.updated_at_unix,
         run.completed_at_unix.unwrap_or_default(),
         run.submitted_at_unix,
@@ -1893,7 +1895,7 @@ fn load_latest_test_harness_current_state_run(
             "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
              FROM capability_workplane_cursor_runs \
              WHERE capability_id = ?1 AND mailbox_name = ?2 AND repo_id = ?3 \
-             ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
+             ORDER BY to_generation_seq DESC, from_generation_seq DESC, updated_at_unix DESC, completed_at_unix DESC, submitted_at_unix DESC, rowid DESC \
              LIMIT 1",
             rusqlite::params!["test_harness", "test_harness.current_state", repo_id],
             |row| {
@@ -1947,7 +1949,7 @@ fn load_latest_test_harness_pack_reconcile_run(
             "SELECT run_id, repo_id, capability_id, consumer_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
              FROM pack_reconcile_runs \
              WHERE capability_id = ?1 AND consumer_id = ?2 AND repo_id = ?3 \
-             ORDER BY updated_at_unix DESC, submitted_at_unix DESC \
+             ORDER BY to_generation_seq DESC, from_generation_seq DESC, updated_at_unix DESC, completed_at_unix DESC, submitted_at_unix DESC, rowid DESC \
              LIMIT 1",
             rusqlite::params!["test_harness", "test_harness.current_state", repo_id],
             |row| {
