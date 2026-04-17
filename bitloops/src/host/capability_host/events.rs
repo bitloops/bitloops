@@ -92,6 +92,7 @@ pub struct CurrentStateConsumerContext {
     pub language_services: Arc<dyn LanguageServicesGateway>,
     pub host_services: Arc<dyn HostServicesGateway>,
     pub workplane: Arc<dyn CapabilityWorkplaneGateway>,
+    pub init_session_id: Option<String>,
 }
 
 pub type EventHandlerContext = CurrentStateConsumerContext;

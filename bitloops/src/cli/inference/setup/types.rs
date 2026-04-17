@@ -51,7 +51,7 @@ pub(crate) struct SummarySetupExecutionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum PreparedSummarySetupAction {
+pub(crate) enum PreparedSummarySetupAction {
     InstallRuntimeOnly {
         message: String,
     },
@@ -69,6 +69,16 @@ pub(super) enum PreparedSummarySetupAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreparedSummarySetupPlan {
     pub(super) action: PreparedSummarySetupAction,
+}
+
+impl PreparedSummarySetupPlan {
+    pub(crate) fn new(action: PreparedSummarySetupAction) -> Self {
+        Self { action }
+    }
+
+    pub(crate) fn action(&self) -> &PreparedSummarySetupAction {
+        &self.action
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -16,6 +16,14 @@ pub(super) async fn execute_repo_graphql<T: DeserializeOwned>(
     execute_graphql_request(repo_root, "/devql/global", None, query, variables, true).await
 }
 
+pub(super) async fn execute_runtime_graphql<T: DeserializeOwned>(
+    repo_root: &Path,
+    query: &str,
+    variables: Value,
+) -> Result<T> {
+    execute_graphql_request(repo_root, "/devql/runtime", None, query, variables, true).await
+}
+
 pub(super) async fn execute_slim_graphql<T: DeserializeOwned>(
     repo_root: &Path,
     scope: &SlimCliRepoScope,

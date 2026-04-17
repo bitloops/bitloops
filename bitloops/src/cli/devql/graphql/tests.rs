@@ -431,3 +431,175 @@ fn task_queue_query_omits_result_payloads_and_deserializes_current_repo_tasks() 
         },
     );
 }
+
+#[test]
+fn start_init_runtime_mutation_serializes_runtime_orchestration_input() {
+    let scope = test_scope();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+    let input = super::types::RuntimeStartInitInput {
+        repo_id: "repo-1".to_string(),
+        run_sync: true,
+        run_ingest: true,
+        ingest_backfill: Some(25),
+        embeddings_bootstrap: Some(super::types::RuntimeEmbeddingsBootstrapRequestInput {
+            config_path: "/tmp/daemon-config.toml".to_string(),
+            profile_name: "local_code".to_string(),
+        }),
+        summaries_bootstrap: Some(super::types::RuntimeSummaryBootstrapRequestInput {
+            action: "configure_local".to_string(),
+            message: Some("configure summaries".to_string()),
+            model_name: Some("ministral-3:3b".to_string()),
+            gateway_url_override: None,
+        }),
+    };
+
+    super::with_graphql_executor_hook(
+        |_, query, variables| {
+            assert_eq!(query, super::documents::START_INIT_MUTATION);
+            assert_eq!(variables["repoId"], json!("repo-1"));
+            assert_eq!(variables["input"]["runSync"], json!(true));
+            assert_eq!(variables["input"]["runIngest"], json!(true));
+            assert_eq!(variables["input"]["ingestBackfill"], json!(25));
+            assert_eq!(
+                variables["input"]["embeddingsBootstrap"]["profileName"],
+                json!("local_code")
+            );
+            assert_eq!(
+                variables["input"]["summariesBootstrap"]["action"],
+                json!("CONFIGURE_LOCAL")
+            );
+            Ok(json!({
+                "startInit": {
+                    "initSessionId": "init-session-graphql-test"
+                }
+            }))
+        },
+        || {
+            let result = runtime
+                .block_on(super::start_init_via_runtime_graphql(&scope, &input))
+                .expect("start init via runtime graphql");
+            assert_eq!(result.init_session_id, "init-session-graphql-test");
+        },
+    );
+}
+
+#[test]
+fn runtime_snapshot_query_deserializes_current_init_session_lane_state() {
+    let scope = test_scope();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime");
+
+    super::with_graphql_executor_hook(
+        |_, query, variables| {
+            assert_eq!(query, super::documents::RUNTIME_SNAPSHOT_QUERY);
+            assert_eq!(variables["repoId"], json!("repo-1"));
+            Ok(json!({
+                "runtimeSnapshot": {
+                    "repoId": "repo-1",
+                    "taskQueue": {
+                        "persisted": true,
+                        "queuedTasks": 1,
+                        "runningTasks": 0,
+                        "failedTasks": 0,
+                        "completedRecentTasks": 2,
+                        "byKind": [],
+                        "paused": false,
+                        "pausedReason": serde_json::Value::Null,
+                        "lastAction": "snapshot",
+                        "lastUpdatedUnix": 10,
+                        "currentRepoTasks": []
+                    },
+                    "currentStateConsumer": {
+                        "persisted": true,
+                        "pendingRuns": 0,
+                        "runningRuns": 0,
+                        "failedRuns": 0,
+                        "completedRecentRuns": 0,
+                        "lastAction": "idle",
+                        "lastUpdatedUnix": 10,
+                        "currentRepoRun": serde_json::Value::Null
+                    },
+                    "workplane": {
+                        "pendingJobs": 0,
+                        "runningJobs": 0,
+                        "failedJobs": 0,
+                        "completedRecentJobs": 0,
+                        "mailboxes": []
+                    },
+                    "blockedMailboxes": [],
+                    "embeddingsReadinessGate": serde_json::Value::Null,
+                    "summariesBootstrap": serde_json::Value::Null,
+                    "currentInitSession": {
+                        "initSessionId": "init-session-graphql-test",
+                        "status": "RUNNING",
+                        "waitingReason": "waiting_for_current_state_consumer",
+                        "followUpSyncRequired": false,
+                        "runSync": true,
+                        "runIngest": false,
+                        "embeddingsSelected": true,
+                        "summariesSelected": false,
+                        "initialSyncTaskId": serde_json::Value::Null,
+                        "ingestTaskId": serde_json::Value::Null,
+                        "followUpSyncTaskId": serde_json::Value::Null,
+                        "embeddingsBootstrapTaskId": serde_json::Value::Null,
+                        "summaryBootstrapRunId": serde_json::Value::Null,
+                        "terminalError": serde_json::Value::Null,
+                        "topPipelineLane": {
+                            "status": "RUNNING",
+                            "waitingReason": "waiting_for_current_state_consumer",
+                            "detail": serde_json::Value::Null,
+                            "taskId": serde_json::Value::Null,
+                            "runId": serde_json::Value::Null,
+                            "pendingCount": 1,
+                            "runningCount": 0,
+                            "failedCount": 0,
+                            "completedCount": 0
+                        },
+                        "embeddingsLane": {
+                            "status": "COMPLETED",
+                            "waitingReason": serde_json::Value::Null,
+                            "detail": serde_json::Value::Null,
+                            "taskId": serde_json::Value::Null,
+                            "runId": serde_json::Value::Null,
+                            "pendingCount": 0,
+                            "runningCount": 0,
+                            "failedCount": 0,
+                            "completedCount": 1
+                        },
+                        "summariesLane": {
+                            "status": "SKIPPED",
+                            "waitingReason": serde_json::Value::Null,
+                            "detail": serde_json::Value::Null,
+                            "taskId": serde_json::Value::Null,
+                            "runId": serde_json::Value::Null,
+                            "pendingCount": 0,
+                            "runningCount": 0,
+                            "failedCount": 0,
+                            "completedCount": 0
+                        }
+                    }
+                }
+            }))
+        },
+        || {
+            let snapshot = runtime
+                .block_on(super::runtime_snapshot_via_graphql(&scope, "repo-1"))
+                .expect("runtime snapshot via graphql");
+            let session = snapshot.current_init_session.expect("current init session");
+            assert_eq!(session.init_session_id, "init-session-graphql-test");
+            assert_eq!(session.status, "RUNNING");
+            assert_eq!(
+                session.waiting_reason.as_deref(),
+                Some("waiting_for_current_state_consumer")
+            );
+            assert_eq!(session.top_pipeline_lane.pending_count, 1);
+            assert_eq!(session.embeddings_lane.status, "COMPLETED");
+            assert_eq!(snapshot.task_queue.queued_tasks, 1);
+        },
+    );
+}

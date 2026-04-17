@@ -419,6 +419,313 @@ pub(super) const PAUSE_TASK_QUEUE_MUTATION: &str = r#"
     }
 "#;
 
+pub(super) const START_INIT_MUTATION: &str = r#"
+    mutation StartInit($repoId: String!, $input: StartInitInput!) {
+      startInit(repoId: $repoId, input: $input) {
+        initSessionId
+      }
+    }
+"#;
+
+pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
+    query RuntimeSnapshot($repoId: String!) {
+      runtimeSnapshot(repoId: $repoId) {
+        repoId
+        taskQueue {
+          persisted
+          queuedTasks
+          runningTasks
+          failedTasks
+          completedRecentTasks
+          byKind {
+            kind
+            queuedTasks
+            runningTasks
+            failedTasks
+            completedRecentTasks
+          }
+          paused
+          pausedReason
+          lastAction
+          lastUpdatedUnix
+          currentRepoTasks {
+            taskId
+            repoId
+            repoName
+            repoIdentity
+            kind
+            source
+            status
+            submittedAtUnix
+            startedAtUnix
+            updatedAtUnix
+            completedAtUnix
+            queuePosition
+            tasksAhead
+            error
+            syncSpec {
+              mode
+              paths
+            }
+            ingestSpec {
+              backfill
+            }
+            embeddingsBootstrapSpec {
+              configPath
+              profileName
+            }
+            syncProgress {
+              phase
+              currentPath
+              pathsTotal
+              pathsCompleted
+              pathsRemaining
+              pathsUnchanged
+              pathsAdded
+              pathsChanged
+              pathsRemoved
+              cacheHits
+              cacheMisses
+              parseErrors
+            }
+            ingestProgress {
+              phase
+              commitsTotal
+              commitsProcessed
+              checkpointCompanionsProcessed
+              currentCheckpointId
+              currentCommitSha
+              eventsInserted
+              artefactsUpserted
+            }
+            embeddingsBootstrapProgress {
+              phase
+              assetName
+              bytesDownloaded
+              bytesTotal
+              version
+              message
+            }
+          }
+        }
+        currentStateConsumer {
+          persisted
+          pendingRuns
+          runningRuns
+          failedRuns
+          completedRecentRuns
+          lastAction
+          lastUpdatedUnix
+          currentRepoRun {
+            runId
+            repoId
+            capabilityId
+            initSessionId
+            consumerId
+            handlerId
+            fromGenerationSeq
+            toGenerationSeq
+            reconcileMode
+            status
+            attempts
+            submittedAtUnix
+            startedAtUnix
+            updatedAtUnix
+            completedAtUnix
+            error
+          }
+        }
+        workplane {
+          pendingJobs
+          runningJobs
+          failedJobs
+          completedRecentJobs
+          pools {
+            poolName
+            displayName
+            workerBudget
+            activeWorkers
+            pendingJobs
+            runningJobs
+            failedJobs
+            completedRecentJobs
+          }
+          mailboxes {
+            mailboxName
+            displayName
+            pendingJobs
+            runningJobs
+            failedJobs
+            completedRecentJobs
+            pendingCursorRuns
+            runningCursorRuns
+            failedCursorRuns
+            completedRecentCursorRuns
+            intentActive
+            blockedReason
+          }
+        }
+        blockedMailboxes {
+          mailboxName
+          displayName
+          reason
+        }
+        embeddingsReadinessGate {
+          blocked
+          readiness
+          reason
+          activeTaskId
+          profileName
+          configPath
+          lastError
+          lastUpdatedUnix
+        }
+        summariesBootstrap {
+          runId
+          repoId
+          initSessionId
+          status
+          request {
+            action
+            message
+            modelName
+            gatewayUrlOverride
+          }
+          progress {
+            phase
+            assetName
+            bytesDownloaded
+            bytesTotal
+            version
+            message
+          }
+          result {
+            outcomeKind
+            modelName
+            message
+          }
+          error
+          submittedAtUnix
+          startedAtUnix
+          updatedAtUnix
+          completedAtUnix
+        }
+        currentInitSession {
+          initSessionId
+          status
+          waitingReason
+          warningSummary
+          followUpSyncRequired
+          runSync
+          runIngest
+          embeddingsSelected
+          summariesSelected
+          initialSyncTaskId
+          ingestTaskId
+          followUpSyncTaskId
+          embeddingsBootstrapTaskId
+          summaryBootstrapRunId
+          terminalError
+          topPipelineLane {
+            status
+            waitingReason
+            detail
+            activityLabel
+            taskId
+            runId
+            progress {
+              completed
+              total
+              remaining
+            }
+            queue {
+              queued
+              running
+              failed
+            }
+            warnings {
+              componentLabel
+              message
+              retryCommand
+            }
+            pendingCount
+            runningCount
+            failedCount
+            completedCount
+          }
+          embeddingsLane {
+            status
+            waitingReason
+            detail
+            activityLabel
+            taskId
+            runId
+            progress {
+              completed
+              total
+              remaining
+            }
+            queue {
+              queued
+              running
+              failed
+            }
+            warnings {
+              componentLabel
+              message
+              retryCommand
+            }
+            pendingCount
+            runningCount
+            failedCount
+            completedCount
+          }
+          summariesLane {
+            status
+            waitingReason
+            detail
+            activityLabel
+            taskId
+            runId
+            progress {
+              completed
+              total
+              remaining
+            }
+            queue {
+              queued
+              running
+              failed
+            }
+            warnings {
+              componentLabel
+              message
+              retryCommand
+            }
+            pendingCount
+            runningCount
+            failedCount
+            completedCount
+          }
+        }
+      }
+    }
+"#;
+
+pub(super) const RUNTIME_EVENTS_SUBSCRIPTION: &str = r#"
+    subscription RuntimeEvents($repoId: String!, $initSessionId: ID) {
+      runtimeEvents(repoId: $repoId, initSessionId: $initSessionId) {
+        domain
+        repoId
+        initSessionId
+        updatedAtUnix
+        taskId
+        runId
+        mailboxName
+      }
+    }
+"#;
+
 pub(super) const RESUME_TASK_QUEUE_MUTATION: &str = r#"
     mutation ResumeTaskQueue($repoId: String) {
       resumeTaskQueue(repoId: $repoId) {

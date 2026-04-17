@@ -25,6 +25,9 @@ pub(super) fn build_capability_config_root(
             "summary_mode": semantic_clones.summary_mode,
             "embedding_mode": semantic_clones.embedding_mode,
             "ann_neighbors": semantic_clones.ann_neighbors,
+            "summary_workers": semantic_clones.summary_workers,
+            "embedding_workers": semantic_clones.embedding_workers,
+            "clone_rebuild_workers": semantic_clones.clone_rebuild_workers,
             "enrichment_workers": semantic_clones.enrichment_workers,
             "inference": {
                 "summary_generation": semantic_clones.inference.summary_generation,

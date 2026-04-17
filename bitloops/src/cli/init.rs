@@ -14,7 +14,6 @@ use crate::cli::inference::{
 };
 use crate::cli::telemetry_consent;
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, bootstrap_default_daemon_environment};
-use crate::devql_transport::SlimCliRepoScope;
 
 #[path = "init/agent_hooks.rs"]
 mod agent_hooks;
@@ -32,12 +31,6 @@ const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
 
 #[cfg(test)]
 type InstallDefaultDaemonHook = dyn Fn(bool) -> Result<()> + 'static;
-
-#[derive(Clone)]
-struct QueuedEmbeddingsBootstrapTask {
-    scope: SlimCliRepoScope,
-    task_id: String,
-}
 
 #[cfg(test)]
 thread_local! {

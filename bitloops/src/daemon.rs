@@ -36,6 +36,8 @@ mod embeddings_bootstrap;
 mod enrichment;
 #[path = "daemon/graphql_client.rs"]
 mod graphql_client;
+#[path = "daemon/init_runtime.rs"]
+mod init_runtime;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
 #[path = "daemon/logger.rs"]
@@ -71,13 +73,22 @@ pub use self::auth::{
     WorkosDeviceLoginStart, WorkosLoginStart, WorkosSessionDetails, complete_workos_device_login,
     logout_workos_session, prepare_workos_device_login, resolve_workos_session_status,
 };
+pub(crate) use self::capability_events::SyncGenerationInput;
 pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
 pub use self::enrichment::EnrichmentControlResult;
 pub use self::enrichment::EnrichmentCoordinator;
 pub use self::enrichment::EnrichmentJobTarget;
 pub(crate) use self::enrichment::EnrichmentQueueState as PersistedEnrichmentQueueState;
+pub use self::init_runtime::{InitRuntimeCoordinator, InitSessionHandle, RuntimeEventRecord};
+pub(crate) use self::init_runtime::{
+    InitRuntimeLaneProgressView, InitRuntimeLaneQueueView, InitRuntimeLaneView,
+    InitRuntimeLaneWarningView, InitRuntimeSessionView, InitRuntimeSnapshot,
+    InitRuntimeWorkplaneMailboxSnapshot, InitRuntimeWorkplanePoolSnapshot,
+    InitRuntimeWorkplaneSnapshot, PersistedInitSessionState, PersistedSummaryBootstrapState,
+};
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 pub use self::tasks::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
+pub(crate) use self::types::BlockedMailboxStatus;
 pub(crate) use self::types::EmbeddingsBootstrapState as PersistedEmbeddingsBootstrapState;
 pub use self::types::{
     CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
@@ -88,9 +99,14 @@ pub use self::types::{
     DevqlTaskStatus, EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus,
     EmbeddingsBootstrapPhase, EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness,
     EmbeddingsBootstrapResult, EmbeddingsBootstrapTaskSpec, EnrichmentQueueMode,
-    EnrichmentQueueState, EnrichmentQueueStatus, FailedEmbeddingJobSummary, IngestTaskSpec,
+    EnrichmentQueueState, EnrichmentQueueStatus, EnrichmentWorkerPoolKind,
+    EnrichmentWorkerPoolStatus, FailedEmbeddingJobSummary, IngestTaskSpec,
+    InitEmbeddingsBootstrapRequest, InitSessionRecord, InitSessionState, InitSessionTerminalStatus,
     InternalDaemonProcessArgs, InternalDaemonSupervisorArgs, PostCommitSnapshotSpec,
-    RepoTaskControlState, ResolvedDaemonConfig, ServiceManagerKind, SupervisorRuntimeState,
+    RepoTaskControlState, ResolvedDaemonConfig, ServiceManagerKind, StartInitSessionSelections,
+    SummaryBootstrapAction, SummaryBootstrapPhase, SummaryBootstrapProgress,
+    SummaryBootstrapRequest, SummaryBootstrapResultRecord, SummaryBootstrapRunRecord,
+    SummaryBootstrapState, SummaryBootstrapStatus, SupervisorRuntimeState,
     SupervisorServiceMetadata, SyncTaskMode, SyncTaskSpec,
 };
 pub(crate) use self::types::{
@@ -307,11 +323,18 @@ pub fn shared_devql_task_coordinator() -> Arc<DevqlTaskCoordinator> {
     DevqlTaskCoordinator::shared()
 }
 
+pub fn shared_init_runtime_coordinator() -> Arc<InitRuntimeCoordinator> {
+    InitRuntimeCoordinator::shared()
+}
+
 pub(crate) fn activate_task_worker(
     config_root: &Path,
     repo_registry_path: Option<&Path>,
     subscription_hub: Arc<crate::graphql::SubscriptionHub>,
 ) {
+    InitRuntimeCoordinator::shared().set_subscription_hub(Arc::clone(&subscription_hub));
+    CapabilityEventCoordinator::shared().set_subscription_hub(Arc::clone(&subscription_hub));
+    EnrichmentCoordinator::shared().set_subscription_hub(Arc::clone(&subscription_hub));
     CapabilityEventCoordinator::shared().activate_worker();
     DevqlTaskCoordinator::shared().activate_worker(
         config_root,
@@ -440,6 +463,14 @@ pub async fn execute_repo_graphql<T: DeserializeOwned>(
     variables: Value,
 ) -> Result<T> {
     graphql_client::execute_repo_graphql(repo_root, query, variables).await
+}
+
+pub(crate) async fn execute_runtime_graphql<T: DeserializeOwned>(
+    repo_root: &Path,
+    query: &str,
+    variables: Value,
+) -> Result<T> {
+    graphql_client::execute_runtime_graphql(repo_root, query, variables).await
 }
 
 pub(crate) async fn execute_slim_graphql<T: DeserializeOwned>(

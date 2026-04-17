@@ -13,6 +13,7 @@ use crate::cli::embeddings::{
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install,
 };
+use crate::daemon::DevqlTaskStatus;
 use crate::daemon::{
     EmbeddingsBootstrapGateEntry, EmbeddingsBootstrapGateStatus, EmbeddingsBootstrapPhase,
     EmbeddingsBootstrapProgress, EmbeddingsBootstrapReadiness, EmbeddingsBootstrapResult,
@@ -93,6 +94,7 @@ pub(crate) fn gate_status_for_config_path(
     let last_updated_unix = persisted_entry
         .map(|entry| entry.last_updated_unix)
         .unwrap_or_default();
+    let active_bootstrap_entry = active_embeddings_bootstrap_entry(runtime_store, persisted_entry)?;
     let capability = match embedding_capability_for_config_path(&config_path) {
         Ok(capability) => capability,
         Err(err) => {
@@ -113,6 +115,9 @@ pub(crate) fn gate_status_for_config_path(
 
     let Some(profile_name) = selected_inference_profile_name(&capability).map(str::to_string)
     else {
+        if let Some(entry) = active_bootstrap_entry.as_ref() {
+            return Ok(pending_gate_status(entry, &config_path, last_updated_unix));
+        }
         return Ok(EmbeddingsBootstrapGateStatus {
             blocked: false,
             readiness: Some(EmbeddingsBootstrapReadiness::Ready),
@@ -125,6 +130,9 @@ pub(crate) fn gate_status_for_config_path(
         });
     };
     let Some(profile) = capability.inference.profiles.get(&profile_name) else {
+        if let Some(entry) = active_bootstrap_entry.as_ref() {
+            return Ok(pending_gate_status(entry, &config_path, last_updated_unix));
+        }
         return Ok(EmbeddingsBootstrapGateStatus {
             blocked: true,
             readiness: persisted_entry.map(|entry| entry.readiness),
@@ -169,23 +177,8 @@ pub(crate) fn gate_status_for_config_path(
         });
     }
 
-    if let Some(entry) = persisted_entry
-        && entry.readiness == EmbeddingsBootstrapReadiness::Pending
-        && entry.active_task_id.is_some()
-    {
-        return Ok(EmbeddingsBootstrapGateStatus {
-            blocked: true,
-            readiness: Some(EmbeddingsBootstrapReadiness::Pending),
-            reason: Some(format!(
-                "Managed embeddings runtime is still bootstrapping via task `{}`",
-                entry.active_task_id.as_deref().unwrap_or_default()
-            )),
-            active_task_id: entry.active_task_id.clone(),
-            profile_name: Some(entry.profile_name.clone()),
-            config_path: Some(config_path),
-            last_error: entry.last_error.clone(),
-            last_updated_unix,
-        });
+    if let Some(entry) = active_bootstrap_entry.as_ref() {
+        return Ok(pending_gate_status(entry, &config_path, last_updated_unix));
     }
 
     if let Some(runtime_name) = profile.runtime.as_deref()
@@ -236,6 +229,57 @@ pub(crate) fn gate_status_for_config_path(
         last_error,
         last_updated_unix,
     })
+}
+
+fn active_embeddings_bootstrap_entry<'a>(
+    runtime_store: &DaemonSqliteRuntimeStore,
+    persisted_entry: Option<&'a EmbeddingsBootstrapGateEntry>,
+) -> Result<Option<&'a EmbeddingsBootstrapGateEntry>> {
+    let Some(entry) = persisted_entry else {
+        return Ok(None);
+    };
+    if entry.readiness != EmbeddingsBootstrapReadiness::Pending {
+        return Ok(None);
+    }
+    let Some(task_id) = entry.active_task_id.as_deref() else {
+        return Ok(None);
+    };
+    let Some(task) = runtime_store
+        .load_devql_task_queue_state()?
+        .unwrap_or_else(crate::host::runtime_store::PersistedDevqlTaskQueueState::default)
+        .tasks
+        .into_iter()
+        .find(|task| task.task_id == task_id)
+    else {
+        return Ok(None);
+    };
+    if matches!(
+        task.status,
+        DevqlTaskStatus::Queued | DevqlTaskStatus::Running
+    ) {
+        return Ok(Some(entry));
+    }
+    Ok(None)
+}
+
+fn pending_gate_status(
+    entry: &EmbeddingsBootstrapGateEntry,
+    config_path: &Path,
+    last_updated_unix: u64,
+) -> EmbeddingsBootstrapGateStatus {
+    EmbeddingsBootstrapGateStatus {
+        blocked: true,
+        readiness: Some(EmbeddingsBootstrapReadiness::Pending),
+        reason: Some(format!(
+            "Managed embeddings runtime is still bootstrapping via task `{}`",
+            entry.active_task_id.as_deref().unwrap_or_default()
+        )),
+        active_task_id: entry.active_task_id.clone(),
+        profile_name: Some(entry.profile_name.clone()),
+        config_path: Some(config_path.to_path_buf()),
+        last_error: entry.last_error.clone(),
+        last_updated_unix,
+    }
 }
 
 pub(crate) fn gate_status_for_enrichment_queue(
@@ -592,6 +636,10 @@ fn config_path_key(config_path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::{
+        DevqlTaskKind, DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec,
+        DevqlTaskStatus, EmbeddingsBootstrapTaskSpec,
+    };
 
     #[test]
     fn enrichment_queue_gate_status_recomputes_from_config_when_no_jobs_are_present() {
@@ -630,6 +678,86 @@ mod tests {
         assert_eq!(
             status.reason.as_deref(),
             Some("Embeddings are not configured for this daemon")
+        );
+    }
+
+    #[test]
+    fn enrichment_queue_gate_stays_pending_while_embeddings_bootstrap_task_is_active() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let runtime_store = DaemonSqliteRuntimeStore::open_at(temp.path().join("runtime.sqlite"))
+            .expect("open daemon runtime store");
+        let config_path = temp.path().join("config.toml");
+
+        std::fs::write(&config_path, "[runtime]\nlocal_dev = false\n")
+            .expect("write minimal daemon config");
+
+        runtime_store
+            .mutate_embeddings_bootstrap_state(|state| {
+                state.entries.insert(
+                    config_path_key(&config_path),
+                    EmbeddingsBootstrapGateEntry {
+                        config_path: config_path.clone(),
+                        profile_name: "local_code".to_string(),
+                        readiness: EmbeddingsBootstrapReadiness::Pending,
+                        active_task_id: Some("bootstrap-task-1".to_string()),
+                        last_error: None,
+                        last_updated_unix: unix_timestamp_now(),
+                    },
+                );
+                Ok(())
+            })
+            .expect("persist pending bootstrap gate state");
+        runtime_store
+            .mutate_devql_task_queue_state(|state| {
+                state.tasks.push(DevqlTaskRecord {
+                    task_id: "bootstrap-task-1".to_string(),
+                    repo_id: "repo-1".to_string(),
+                    repo_name: "repo".to_string(),
+                    repo_provider: "local".to_string(),
+                    repo_organisation: "local".to_string(),
+                    repo_identity: "repo".to_string(),
+                    daemon_config_root: temp.path().to_path_buf(),
+                    repo_root: temp.path().join("repo"),
+                    init_session_id: None,
+                    kind: DevqlTaskKind::EmbeddingsBootstrap,
+                    source: DevqlTaskSource::Init,
+                    spec: DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+                        config_path: config_path.clone(),
+                        profile_name: "local_code".to_string(),
+                    }),
+                    status: DevqlTaskStatus::Running,
+                    submitted_at_unix: 1,
+                    started_at_unix: Some(1),
+                    updated_at_unix: 1,
+                    completed_at_unix: None,
+                    queue_position: None,
+                    tasks_ahead: None,
+                    progress: DevqlTaskProgress::EmbeddingsBootstrap(
+                        EmbeddingsBootstrapProgress::default(),
+                    ),
+                    error: None,
+                    result: None,
+                });
+                Ok(())
+            })
+            .expect("persist active embeddings bootstrap task");
+
+        let status =
+            gate_status_for_enrichment_queue(&runtime_store, std::iter::empty::<PathBuf>())
+                .expect("load enrichment queue gate status")
+                .expect("gate status should exist");
+
+        assert!(status.blocked);
+        assert_eq!(
+            status.readiness,
+            Some(EmbeddingsBootstrapReadiness::Pending)
+        );
+        assert_eq!(status.active_task_id.as_deref(), Some("bootstrap-task-1"));
+        assert!(
+            status
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("still bootstrapping"))
         );
     }
 }

@@ -47,6 +47,7 @@ pub struct LocalCapabilityWorkplaneGateway {
     capability_id: String,
     runtime_store: RepoSqliteRuntimeStore,
     declared_mailboxes: BTreeSet<String>,
+    init_session_id: Option<String>,
 }
 
 impl LocalCapabilityWorkplaneGateway {
@@ -54,6 +55,7 @@ impl LocalCapabilityWorkplaneGateway {
         repo_root: &Path,
         capability_id: &str,
         declared_mailboxes: &[CapabilityMailboxRegistration],
+        init_session_id: Option<String>,
     ) -> Result<Self> {
         Ok(Self {
             capability_id: capability_id.to_string(),
@@ -62,6 +64,7 @@ impl LocalCapabilityWorkplaneGateway {
                 .iter()
                 .map(|registration| registration.mailbox_name.to_string())
                 .collect(),
+            init_session_id,
         })
     }
 
@@ -90,6 +93,7 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
                     .map(|job| {
                         crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
                             job.mailbox_name,
+                            self.init_session_id.clone(),
                             job.dedupe_key,
                             job.payload,
                         )

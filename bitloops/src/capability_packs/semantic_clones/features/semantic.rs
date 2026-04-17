@@ -199,16 +199,30 @@ pub(super) fn build_semantics_row(
     summary_provider: &dyn SemanticSummaryProvider,
 ) -> SymbolSemanticsRow {
     let docstring_summary = extract_summary_from_docstring(input.docstring.as_deref());
-    let llm_candidate = summary_provider.generate(input);
+    let llm_candidate = summary_provider.generate(input).and_then(|candidate| {
+        let normalized_summary = normalize_summary_text(&candidate.summary);
+        if !is_valid_summary(&normalized_summary) {
+            return None;
+        }
+        Some(SemanticSummaryCandidate {
+            summary: normalized_summary,
+            confidence: candidate.confidence,
+            source_model: candidate.source_model,
+        })
+    });
     let llm_summary = llm_candidate
         .as_ref()
-        .map(|candidate| normalize_summary_text(&candidate.summary))
-        .filter(|summary| !summary.is_empty());
-    let canonical_llm_summary = llm_summary.as_deref().map(ensure_terminal_period);
+        .map(|candidate| candidate.summary.clone());
+    let canonical_llm_summary = llm_candidate
+        .as_ref()
+        .map(|candidate| ensure_terminal_period(candidate.summary.as_str()));
     let template_summary = build_template_summary(input);
     let llm_confidence = llm_candidate
         .as_ref()
         .map(|candidate| candidate.confidence.clamp(0.0, 1.0));
+    let source_model = llm_candidate
+        .as_ref()
+        .and_then(|candidate| candidate.source_model.clone());
 
     // Persist every candidate, then synthesize a single canonical summary for Stage 3 and
     // other downstream consumers. Template stays as stable scaffolding, LLM adds the current
@@ -233,7 +247,7 @@ pub(super) fn build_semantics_row(
         template_summary,
         summary,
         confidence,
-        source_model: llm_candidate.and_then(|candidate| candidate.source_model),
+        source_model,
     }
 }
 
@@ -526,6 +540,25 @@ mod tests {
         );
 
         assert_eq!(summary, "Function normalize email.");
+    }
+
+    #[test]
+    fn semantic_features_build_semantics_row_drops_invalid_llm_candidate() {
+        let input = sample_input("method", "getById");
+
+        let row = build_semantics_row(
+            &input,
+            &StaticSummaryProvider {
+                summary: Some("short".to_string()),
+                confidence: 0.91,
+                source_model: Some("ollama:ministral-3:3b".to_string()),
+            },
+        );
+
+        assert_eq!(row.template_summary, "Method get by id.");
+        assert_eq!(row.summary, "Method get by id.");
+        assert_eq!(row.llm_summary, None);
+        assert_eq!(row.source_model, None);
     }
 
     #[test]

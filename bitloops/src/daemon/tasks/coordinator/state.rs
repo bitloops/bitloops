@@ -374,16 +374,23 @@ impl DevqlTaskCoordinator {
     }
 
     fn publish_tasks(&self, tasks: Vec<DevqlTaskRecord>) {
-        let Some(hub) = self
+        let hub = self
             .subscription_hub
             .lock()
             .ok()
-            .and_then(|slot| slot.clone())
-        else {
-            return;
-        };
+            .and_then(|slot| slot.clone());
         for task in tasks {
-            hub.publish_task(task);
+            if let Err(err) =
+                crate::daemon::shared_init_runtime_coordinator().handle_task_update(task.clone())
+            {
+                log::warn!(
+                    "failed to reconcile init runtime state for task {}: {err:#}",
+                    task.task_id
+                );
+            }
+            if let Some(hub) = hub.as_ref() {
+                hub.publish_task(task);
+            }
         }
     }
 

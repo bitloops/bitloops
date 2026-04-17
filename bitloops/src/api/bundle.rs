@@ -571,6 +571,7 @@ mod tests {
             subscription_hub: crate::graphql::SubscriptionHub::new_arc(),
             dashboard_graphql_schema: crate::api::dashboard_schema::build_dashboard_schema_template(
             ),
+            runtime_graphql_schema: crate::api::runtime_schema::build_runtime_schema_template(),
             devql_schema: crate::graphql::build_global_schema_template(),
             devql_slim_schema: crate::graphql::build_slim_schema_template(),
         }

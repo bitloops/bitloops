@@ -18,15 +18,18 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::config::resolve_repo_runtime_db_path_for_config_root;
+use crate::graphql::SubscriptionHub;
 use crate::host::runtime_store::{DaemonSqliteRuntimeStore, WorkplaneJobStatus};
 use rusqlite::params;
 
-use super::types::{EnrichmentQueueMode, EnrichmentQueueStatus, unix_timestamp_now};
+use super::types::{
+    BlockedMailboxStatus, EnrichmentQueueMode, EnrichmentQueueStatus, unix_timestamp_now,
+};
 
 #[path = "enrichment/execution.rs"]
 mod execution;
 #[path = "enrichment/worker_count.rs"]
-mod worker_count;
+pub(crate) mod worker_count;
 #[path = "enrichment/workplane.rs"]
 mod workplane;
 
@@ -34,13 +37,15 @@ mod workplane;
 use self::workplane::load_workplane_jobs_by_status;
 use self::workplane::{
     claim_next_workplane_job, compact_and_prune_workplane_jobs,
-    current_workplane_mailbox_blocked_statuses, default_state, enqueue_workplane_clone_rebuild,
-    enqueue_workplane_embedding_jobs, enqueue_workplane_summary_jobs,
+    current_workplane_mailbox_blocked_statuses,
+    current_workplane_mailbox_blocked_statuses_for_repo, default_state,
+    enqueue_workplane_clone_rebuild, enqueue_workplane_embedding_jobs,
+    enqueue_workplane_embedding_repo_backfill_job, enqueue_workplane_summary_jobs,
     iter_workplane_job_config_roots, last_failed_embedding_job_from_workplane,
     persist_workplane_job_completion, project_workplane_status, retry_failed_workplane_jobs,
     sql_i64,
 };
-use worker_count::configured_enrichment_worker_count;
+use worker_count::{EnrichmentWorkerPool, configured_enrichment_worker_budgets};
 
 #[cfg(test)]
 const MAX_SEMANTIC_ENRICHMENT_JOB_ARTEFACTS: usize = 32;
@@ -122,6 +127,7 @@ pub struct EnrichmentControlResult {
 pub struct EnrichmentJobTarget {
     config_root: PathBuf,
     repo_root: PathBuf,
+    init_session_id: Option<String>,
 }
 
 impl EnrichmentJobTarget {
@@ -129,7 +135,13 @@ impl EnrichmentJobTarget {
         Self {
             config_root,
             repo_root,
+            init_session_id: None,
         }
+    }
+
+    pub fn with_init_session_id(mut self, init_session_id: Option<String>) -> Self {
+        self.init_session_id = init_session_id;
+        self
     }
 }
 
@@ -141,6 +153,7 @@ pub struct EnrichmentCoordinator {
     notify: Notify,
     state_initialised: AtomicBool,
     workers_started: AtomicBool,
+    subscription_hub: std::sync::Mutex<Option<Arc<SubscriptionHub>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +161,11 @@ enum FollowUpJob {
     SemanticSummaries {
         target: EnrichmentJobTarget,
         artefact_ids: Vec<String>,
+    },
+    RepoBackfillEmbeddings {
+        target: EnrichmentJobTarget,
+        artefact_ids: Vec<String>,
+        representation_kind: EmbeddingRepresentationKind,
     },
     SymbolEmbeddings {
         target: EnrichmentJobTarget,
@@ -222,10 +240,17 @@ impl EnrichmentCoordinator {
                 notify: Notify::new(),
                 state_initialised: AtomicBool::new(false),
                 workers_started: AtomicBool::new(false),
+                subscription_hub: std::sync::Mutex::new(None),
             })
         }));
         coordinator.ensure_started();
         coordinator
+    }
+
+    pub(crate) fn set_subscription_hub(&self, subscription_hub: Arc<SubscriptionHub>) {
+        if let Ok(mut slot) = self.subscription_hub.lock() {
+            *slot = Some(subscription_hub);
+        }
     }
 
     pub(crate) fn ensure_started(self: &Arc<Self>) {
@@ -245,15 +270,26 @@ impl EnrichmentCoordinator {
             return;
         }
 
-        let worker_count = configured_enrichment_worker_count();
-        if worker_count > 1 {
-            log::info!("starting {worker_count} enrichment workers");
-        }
-        for _ in 0..worker_count {
-            let coordinator = Arc::clone(self);
-            handle.spawn(async move {
-                coordinator.run_loop().await;
-            });
+        let budgets = configured_enrichment_worker_budgets();
+        for pool in [
+            EnrichmentWorkerPool::SummaryRefresh,
+            EnrichmentWorkerPool::Embeddings,
+            EnrichmentWorkerPool::CloneRebuild,
+        ] {
+            let worker_count = budgets.for_pool(pool);
+            if worker_count > 0 {
+                log::info!(
+                    "starting {} enrichment workers for pool {}",
+                    worker_count,
+                    pool.as_str()
+                );
+            }
+            for _ in 0..worker_count {
+                let coordinator = Arc::clone(self);
+                handle.spawn(async move {
+                    coordinator.run_loop(pool).await;
+                });
+            }
         }
     }
 
@@ -274,6 +310,10 @@ impl EnrichmentCoordinator {
         self.save_state(&mut state)?;
         compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
+        publish_workplane_runtime_event(
+            &target,
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+        )?;
         Ok(())
     }
 
@@ -296,6 +336,15 @@ impl EnrichmentCoordinator {
         self.save_state(&mut state)?;
         compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
+        let mailbox_name = match representation_kind {
+            EmbeddingRepresentationKind::Code => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+            }
+            EmbeddingRepresentationKind::Summary => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+            }
+        };
+        publish_workplane_runtime_event(&target, mailbox_name)?;
         Ok(())
     }
 
@@ -307,6 +356,10 @@ impl EnrichmentCoordinator {
         self.save_state(&mut state)?;
         compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
+        publish_workplane_runtime_event(
+            &target,
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+        )?;
         Ok(())
     }
 
@@ -418,13 +471,16 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         log::warn!("requeued {recovered} stale running enrichment jobs on daemon startup");
     }
 
-    async fn run_loop(self: Arc<Self>) {
+    async fn run_loop(self: Arc<Self>, pool: EnrichmentWorkerPool) {
         loop {
-            match self.process_next_job().await {
+            match self.process_next_job(pool).await {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(err) => {
-                    log::warn!("daemon enrichment worker error: {err:#}");
+                    log::warn!(
+                        "daemon enrichment worker error for pool {}: {err:#}",
+                        pool.as_str()
+                    );
                 }
             }
             tokio::select! {
@@ -434,20 +490,21 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         }
     }
 
-    async fn process_next_job(&self) -> Result<bool> {
+    async fn process_next_job(&self, pool: EnrichmentWorkerPool) -> Result<bool> {
         let job = {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
             compact_and_prune_workplane_jobs(&self.workplane_store)?;
             let Some(job) =
-                claim_next_workplane_job(&self.workplane_store, &self.runtime_store, &state)?
+                claim_next_workplane_job(&self.workplane_store, &self.runtime_store, &state, pool)?
             else {
                 return Ok(false);
             };
-            state.last_action = Some("running".to_string());
+            state.last_action = Some(format!("running:{}", pool.as_str()));
             self.save_state(&mut state)?;
             job
         };
+        publish_job_runtime_event(&job);
 
         let outcome = execution::execute_workplane_job(&job).await;
 
@@ -461,6 +518,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             });
             self.save_state(&mut state)?;
         }
+        publish_job_runtime_event(&job);
 
         for follow_up in outcome.follow_ups {
             self.enqueue_follow_up(follow_up).await?;
@@ -476,6 +534,14 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
                 artefact_ids,
             } => {
                 self.enqueue_semantic_summary_workplane_jobs(target, artefact_ids)
+                    .await
+            }
+            FollowUpJob::RepoBackfillEmbeddings {
+                target,
+                artefact_ids,
+                representation_kind,
+            } => {
+                self.enqueue_repo_backfill_embedding_job(target, artefact_ids, representation_kind)
                     .await
             }
             FollowUpJob::SymbolEmbeddings {
@@ -527,6 +593,39 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         self.save_state(&mut state)?;
         compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
+        let mailbox_name = match representation_kind {
+            EmbeddingRepresentationKind::Code => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+            }
+            EmbeddingRepresentationKind::Summary => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+            }
+        };
+        publish_workplane_runtime_event(&target, mailbox_name)?;
+        Ok(())
+    }
+
+    async fn enqueue_repo_backfill_embedding_job(
+        &self,
+        target: EnrichmentJobTarget,
+        artefact_ids: Vec<String>,
+        representation_kind: EmbeddingRepresentationKind,
+    ) -> Result<()> {
+        enqueue_workplane_embedding_repo_backfill_job(&target, artefact_ids, representation_kind)?;
+        let mut state = self.load_state()?;
+        state.last_action = Some("enqueue_embeddings".to_string());
+        self.save_state(&mut state)?;
+        compact_and_prune_workplane_jobs(&self.workplane_store)?;
+        self.notify.notify_waiters();
+        let mailbox_name = match representation_kind {
+            EmbeddingRepresentationKind::Code => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+            }
+            EmbeddingRepresentationKind::Summary => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+            }
+        };
+        publish_workplane_runtime_event(&target, mailbox_name)?;
         Ok(())
     }
 
@@ -541,8 +640,48 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         self.save_state(&mut state)?;
         compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
+        publish_workplane_runtime_event(
+            &target,
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+        )?;
         Ok(())
     }
+}
+
+fn publish_workplane_runtime_event(target: &EnrichmentJobTarget, mailbox_name: &str) -> Result<()> {
+    let Some(init_session_id) = target.init_session_id.clone() else {
+        return Ok(());
+    };
+    let repo_id = crate::host::devql::resolve_repo_identity(&target.repo_root)?.repo_id;
+    crate::daemon::shared_init_runtime_coordinator().publish_runtime_event(
+        crate::daemon::RuntimeEventRecord {
+            domain: "workplane".to_string(),
+            repo_id,
+            init_session_id: Some(init_session_id),
+            updated_at_unix: unix_timestamp_now(),
+            task_id: None,
+            run_id: None,
+            mailbox_name: Some(mailbox_name.to_string()),
+        },
+    );
+    Ok(())
+}
+
+fn publish_job_runtime_event(job: &crate::host::runtime_store::WorkplaneJobRecord) {
+    let Some(init_session_id) = job.init_session_id.clone() else {
+        return;
+    };
+    crate::daemon::shared_init_runtime_coordinator().publish_runtime_event(
+        crate::daemon::RuntimeEventRecord {
+            domain: "workplane".to_string(),
+            repo_id: job.repo_id.clone(),
+            init_session_id: Some(init_session_id),
+            updated_at_unix: unix_timestamp_now(),
+            task_id: None,
+            run_id: None,
+            mailbox_name: Some(job.mailbox_name.clone()),
+        },
+    );
 }
 
 pub fn snapshot() -> Result<EnrichmentQueueStatus> {
@@ -569,6 +708,14 @@ pub fn snapshot() -> Result<EnrichmentQueueStatus> {
         )?,
         last_failed_embedding: last_failed_embedding_job_from_workplane(&workplane_store)?,
     })
+}
+
+pub(crate) fn blocked_mailboxes_for_repo(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    runtime_store: &DaemonSqliteRuntimeStore,
+    repo_id: &str,
+) -> Result<Vec<BlockedMailboxStatus>> {
+    current_workplane_mailbox_blocked_statuses_for_repo(workplane_store, runtime_store, repo_id)
 }
 
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {

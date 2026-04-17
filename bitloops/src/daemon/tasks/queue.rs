@@ -45,6 +45,7 @@ pub(super) fn merge_existing_task(
     source: DevqlTaskSource,
     kind: DevqlTaskKind,
     spec: &DevqlTaskSpec,
+    init_session_id: Option<&str>,
 ) -> Option<DevqlTaskRecord> {
     if kind == DevqlTaskKind::EmbeddingsBootstrap {
         return None;
@@ -58,6 +59,7 @@ pub(super) fn merge_existing_task(
                     task.status,
                     DevqlTaskStatus::Queued | DevqlTaskStatus::Running
                 )
+                && task.init_session_id.as_deref() == init_session_id
                 && task.spec == *spec
         }) {
             existing.updated_at_unix = unix_timestamp_now();
@@ -76,6 +78,7 @@ pub(super) fn merge_existing_task(
                     task.status,
                     DevqlTaskStatus::Queued | DevqlTaskStatus::Running
                 )
+                && task.init_session_id.as_deref() == init_session_id
                 && (source != DevqlTaskSource::RepoPolicyChange
                     || task.status == DevqlTaskStatus::Queued)
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing_spec| {
@@ -115,6 +118,7 @@ pub(super) fn merge_existing_task(
             task.repo_id == cfg.repo.repo_id
                 && task.kind == DevqlTaskKind::Sync
                 && task.status == DevqlTaskStatus::Queued
+                && task.init_session_id.as_deref() == init_session_id
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing| {
                     matches!(existing.mode, SyncTaskMode::Paths { .. })
                         && sync_specs_have_compatible_snapshots(

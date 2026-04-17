@@ -99,6 +99,12 @@ pub struct SymbolEmbeddingsRefreshPayload {
     pub mode: EmbeddingRefreshMode,
     #[serde(default)]
     pub manage_active_state: bool,
+    #[serde(default = "default_perform_clone_rebuild_inline")]
+    pub perform_clone_rebuild_inline: bool,
+}
+
+fn default_perform_clone_rebuild_inline() -> bool {
+    true
 }
 
 struct SemanticFeaturesRefreshIngester;
@@ -304,6 +310,7 @@ impl IngesterHandler for SymbolEmbeddingsRefreshIngester {
                     summary_provider.provider,
                     payload.representation_kind,
                     provider,
+                    payload.perform_clone_rebuild_inline,
                 )
                 .await?;
                 return Ok(IngestResult::new(

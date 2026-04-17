@@ -17,6 +17,7 @@ pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode}
 pub(crate) use subscriptions::SubscriptionHub;
 pub(crate) use types::Checkpoint;
 pub(crate) use types::HealthStatus;
+pub(crate) use types::TaskQueueStatusObject;
 pub(crate) use types::{ArtefactFilterInput, CanonicalKind};
 
 #[cfg(test)]
@@ -435,7 +436,7 @@ pub(crate) async fn global_graphql_ws_handler(
     response
 }
 
-fn validate_repo_daemon_binding(
+pub(crate) fn validate_repo_daemon_binding(
     headers: &HeaderMap,
     state: &crate::api::DashboardState,
     repo_root: Option<&Path>,
@@ -702,7 +703,7 @@ fn map_execution_error(error: &ServerError) -> anyhow::Error {
     }
 }
 
-fn graphql_error_response(err: anyhow::Error) -> GraphQLResponse {
+pub(crate) fn graphql_error_response(err: anyhow::Error) -> GraphQLResponse {
     Response::from_errors(vec![
         bad_user_input_error(err.to_string()).into_server_error(Pos::default()),
     ])

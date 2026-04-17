@@ -16,7 +16,7 @@ use crate::capability_packs::semantic_clones::types::{
 };
 use crate::capability_packs::semantic_clones::workplane::{
     load_effective_mailbox_intent_for_repo, payload_artefact_id, payload_is_repo_backfill,
-    payload_representation_kind,
+    payload_repo_backfill_artefact_ids, payload_representation_kind,
 };
 use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
@@ -35,6 +35,7 @@ use super::workplane::fallback_repo_identity;
 use super::{EnrichmentJobTarget, FollowUpJob, JobExecutionOutcome};
 
 const WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE: usize = 32;
+const WORKPLANE_EMBEDDING_REPO_BACKFILL_BATCH_SIZE: usize = 32;
 
 #[cfg(test)]
 use anyhow::Context;
@@ -50,6 +51,15 @@ type SemanticFeatureInput =
 
 struct SummaryRefreshWorkplanePlan {
     inputs: Vec<SemanticFeatureInput>,
+    follow_ups: Vec<FollowUpJob>,
+}
+
+struct EmbeddingRefreshWorkplanePlan {
+    scope: SymbolEmbeddingsRefreshScope,
+    path: Option<String>,
+    content_id: Option<String>,
+    inputs: Vec<SemanticFeatureInput>,
+    manage_active_state: bool,
     follow_ups: Vec<FollowUpJob>,
 }
 
@@ -203,15 +213,24 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
             if inputs.is_empty() {
                 return JobExecutionOutcome::ok();
             }
-            let payload = SymbolEmbeddingsRefreshPayload {
+            let plan = build_embedding_refresh_workplane_plan(
+                job,
                 scope,
                 path,
                 content_id,
                 inputs,
+                representation_kind,
+            );
+            let payload = SymbolEmbeddingsRefreshPayload {
+                scope: plan.scope,
+                path: plan.path,
+                content_id: plan.content_id,
+                inputs: plan.inputs,
                 expected_input_hashes: BTreeMap::new(),
                 representation_kind,
                 mode: EmbeddingRefreshMode::ConfiguredStrict,
-                manage_active_state: payload_is_repo_backfill(&job.payload),
+                manage_active_state: plan.manage_active_state,
+                perform_clone_rebuild_inline: false,
             };
             match capability_host
                 .invoke_ingester_with_relational(
@@ -226,7 +245,10 @@ pub(super) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                 .await
             {
                 Ok(_) => {
-                    let mut outcome = JobExecutionOutcome::ok();
+                    let mut outcome = JobExecutionOutcome {
+                        error: None,
+                        follow_ups: plan.follow_ups,
+                    };
                     outcome
                         .follow_ups
                         .push(clone_edges_rebuild_follow_up_from_workplane(job));
@@ -322,6 +344,7 @@ async fn execute_embedding_job(
         representation_kind,
         mode: EmbeddingRefreshMode::ConfiguredStrict,
         manage_active_state: true,
+        perform_clone_rebuild_inline: true,
     };
     let result = match capability_host
         .invoke_ingester_with_relational(
@@ -386,7 +409,8 @@ fn symbol_embeddings_follow_up(
     representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
 ) -> FollowUpJob {
     FollowUpJob::SymbolEmbeddings {
-        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone()),
+        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_init_session_id(None),
         artefact_ids: artefact_ids.to_vec(),
         input_hashes: input_hashes.clone(),
         representation_kind,
@@ -396,13 +420,15 @@ fn symbol_embeddings_follow_up(
 #[cfg(test)]
 fn clone_edges_rebuild_follow_up(job: &EnrichmentJob) -> FollowUpJob {
     FollowUpJob::CloneEdgesRebuild {
-        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone()),
+        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_init_session_id(None),
     }
 }
 
 fn clone_edges_rebuild_follow_up_from_workplane(job: &WorkplaneJobRecord) -> FollowUpJob {
     FollowUpJob::CloneEdgesRebuild {
-        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone()),
+        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_init_session_id(job.init_session_id.clone()),
     }
 }
 
@@ -412,7 +438,8 @@ fn symbol_embeddings_follow_up_from_artefact_ids(
     representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
 ) -> FollowUpJob {
     FollowUpJob::SymbolEmbeddings {
-        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone()),
+        target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_init_session_id(job.init_session_id.clone()),
         artefact_ids: artefact_ids.to_vec(),
         input_hashes: BTreeMap::new(),
         representation_kind,
@@ -433,14 +460,12 @@ fn build_summary_refresh_workplane_plan(
     }
 
     let mut follow_ups = Vec::new();
-    if summary_embeddings_active {
-        if let Some(artefact_id) = payload_artefact_id(&job.payload) {
-            follow_ups.push(symbol_embeddings_follow_up_from_artefact_ids(
-                job,
-                &[artefact_id],
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
-            ));
-        }
+    if summary_embeddings_active && let Some(artefact_id) = payload_artefact_id(&job.payload) {
+        follow_ups.push(symbol_embeddings_follow_up_from_artefact_ids(
+            job,
+            &[artefact_id],
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+        ));
     }
     SummaryRefreshWorkplanePlan { inputs, follow_ups }
 }
@@ -479,11 +504,66 @@ fn build_repo_backfill_summary_refresh_workplane_plan(
     }
     if !remaining_artefact_ids.is_empty() {
         follow_ups.push(FollowUpJob::SemanticSummaries {
-            target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone()),
+            target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+                .with_init_session_id(job.init_session_id.clone()),
             artefact_ids: remaining_artefact_ids,
         });
     }
     SummaryRefreshWorkplanePlan { inputs, follow_ups }
+}
+
+fn build_embedding_refresh_workplane_plan(
+    job: &WorkplaneJobRecord,
+    scope: SymbolEmbeddingsRefreshScope,
+    path: Option<String>,
+    content_id: Option<String>,
+    inputs: Vec<SemanticFeatureInput>,
+    representation_kind: crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind,
+) -> EmbeddingRefreshWorkplanePlan {
+    if !payload_is_repo_backfill(&job.payload) {
+        return EmbeddingRefreshWorkplanePlan {
+            scope,
+            path,
+            content_id,
+            inputs,
+            manage_active_state: false,
+            follow_ups: Vec::new(),
+        };
+    }
+
+    let batch_size = inputs
+        .len()
+        .min(WORKPLANE_EMBEDDING_REPO_BACKFILL_BATCH_SIZE);
+    let (batch_inputs, remaining_inputs): (Vec<_>, Vec<_>) = inputs
+        .into_iter()
+        .enumerate()
+        .partition(|(index, _)| *index < batch_size);
+    let inputs = batch_inputs
+        .into_iter()
+        .map(|(_, input)| input)
+        .collect::<Vec<_>>();
+    let remaining_artefact_ids = remaining_inputs
+        .into_iter()
+        .map(|(_, input)| input.artefact_id)
+        .collect::<Vec<_>>();
+    let mut follow_ups = Vec::new();
+    if !remaining_artefact_ids.is_empty() {
+        follow_ups.push(FollowUpJob::RepoBackfillEmbeddings {
+            target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+                .with_init_session_id(job.init_session_id.clone()),
+            artefact_ids: remaining_artefact_ids,
+            representation_kind,
+        });
+    }
+
+    EmbeddingRefreshWorkplanePlan {
+        scope,
+        path,
+        content_id,
+        inputs,
+        manage_active_state: follow_ups.is_empty(),
+        follow_ups,
+    }
 }
 
 async fn load_workplane_job_inputs(
@@ -558,7 +638,19 @@ async fn load_repo_backfill_inputs(
     relational: &RelationalStorage,
     job: &WorkplaneJobRecord,
 ) -> Result<Vec<crate::capability_packs::semantic_clones::features::SemanticFeatureInput>> {
-    load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id).await
+    let current_inputs =
+        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
+            .await?;
+    let Some(artefact_ids) = payload_repo_backfill_artefact_ids(&job.payload) else {
+        return Ok(current_inputs);
+    };
+    let artefact_ids = artefact_ids
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    Ok(current_inputs
+        .into_iter()
+        .filter(|input| artefact_ids.contains(&input.artefact_id))
+        .collect())
 }
 
 async fn clear_embedding_outputs(relational: &RelationalStorage, repo_id: &str) -> Result<()> {

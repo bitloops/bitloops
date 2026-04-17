@@ -144,6 +144,7 @@ impl LocalCapabilityRuntimeResources {
                     &self.repo_root,
                     capability_id,
                     declared_mailboxes,
+                    None,
                 )
                 .ok()
             }),
@@ -154,8 +155,14 @@ impl LocalCapabilityRuntimeResources {
         &self,
         capability_id: &str,
         declared_mailboxes: &[CapabilityMailboxRegistration],
+        init_session_id: Option<String>,
     ) -> Result<LocalCapabilityWorkplaneGateway> {
-        LocalCapabilityWorkplaneGateway::new(&self.repo_root, capability_id, declared_mailboxes)
+        LocalCapabilityWorkplaneGateway::new(
+            &self.repo_root,
+            capability_id,
+            declared_mailboxes,
+            init_session_id,
+        )
     }
 }
 

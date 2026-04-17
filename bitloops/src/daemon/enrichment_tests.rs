@@ -5,6 +5,7 @@ use crate::host::runtime_store::{
 use crate::test_support::git_fixtures::init_test_repo;
 use serde_json::json;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tempfile::TempDir;
@@ -183,6 +184,7 @@ fn new_test_coordinator(temp: &TempDir) -> (EnrichmentCoordinator, EnrichmentJob
                 .expect("open test daemon runtime store"),
             workplane_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
                 .expect("open test workplane store"),
+            subscription_hub: std::sync::Mutex::new(None),
             lock: Mutex::new(()),
             notify: Notify::new(),
             state_initialised: AtomicBool::new(false),
@@ -204,15 +206,24 @@ fn configure_summary_refresh_for_repo(target: &EnrichmentJobTarget) {
     )
     .expect("bind repo root to daemon config");
 
+    #[cfg(unix)]
+    let (command, args) = fake_text_generation_runtime_command_and_args(&target.repo_root);
+    #[cfg(windows)]
+    let (command, args) = fake_text_generation_runtime_command_and_args(&target.repo_root);
+    let runtime_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
-    config.push_str(
+    config.push_str(&format!(
         r#"
 [semantic_clones.inference]
 summary_generation = "summary_local"
 
 [inference.runtimes.bitloops_inference]
-command = "bitloops-inference"
-args = []
+command = {command:?}
+args = [{runtime_args}]
 startup_timeout_secs = 1
 request_timeout_secs = 1
 
@@ -225,8 +236,215 @@ base_url = "http://127.0.0.1:11434/api/chat"
 temperature = "0.1"
 max_output_tokens = 200
 "#,
-    );
+    ));
     fs::write(&config_path, config).expect("write test daemon config with summary profile");
+}
+
+fn configure_embeddings_for_repo(target: &EnrichmentJobTarget, profile_name: &str) -> PathBuf {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    #[cfg(unix)]
+    let (command, args) = fake_embeddings_runtime_command_and_args(&target.repo_root);
+    #[cfg(windows)]
+    let (command, args) = fake_embeddings_runtime_command_and_args(&target.repo_root);
+    let runtime_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "{profile_name}"
+summary_embeddings = "{profile_name}"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = {command:?}
+args = [{runtime_args}]
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.{profile_name}]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "local-code"
+"#
+    ));
+    fs::write(&config_path, config).expect("write test daemon config with embeddings profile");
+    config_path
+}
+
+#[cfg(unix)]
+fn fake_text_generation_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-text-generation-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake text-generation runtime dir");
+    }
+    fs::write(
+        &script_path,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
+      exit 0
+      ;;
+    *'"type":"infer"'*)
+      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write fake text-generation runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat fake text-generation runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions)
+        .expect("chmod fake text-generation runtime script");
+    (
+        "/bin/sh".to_string(),
+        vec![script_path.to_string_lossy().into_owned()],
+    )
+}
+
+#[cfg(windows)]
+fn fake_text_generation_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-text-generation-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake text-generation runtime dir");
+    }
+    fs::write(
+        &script_path,
+        r#"
+while (($line = [Console]::In.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $requestId = [regex]::Match($line, '"request_id":"([^"]+)"').Groups[1].Value
+  if ($line -like '*"type":"describe"*') {
+    Write-Output '{"type":"describe","request_id":"'"$requestId"'","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}'
+  } elseif ($line -like '*"type":"shutdown"*') {
+    Write-Output '{"type":"shutdown","request_id":"'"$requestId"'"}'
+    exit 0
+  } elseif ($line -like '*"type":"infer"*') {
+    Write-Output '{"type":"infer","request_id":"'"$requestId"'","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"ministral-3:3b"}'
+  }
+}
+"#,
+    )
+    .expect("write fake text-generation runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.to_string_lossy().into_owned(),
+        ],
+    )
+}
+
+#[cfg(unix)]
+fn fake_embeddings_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-embeddings-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake embeddings runtime dir");
+    }
+    fs::write(
+        &script_path,
+        r#"#!/bin/sh
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
+while IFS= read -r line; do
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"embed"'*)
+      printf '{"id":"%s","ok":true,"vectors":[[0.1,0.2,0.3]],"model":"local-code"}\n' "$req_id"
+      ;;
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"local-code"}\n' "$req_id"
+      exit 0
+      ;;
+    *)
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write fake embeddings runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat fake embeddings runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod fake embeddings runtime script");
+    (
+        "/bin/sh".to_string(),
+        vec![script_path.to_string_lossy().into_owned()],
+    )
+}
+
+#[cfg(windows)]
+fn fake_embeddings_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-embeddings-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake embeddings runtime dir");
+    }
+    fs::write(
+        &script_path,
+        r#"
+$ready = @{ event = "ready"; protocol = 1; capabilities = @("embed", "shutdown") }
+$ready | ConvertTo-Json -Compress
+while (($line = [Console]::In.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.cmd) {
+    "embed" {
+      @{ id = $request.id; ok = $true; vectors = @(@(0.1, 0.2, 0.3)); model = "local-code" } | ConvertTo-Json -Compress
+    }
+    "shutdown" {
+      @{ id = $request.id; ok = $true; model = "local-code" } | ConvertTo-Json -Compress
+      exit 0
+    }
+    default {
+      @{ id = $request.id; ok = $false; error = @{ message = "unexpected request" } } | ConvertTo-Json -Compress
+    }
+  }
+}
+"#,
+    )
+    .expect("write fake embeddings runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.to_string_lossy().into_owned(),
+        ],
+    )
 }
 
 fn load_workplane_jobs(
@@ -237,6 +455,343 @@ fn load_workplane_jobs(
         .workplane_store
         .with_connection(|conn| super::load_workplane_jobs_by_status(conn, status))
         .expect("load workplane jobs")
+}
+
+#[test]
+fn summary_refresh_pool_only_claims_summary_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_summary_refresh_for_repo(&target);
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-a"),
+            job_id: "summary-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("code-a"),
+            job_id: "code-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 3,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+    )
+    .expect("claim summary refresh job")
+    .expect("summary refresh job should be claimable");
+
+    assert_eq!(
+        claimed.mailbox_name,
+        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+    );
+}
+
+#[test]
+fn embeddings_pool_only_claims_embedding_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-a"),
+            job_id: "summary-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-embed-a"),
+            job_id: "summary-embed-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 3,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::Embeddings,
+    )
+    .expect("claim embeddings job")
+    .expect("embedding job should be claimable");
+
+    assert_eq!(
+        claimed.mailbox_name,
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+    );
+}
+
+#[test]
+fn clone_rebuild_pool_only_claims_clone_rebuild_jobs() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_summary_refresh_for_repo(&target);
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-a"),
+            job_id: "summary-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::CloneRebuild,
+    )
+    .expect("claim clone rebuild job")
+    .expect("clone rebuild job should be claimable");
+
+    assert_eq!(claimed.mailbox_name, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX);
+}
+
+#[test]
+fn embeddings_pool_does_not_borrow_summary_or_clone_rebuild_work() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_summary_refresh_for_repo(&target);
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-a"),
+            job_id: "summary-a",
+            updated_at_unix: 1,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: None,
+            job_id: "clone-a",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::Embeddings,
+    )
+    .expect("attempt embeddings pool claim");
+
+    assert!(claimed.is_none());
+}
+
+#[test]
+fn projected_workplane_status_reports_per_pool_counts() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_summary_refresh_for_repo(&target);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Completed,
+            artefact_id: Some("summary-complete"),
+            job_id: "summary-complete",
+            updated_at_unix: 1,
+            attempts: 1,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            status: WorkplaneJobStatus::Pending,
+            artefact_id: Some("summary-pending"),
+            job_id: "summary-pending",
+            updated_at_unix: 2,
+            attempts: 0,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            status: WorkplaneJobStatus::Running,
+            artefact_id: Some("code-running"),
+            job_id: "code-running",
+            updated_at_unix: 3,
+            attempts: 1,
+            last_error: None,
+        },
+    );
+    insert_workplane_job(
+        &coordinator,
+        &target,
+        WorkplaneJobFixture {
+            repo_id: &repo_id,
+            mailbox_name: SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+            status: WorkplaneJobStatus::Failed,
+            artefact_id: None,
+            job_id: "clone-failed",
+            updated_at_unix: 4,
+            attempts: 2,
+            last_error: Some("failed"),
+        },
+    );
+
+    let projected = project_workplane_status(&coordinator.workplane_store, &default_state())
+        .expect("project workplane status");
+
+    assert_eq!(projected.completed_recent_jobs, 1);
+    assert_eq!(projected.worker_pools.len(), 3);
+    assert_eq!(
+        projected
+            .worker_pools
+            .iter()
+            .find(|pool| pool.kind == crate::daemon::EnrichmentWorkerPoolKind::SummaryRefresh)
+            .map(|pool| {
+                (
+                    pool.pending_jobs,
+                    pool.running_jobs,
+                    pool.failed_jobs,
+                    pool.completed_recent_jobs,
+                )
+            }),
+        Some((1, 0, 0, 1))
+    );
+    assert_eq!(
+        projected
+            .worker_pools
+            .iter()
+            .find(|pool| pool.kind == crate::daemon::EnrichmentWorkerPoolKind::Embeddings)
+            .map(|pool| {
+                (
+                    pool.pending_jobs,
+                    pool.running_jobs,
+                    pool.failed_jobs,
+                    pool.completed_recent_jobs,
+                )
+            }),
+        Some((0, 1, 0, 0))
+    );
+    assert_eq!(
+        projected
+            .worker_pools
+            .iter()
+            .find(|pool| pool.kind == crate::daemon::EnrichmentWorkerPoolKind::CloneRebuild)
+            .map(|pool| {
+                (
+                    pool.pending_jobs,
+                    pool.running_jobs,
+                    pool.failed_jobs,
+                    pool.completed_recent_jobs,
+                )
+            }),
+        Some((0, 0, 1, 0))
+    );
 }
 
 struct WorkplaneJobFixture<'a> {
@@ -265,7 +820,15 @@ fn insert_workplane_job(
     let payload = fixture
         .artefact_id
         .map(|artefact_id| serde_json::json!({ "artefact_id": artefact_id }))
-        .unwrap_or_else(|| serde_json::json!({}));
+        .unwrap_or_else(|| {
+            serde_json::to_value(
+                crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                    work_item_count: None,
+                    artefact_ids: None,
+                },
+            )
+            .expect("serialize repo backfill test payload")
+        });
     let started_at_unix =
         (fixture.status == WorkplaneJobStatus::Running).then_some(fixture.updated_at_unix);
     let completed_at_unix = matches!(
@@ -757,6 +1320,14 @@ fn compaction_replaces_large_old_pending_embedding_backlog_with_repo_backfill_jo
             &pending_jobs[0].payload
         ),
         "pending job should be converted to a repo backfill payload"
+    );
+    assert_eq!(
+        crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
+            &pending_jobs[0].payload,
+            pending_jobs[0].mailbox_name.as_str(),
+        ),
+        u64::try_from(pending_count).expect("pending count fits u64"),
+        "compacted repo backfill job should retain the exact artefact workload size",
     );
 }
 

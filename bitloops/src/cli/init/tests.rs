@@ -8,8 +8,7 @@ use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
 };
 use crate::cli::inference::{
-    ManagedInferenceBinaryInstallOutcome, OllamaAvailability, with_managed_inference_install_hook,
-    with_ollama_probe_hook, with_summary_generation_configured_hook,
+    OllamaAvailability, with_ollama_probe_hook, with_summary_generation_configured_hook,
 };
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
@@ -21,10 +20,10 @@ use crate::test_support::process_state::{with_env_vars, with_process_state};
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
 use clap::Parser;
+use serde_json::json;
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tempfile::TempDir;
 
 fn setup_git_repo(dir: &TempDir) {
@@ -245,170 +244,152 @@ request_timeout_secs = 5
     .expect("write daemon config");
 }
 
-fn completed_sync_task_json(task_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "taskId": task_id,
-        "repoId": "repo-1",
-        "repoName": "demo",
-        "repoIdentity": "local/demo",
-        "kind": "SYNC",
-        "source": "init",
-        "status": "COMPLETED",
-        "submittedAtUnix": 1,
-        "startedAtUnix": 2,
-        "updatedAtUnix": 3,
-        "completedAtUnix": 4,
-        "queuePosition": serde_json::Value::Null,
-        "tasksAhead": serde_json::Value::Null,
-        "error": serde_json::Value::Null,
-        "syncSpec": {
-            "mode": "auto",
-            "paths": []
-        },
-        "ingestSpec": serde_json::Value::Null,
-        "embeddingsBootstrapSpec": serde_json::Value::Null,
-        "syncProgress": {
-            "phase": "complete",
-            "currentPath": serde_json::Value::Null,
-            "pathsTotal": 1,
-            "pathsCompleted": 1,
-            "pathsRemaining": 0,
-            "pathsUnchanged": 0,
-            "pathsAdded": 0,
-            "pathsChanged": 0,
-            "pathsRemoved": 0,
-            "cacheHits": 0,
-            "cacheMisses": 0,
-            "parseErrors": 0
-        },
-        "ingestProgress": serde_json::Value::Null,
-        "embeddingsBootstrapProgress": serde_json::Value::Null,
-        "syncResult": serde_json::Value::Null,
-        "ingestResult": serde_json::Value::Null,
-        "embeddingsBootstrapResult": serde_json::Value::Null
-    })
+fn test_repo_id(repo_root: &Path) -> String {
+    crate::host::devql::resolve_repo_identity(repo_root)
+        .expect("resolve repo identity")
+        .repo_id
 }
 
-fn completed_ingest_task_json(task_id: &str, backfill: usize) -> serde_json::Value {
-    serde_json::json!({
-        "taskId": task_id,
-        "repoId": "repo-1",
-        "repoName": "demo",
-        "repoIdentity": "local/demo",
-        "kind": "INGEST",
-        "source": "manual_cli",
-        "status": "COMPLETED",
-        "submittedAtUnix": 1,
-        "startedAtUnix": 2,
-        "updatedAtUnix": 3,
-        "completedAtUnix": 4,
-        "queuePosition": serde_json::Value::Null,
-        "tasksAhead": serde_json::Value::Null,
-        "error": serde_json::Value::Null,
-        "syncSpec": serde_json::Value::Null,
-        "ingestSpec": {
-            "backfill": backfill
-        },
-        "embeddingsBootstrapSpec": serde_json::Value::Null,
-        "syncProgress": serde_json::Value::Null,
-        "ingestProgress": {
-            "phase": "complete",
-            "commitsTotal": backfill,
-            "commitsProcessed": backfill,
-            "checkpointCompanionsProcessed": 0,
-            "currentCheckpointId": serde_json::Value::Null,
-            "currentCommitSha": serde_json::Value::Null,
-            "eventsInserted": 0,
-            "artefactsUpserted": 0
-        },
-        "syncResult": serde_json::Value::Null,
-        "ingestResult": serde_json::Value::Null,
-        "embeddingsBootstrapProgress": serde_json::Value::Null,
-        "embeddingsBootstrapResult": serde_json::Value::Null
-    })
+#[derive(Debug, Clone)]
+struct RuntimeSessionSnapshotFixture {
+    status: &'static str,
+    waiting_reason: Option<&'static str>,
+    follow_up_sync_required: bool,
+    run_sync: bool,
+    run_ingest: bool,
+    embeddings_selected: bool,
+    summaries_selected: bool,
+    terminal_error: Option<&'static str>,
+    top_lane_status: &'static str,
+    top_lane_waiting_reason: Option<&'static str>,
+    top_lane_detail: Option<&'static str>,
+    embeddings_lane_status: &'static str,
+    embeddings_lane_waiting_reason: Option<&'static str>,
+    summaries_lane_status: &'static str,
+    summaries_lane_waiting_reason: Option<&'static str>,
 }
 
-fn completed_bootstrap_task_json(task_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "taskId": task_id,
-        "repoId": "repo-1",
-        "repoName": "demo",
-        "repoIdentity": "local/demo",
-        "kind": "EMBEDDINGS_BOOTSTRAP",
-        "source": "init",
-        "status": "COMPLETED",
-        "submittedAtUnix": 1,
-        "startedAtUnix": 2,
-        "updatedAtUnix": 3,
-        "completedAtUnix": 4,
-        "queuePosition": serde_json::Value::Null,
-        "tasksAhead": serde_json::Value::Null,
-        "error": serde_json::Value::Null,
-        "syncSpec": serde_json::Value::Null,
-        "ingestSpec": serde_json::Value::Null,
-        "embeddingsBootstrapSpec": {
-            "configPath": "/tmp/config.toml",
-            "profileName": "local_code"
-        },
-        "syncProgress": serde_json::Value::Null,
-        "ingestProgress": serde_json::Value::Null,
-        "embeddingsBootstrapProgress": {
-            "phase": "complete",
-            "assetName": serde_json::Value::Null,
-            "bytesDownloaded": 0,
-            "bytesTotal": serde_json::Value::Null,
-            "version": serde_json::Value::Null,
-            "message": "Bootstrap completed"
-        },
-        "syncResult": serde_json::Value::Null,
-        "ingestResult": serde_json::Value::Null,
-        "embeddingsBootstrapResult": {
-            "version": serde_json::Value::Null,
-            "binaryPath": serde_json::Value::Null,
-            "cacheDir": serde_json::Value::Null,
-            "runtimeName": serde_json::Value::Null,
-            "modelName": serde_json::Value::Null,
-            "freshlyInstalled": false,
-            "message": "Bootstrap completed"
+impl Default for RuntimeSessionSnapshotFixture {
+    fn default() -> Self {
+        Self {
+            status: "COMPLETED",
+            waiting_reason: None,
+            follow_up_sync_required: false,
+            run_sync: false,
+            run_ingest: false,
+            embeddings_selected: false,
+            summaries_selected: false,
+            terminal_error: None,
+            top_lane_status: "SKIPPED",
+            top_lane_waiting_reason: None,
+            top_lane_detail: None,
+            embeddings_lane_status: "SKIPPED",
+            embeddings_lane_waiting_reason: None,
+            summaries_lane_status: "SKIPPED",
+            summaries_lane_waiting_reason: None,
+        }
+    }
+}
+
+fn runtime_start_init_result_json(session_id: &str) -> serde_json::Value {
+    json!({
+        "startInit": {
+            "initSessionId": session_id
         }
     })
 }
 
-fn running_bootstrap_task_json(task_id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "taskId": task_id,
-        "repoId": "repo-1",
-        "repoName": "demo",
-        "repoIdentity": "local/demo",
-        "kind": "EMBEDDINGS_BOOTSTRAP",
-        "source": "init",
-        "status": "RUNNING",
-        "submittedAtUnix": 1,
-        "startedAtUnix": 2,
-        "updatedAtUnix": 3,
-        "completedAtUnix": serde_json::Value::Null,
-        "queuePosition": serde_json::Value::Null,
-        "tasksAhead": serde_json::Value::Null,
-        "error": serde_json::Value::Null,
-        "syncSpec": serde_json::Value::Null,
-        "ingestSpec": serde_json::Value::Null,
-        "embeddingsBootstrapSpec": {
-            "configPath": "/tmp/config.toml",
-            "profileName": "local_code"
-        },
-        "syncProgress": serde_json::Value::Null,
-        "ingestProgress": serde_json::Value::Null,
-        "embeddingsBootstrapProgress": {
-            "phase": "warming_profile",
-            "assetName": serde_json::Value::Null,
-            "bytesDownloaded": 0,
-            "bytesTotal": serde_json::Value::Null,
-            "version": serde_json::Value::Null,
-            "message": "Warming profile `local_code`"
-        },
-        "syncResult": serde_json::Value::Null,
-        "ingestResult": serde_json::Value::Null,
-        "embeddingsBootstrapResult": serde_json::Value::Null
+fn runtime_snapshot_json(
+    repo_id: &str,
+    session_id: &str,
+    fixture: RuntimeSessionSnapshotFixture,
+) -> serde_json::Value {
+    json!({
+        "runtimeSnapshot": {
+            "repoId": repo_id,
+            "taskQueue": {
+                "persisted": true,
+                "queuedTasks": 0,
+                "runningTasks": 0,
+                "failedTasks": 0,
+                "completedRecentTasks": 0,
+                "byKind": [],
+                "paused": false,
+                "pausedReason": serde_json::Value::Null,
+                "lastAction": "idle",
+                "lastUpdatedUnix": 1,
+                "currentRepoTasks": []
+            },
+            "currentStateConsumer": {
+                "persisted": true,
+                "pendingRuns": 0,
+                "runningRuns": 0,
+                "failedRuns": 0,
+                "completedRecentRuns": 0,
+                "lastAction": "idle",
+                "lastUpdatedUnix": 1,
+                "currentRepoRun": serde_json::Value::Null
+            },
+            "workplane": {
+                "pendingJobs": 0,
+                "runningJobs": 0,
+                "failedJobs": 0,
+                "completedRecentJobs": 0,
+                "mailboxes": []
+            },
+            "blockedMailboxes": [],
+            "embeddingsReadinessGate": serde_json::Value::Null,
+            "summariesBootstrap": serde_json::Value::Null,
+            "currentInitSession": {
+                "initSessionId": session_id,
+                "status": fixture.status,
+                "waitingReason": fixture.waiting_reason,
+                "followUpSyncRequired": fixture.follow_up_sync_required,
+                "runSync": fixture.run_sync,
+                "runIngest": fixture.run_ingest,
+                "embeddingsSelected": fixture.embeddings_selected,
+                "summariesSelected": fixture.summaries_selected,
+                "initialSyncTaskId": serde_json::Value::Null,
+                "ingestTaskId": serde_json::Value::Null,
+                "followUpSyncTaskId": serde_json::Value::Null,
+                "embeddingsBootstrapTaskId": serde_json::Value::Null,
+                "summaryBootstrapRunId": serde_json::Value::Null,
+                "terminalError": fixture.terminal_error,
+                "topPipelineLane": {
+                    "status": fixture.top_lane_status,
+                    "waitingReason": fixture.top_lane_waiting_reason,
+                    "detail": fixture.top_lane_detail,
+                    "taskId": serde_json::Value::Null,
+                    "runId": serde_json::Value::Null,
+                    "pendingCount": 0,
+                    "runningCount": 0,
+                    "failedCount": 0,
+                    "completedCount": if fixture.top_lane_status.eq_ignore_ascii_case("completed") { 1 } else { 0 }
+                },
+                "embeddingsLane": {
+                    "status": fixture.embeddings_lane_status,
+                    "waitingReason": fixture.embeddings_lane_waiting_reason,
+                    "detail": serde_json::Value::Null,
+                    "taskId": serde_json::Value::Null,
+                    "runId": serde_json::Value::Null,
+                    "pendingCount": 0,
+                    "runningCount": 0,
+                    "failedCount": 0,
+                    "completedCount": if fixture.embeddings_lane_status.eq_ignore_ascii_case("completed") { 1 } else { 0 }
+                },
+                "summariesLane": {
+                    "status": fixture.summaries_lane_status,
+                    "waitingReason": fixture.summaries_lane_waiting_reason,
+                    "detail": serde_json::Value::Null,
+                    "taskId": serde_json::Value::Null,
+                    "runId": serde_json::Value::Null,
+                    "pendingCount": 0,
+                    "runningCount": 0,
+                    "failedCount": 0,
+                    "completedCount": if fixture.summaries_lane_status.eq_ignore_ascii_case("completed") { 1 } else { 0 }
+                }
+            }
+        }
     })
 }
 
@@ -1602,9 +1583,12 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
 }
 
 #[test]
-fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is_accepted() {
+fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_accepted() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-summary-bootstrap";
+    let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
     setup_git_repo(&repo);
 
     with_summary_generation_configured_hook(
@@ -1640,136 +1624,147 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
                                         }))
                                     },
                                     || {
-                                        let install_root = repo.path().to_path_buf();
-                                        with_managed_inference_install_hook(
-                                            move |_repo_root| {
-                                                Ok(ManagedInferenceBinaryInstallOutcome {
-                                                    version: "v1.2.3".to_string(),
-                                                    binary_path: install_root
-                                                        .join("bitloops-inference"),
-                                                    freshly_installed: true,
+                                        with_ollama_probe_hook(
+                                            || {
+                                                Ok(OllamaAvailability::Running {
+                                                    models: vec!["ministral-3:3b".to_string()],
                                                 })
                                             },
                                             || {
-                                                with_ollama_probe_hook(
+                                                with_ingest_daemon_bootstrap_hook(
+                                                    |_repo_root| Ok(()),
                                                     || {
-                                                        Ok(OllamaAvailability::Running {
-                                                            models: vec![
-                                                                "ministral-3:3b".to_string(),
-                                                            ],
-                                                        })
-                                                    },
-                                                    || {
-                                                        with_ingest_daemon_bootstrap_hook(
-                                                            |_repo_root| Ok(()),
-                                                            || {
-                                                                with_graphql_executor_hook(
-                                                                    |_repo_root, query, variables| {
-                                                                        if query.contains("task(")
-                                                                            || query.contains("query Task")
-                                                                        {
-                                                                            let task_id = variables["id"]
-                                                                                .as_str()
-                                                                                .expect("task id");
-                                                                            if task_id.starts_with(
-                                                                                "embeddings_bootstrap-task-",
-                                                                            ) {
-                                                                                return Ok(
-                                                                                    serde_json::json!({
-                                                                                        "task": completed_bootstrap_task_json(task_id)
-                                                                                    }),
-                                                                                );
-                                                                            }
-                                                                        }
+                                                        with_graphql_executor_hook(
+                                                            {
+                                                                let repo_id = repo_id.clone();
+                                                                let saw_start_init =
+                                                                    std::rc::Rc::clone(
+                                                                        &saw_start_init,
+                                                                    );
+                                                                move |_repo_root, query, variables| {
+                                                                    if query.contains("startInit(") {
+                                                                        *saw_start_init.borrow_mut() = true;
+                                                                        assert_eq!(variables["repoId"], repo_id);
+                                                                        assert_eq!(
+                                                                            variables["input"]["runSync"],
+                                                                            json!(false)
+                                                                        );
+                                                                        assert_eq!(
+                                                                            variables["input"]["runIngest"],
+                                                                            json!(false)
+                                                                        );
+                                                                        assert_eq!(
+                                                                            variables["input"]["embeddingsBootstrap"]["profileName"],
+                                                                            json!("local_code")
+                                                                        );
+                                                                        assert_eq!(
+                                                                            variables["input"]["summariesBootstrap"]["action"],
+                                                                            json!("CONFIGURE_LOCAL")
+                                                                        );
+                                                                        assert_eq!(
+                                                                            variables["input"]["summariesBootstrap"]["modelName"],
+                                                                            json!("ministral-3:3b")
+                                                                        );
+                                                                        return Ok(runtime_start_init_result_json(session_id));
+                                                                    }
 
-                                                                        panic!(
-                                                                            "unexpected repo-scoped query: {query}"
-                                                                        );
-                                                                    },
-                                                                    || {
-                                                                        let mut out = Vec::new();
-                                                                        let mut input =
-                                                                            Cursor::new("2\n");
-                                                                        let select = |_items: &[String]| {
-                                                                            Ok(vec![
-                                                                                "claude-code"
-                                                                                    .to_string(),
-                                                                            ])
-                                                                        };
-                                                                        let runtime =
-                                                                            test_runtime();
-                                                                        runtime
-                                                                            .block_on(run_with_io_async_for_project_root(
-                                                                                InitArgs {
-                                                                                    install_default_daemon: true,
-                                                                                    force: false,
-                                                                                    agent: Vec::new(),
-                                                                                    telemetry: Some(false),
-                                                                                    no_telemetry: false,
-                                                                                    skip_baseline: false,
-                                                                                    sync: Some(false),
-                                                                                    ingest: Some(false),
-                                                                                    backfill: None,
-                                                                                    exclude: Vec::new(),
-                                                                                    exclude_from: Vec::new(),
-                                                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
-                                                                                embeddings_gateway_url: None,
-                                                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
-                                                                                },
-                                                                                repo.path(),
-                                                                                &mut out,
-                                                                                &mut input,
-                                                                                Some(&select),
-                                                                            ))
-                                                                            .expect("run init");
+                                                                    if query.contains("runtimeSnapshot(") {
+                                                                        return Ok(runtime_snapshot_json(
+                                                                            repo_id.as_str(),
+                                                                            session_id,
+                                                                            RuntimeSessionSnapshotFixture {
+                                                                                status: "COMPLETED",
+                                                                                embeddings_selected: true,
+                                                                                summaries_selected: true,
+                                                                                embeddings_lane_status: "COMPLETED",
+                                                                                summaries_lane_status: "COMPLETED",
+                                                                                ..RuntimeSessionSnapshotFixture::default()
+                                                                            },
+                                                                        ));
+                                                                    }
 
-                                                                        let rendered =
-                                                                            String::from_utf8(out)
-                                                                                .expect("utf8 output");
-                                                                        assert!(rendered.contains(
-                                                                            "How would you like Bitloops to configure semantic summaries?"
-                                                                        ));
-                                                                        assert!(rendered.contains(
-                                                                            "1. Bitloops cloud (recommended)"
-                                                                        ));
-                                                                        assert!(rendered.contains(
-                                                                            "2. Local Ollama"
-                                                                        ));
-                                                                        assert!(rendered.contains(
-                                                                            "3. Skip for now"
-                                                                        ));
-
-                                                                        let daemon_config_path =
-                                                                            ensure_daemon_config_exists()
-                                                                                .expect("daemon config path");
-                                                                        let daemon_config = std::fs::read_to_string(
-                                                                            daemon_config_path,
-                                                                        )
-                                                                        .expect("read daemon config");
-                                                                        assert!(
-                                                                            daemon_config.contains(
-                                                                                "summary_generation = \"summary_local\""
-                                                                            ),
-                                                                            "expected summary generation binding after init:\n{daemon_config}"
-                                                                        );
-                                                                        assert!(
-                                                                            daemon_config.contains(
-                                                                                "[inference.profiles.summary_local]"
-                                                                            ),
-                                                                            "expected summary profile after init:\n{daemon_config}"
-                                                                        );
-                                                                        assert!(
-                                                                            daemon_config.contains(
-                                                                                "model = \"ministral-3:3b\""
-                                                                            ),
-                                                                            "expected Ollama model after init:\n{daemon_config}"
-                                                                        );
-                                                                    },
-                                                                )
+                                                                    panic!("unexpected repo-scoped query: {query}");
+                                                                }
                                                             },
-                                                        );
+                                                            || {
+                                                                let mut out = Vec::new();
+                                                                let mut input = Cursor::new("2\n");
+                                                                let select =
+                                                                    |_items: &[String]| {
+                                                                        Ok(vec![
+                                                                            "claude-code"
+                                                                                .to_string(),
+                                                                        ])
+                                                                    };
+                                                                let runtime = test_runtime();
+                                                                runtime
+                                                                    .block_on(run_with_io_async_for_project_root(
+                                                                        InitArgs {
+                                                                            install_default_daemon: true,
+                                                                            force: false,
+                                                                            agent: Vec::new(),
+                                                                            telemetry: Some(false),
+                                                                            no_telemetry: false,
+                                                                            skip_baseline: false,
+                                                                            sync: Some(false),
+                                                                            ingest: Some(false),
+                                                                            backfill: None,
+                                                                            exclude: Vec::new(),
+                                                                            exclude_from: Vec::new(),
+                                                                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                            embeddings_gateway_url: None,
+                                                                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                                                        },
+                                                                        repo.path(),
+                                                                        &mut out,
+                                                                        &mut input,
+                                                                        Some(&select),
+                                                                    ))
+                                                                    .expect("run init");
+
+                                                                let rendered =
+                                                                    String::from_utf8(out)
+                                                                        .expect("utf8 output");
+                                                                assert!(rendered.contains(
+                                                                    "How would you like Bitloops to configure semantic summaries?"
+                                                                ));
+                                                                assert!(rendered.contains(
+                                                                    "1. Bitloops cloud (recommended)"
+                                                                ));
+                                                                assert!(
+                                                                    rendered.contains(
+                                                                        "2. Local Ollama"
+                                                                    )
+                                                                );
+                                                                assert!(
+                                                                    rendered.contains(
+                                                                        "3. Skip for now"
+                                                                    )
+                                                                );
+                                                                assert!(
+                                                                    rendered.contains("Summaries")
+                                                                );
+
+                                                                let daemon_config_path =
+                                                                    ensure_daemon_config_exists()
+                                                                        .expect(
+                                                                            "daemon config path",
+                                                                        );
+                                                                let daemon_config =
+                                                                    std::fs::read_to_string(
+                                                                        daemon_config_path,
+                                                                    )
+                                                                    .expect("read daemon config");
+                                                                assert!(
+                                                                    !daemon_config.contains(
+                                                                        "summary_generation = \"summary_local\""
+                                                                    ),
+                                                                    "summary configuration should now be applied by the daemon bootstrap path:\n{daemon_config}"
+                                                                );
+                                                            },
+                                                        )
                                                     },
-                                                )
+                                                );
                                             },
                                         )
                                     },
@@ -1781,12 +1776,20 @@ fn run_init_with_install_default_daemon_writes_summary_generation_when_prompt_is
             })
         },
     );
+
+    assert!(
+        *saw_start_init.borrow(),
+        "init should send a summary bootstrap request to the runtime API"
+    );
 }
 
 #[test]
 fn run_init_with_install_default_daemon_auto_installs_embeddings() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-auto-embeddings";
+    let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
     setup_git_repo(&repo);
 
     with_temp_app_dirs(&app_dirs, false, true, || {
@@ -1810,81 +1813,122 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                         }))
                     },
                     || {
-                        let mut out = Vec::new();
-                        let mut input = Cursor::new("");
-                        let runtime = test_runtime();
-                        runtime
-                            .block_on(run_with_io_async_for_project_root(
-                                InitArgs {
-                                    install_default_daemon: true,
-                                    force: false,
-                                    agent: Vec::new(),
-                                    telemetry: Some(false),
-                                    no_telemetry: false,
-                                    skip_baseline: false,
-                                    sync: Some(false),
-                                    ingest: Some(false),
-                                    backfill: None,
-                                    exclude: Vec::new(),
-                                    exclude_from: Vec::new(),
-                                    embeddings_runtime:
-                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
-                                    embeddings_gateway_url: None,
-                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
-                                        .to_string(),
-                                },
-                                repo.path(),
-                                &mut out,
-                                &mut input,
-                                None,
-                            ))
-                            .expect("run init");
+                        with_graphql_executor_hook(
+                            {
+                                let repo_id = repo_id.clone();
+                                let saw_start_init = std::rc::Rc::clone(&saw_start_init);
+                                move |_repo_root, query, variables| {
+                                    if query.contains("startInit(") {
+                                        *saw_start_init.borrow_mut() = true;
+                                        assert_eq!(variables["repoId"], repo_id);
+                                        assert_eq!(variables["input"]["runSync"], json!(false));
+                                        assert_eq!(variables["input"]["runIngest"], json!(false));
+                                        assert_eq!(
+                                            variables["input"]["embeddingsBootstrap"]["profileName"],
+                                            json!("local_code")
+                                        );
+                                        assert_eq!(
+                                            variables["input"]["summariesBootstrap"],
+                                            serde_json::Value::Null
+                                        );
+                                        return Ok(runtime_start_init_result_json(session_id));
+                                    }
 
-                        let rendered = String::from_utf8(out).expect("utf8 output");
-                        assert!(
-                            !rendered.contains("Queueing embeddings bootstrap in the daemon...")
+                                    if query.contains("runtimeSnapshot(") {
+                                        return Ok(runtime_snapshot_json(
+                                            repo_id.as_str(),
+                                            session_id,
+                                            RuntimeSessionSnapshotFixture {
+                                                embeddings_selected: true,
+                                                embeddings_lane_status: "COMPLETED",
+                                                status: "COMPLETED",
+                                                ..RuntimeSessionSnapshotFixture::default()
+                                            },
+                                        ));
+                                    }
+
+                                    panic!("unexpected repo-scoped query: {query}");
+                                }
+                            },
+                            || {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io_async_for_project_root(
+                                        InitArgs {
+                                            install_default_daemon: true,
+                                            force: false,
+                                            agent: Vec::new(),
+                                            telemetry: Some(false),
+                                            no_telemetry: false,
+                                            skip_baseline: false,
+                                            sync: Some(false),
+                                            ingest: Some(false),
+                                            backfill: None,
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
+                                            embeddings_runtime:
+                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                        },
+                                        repo.path(),
+                                        &mut out,
+                                        &mut input,
+                                        None,
+                                    ))
+                                    .expect("run init");
+
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(
+                                    !rendered
+                                        .contains("Queueing embeddings bootstrap in the daemon...")
+                                );
+                                assert!(!rendered.contains("Embeddings bootstrap task:"));
+                                assert!(!rendered.contains("Embeddings bootstrap phase:"));
+                                assert!(
+                                    rendered.contains("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
+                                );
+                                assert!(rendered.contains("Embeddings"));
+                                let config = std::fs::read_to_string(
+                                    repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+                                )
+                                .unwrap_or_else(|_| String::new());
+                                assert!(
+                                    config.is_empty(),
+                                    "init with default daemon should use the daemon config, not repo-local config:\n{config}"
+                                );
+                                let daemon_config = ensure_daemon_config_exists()
+                                    .expect("resolve daemon config after init");
+                                let daemon_config = std::fs::read_to_string(daemon_config)
+                                    .expect("read daemon config");
+                                assert!(
+                                    !daemon_config.contains("code_embeddings = \"local_code\""),
+                                    "embeddings config should now be applied asynchronously by the daemon task:\n{daemon_config}"
+                                );
+                            },
                         );
-                        assert!(!rendered.contains("Embeddings bootstrap task:"));
-                        assert!(!rendered.contains("Embeddings bootstrap phase:"));
-                        assert!(
-                            rendered.contains("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
-                        );
-                        let config = std::fs::read_to_string(
-                            repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
-                        )
-                        .unwrap_or_else(|_| String::new());
-                        assert!(
-                            config.is_empty(),
-                            "init with default daemon should use the daemon config, not repo-local config:\n{config}"
-                        );
-                        let daemon_config = ensure_daemon_config_exists()
-                            .expect("resolve daemon config after init");
-                        let daemon_config =
-                            std::fs::read_to_string(daemon_config).expect("read daemon config");
-                        assert!(
-                            !daemon_config.contains("code_embeddings = \"local_code\""),
-                            "embeddings config should now be applied asynchronously by the daemon task:\n{daemon_config}"
-                        );
-                        let queued = crate::daemon::devql_tasks(
-                            None,
-                            Some(crate::daemon::DevqlTaskKind::EmbeddingsBootstrap),
-                            Some(crate::daemon::DevqlTaskStatus::Queued),
-                            None,
-                        )
-                        .expect("load queued bootstrap tasks");
-                        assert_eq!(queued.len(), 1);
                     },
                 );
             },
         );
     });
+
+    assert!(
+        *saw_start_init.borrow(),
+        "init should start a runtime session for embeddings bootstrap"
+    );
 }
 
 #[test]
-fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest() {
-    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<&'static str>::new()));
+fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_and_embeddings() {
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-sync-ingest-embeddings";
     setup_git_repo(&repo);
 
     with_temp_app_dirs(&app_dirs, false, true, || {
@@ -1914,136 +1958,47 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                 with_graphql_executor_hook(
                                     {
                                         let events = std::rc::Rc::clone(&events);
+                                        let repo_id = repo_id.clone();
                                         move |_repo_root, query, variables| {
-                                            if query.contains("enqueueTask")
-                                                && variables["input"]["kind"] == "SYNC"
-                                            {
-                                                events.borrow_mut().push("sync");
+                                            if query.contains("startInit(") {
+                                                events.borrow_mut().push("start_init".to_string());
+                                                assert_eq!(variables["repoId"], repo_id);
                                                 assert_eq!(
-                                                    variables,
-                                                    &serde_json::json!({
-                                                        "input": {
-                                                            "kind": "SYNC",
-                                                            "sync": {
-                                                                "full": false,
-                                                                "paths": serde_json::Value::Null,
-                                                                "repair": false,
-                                                                "validate": false,
-                                                                "source": "init"
-                                                            }
-                                                        }
-                                                    })
+                                                    variables["input"]["runSync"],
+                                                    json!(true)
                                                 );
-                                                return Ok(serde_json::json!({
-                                                    "enqueueTask": {
-                                                        "merged": false,
-                                                        "task": {
-                                                            "taskId": "sync-task-1",
-                                                            "repoId": "repo-1",
-                                                            "repoName": "demo",
-                                                            "repoIdentity": "local/demo",
-                                                            "kind": "SYNC",
-                                                            "source": "init",
-                                                            "status": "QUEUED",
-                                                            "submittedAtUnix": 1,
-                                                            "startedAtUnix": null,
-                                                            "updatedAtUnix": 1,
-                                                            "completedAtUnix": null,
-                                                            "queuePosition": 1,
-                                                            "tasksAhead": 0,
-                                                            "error": null,
-                                                            "syncSpec": {
-                                                                "mode": "auto",
-                                                                "paths": []
-                                                            },
-                                                            "ingestSpec": null,
-                                                            "syncProgress": {
-                                                                "phase": "queued",
-                                                                "currentPath": null,
-                                                                "pathsTotal": 0,
-                                                                "pathsCompleted": 0,
-                                                                "pathsRemaining": 0,
-                                                                "pathsUnchanged": 0,
-                                                                "pathsAdded": 0,
-                                                                "pathsChanged": 0,
-                                                                "pathsRemoved": 0,
-                                                                "cacheHits": 0,
-                                                                "cacheMisses": 0,
-                                                                "parseErrors": 0
-                                                            },
-                                                            "ingestProgress": null,
-                                                            "syncResult": null,
-                                                            "ingestResult": null
-                                                        }
-                                                    }
-                                                }));
+                                                assert_eq!(
+                                                    variables["input"]["runIngest"],
+                                                    json!(true)
+                                                );
+                                                assert_eq!(
+                                                    variables["input"]["ingestBackfill"],
+                                                    json!(50)
+                                                );
+                                                assert_eq!(
+                                                    variables["input"]["embeddingsBootstrap"]["profileName"],
+                                                    json!("local_code")
+                                                );
+                                                return Ok(runtime_start_init_result_json(
+                                                    session_id,
+                                                ));
                                             }
 
-                                            if query.contains("task(")
-                                                || query.contains("query Task")
-                                            {
-                                                let task_id =
-                                                    variables["id"].as_str().expect("task id");
-                                                let task = if task_id == "sync-task-1" {
-                                                    completed_sync_task_json(task_id)
-                                                } else if task_id == "ingest-task-1" {
-                                                    completed_ingest_task_json(task_id, 50)
-                                                } else if task_id
-                                                    .starts_with("embeddings_bootstrap-task-")
-                                                {
-                                                    completed_bootstrap_task_json(task_id)
-                                                } else {
-                                                    panic!("unexpected task id: {task_id}");
-                                                };
-                                                return Ok(serde_json::json!({
-                                                    "task": task
-                                                }));
-                                            }
-
-                                            if query.contains("enqueueTask")
-                                                && variables["input"]["kind"] == "INGEST"
-                                            {
-                                                events.borrow_mut().push("ingest");
-                                                assert_eq!(
-                                                    variables,
-                                                    &serde_json::json!({
-                                                        "input": {
-                                                            "kind": "INGEST",
-                                                            "ingest": {
-                                                                "backfill": 50
-                                                            }
-                                                        }
-                                                    })
-                                                );
-                                                return Ok(serde_json::json!({
-                                                    "enqueueTask": {
-                                                        "merged": false,
-                                                        "task": {
-                                                            "taskId": "ingest-task-1",
-                                                            "repoId": "repo-1",
-                                                            "repoName": "demo",
-                                                            "repoIdentity": "local/demo",
-                                                            "kind": "INGEST",
-                                                            "source": "manual_cli",
-                                                            "status": "QUEUED",
-                                                            "submittedAtUnix": 1,
-                                                            "startedAtUnix": null,
-                                                            "updatedAtUnix": 1,
-                                                            "completedAtUnix": null,
-                                                            "queuePosition": 1,
-                                                            "tasksAhead": 0,
-                                                            "error": null,
-                                                            "syncSpec": null,
-                                                            "ingestSpec": {
-                                                                "backfill": 50
-                                                            },
-                                                            "syncProgress": null,
-                                                            "ingestProgress": null,
-                                                            "syncResult": null,
-                                                            "ingestResult": null
-                                                        }
-                                                    }
-                                                }));
+                                            if query.contains("runtimeSnapshot(") {
+                                                events.borrow_mut().push("snapshot".to_string());
+                                                return Ok(runtime_snapshot_json(
+                                                    repo_id.as_str(),
+                                                    session_id,
+                                                    RuntimeSessionSnapshotFixture {
+                                                        status: "COMPLETED",
+                                                        run_sync: true,
+                                                        run_ingest: true,
+                                                        embeddings_selected: true,
+                                                        top_lane_status: "COMPLETED",
+                                                        embeddings_lane_status: "COMPLETED",
+                                                        ..RuntimeSessionSnapshotFixture::default()
+                                                    },
+                                                ));
                                             }
 
                                             panic!("unexpected repo-scoped query: {query}");
@@ -2079,25 +2034,12 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                             .expect("run init");
 
                                         let rendered = String::from_utf8(out).expect("utf8 output");
-                                        let handoff_index = rendered
-                                            .find("The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background.")
-                                            .expect("handoff output");
-                                        let checklist_index = rendered
-                                            .find("Bitloops is currently updating its local database with the following:")
-                                            .expect("checklist output");
-                                        let sync_description_index = rendered
-                                            .find(
-                                                "Analysing your current branch to know what's what",
-                                            )
-                                            .expect("sync description output");
-                                        let embeddings_description_index = rendered
-                                            .find("Creating code embeddings for fast search using our local embeddings provider")
-                                            .expect("embeddings description output");
-                                        assert!(handoff_index < checklist_index);
-                                        assert!(checklist_index < sync_description_index);
-                                        assert!(
-                                            sync_description_index < embeddings_description_index
-                                        );
+                                        assert!(rendered.contains(
+                                            "The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background."
+                                        ));
+                                        assert!(rendered.contains(
+                                            "Bitloops is currently updating its local database with the following:"
+                                        ));
                                         assert!(!rendered.contains(
                                             "Queueing embeddings bootstrap in the daemon..."
                                         ));
@@ -2106,15 +2048,7 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
                                         assert!(
                                             !rendered.contains("Starting initial DevQL sync...")
                                         );
-                                        assert_eq!(&*events.borrow(), &["sync", "ingest"]);
-                                        let queued = crate::daemon::devql_tasks(
-                                            None,
-                                            Some(crate::daemon::DevqlTaskKind::EmbeddingsBootstrap),
-                                            Some(crate::daemon::DevqlTaskStatus::Queued),
-                                            None,
-                                        )
-                                        .expect("load queued bootstrap tasks");
-                                        assert_eq!(queued.len(), 1);
+                                        assert!(rendered.contains("Embeddings"));
                                     },
                                 )
                             },
@@ -2124,14 +2058,20 @@ fn run_init_with_install_default_daemon_queues_embeddings_before_sync_and_ingest
             },
         );
     });
+
+    assert_eq!(
+        &*events.borrow(),
+        &["start_init".to_string(), "snapshot".to_string()]
+    );
 }
 
 #[test]
-fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_readiness() {
-    let sync_events = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-    let bootstrap_query_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
+    let snapshot_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-follow-up-sync";
     setup_git_repo(&repo);
 
     with_temp_app_dirs(&app_dirs, false, true, || {
@@ -2160,91 +2100,63 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
                             || {
                                 with_graphql_executor_hook(
                                     {
-                                        let sync_events = std::rc::Rc::clone(&sync_events);
-                                        let bootstrap_query_count =
-                                            std::rc::Rc::clone(&bootstrap_query_count);
+                                        let snapshot_count = std::rc::Rc::clone(&snapshot_count);
+                                        let repo_id = repo_id.clone();
                                         move |_repo_root, query, variables| {
-                                            if query.contains("enqueueTask")
-                                                && variables["input"]["kind"] == "SYNC"
-                                            {
-                                                let mut sync_events = sync_events.borrow_mut();
-                                                let task_number = sync_events.len() + 1;
-                                                sync_events.push(
-                                                    variables["input"]["sync"]["source"]
-                                                        .as_str()
-                                                        .expect("sync source")
-                                                        .to_string(),
+                                            if query.contains("startInit(") {
+                                                assert_eq!(variables["repoId"], repo_id);
+                                                assert_eq!(
+                                                    variables["input"]["runSync"],
+                                                    json!(true)
                                                 );
-                                                return Ok(serde_json::json!({
-                                                    "enqueueTask": {
-                                                        "merged": false,
-                                                        "task": {
-                                                            "taskId": format!("sync-task-{task_number}"),
-                                                            "repoId": "repo-1",
-                                                            "repoName": "demo",
-                                                            "repoIdentity": "local/demo",
-                                                            "kind": "SYNC",
-                                                            "source": variables["input"]["sync"]["source"],
-                                                            "status": "QUEUED",
-                                                            "submittedAtUnix": 1,
-                                                            "startedAtUnix": serde_json::Value::Null,
-                                                            "updatedAtUnix": 1,
-                                                            "completedAtUnix": serde_json::Value::Null,
-                                                            "queuePosition": 1,
-                                                            "tasksAhead": 0,
-                                                            "error": serde_json::Value::Null,
-                                                            "syncSpec": {
-                                                                "mode": "auto",
-                                                                "paths": []
-                                                            },
-                                                            "ingestSpec": serde_json::Value::Null,
-                                                            "embeddingsBootstrapSpec": serde_json::Value::Null,
-                                                            "syncProgress": {
-                                                                "phase": "queued",
-                                                                "currentPath": serde_json::Value::Null,
-                                                                "pathsTotal": 0,
-                                                                "pathsCompleted": 0,
-                                                                "pathsRemaining": 0,
-                                                                "pathsUnchanged": 0,
-                                                                "pathsAdded": 0,
-                                                                "pathsChanged": 0,
-                                                                "pathsRemoved": 0,
-                                                                "cacheHits": 0,
-                                                                "cacheMisses": 0,
-                                                                "parseErrors": 0
-                                                            },
-                                                            "ingestProgress": serde_json::Value::Null,
-                                                            "embeddingsBootstrapProgress": serde_json::Value::Null,
-                                                            "syncResult": serde_json::Value::Null,
-                                                            "ingestResult": serde_json::Value::Null,
-                                                            "embeddingsBootstrapResult": serde_json::Value::Null
-                                                        }
-                                                    }
-                                                }));
+                                                assert_eq!(
+                                                    variables["input"]["runIngest"],
+                                                    json!(false)
+                                                );
+                                                assert_eq!(
+                                                    variables["input"]["embeddingsBootstrap"]["profileName"],
+                                                    json!("local_code")
+                                                );
+                                                return Ok(runtime_start_init_result_json(
+                                                    session_id,
+                                                ));
                                             }
 
-                                            if query.contains("task(")
-                                                || query.contains("query Task")
-                                            {
-                                                let task_id =
-                                                    variables["id"].as_str().expect("task id");
-                                                let task = if task_id.starts_with("sync-task-") {
-                                                    completed_sync_task_json(task_id)
-                                                } else if task_id
-                                                    .starts_with("embeddings_bootstrap-task-")
-                                                {
-                                                    let mut count =
-                                                        bootstrap_query_count.borrow_mut();
-                                                    *count += 1;
-                                                    if *count == 1 {
-                                                        running_bootstrap_task_json(task_id)
-                                                    } else {
-                                                        completed_bootstrap_task_json(task_id)
+                                            if query.contains("runtimeSnapshot(") {
+                                                let mut count = snapshot_count.borrow_mut();
+                                                *count += 1;
+                                                let fixture = if *count == 1 {
+                                                    RuntimeSessionSnapshotFixture {
+                                                        status: "RUNNING",
+                                                        waiting_reason: Some(
+                                                            "waiting_for_follow_up_sync",
+                                                        ),
+                                                        follow_up_sync_required: true,
+                                                        run_sync: true,
+                                                        embeddings_selected: true,
+                                                        top_lane_status: "RUNNING",
+                                                        top_lane_waiting_reason: Some(
+                                                            "waiting_for_follow_up_sync",
+                                                        ),
+                                                        embeddings_lane_status: "COMPLETED",
+                                                        ..RuntimeSessionSnapshotFixture::default()
                                                     }
                                                 } else {
-                                                    panic!("unexpected task id: {task_id}");
+                                                    RuntimeSessionSnapshotFixture {
+                                                        status: "COMPLETED",
+                                                        follow_up_sync_required: true,
+                                                        run_sync: true,
+                                                        embeddings_selected: true,
+                                                        top_lane_status: "COMPLETED",
+                                                        embeddings_lane_status: "COMPLETED",
+                                                        ..RuntimeSessionSnapshotFixture::default()
+                                                    }
                                                 };
-                                                return Ok(serde_json::json!({ "task": task }));
+                                                return Ok(runtime_snapshot_json(
+                                                    repo_id.as_str(),
+                                                    session_id,
+                                                    fixture,
+                                                ));
                                             }
 
                                             panic!("unexpected repo-scoped query: {query}");
@@ -2282,10 +2194,8 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
                                             ))
                                             .expect("run init");
 
-                                        assert_eq!(
-                                            &*sync_events.borrow(),
-                                            &["init".to_string(), "init".to_string()]
-                                        );
+                                        let rendered = String::from_utf8(out).expect("utf8 output");
+                                        assert!(rendered.contains("follow-up sync"));
                                     },
                                 );
                             },
@@ -2295,13 +2205,175 @@ fn run_init_with_install_default_daemon_enqueues_follow_up_sync_after_bootstrap_
             },
         );
     });
+
+    assert!(
+        *snapshot_count.borrow() >= 2,
+        "expected the renderer to observe a follow-up sync wait before completion"
+    );
 }
 
 #[test]
-fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_renders_separate_lane() {
+fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_waiting_for_follow_up_sync()
+ {
+    let snapshot_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-summary-follow-up-wait";
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        with_ingest_daemon_bootstrap_hook(
+                            |_repo_root| Ok(()),
+                            || {
+                                with_graphql_executor_hook(
+                                    {
+                                        let snapshot_count = std::rc::Rc::clone(&snapshot_count);
+                                        let repo_id = repo_id.clone();
+                                        move |_repo_root, query, variables| {
+                                            if query.contains("startInit(") {
+                                                assert_eq!(variables["repoId"], repo_id);
+                                                assert_eq!(
+                                                    variables["input"]["runSync"],
+                                                    json!(true)
+                                                );
+                                                assert_eq!(
+                                                    variables["input"]["runIngest"],
+                                                    json!(false)
+                                                );
+                                                assert_eq!(
+                                                    variables["input"]["embeddingsBootstrap"]["profileName"],
+                                                    json!("local_code")
+                                                );
+                                                return Ok(runtime_start_init_result_json(
+                                                    session_id,
+                                                ));
+                                            }
+
+                                            if query.contains("runtimeSnapshot(") {
+                                                let mut count = snapshot_count.borrow_mut();
+                                                *count += 1;
+                                                let fixture = if *count == 1 {
+                                                    RuntimeSessionSnapshotFixture {
+                                                        status: "RUNNING",
+                                                        waiting_reason: Some(
+                                                            "waiting_for_embeddings_bootstrap",
+                                                        ),
+                                                        follow_up_sync_required: true,
+                                                        run_sync: true,
+                                                        run_ingest: false,
+                                                        embeddings_selected: true,
+                                                        summaries_selected: true,
+                                                        top_lane_status: "COMPLETED",
+                                                        embeddings_lane_status: "RUNNING",
+                                                        summaries_lane_status: "WAITING",
+                                                        summaries_lane_waiting_reason: Some(
+                                                            "waiting_for_follow_up_sync",
+                                                        ),
+                                                        ..RuntimeSessionSnapshotFixture::default()
+                                                    }
+                                                } else {
+                                                    RuntimeSessionSnapshotFixture {
+                                                        status: "COMPLETED",
+                                                        follow_up_sync_required: true,
+                                                        run_sync: true,
+                                                        run_ingest: false,
+                                                        embeddings_selected: true,
+                                                        summaries_selected: true,
+                                                        top_lane_status: "COMPLETED",
+                                                        embeddings_lane_status: "COMPLETED",
+                                                        summaries_lane_status: "COMPLETED",
+                                                        ..RuntimeSessionSnapshotFixture::default()
+                                                    }
+                                                };
+                                                return Ok(runtime_snapshot_json(
+                                                    repo_id.as_str(),
+                                                    session_id,
+                                                    fixture,
+                                                ));
+                                            }
+
+                                            panic!("unexpected repo-scoped query: {query}");
+                                        }
+                                    },
+                                    || {
+                                        let mut out = Vec::new();
+                                        let mut input = Cursor::new("");
+                                        let runtime = test_runtime();
+                                        runtime
+                                            .block_on(run_with_io_async_for_project_root(
+                                                InitArgs {
+                                                    install_default_daemon: true,
+                                                    force: false,
+                                                    agent: Vec::new(),
+                                                    telemetry: Some(false),
+                                                    no_telemetry: false,
+                                                    skip_baseline: false,
+                                                    sync: Some(true),
+                                                    ingest: Some(false),
+                                                    backfill: None,
+                                                    exclude: Vec::new(),
+                                                    exclude_from: Vec::new(),
+                                                    embeddings_runtime:
+                                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                    embeddings_gateway_url: None,
+                                                    embeddings_api_key_env:
+                                                        "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                            .to_string(),
+                                                },
+                                                repo.path(),
+                                                &mut out,
+                                                &mut input,
+                                                None,
+                                            ))
+                                            .expect("run init");
+
+                                        let rendered = String::from_utf8(out).expect("utf8 output");
+                                        assert!(rendered.contains("Summaries"));
+                                        assert!(rendered.contains("follow-up sync"));
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+
+    assert!(
+        *snapshot_count.borrow() >= 2,
+        "expected the renderer to observe the summaries lane waiting before completion"
+    );
+}
+
+#[test]
+fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
     let events = Arc::new(Mutex::new(Vec::<String>::new()));
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-summary-lane";
     setup_git_repo(&repo);
 
     with_summary_generation_configured_hook(
@@ -2337,165 +2409,101 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
                                         }))
                                     },
                                     || {
-                                        let install_root = repo.path().to_path_buf();
-                                        with_managed_inference_install_hook(
-                                            {
-                                                let events = Arc::clone(&events);
-                                                move |_repo_root| {
-                                                    events
-                                                        .lock()
-                                                        .expect("lock inference events")
-                                                        .push("inference_start".to_string());
-                                                    std::thread::sleep(Duration::from_millis(250));
-                                                    events
-                                                        .lock()
-                                                        .expect("lock inference events")
-                                                        .push("inference_finish".to_string());
-                                                    Ok(ManagedInferenceBinaryInstallOutcome {
-                                                        version: "v1.2.3".to_string(),
-                                                        binary_path: install_root
-                                                            .join("bitloops-inference"),
-                                                        freshly_installed: true,
-                                                    })
-                                                }
-                                            },
+                                        with_ollama_probe_hook(
+                                            || Ok(OllamaAvailability::MissingCli),
                                             || {
-                                                with_ollama_probe_hook(
-                                                    || Ok(OllamaAvailability::MissingCli),
+                                                with_ingest_daemon_bootstrap_hook(
+                                                    |_repo_root| Ok(()),
                                                     || {
-                                                        with_ingest_daemon_bootstrap_hook(
-                                                            |_repo_root| Ok(()),
-                                                            || {
-                                                                with_graphql_executor_hook(
-                                                                    {
-                                                                        let events =
-                                                                            Arc::clone(&events);
-                                                                        move |_repo_root, query, variables| {
-                                                                            if query.contains("enqueueTask")
-                                                                                && variables["input"]["kind"] == "SYNC"
-                                                                            {
-                                                                                events
-                                                                                    .lock()
-                                                                                    .expect("lock sync events")
-                                                                                    .push("sync".to_string());
-                                                                                return Ok(serde_json::json!({
-                                                                                    "enqueueTask": {
-                                                                                        "merged": false,
-                                                                                        "task": {
-                                                                                            "taskId": "sync-task-1",
-                                                                                            "repoId": "repo-1",
-                                                                                            "repoName": "demo",
-                                                                                            "repoIdentity": "local/demo",
-                                                                                            "kind": "SYNC",
-                                                                                            "source": "init",
-                                                                                            "status": "QUEUED",
-                                                                                            "submittedAtUnix": 1,
-                                                                                            "startedAtUnix": null,
-                                                                                            "updatedAtUnix": 1,
-                                                                                            "completedAtUnix": null,
-                                                                                            "queuePosition": 1,
-                                                                                            "tasksAhead": 0,
-                                                                                            "error": null,
-                                                                                            "syncSpec": {
-                                                                                                "mode": "auto",
-                                                                                                "paths": []
-                                                                                            },
-                                                                                            "ingestSpec": null,
-                                                                                            "embeddingsBootstrapSpec": null,
-                                                                                            "syncProgress": {
-                                                                                                "phase": "queued",
-                                                                                                "currentPath": null,
-                                                                                                "pathsTotal": 0,
-                                                                                                "pathsCompleted": 0,
-                                                                                                "pathsRemaining": 0,
-                                                                                                "pathsUnchanged": 0,
-                                                                                                "pathsAdded": 0,
-                                                                                                "pathsChanged": 0,
-                                                                                                "pathsRemoved": 0,
-                                                                                                "cacheHits": 0,
-                                                                                                "cacheMisses": 0,
-                                                                                                "parseErrors": 0
-                                                                                            },
-                                                                                            "ingestProgress": null,
-                                                                                            "embeddingsBootstrapProgress": null,
-                                                                                            "syncResult": null,
-                                                                                            "ingestResult": null,
-                                                                                            "embeddingsBootstrapResult": null
-                                                                                        }
-                                                                                    }
-                                                                                }));
-                                                                            }
-
-                                                                            if query.contains("task(")
-                                                                                || query.contains("query Task")
-                                                                            {
-                                                                                let task_id = variables["id"].as_str().expect("task id");
-                                                                                let task = if task_id == "sync-task-1" {
-                                                                                    completed_sync_task_json(task_id)
-                                                                                } else if task_id.starts_with("embeddings_bootstrap-task-") {
-                                                                                    completed_bootstrap_task_json(task_id)
-                                                                                } else {
-                                                                                    panic!("unexpected task id: {task_id}");
-                                                                                };
-                                                                                return Ok(serde_json::json!({
-                                                                                    "task": task
-                                                                                }));
-                                                                            }
-
-                                                                            panic!("unexpected repo-scoped query: {query}");
-                                                                        }
-                                                                    },
-                                                                    || {
-                                                                        let mut out = Vec::new();
-                                                                        let mut input =
-                                                                            Cursor::new("");
-                                                                        let runtime =
-                                                                            test_runtime();
-                                                                        runtime
-                                                                            .block_on(run_with_io_async_for_project_root(
-                                                                                InitArgs {
-                                                                                    install_default_daemon: true,
-                                                                                    force: false,
-                                                                                    agent: Vec::new(),
-                                                                                    telemetry: Some(false),
-                                                                                    no_telemetry: false,
-                                                                                    skip_baseline: false,
-                                                                                    sync: Some(true),
-                                                                                    ingest: Some(false),
-                                                                                    backfill: None,
-                                                                                    exclude: Vec::new(),
-                                                                                    exclude_from: Vec::new(),
-                                                                                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
-                                                                                embeddings_gateway_url: None,
-                                                                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
-                                                                                },
-                                                                                repo.path(),
-                                                                                &mut out,
-                                                                                &mut input,
-                                                                                None,
-                                                                            ))
-                                                                            .expect("run init");
-
-                                                                        let rendered =
-                                                                            String::from_utf8(out)
-                                                                                .expect(
-                                                                                    "utf8 output",
-                                                                                );
-                                                                        assert!(
-                                                                            rendered.contains("Creating code embeddings for fast search using our local embeddings provider")
+                                                        with_graphql_executor_hook(
+                                                            {
+                                                                let events = Arc::clone(&events);
+                                                                let repo_id = repo_id.clone();
+                                                                move |_repo_root, query, variables| {
+                                                                    if query.contains("startInit(") {
+                                                                        events
+                                                                            .lock()
+                                                                            .expect("lock events")
+                                                                            .push("start_init".to_string());
+                                                                        assert_eq!(variables["repoId"], repo_id);
+                                                                        assert_eq!(variables["input"]["runSync"], json!(true));
+                                                                        assert_eq!(variables["input"]["runIngest"], json!(false));
+                                                                        assert_eq!(
+                                                                            variables["input"]["summariesBootstrap"]["action"],
+                                                                            json!("INSTALL_RUNTIME_ONLY")
                                                                         );
-                                                                        assert!(
-                                                                            rendered.contains("Configuring semantic summaries with bitloops-inference")
-                                                                        );
-                                                                        assert!(
-                                                                            !rendered.contains("Starting initial DevQL sync...")
-                                                                        );
-                                                                    },
-                                                                )
+                                                                        return Ok(runtime_start_init_result_json(session_id));
+                                                                    }
+
+                                                                    if query.contains("runtimeSnapshot(") {
+                                                                        events
+                                                                            .lock()
+                                                                            .expect("lock events")
+                                                                            .push("snapshot".to_string());
+                                                                        return Ok(runtime_snapshot_json(
+                                                                            repo_id.as_str(),
+                                                                            session_id,
+                                                                            RuntimeSessionSnapshotFixture {
+                                                                                status: "COMPLETED",
+                                                                                run_sync: true,
+                                                                                embeddings_selected: true,
+                                                                                summaries_selected: true,
+                                                                                top_lane_status: "COMPLETED",
+                                                                                embeddings_lane_status: "COMPLETED",
+                                                                                summaries_lane_status: "COMPLETED",
+                                                                                ..RuntimeSessionSnapshotFixture::default()
+                                                                            },
+                                                                        ));
+                                                                    }
+
+                                                                    panic!("unexpected repo-scoped query: {query}");
+                                                                }
                                                             },
-                                                        );
+                                                            || {
+                                                                let mut out = Vec::new();
+                                                                let mut input = Cursor::new("");
+                                                                let runtime = test_runtime();
+                                                                runtime
+                                                                    .block_on(run_with_io_async_for_project_root(
+                                                                        InitArgs {
+                                                                            install_default_daemon: true,
+                                                                            force: false,
+                                                                            agent: Vec::new(),
+                                                                            telemetry: Some(false),
+                                                                            no_telemetry: false,
+                                                                            skip_baseline: false,
+                                                                            sync: Some(true),
+                                                                            ingest: Some(false),
+                                                                            backfill: None,
+                                                                            exclude: Vec::new(),
+                                                                            exclude_from: Vec::new(),
+                                                                            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                                                            embeddings_gateway_url: None,
+                                                                            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                                                        },
+                                                                        repo.path(),
+                                                                        &mut out,
+                                                                        &mut input,
+                                                                        None,
+                                                                    ))
+                                                                    .expect("run init");
+
+                                                                let rendered =
+                                                                    String::from_utf8(out)
+                                                                        .expect("utf8 output");
+                                                                assert!(rendered.contains(
+                                                                    "Bitloops is currently updating its local database with the following:"
+                                                                ));
+                                                                assert!(
+                                                                    rendered.contains("Summaries")
+                                                                );
+                                                                assert!(!rendered.contains(
+                                                                    "Starting initial DevQL sync..."
+                                                                ));
+                                                            },
+                                                        )
                                                     },
-                                                )
+                                                );
                                             },
                                         );
                                     },
@@ -2509,18 +2517,9 @@ fn run_init_with_install_default_daemon_runs_summary_setup_in_parallel_and_rende
     );
 
     let events = events.lock().expect("lock events");
-    let sync_index = events
-        .iter()
-        .position(|event| event == "sync")
-        .expect("sync event");
-    let inference_finish_index = events
-        .iter()
-        .position(|event| event == "inference_finish")
-        .expect("inference finish event");
-    assert!(
-        sync_index < inference_finish_index,
-        "summary setup should not block sync enqueueing, saw events: {:?}",
-        *events
+    assert_eq!(
+        &*events,
+        &["start_init".to_string(), "snapshot".to_string()]
     );
 }
 
@@ -2640,10 +2639,12 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
 
 #[test]
 fn run_init_triggers_repo_scoped_ingest_when_enabled() {
-    let saw_ingest = std::rc::Rc::new(std::cell::RefCell::new(false));
+    let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
     let repo = tempfile::tempdir().unwrap();
     let repo_root = repo.path().to_path_buf();
     let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-ingest";
     setup_git_repo(&repo);
 
     with_temp_app_dirs(&app_dirs, false, false, || {
@@ -2667,8 +2668,9 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                     || {
                         with_graphql_executor_hook(
                             {
-                                let saw_ingest = std::rc::Rc::clone(&saw_ingest);
+                                let saw_start_init = std::rc::Rc::clone(&saw_start_init);
                                 let repo_root = repo_root.clone();
+                                let repo_id = repo_id.clone();
                                 move |actual_repo_root: &std::path::Path,
                                   query: &str,
                                   variables: &serde_json::Value| {
@@ -2679,62 +2681,30 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                     .unwrap_or_else(|_| actual_repo_root.to_path_buf());
                                 assert_eq!(actual_repo_root, expected_repo_root);
 
-                                if query.contains("enqueueTask")
-                                    && variables["input"]["kind"] == "SYNC"
-                                {
-                                    panic!("init should not enqueue sync when sync=false");
-                                }
-
-                                if query.contains("enqueueTask")
-                                    && variables["input"]["kind"] == "INGEST"
-                                {
-                                    *saw_ingest.borrow_mut() = true;
+                                if query.contains("startInit(") {
+                                    *saw_start_init.borrow_mut() = true;
+                                    assert_eq!(variables["repoId"], repo_id);
+                                    assert_eq!(variables["input"]["runSync"], json!(false));
+                                    assert_eq!(variables["input"]["runIngest"], json!(true));
+                                    assert_eq!(variables["input"]["ingestBackfill"], json!(50));
                                     assert_eq!(
-                                        variables,
-                                        &serde_json::json!({
-                                            "input": {
-                                                "kind": "INGEST",
-                                                "ingest": {
-                                                    "backfill": 50
-                                                }
-                                            }
-                                        })
+                                        variables["input"]["embeddingsBootstrap"],
+                                        serde_json::Value::Null
                                     );
-                                    return Ok(serde_json::json!({
-                                        "enqueueTask": {
-                                            "merged": false,
-                                            "task": {
-                                                "taskId": "ingest-task-2",
-                                                "repoId": "repo-1",
-                                                "repoName": "demo",
-                                                "repoIdentity": "local/demo",
-                                                "kind": "INGEST",
-                                                "source": "manual_cli",
-                                                "status": "QUEUED",
-                                                "submittedAtUnix": 1,
-                                                "startedAtUnix": null,
-                                                "updatedAtUnix": 1,
-                                                "completedAtUnix": null,
-                                                "queuePosition": 1,
-                                                "tasksAhead": 0,
-                                                "error": null,
-                                                "syncSpec": null,
-                                                "ingestSpec": {
-                                                    "backfill": 50
-                                                },
-                                                "syncProgress": null,
-                                                "ingestProgress": null,
-                                                "syncResult": null,
-                                                "ingestResult": null
-                                            }
-                                        }
-                                    }));
+                                    return Ok(runtime_start_init_result_json(session_id));
                                 }
 
-                                if query.contains("task(") || query.contains("query Task") {
-                                    return Ok(serde_json::json!({
-                                        "task": null
-                                    }));
+                                if query.contains("runtimeSnapshot(") {
+                                    return Ok(runtime_snapshot_json(
+                                        repo_id.as_str(),
+                                        session_id,
+                                        RuntimeSessionSnapshotFixture {
+                                            status: "COMPLETED",
+                                            run_ingest: true,
+                                            top_lane_status: "COMPLETED",
+                                            ..RuntimeSessionSnapshotFixture::default()
+                                        },
+                                    ));
                                 }
 
                                 panic!("unexpected repo-scoped query: {query}");
@@ -2772,14 +2742,16 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                     .expect("run init");
 
                                 let rendered = String::from_utf8(out).expect("utf8 output");
-                                assert!(rendered.contains("Starting initial DevQL ingest..."));
+                                assert!(rendered.contains(
+                                    "Bitloops is currently updating its local database with the following:"
+                                ));
                             },
                         )
                     },
                 );
                 assert!(
-                    *saw_ingest.borrow(),
-                    "init should invoke repo-scoped ingest"
+                    *saw_start_init.borrow(),
+                    "init should invoke runtime startInit for repo-scoped ingest"
                 );
             },
         );
@@ -2788,10 +2760,12 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
 
 #[test]
 fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
-    let saw_ingest = std::rc::Rc::new(std::cell::RefCell::new(false));
+    let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
     let repo = tempfile::tempdir().unwrap();
     let repo_root = repo.path().to_path_buf();
     let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-ingest-backfill";
     setup_git_repo(&repo);
 
     with_temp_app_dirs(&app_dirs, false, false, || {
@@ -2815,8 +2789,9 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                     || {
                         with_graphql_executor_hook(
                             {
-                                let saw_ingest = std::rc::Rc::clone(&saw_ingest);
+                                let saw_start_init = std::rc::Rc::clone(&saw_start_init);
                                 let repo_root = repo_root.clone();
+                                let repo_id = repo_id.clone();
                                 move |actual_repo_root: &std::path::Path,
                                           query: &str,
                                           variables: &serde_json::Value| {
@@ -2828,64 +2803,29 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             .unwrap_or_else(|_| actual_repo_root.to_path_buf());
                                         assert_eq!(actual_repo_root, expected_repo_root);
 
-                                        if query.contains("enqueueTask")
-                                            && variables["input"]["kind"] == "SYNC"
-                                        {
-                                            panic!("init should not enqueue sync when sync=false");
-                                        }
-
-                                        if query.contains("enqueueTask")
-                                            && variables["input"]["kind"] == "INGEST"
-                                        {
-                                            *saw_ingest.borrow_mut() = true;
+                                        if query.contains("startInit(") {
+                                            *saw_start_init.borrow_mut() = true;
+                                            assert_eq!(variables["repoId"], repo_id);
+                                            assert_eq!(variables["input"]["runSync"], json!(false));
+                                            assert_eq!(variables["input"]["runIngest"], json!(true));
                                             assert_eq!(
-                                                variables,
-                                                &serde_json::json!({
-                                                    "input": {
-                                                        "kind": "INGEST",
-                                                        "ingest": {
-                                                            "backfill": 10
-                                                        }
-                                                    }
-                                                })
+                                                variables["input"]["ingestBackfill"],
+                                                json!(10)
                                             );
-                                            return Ok(serde_json::json!({
-                                                "enqueueTask": {
-                                                    "merged": false,
-                                                    "task": {
-                                                        "taskId": "ingest-task-3",
-                                                        "repoId": "repo-1",
-                                                        "repoName": "demo",
-                                                        "repoIdentity": "local/demo",
-                                                        "kind": "INGEST",
-                                                        "source": "manual_cli",
-                                                        "status": "QUEUED",
-                                                        "submittedAtUnix": 1,
-                                                        "startedAtUnix": null,
-                                                        "updatedAtUnix": 1,
-                                                        "completedAtUnix": null,
-                                                        "queuePosition": 1,
-                                                        "tasksAhead": 0,
-                                                        "error": null,
-                                                        "syncSpec": null,
-                                                        "ingestSpec": {
-                                                            "backfill": 10
-                                                        },
-                                                        "syncProgress": null,
-                                                        "ingestProgress": null,
-                                                        "syncResult": null,
-                                                        "ingestResult": null
-                                                    }
-                                                }
-                                            }));
+                                            return Ok(runtime_start_init_result_json(session_id));
                                         }
 
-                                        if query.contains("task(")
-                                            || query.contains("query Task")
-                                        {
-                                            return Ok(serde_json::json!({
-                                                "task": null
-                                            }));
+                                        if query.contains("runtimeSnapshot(") {
+                                            return Ok(runtime_snapshot_json(
+                                                repo_id.as_str(),
+                                                session_id,
+                                                RuntimeSessionSnapshotFixture {
+                                                    status: "COMPLETED",
+                                                    run_ingest: true,
+                                                    top_lane_status: "COMPLETED",
+                                                    ..RuntimeSessionSnapshotFixture::default()
+                                                },
+                                            ));
                                         }
 
                                         panic!("unexpected repo-scoped query: {query}");
@@ -2921,13 +2861,18 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                         None,
                                     ))
                                     .expect("run init");
+
+                                let rendered = String::from_utf8(out).expect("utf8 output");
+                                assert!(rendered.contains(
+                                    "Bitloops is currently updating its local database with the following:"
+                                ));
                             },
                         )
                     },
                 );
                 assert!(
-                    *saw_ingest.borrow(),
-                    "init should invoke repo-scoped ingest"
+                    *saw_start_init.borrow(),
+                    "init should invoke runtime startInit for repo-scoped ingest"
                 );
             },
         );

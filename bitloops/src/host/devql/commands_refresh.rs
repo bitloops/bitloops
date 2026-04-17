@@ -593,6 +593,7 @@ mod tests {
                     },
                     post_commit_snapshot: None,
                 }),
+                init_session_id: None,
                 status: DevqlTaskStatus::Queued,
                 submitted_at_unix: 1,
                 started_at_unix: None,

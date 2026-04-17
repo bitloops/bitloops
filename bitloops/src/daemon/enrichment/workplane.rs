@@ -26,9 +26,10 @@ use crate::host::runtime_store::{
 
 use super::super::types::{
     BlockedMailboxStatus, EnrichmentQueueMode,
-    EnrichmentQueueState as ProjectedEnrichmentQueueState, FailedEmbeddingJobSummary,
-    unix_timestamp_now,
+    EnrichmentQueueState as ProjectedEnrichmentQueueState, EnrichmentWorkerPoolKind,
+    EnrichmentWorkerPoolStatus, FailedEmbeddingJobSummary, unix_timestamp_now,
 };
+use super::worker_count::{EnrichmentWorkerPool, configured_enrichment_worker_budgets};
 use super::{
     EnrichmentJobTarget, EnrichmentQueueState, JobExecutionOutcome,
     WORKPLANE_PENDING_COMPACTION_MIN_AGE_SECS, WORKPLANE_PENDING_COMPACTION_MIN_COUNT,
@@ -49,6 +50,17 @@ struct WorkplaneBucketCounts {
     work_items: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PendingRepoBackfillJobRequest<'a> {
+    repo_id: &'a str,
+    repo_root: &'a str,
+    config_root: &'a str,
+    registration: &'a CapabilityMailboxRegistration,
+    dedupe_key: &'a str,
+    work_item_count: u64,
+    now: u64,
+}
+
 pub(super) fn enqueue_workplane_summary_jobs(
     target: &EnrichmentJobTarget,
     artefact_ids: Vec<String>,
@@ -58,11 +70,15 @@ pub(super) fn enqueue_workplane_summary_jobs(
         vec![
             crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
                 SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                target.init_session_id.clone(),
                 Some(repo_backfill_dedupe_key(
                     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
                 )),
-                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill)
-                    .expect("summary repo backfill payload should serialize"),
+                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill {
+                    work_item_count: Some(0),
+                    artefact_ids: None,
+                })
+                .expect("summary repo backfill payload should serialize"),
             ),
         ]
     } else {
@@ -71,6 +87,7 @@ pub(super) fn enqueue_workplane_summary_jobs(
             .map(|artefact_id| {
                 crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
                     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                    target.init_session_id.clone(),
                     Some(format!(
                         "{}:{artefact_id}",
                         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
@@ -99,9 +116,13 @@ pub(super) fn enqueue_workplane_embedding_jobs(
         vec![
             crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
                 mailbox_name,
+                target.init_session_id.clone(),
                 Some(repo_backfill_dedupe_key(mailbox_name)),
-                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill)
-                    .expect("embedding repo backfill payload should serialize"),
+                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill {
+                    work_item_count: Some(0),
+                    artefact_ids: None,
+                })
+                .expect("embedding repo backfill payload should serialize"),
             ),
         ]
     } else {
@@ -110,6 +131,7 @@ pub(super) fn enqueue_workplane_embedding_jobs(
             .map(|artefact_id| {
                 crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
                     mailbox_name,
+                    target.init_session_id.clone(),
                     Some(format!("{mailbox_name}:{artefact_id}")),
                     serde_json::to_value(SemanticClonesMailboxPayload::Artefact { artefact_id })
                         .expect("embedding artefact payload should serialize"),
@@ -121,6 +143,39 @@ pub(super) fn enqueue_workplane_embedding_jobs(
     Ok(())
 }
 
+pub(super) fn enqueue_workplane_embedding_repo_backfill_job(
+    target: &EnrichmentJobTarget,
+    artefact_ids: Vec<String>,
+    representation_kind: EmbeddingRepresentationKind,
+) -> Result<()> {
+    if artefact_ids.is_empty() {
+        return Ok(());
+    }
+    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let mailbox_name = match representation_kind {
+        EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    };
+    let dedupe_key = repo_backfill_dedupe_key(mailbox_name);
+    let payload = serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill {
+        work_item_count: Some(artefact_ids.len() as u64),
+        artefact_ids: Some(artefact_ids),
+    })
+    .expect("embedding repo backfill payload should serialize");
+    let _ = store.enqueue_capability_workplane_jobs(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        vec![
+            crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+                mailbox_name,
+                target.init_session_id.clone(),
+                Some(dedupe_key),
+                payload,
+            ),
+        ],
+    )?;
+    Ok(())
+}
+
 pub(super) fn enqueue_workplane_clone_rebuild(target: &EnrichmentJobTarget) -> Result<()> {
     let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
     let _ = store.enqueue_capability_workplane_jobs(
@@ -128,9 +183,13 @@ pub(super) fn enqueue_workplane_clone_rebuild(target: &EnrichmentJobTarget) -> R
         vec![
             crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
                 SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+                target.init_session_id.clone(),
                 Some(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX.to_string()),
-                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill)
-                    .expect("clone rebuild payload should serialize"),
+                serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill {
+                    work_item_count: Some(1),
+                    artefact_ids: None,
+                })
+                .expect("clone rebuild payload should serialize"),
             ),
         ],
     )?;
@@ -209,12 +268,15 @@ fn compact_pending_artefact_backlogs(conn: &rusqlite::Connection) -> Result<()> 
             }
             if !ensure_pending_repo_backfill_job(
                 conn,
-                &repo_id,
-                &repo_root,
-                &config_root,
-                &registration,
-                &backfill_dedupe_key,
-                now,
+                PendingRepoBackfillJobRequest {
+                    repo_id: &repo_id,
+                    repo_root: &repo_root,
+                    config_root: &config_root,
+                    registration: &registration,
+                    dedupe_key: &backfill_dedupe_key,
+                    work_item_count: pending_count,
+                    now,
+                },
             )? {
                 continue;
             }
@@ -240,13 +302,17 @@ fn compact_pending_artefact_backlogs(conn: &rusqlite::Connection) -> Result<()> 
 
 fn ensure_pending_repo_backfill_job(
     conn: &rusqlite::Connection,
-    repo_id: &str,
-    repo_root: &str,
-    config_root: &str,
-    registration: &CapabilityMailboxRegistration,
-    dedupe_key: &str,
-    now: u64,
+    request: PendingRepoBackfillJobRequest<'_>,
 ) -> Result<bool> {
+    let PendingRepoBackfillJobRequest {
+        repo_id,
+        repo_root,
+        config_root,
+        registration,
+        dedupe_key,
+        work_item_count,
+        now,
+    } = request;
     let existing = conn
         .query_row(
             "SELECT job_id, status
@@ -269,8 +335,11 @@ fn ensure_pending_repo_backfill_job(
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()?;
-    let payload = serde_json::to_string(&SemanticClonesMailboxPayload::RepoBackfill)
-        .expect("repo backfill payload should serialize");
+    let payload = serde_json::to_string(&SemanticClonesMailboxPayload::RepoBackfill {
+        work_item_count: Some(work_item_count),
+        artefact_ids: None,
+    })
+    .expect("repo backfill payload should serialize");
     match existing {
         Some((_, status)) if WorkplaneJobStatus::parse(&status) == WorkplaneJobStatus::Running => {
             Ok(false)
@@ -289,12 +358,12 @@ fn ensure_pending_repo_backfill_job(
             conn.execute(
                 "INSERT INTO capability_workplane_jobs (
                     job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
-                    dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                    init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
                     started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
                     lease_expires_at_unix, last_error
                  ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6,
-                    ?7, ?8, ?9, 0, ?10, ?11,
+                    NULL, ?7, ?8, ?9, 0, ?10, ?11,
                     NULL, ?12, NULL, NULL,
                     NULL, NULL
                  )",
@@ -428,6 +497,7 @@ pub(super) fn claim_next_workplane_job(
     workplane_store: &DaemonSqliteRuntimeStore,
     runtime_store: &DaemonSqliteRuntimeStore,
     control_state: &EnrichmentQueueState,
+    pool: EnrichmentWorkerPool,
 ) -> Result<Option<WorkplaneJobRecord>> {
     workplane_store.with_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
@@ -437,6 +507,9 @@ pub(super) fn claim_next_workplane_job(
             let jobs = load_workplane_jobs_by_status(conn, WorkplaneJobStatus::Pending)?;
             let mut readiness_cache = BTreeMap::new();
             for mut job in jobs {
+                if mailbox_worker_pool(job.mailbox_name.as_str()) != Some(pool) {
+                    continue;
+                }
                 if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
                     continue;
                 }
@@ -537,6 +610,38 @@ pub(super) fn project_workplane_status(
         count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Running)?;
     let (failed_summary, failed_embeddings, failed_rebuilds) =
         count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Failed)?;
+    let (completed_summary, completed_embeddings, completed_rebuilds) =
+        count_workplane_job_buckets(workplane_store, WorkplaneJobStatus::Completed)?;
+    let budgets = configured_enrichment_worker_budgets();
+    let worker_pools = vec![
+        EnrichmentWorkerPoolStatus {
+            kind: EnrichmentWorkerPoolKind::SummaryRefresh,
+            worker_budget: budgets.summary_refresh as u64,
+            active_workers: running_summary.jobs,
+            pending_jobs: pending_summary.jobs,
+            running_jobs: running_summary.jobs,
+            failed_jobs: failed_summary.jobs,
+            completed_recent_jobs: completed_summary.jobs,
+        },
+        EnrichmentWorkerPoolStatus {
+            kind: EnrichmentWorkerPoolKind::Embeddings,
+            worker_budget: budgets.embeddings as u64,
+            active_workers: running_embeddings.jobs,
+            pending_jobs: pending_embeddings.jobs,
+            running_jobs: running_embeddings.jobs,
+            failed_jobs: failed_embeddings.jobs,
+            completed_recent_jobs: completed_embeddings.jobs,
+        },
+        EnrichmentWorkerPoolStatus {
+            kind: EnrichmentWorkerPoolKind::CloneRebuild,
+            worker_budget: budgets.clone_rebuild as u64,
+            active_workers: running_rebuilds.jobs,
+            pending_jobs: pending_rebuilds.jobs,
+            running_jobs: running_rebuilds.jobs,
+            failed_jobs: failed_rebuilds.jobs,
+            completed_recent_jobs: completed_rebuilds.jobs,
+        },
+    ];
 
     Ok(ProjectedEnrichmentQueueState {
         version: 1,
@@ -545,18 +650,40 @@ pub(super) fn project_workplane_status(
         } else {
             EnrichmentQueueMode::Running
         },
-        pending_jobs: pending_summary + pending_embeddings + pending_rebuilds,
-        pending_semantic_jobs: pending_summary,
-        pending_embedding_jobs: pending_embeddings,
-        pending_clone_edges_rebuild_jobs: pending_rebuilds,
-        running_jobs: running_summary + running_embeddings + running_rebuilds,
-        running_semantic_jobs: running_summary,
-        running_embedding_jobs: running_embeddings,
-        running_clone_edges_rebuild_jobs: running_rebuilds,
-        failed_jobs: failed_summary + failed_embeddings + failed_rebuilds,
-        failed_semantic_jobs: failed_summary,
-        failed_embedding_jobs: failed_embeddings,
-        failed_clone_edges_rebuild_jobs: failed_rebuilds,
+        worker_pools,
+        pending_jobs: pending_summary.jobs + pending_embeddings.jobs + pending_rebuilds.jobs,
+        pending_work_items: pending_summary.work_items
+            + pending_embeddings.work_items
+            + pending_rebuilds.work_items,
+        pending_semantic_jobs: pending_summary.jobs,
+        pending_semantic_work_items: pending_summary.work_items,
+        pending_embedding_jobs: pending_embeddings.jobs,
+        pending_embedding_work_items: pending_embeddings.work_items,
+        pending_clone_edges_rebuild_jobs: pending_rebuilds.jobs,
+        pending_clone_edges_rebuild_work_items: pending_rebuilds.work_items,
+        completed_recent_jobs: completed_summary.jobs
+            + completed_embeddings.jobs
+            + completed_rebuilds.jobs,
+        running_jobs: running_summary.jobs + running_embeddings.jobs + running_rebuilds.jobs,
+        running_work_items: running_summary.work_items
+            + running_embeddings.work_items
+            + running_rebuilds.work_items,
+        running_semantic_jobs: running_summary.jobs,
+        running_semantic_work_items: running_summary.work_items,
+        running_embedding_jobs: running_embeddings.jobs,
+        running_embedding_work_items: running_embeddings.work_items,
+        running_clone_edges_rebuild_jobs: running_rebuilds.jobs,
+        running_clone_edges_rebuild_work_items: running_rebuilds.work_items,
+        failed_jobs: failed_summary.jobs + failed_embeddings.jobs + failed_rebuilds.jobs,
+        failed_work_items: failed_summary.work_items
+            + failed_embeddings.work_items
+            + failed_rebuilds.work_items,
+        failed_semantic_jobs: failed_summary.jobs,
+        failed_semantic_work_items: failed_summary.work_items,
+        failed_embedding_jobs: failed_embeddings.jobs,
+        failed_embedding_work_items: failed_embeddings.work_items,
+        failed_clone_edges_rebuild_jobs: failed_rebuilds.jobs,
+        failed_clone_edges_rebuild_work_items: failed_rebuilds.work_items,
         retried_failed_jobs: control_state.retried_failed_jobs,
         last_action: control_state.last_action.clone(),
         last_updated_unix: control_state.updated_at_unix,
@@ -615,7 +742,7 @@ pub(super) fn last_failed_embedding_job_from_workplane(
 ) -> Result<Option<FailedEmbeddingJobSummary>> {
     workplane_store.with_connection(|conn| {
         conn.query_row(
-            "SELECT job_id, repo_id, mailbox_name, attempts, last_error, updated_at_unix
+            "SELECT job_id, repo_id, mailbox_name, payload, attempts, last_error, updated_at_unix
              FROM capability_workplane_jobs
              WHERE status = ?1
                AND mailbox_name IN (?2, ?3)
@@ -628,6 +755,9 @@ pub(super) fn last_failed_embedding_job_from_workplane(
             ],
             |row| {
                 let mailbox_name = row.get::<_, String>(2)?;
+                let payload_raw = row.get::<_, String>(3)?;
+                let payload =
+                    serde_json::from_str::<serde_json::Value>(&payload_raw).unwrap_or_default();
                 Ok(FailedEmbeddingJobSummary {
                     job_id: row.get(0)?,
                     repo_id: row.get(1)?,
@@ -637,10 +767,10 @@ pub(super) fn last_failed_embedding_job_from_workplane(
                     } else {
                         "summary".to_string()
                     },
-                    artefact_count: 1,
-                    attempts: row.get(3)?,
-                    error: row.get(4)?,
-                    updated_at_unix: u64::try_from(row.get::<_, i64>(5)?).unwrap_or_default(),
+                    artefact_count: payload_work_item_count(&payload, &mailbox_name),
+                    attempts: row.get(4)?,
+                    error: row.get(5)?,
+                    updated_at_unix: u64::try_from(row.get::<_, i64>(6)?).unwrap_or_default(),
                 })
             },
         )
@@ -652,28 +782,32 @@ pub(super) fn last_failed_embedding_job_from_workplane(
 fn count_workplane_job_buckets(
     workplane_store: &DaemonSqliteRuntimeStore,
     status: WorkplaneJobStatus,
-) -> Result<(u64, u64, u64)> {
+) -> Result<(
+    WorkplaneBucketCounts,
+    WorkplaneBucketCounts,
+    WorkplaneBucketCounts,
+)> {
     workplane_store.with_connection(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT mailbox_name, COUNT(*)
-             FROM capability_workplane_jobs
-             WHERE status = ?1
-             GROUP BY mailbox_name",
-        )?;
-        let rows = stmt.query_map(params![status.as_str()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        let mut summary = 0u64;
-        let mut embeddings = 0u64;
-        let mut rebuilds = 0u64;
-        for row in rows {
-            let (mailbox_name, count) = row?;
-            let count = u64::try_from(count).unwrap_or_default();
-            match mailbox_name.as_str() {
-                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => summary += count,
+        let jobs = load_workplane_jobs_by_status(conn, status)?;
+        let mut summary = WorkplaneBucketCounts::default();
+        let mut embeddings = WorkplaneBucketCounts::default();
+        let mut rebuilds = WorkplaneBucketCounts::default();
+        for job in jobs {
+            let work_item_count = payload_work_item_count(&job.payload, &job.mailbox_name);
+            match job.mailbox_name.as_str() {
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => {
+                    summary.jobs += 1;
+                    summary.work_items += work_item_count;
+                }
                 SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
-                | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => embeddings += count,
-                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => rebuilds += count,
+                | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
+                    embeddings.jobs += 1;
+                    embeddings.work_items += work_item_count;
+                }
+                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => {
+                    rebuilds.jobs += 1;
+                    rebuilds.work_items += work_item_count;
+                }
                 _ => {}
             }
         }
@@ -685,11 +819,38 @@ pub(super) fn current_workplane_mailbox_blocked_statuses(
     workplane_store: &DaemonSqliteRuntimeStore,
     runtime_store: &DaemonSqliteRuntimeStore,
 ) -> Result<Vec<BlockedMailboxStatus>> {
+    current_workplane_mailbox_blocked_statuses_for_repo_internal(
+        workplane_store,
+        runtime_store,
+        None,
+    )
+}
+
+pub(crate) fn current_workplane_mailbox_blocked_statuses_for_repo(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    runtime_store: &DaemonSqliteRuntimeStore,
+    repo_id: &str,
+) -> Result<Vec<BlockedMailboxStatus>> {
+    current_workplane_mailbox_blocked_statuses_for_repo_internal(
+        workplane_store,
+        runtime_store,
+        Some(repo_id),
+    )
+}
+
+fn current_workplane_mailbox_blocked_statuses_for_repo_internal(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    runtime_store: &DaemonSqliteRuntimeStore,
+    repo_id: Option<&str>,
+) -> Result<Vec<BlockedMailboxStatus>> {
     let jobs = workplane_store
         .with_connection(|conn| load_workplane_jobs_by_status(conn, WorkplaneJobStatus::Pending))?;
     let mut readiness_cache = BTreeMap::new();
     let mut blocked_by_mailbox = BTreeMap::<String, String>::new();
     for job in jobs {
+        if repo_id.is_some_and(|repo_id| job.repo_id != repo_id) {
+            continue;
+        }
         let readiness = mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?;
         if readiness.blocked
             && let Some(reason) = readiness.reason
@@ -753,29 +914,7 @@ fn resolve_mailbox_provider_readiness(
     slot_name: &str,
     text_generation: bool,
 ) -> Result<WorkplaneMailboxReadiness> {
-    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
-    let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
-    let inference = capability_host.inference_for_capability(&job.capability_id);
-    let Some(slot) = inference.describe(slot_name) else {
-        return Ok(WorkplaneMailboxReadiness {
-            blocked: true,
-            reason: Some(format!(
-                "{} slot `{slot_name}` is not configured yet",
-                if text_generation {
-                    "text-generation"
-                } else {
-                    "embedding"
-                }
-            )),
-        });
-    };
-
-    if !text_generation
-        && slot.driver.as_deref() == Some(crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER)
-        && slot.runtime.as_deref()
-            == Some(crate::host::inference::BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID)
-    {
+    if !text_generation {
         let gate_status = crate::daemon::embeddings_bootstrap::gate_status_for_config_path(
             runtime_store,
             &job.config_root
@@ -788,6 +927,24 @@ fn resolve_mailbox_provider_readiness(
             });
         }
     }
+
+    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
+        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
+    let inference = capability_host.inference_for_capability(&job.capability_id);
+    let Some(_slot) = inference.describe(slot_name) else {
+        return Ok(WorkplaneMailboxReadiness {
+            blocked: true,
+            reason: Some(format!(
+                "{} slot `{slot_name}` is not configured yet",
+                if text_generation {
+                    "text-generation"
+                } else {
+                    "embedding"
+                }
+            )),
+        });
+    };
 
     let resolution = if text_generation {
         inference.text_generation(slot_name).map(|_| ())
@@ -809,7 +966,7 @@ pub(super) fn load_workplane_jobs_by_status(
 ) -> Result<Vec<WorkplaneJobRecord>> {
     let mut stmt = conn.prepare(
         "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
-                dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
                 started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
                 lease_expires_at_unix, last_error
          FROM capability_workplane_jobs
@@ -833,7 +990,7 @@ pub(super) fn load_workplane_jobs_by_status(
 }
 
 fn map_workplane_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkplaneJobRecord> {
-    let payload_raw = row.get::<_, String>(7)?;
+    let payload_raw = row.get::<_, String>(8)?;
     Ok(WorkplaneJobRecord {
         job_id: row.get(0)?,
         repo_id: row.get(1)?,
@@ -841,24 +998,25 @@ fn map_workplane_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkplaneJ
         config_root: PathBuf::from(row.get::<_, String>(3)?),
         capability_id: row.get(4)?,
         mailbox_name: row.get(5)?,
-        dedupe_key: row.get(6)?,
+        init_session_id: row.get(6)?,
+        dedupe_key: row.get(7)?,
         payload: serde_json::from_str(&payload_raw).unwrap_or(serde_json::Value::Null),
-        status: WorkplaneJobStatus::parse(&row.get::<_, String>(8)?),
-        attempts: row.get(9)?,
-        available_at_unix: u64::try_from(row.get::<_, i64>(10)?).unwrap_or_default(),
-        submitted_at_unix: u64::try_from(row.get::<_, i64>(11)?).unwrap_or_default(),
+        status: WorkplaneJobStatus::parse(&row.get::<_, String>(9)?),
+        attempts: row.get(10)?,
+        available_at_unix: u64::try_from(row.get::<_, i64>(11)?).unwrap_or_default(),
+        submitted_at_unix: u64::try_from(row.get::<_, i64>(12)?).unwrap_or_default(),
         started_at_unix: row
-            .get::<_, Option<i64>>(12)?
+            .get::<_, Option<i64>>(13)?
             .and_then(|value| u64::try_from(value).ok()),
-        updated_at_unix: u64::try_from(row.get::<_, i64>(13)?).unwrap_or_default(),
+        updated_at_unix: u64::try_from(row.get::<_, i64>(14)?).unwrap_or_default(),
         completed_at_unix: row
-            .get::<_, Option<i64>>(14)?
+            .get::<_, Option<i64>>(15)?
             .and_then(|value| u64::try_from(value).ok()),
-        lease_owner: row.get(15)?,
+        lease_owner: row.get(16)?,
         lease_expires_at_unix: row
-            .get::<_, Option<i64>>(16)?
+            .get::<_, Option<i64>>(17)?
             .and_then(|value| u64::try_from(value).ok()),
-        last_error: row.get(17)?,
+        last_error: row.get(18)?,
     })
 }
 
@@ -923,6 +1081,17 @@ fn workplane_mailbox_registration(
             )
             .backlog_policy(CapabilityMailboxBacklogPolicy::RepoCoalesced),
         ),
+        _ => None,
+    }
+}
+
+fn mailbox_worker_pool(mailbox_name: &str) -> Option<EnrichmentWorkerPool> {
+    match mailbox_name {
+        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => Some(EnrichmentWorkerPool::SummaryRefresh),
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
+            Some(EnrichmentWorkerPool::Embeddings)
+        }
+        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => Some(EnrichmentWorkerPool::CloneRebuild),
         _ => None,
     }
 }

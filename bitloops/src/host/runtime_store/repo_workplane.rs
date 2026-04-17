@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use super::types::RepoSqliteRuntimeStore;
+use crate::storage::SqliteConnectionPool;
 
 pub(crate) const REPO_WORKPLANE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS capability_workplane_cursor_generations (
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS capability_workplane_cursor_runs (
     repo_root TEXT NOT NULL,
     capability_id TEXT NOT NULL,
     mailbox_name TEXT NOT NULL,
+    init_session_id TEXT,
     from_generation_seq INTEGER NOT NULL,
     to_generation_seq INTEGER NOT NULL,
     reconcile_mode TEXT NOT NULL,
@@ -103,6 +105,7 @@ CREATE TABLE IF NOT EXISTS capability_workplane_jobs (
     config_root TEXT NOT NULL,
     capability_id TEXT NOT NULL,
     mailbox_name TEXT NOT NULL,
+    init_session_id TEXT,
     dedupe_key TEXT,
     payload TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -127,6 +130,7 @@ ON capability_workplane_jobs (repo_id, capability_id, mailbox_name, dedupe_key);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityWorkplaneJobInsert {
     pub mailbox_name: String,
+    pub init_session_id: Option<String>,
     pub dedupe_key: Option<String>,
     pub payload: Value,
 }
@@ -134,11 +138,13 @@ pub struct CapabilityWorkplaneJobInsert {
 impl CapabilityWorkplaneJobInsert {
     pub fn new(
         mailbox_name: impl Into<String>,
+        init_session_id: Option<String>,
         dedupe_key: Option<String>,
         payload: Value,
     ) -> Self {
         Self {
             mailbox_name: mailbox_name.into(),
+            init_session_id,
             dedupe_key,
             payload,
         }
@@ -211,6 +217,7 @@ pub struct WorkplaneCursorRunRecord {
     pub repo_root: PathBuf,
     pub capability_id: String,
     pub mailbox_name: String,
+    pub init_session_id: Option<String>,
     pub from_generation_seq: u64,
     pub to_generation_seq: u64,
     pub reconcile_mode: String,
@@ -231,6 +238,7 @@ pub struct WorkplaneJobRecord {
     pub config_root: PathBuf,
     pub capability_id: String,
     pub mailbox_name: String,
+    pub init_session_id: Option<String>,
     pub dedupe_key: Option<String>,
     pub payload: Value,
     pub status: WorkplaneJobStatus,
@@ -328,6 +336,7 @@ impl RepoSqliteRuntimeStore {
                         &self.repo_id,
                         capability_id,
                         &job.mailbox_name,
+                        job.init_session_id.as_deref(),
                         job.dedupe_key.as_deref(),
                     )? {
                         if existing.status == WorkplaneJobStatus::Pending {
@@ -357,13 +366,13 @@ impl RepoSqliteRuntimeStore {
                     conn.execute(
                         "INSERT INTO capability_workplane_jobs (
                             job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
-                            dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                            init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
                             started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
                             lease_expires_at_unix, last_error
                          ) VALUES (
                             ?1, ?2, ?3, ?4, ?5, ?6,
-                            ?7, ?8, ?9, 0, ?10, ?11,
-                            NULL, ?12, NULL, NULL,
+                            ?7, ?8, ?9, ?10, 0, ?11, ?12,
+                            NULL, ?13, NULL, NULL,
                             NULL, NULL
                          )",
                         params![
@@ -373,6 +382,7 @@ impl RepoSqliteRuntimeStore {
                             self.config_root.to_string_lossy().to_string(),
                             capability_id,
                             &job.mailbox_name,
+                            job.init_session_id.as_deref(),
                             job.dedupe_key.as_deref(),
                             job.payload.to_string(),
                             WorkplaneJobStatus::Pending.as_str(),
@@ -516,20 +526,53 @@ fn load_deduped_job(
     repo_id: &str,
     capability_id: &str,
     mailbox_name: &str,
+    init_session_id: Option<&str>,
     dedupe_key: Option<&str>,
 ) -> Result<Option<WorkplaneJobRecord>> {
     let Some(dedupe_key) = dedupe_key else {
         return Ok(None);
     };
+    if let Some(init_session_id) = init_session_id {
+        return conn
+            .query_row(
+                "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                        init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                        started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                        lease_expires_at_unix, last_error
+                 FROM capability_workplane_jobs
+                 WHERE repo_id = ?1
+                   AND capability_id = ?2
+                   AND mailbox_name = ?3
+                   AND init_session_id = ?4
+                   AND dedupe_key = ?5
+                   AND status IN (?6, ?7)
+                 ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, submitted_at_unix ASC
+                 LIMIT 1",
+                params![
+                    repo_id,
+                    capability_id,
+                    mailbox_name,
+                    init_session_id,
+                    dedupe_key,
+                    WorkplaneJobStatus::Running.as_str(),
+                    WorkplaneJobStatus::Pending.as_str(),
+                ],
+                map_workplane_job_record_row,
+            )
+            .optional()
+            .map_err(anyhow::Error::from);
+    }
+
     conn.query_row(
         "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
-                dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
                 started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
                 lease_expires_at_unix, last_error
          FROM capability_workplane_jobs
          WHERE repo_id = ?1
            AND capability_id = ?2
            AND mailbox_name = ?3
+           AND init_session_id IS NULL
            AND dedupe_key = ?4
            AND status IN (?5, ?6)
          ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, submitted_at_unix ASC
@@ -549,7 +592,7 @@ fn load_deduped_job(
 }
 
 fn map_workplane_job_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkplaneJobRecord> {
-    let payload_raw = row.get::<_, String>(7)?;
+    let payload_raw = row.get::<_, String>(8)?;
     let payload = serde_json::from_str(&payload_raw).unwrap_or(Value::Null);
     Ok(WorkplaneJobRecord {
         job_id: row.get(0)?,
@@ -558,18 +601,19 @@ fn map_workplane_job_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Wor
         config_root: PathBuf::from(row.get::<_, String>(3)?),
         capability_id: row.get(4)?,
         mailbox_name: row.get(5)?,
-        dedupe_key: row.get(6)?,
+        init_session_id: row.get(6)?,
+        dedupe_key: row.get(7)?,
         payload,
-        status: WorkplaneJobStatus::parse(&row.get::<_, String>(8)?),
-        attempts: row.get(9)?,
-        available_at_unix: parse_u64(row.get::<_, i64>(10)?),
-        submitted_at_unix: parse_u64(row.get::<_, i64>(11)?),
-        started_at_unix: row.get::<_, Option<i64>>(12)?.map(parse_u64),
-        updated_at_unix: parse_u64(row.get::<_, i64>(13)?),
-        completed_at_unix: row.get::<_, Option<i64>>(14)?.map(parse_u64),
-        lease_owner: row.get(15)?,
-        lease_expires_at_unix: row.get::<_, Option<i64>>(16)?.map(parse_u64),
-        last_error: row.get(17)?,
+        status: WorkplaneJobStatus::parse(&row.get::<_, String>(9)?),
+        attempts: row.get(10)?,
+        available_at_unix: parse_u64(row.get::<_, i64>(11)?),
+        submitted_at_unix: parse_u64(row.get::<_, i64>(12)?),
+        started_at_unix: row.get::<_, Option<i64>>(13)?.map(parse_u64),
+        updated_at_unix: parse_u64(row.get::<_, i64>(14)?),
+        completed_at_unix: row.get::<_, Option<i64>>(15)?.map(parse_u64),
+        lease_owner: row.get(16)?,
+        lease_expires_at_unix: row.get::<_, Option<i64>>(17)?.map(parse_u64),
+        last_error: row.get(18)?,
     })
 }
 
@@ -586,4 +630,47 @@ fn unix_timestamp_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+pub(crate) fn ensure_repo_workplane_schema_upgrades(sqlite: &SqliteConnectionPool) -> Result<()> {
+    sqlite.with_connection(|conn| {
+        ensure_table_has_column(
+            conn,
+            "capability_workplane_cursor_runs",
+            "init_session_id",
+            "ALTER TABLE capability_workplane_cursor_runs ADD COLUMN init_session_id TEXT",
+        )?;
+        ensure_table_has_column(
+            conn,
+            "capability_workplane_jobs",
+            "init_session_id",
+            "ALTER TABLE capability_workplane_jobs ADD COLUMN init_session_id TEXT",
+        )?;
+        Ok(())
+    })
+}
+
+fn ensure_table_has_column(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    alter_sql: &str,
+) -> Result<()> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .with_context(|| format!("preparing PRAGMA table_info for `{table}`"))?;
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("querying PRAGMA table_info for `{table}`"))?;
+    while let Some(row) = rows.next().context("reading PRAGMA row")? {
+        let name: String = row
+            .get(1)
+            .with_context(|| format!("reading column name from `{table}`"))?;
+        if name == column {
+            return Ok(());
+        }
+    }
+    conn.execute_batch(alter_sql)
+        .with_context(|| format!("adding `{column}` column to `{table}`"))?;
+    Ok(())
 }

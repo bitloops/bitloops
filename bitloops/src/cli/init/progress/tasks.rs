@@ -11,6 +11,9 @@ use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 use super::EmbeddingQueueSnapshot;
 
+const CURRENT_CODE_EMBEDDINGS_TABLE: &str = "symbol_embeddings_current";
+const CURRENT_SUMMARY_SEMANTICS_TABLE: &str = "symbol_semantics_current";
+
 pub(super) async fn current_embedding_queue_snapshot(
     repo_root: &std::path::Path,
     repo_id: &str,
@@ -166,45 +169,45 @@ async fn count_current_code_embedding_artefacts(
     relational: &DefaultRelationalStore,
     repo_id: &str,
 ) -> Result<u64> {
-    query_progress_count(
-        relational,
-        &format!(
-            "SELECT COUNT(DISTINCT a.artefact_id) AS total \
-             FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             JOIN symbol_embeddings e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
-             WHERE a.repo_id = '{}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
-               AND LOWER(COALESCE(e.representation_kind, 'code')) = 'code'",
-            escape_sql_string(repo_id),
-        ),
-    )
-    .await
+    query_progress_count(relational, &current_code_embedding_progress_sql(repo_id)).await
 }
 
 async fn count_current_model_backed_summary_artefacts(
     relational: &DefaultRelationalStore,
     repo_id: &str,
 ) -> Result<u64> {
-    query_progress_count(
-        relational,
-        &format!(
-            "SELECT COUNT(DISTINCT a.artefact_id) AS total \
-             FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             JOIN symbol_semantics s ON s.repo_id = a.repo_id AND s.artefact_id = a.artefact_id \
-             WHERE a.repo_id = '{}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
-               AND ( \
-                    (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
-                    OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
-               )",
-            escape_sql_string(repo_id),
-        ),
+    query_progress_count(relational, &current_summary_progress_sql(repo_id)).await
+}
+
+fn current_code_embedding_progress_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT COUNT(DISTINCT a.artefact_id) AS total \
+         FROM artefacts_current a \
+         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         JOIN {CURRENT_CODE_EMBEDDINGS_TABLE} e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
+         WHERE a.repo_id = '{}' \
+           AND cfs.analysis_mode = 'code' \
+           AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+           AND LOWER(COALESCE(e.representation_kind, 'code')) = 'code'",
+        escape_sql_string(repo_id),
     )
-    .await
+}
+
+fn current_summary_progress_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT COUNT(DISTINCT a.artefact_id) AS total \
+         FROM artefacts_current a \
+         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         JOIN {CURRENT_SUMMARY_SEMANTICS_TABLE} s ON s.repo_id = a.repo_id AND s.artefact_id = a.artefact_id \
+         WHERE a.repo_id = '{}' \
+           AND cfs.analysis_mode = 'code' \
+           AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+           AND ( \
+                (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
+                OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
+           )",
+        escape_sql_string(repo_id),
+    )
 }
 
 async fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {
@@ -235,4 +238,25 @@ fn missing_progress_table(err: &anyhow::Error) -> bool {
 
 fn escape_sql_string(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_embedding_progress_sql_uses_current_projection() {
+        let sql = current_code_embedding_progress_sql("repo-1");
+
+        assert!(sql.contains("JOIN symbol_embeddings_current e"));
+        assert!(!sql.contains("JOIN symbol_embeddings e"));
+    }
+
+    #[test]
+    fn summary_progress_sql_uses_current_projection() {
+        let sql = current_summary_progress_sql("repo-1");
+
+        assert!(sql.contains("JOIN symbol_semantics_current s"));
+        assert!(!sql.contains("JOIN symbol_semantics s"));
+    }
 }

@@ -2,6 +2,10 @@ use super::dashboard_schema::{
     dashboard_graphql_handler, dashboard_graphql_playground_handler, dashboard_graphql_sdl_handler,
 };
 use super::handlers::handle_dashboard_git_blob;
+use super::runtime_schema::{
+    runtime_graphql_handler, runtime_graphql_playground_handler, runtime_graphql_sdl_handler,
+    runtime_graphql_ws_handler,
+};
 use super::{
     ApiError, DASHBOARD_FALLBACK_INSTALL_HTML, DashboardState, ServeMode, content_type_for_path,
     has_bundle_index, request_path_looks_like_asset, resolve_bundle_file,
@@ -193,6 +197,16 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/devql/playground", get(slim_graphql_playground_handler))
         .route("/devql/sdl", get(slim_graphql_sdl_handler))
         .route("/devql/ws", get(slim_graphql_ws_handler))
+        .route(
+            "/devql/runtime",
+            post(runtime_graphql_handler).get(runtime_graphql_playground_handler),
+        )
+        .route(
+            "/devql/runtime/playground",
+            get(runtime_graphql_playground_handler),
+        )
+        .route("/devql/runtime/sdl", get(runtime_graphql_sdl_handler))
+        .route("/devql/runtime/ws", get(runtime_graphql_ws_handler))
         .route(
             "/devql/dashboard",
             post(dashboard_graphql_handler).get(dashboard_graphql_playground_handler),

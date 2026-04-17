@@ -6,13 +6,12 @@ use anyhow::{Context, Result, bail};
 use crate::adapters::agents::AgentAdapterRegistry;
 use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
 use crate::cli::embeddings::{
-    EmbeddingsRuntime, enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings,
-    install_or_configure_platform_embeddings,
+    EmbeddingsRuntime, install_or_bootstrap_embeddings, install_or_configure_platform_embeddings,
 };
 use crate::cli::inference::{
-    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
-    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
-    prepare_local_summary_generation_plan,
+    PreparedSummarySetupAction, SummarySetupSelection, configure_cloud_summary_generation,
+    configure_local_summary_generation, platform_summary_gateway_url_override,
+    prepare_cloud_summary_generation_plan, prepare_local_summary_generation_plan,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -24,10 +23,10 @@ use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_i
 
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
-    AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
-    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_local_policy_excluded,
-    maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
-    should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
+    AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, choose_summary_setup_during_init,
+    detect_or_select_agent, ensure_repo_local_policy_excluded, maybe_install_default_daemon,
+    normalize_cli_exclusions, normalize_exclude_from_paths, should_install_embeddings_during_init,
+    should_run_initial_ingest, should_run_initial_sync,
 };
 
 fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
@@ -144,7 +143,7 @@ pub(super) async fn run_for_project_root(
             .context("activating semantic clones deferred mailboxes for init")?;
     }
 
-    let mut queued_embeddings_bootstrap = None;
+    let mut embeddings_bootstrap = None;
     let mut prepared_summary_setup = None;
     let should_install_embeddings = should_install_embeddings_during_init(
         project_root,
@@ -167,8 +166,7 @@ pub(super) async fn run_for_project_root(
                 writeln!(out, "{line}")?;
             }
         } else if args.install_default_daemon {
-            queued_embeddings_bootstrap =
-                Some(enqueue_embeddings_bootstrap_during_init(project_root, out).await?);
+            embeddings_bootstrap = Some(resolve_embeddings_bootstrap_request(project_root)?);
         } else {
             install_embeddings_during_init(project_root, out)?;
         }
@@ -231,101 +229,32 @@ pub(super) async fn run_for_project_root(
     if args.install_default_daemon {
         write_init_setup_handoff(out).await?;
     }
-    let run_concurrent_init_progress = args.install_default_daemon
-        && (prepared_summary_setup.is_some()
-            || (queued_embeddings_bootstrap.is_some() && (should_sync || should_ingest)));
-    if should_sync || should_ingest || prepared_summary_setup.is_some() {
+    if should_sync
+        || should_ingest
+        || embeddings_bootstrap.is_some()
+        || prepared_summary_setup.is_some()
+    {
         let scope = crate::devql_transport::discover_slim_cli_repo_scope(Some(project_root))?;
-        if run_concurrent_init_progress {
-            let initial_top_task = if should_sync {
-                let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
-                    &scope, false, None, false, false, "init", false,
-                )
-                .await?;
-                Some(task)
-            } else if should_ingest {
-                let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
-                    &scope,
-                    Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
-                    false,
-                )
-                .await?;
-                Some(task)
-            } else {
-                None
-            };
-            run_dual_init_progress(
-                out,
-                &scope,
-                initial_top_task,
-                InitProgressOptions {
-                    show_sync: should_sync,
-                    show_ingest: should_ingest,
-                    enqueue_ingest_after_sync: should_sync && should_ingest,
-                    ingest_backfill: args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL),
-                    queued_embeddings_bootstrap,
-                    prepared_summary_setup,
+        let ingest_backfill =
+            should_ingest.then_some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL));
+        let summaries_bootstrap = prepared_summary_setup
+            .as_ref()
+            .map(runtime_summary_bootstrap_request_from_plan);
+        run_dual_init_progress(
+            out,
+            &scope,
+            InitProgressOptions {
+                start_input: crate::cli::devql::graphql::RuntimeStartInitInput {
+                    repo_id: scope.repo.repo_id.clone(),
+                    run_sync: should_sync,
+                    run_ingest: should_ingest,
+                    ingest_backfill,
+                    embeddings_bootstrap,
+                    summaries_bootstrap,
                 },
-            )
-            .await?;
-        } else if should_sync {
-            writeln!(out, "Starting initial DevQL sync...")?;
-            out.flush()?;
-            let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
-                &scope, false, None, false, false, "init", false,
-            )
-            .await?;
-            if let Some(task) =
-                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task.clone()).await?
-            {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
-            }
-            if should_ingest {
-                writeln!(out, "Starting initial DevQL ingest after sync...")?;
-                out.flush()?;
-                let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
-                    &scope,
-                    Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
-                    false,
-                )
-                .await?;
-                if let Some(task) =
-                    crate::cli::devql::graphql::watch_task_via_graphql(&scope, task).await?
-                {
-                    writeln!(
-                        out,
-                        "{}",
-                        crate::cli::devql::format_task_completion_summary(&task)
-                    )?;
-                }
-            }
-        } else if should_ingest {
-            if should_sync {
-                writeln!(out, "Starting initial DevQL ingest after sync...")?;
-            } else {
-                writeln!(out, "Starting initial DevQL ingest...")?;
-            }
-            out.flush()?;
-            let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
-                &scope,
-                Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
-                false,
-            )
-            .await?;
-            if let Some(task) =
-                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task).await?
-            {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
-            }
-        }
+            },
+        )
+        .await?;
     }
     Ok(())
 }
@@ -363,18 +292,25 @@ async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
         .unwrap_or(runtime.config_path))
 }
 
-async fn enqueue_embeddings_bootstrap_during_init(
-    project_root: &Path,
-    out: &mut dyn Write,
-) -> Result<QueuedEmbeddingsBootstrapTask> {
-    let (scope, queued) =
-        enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
-            .await?;
-    out.flush()?;
-    Ok(QueuedEmbeddingsBootstrapTask {
-        scope,
-        task_id: queued.task.task_id,
-    })
+fn resolve_embeddings_bootstrap_request(
+    repo_root: &Path,
+) -> Result<crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput> {
+    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))
+        .unwrap_or_else(|_| repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH));
+    let profile_name = crate::cli::embeddings::embedding_capability_for_config_path(&config_path)
+        .ok()
+        .and_then(|capability| {
+            crate::cli::embeddings::selected_inference_profile_name(&capability).map(str::to_string)
+        })
+        .unwrap_or_else(|| "local_code".to_string());
+
+    Ok(
+        crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput {
+            config_path: config_path.display().to_string(),
+            profile_name,
+        },
+    )
 }
 
 fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {
@@ -394,6 +330,45 @@ fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> R
         Err(err) => {
             bail!("Bitloops init completed, but embeddings installation failed: {err:#}");
         }
+    }
+}
+
+fn runtime_summary_bootstrap_request_from_plan(
+    plan: &crate::cli::inference::PreparedSummarySetupPlan,
+) -> crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+    match plan.action() {
+        PreparedSummarySetupAction::InstallRuntimeOnly { message } => {
+            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+                action: "install_runtime_only".to_string(),
+                message: Some(message.clone()),
+                model_name: None,
+                gateway_url_override: None,
+            }
+        }
+        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
+            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+                action: "install_runtime_only_pending_probe".to_string(),
+                message: Some(message.clone()),
+                model_name: None,
+                gateway_url_override: None,
+            }
+        }
+        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
+            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+                action: "configure_local".to_string(),
+                message: None,
+                model_name: Some(model_name.clone()),
+                gateway_url_override: None,
+            }
+        }
+        PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override,
+        } => crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+            action: "configure_cloud".to_string(),
+            message: None,
+            model_name: None,
+            gateway_url_override: gateway_url_override.clone(),
+        },
     }
 }
 

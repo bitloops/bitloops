@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MANAGED_RELEASE_DOWNLOAD_BUFFER_BYTES: usize = 1024 * 1024;
 #[cfg(not(test))]
@@ -26,6 +26,10 @@ const TARGET_PARALLEL_DOWNLOAD_PART_BYTES: u64 = 1024;
 const MAX_PARALLEL_DOWNLOAD_PARTS: usize = 6;
 #[cfg(test)]
 const MAX_PARALLEL_DOWNLOAD_PARTS: usize = 4;
+#[cfg(not(test))]
+const PARALLEL_RANGE_TIMEOUT_GRACE_SECS: u64 = 15;
+#[cfg(not(test))]
+const PARALLEL_RANGE_TIMEOUT_MIN_BYTES_PER_SEC: u64 = 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct DownloadedManagedAsset {
@@ -73,7 +77,7 @@ struct ParsedContentRange {
 }
 
 enum WorkerEvent {
-    Progress(u64),
+    Progress(usize, u64),
     Done(usize, Result<DownloadedManagedChunk, String>),
 }
 
@@ -85,6 +89,26 @@ struct DownloadByteRangeRequest {
     asset_label: String,
     total_bytes: u64,
     abort: Arc<AtomicBool>,
+}
+
+impl DownloadByteRangeRequest {
+    fn new(
+        client: &Client,
+        url: &str,
+        user_agent: &str,
+        asset_label: &str,
+        total_bytes: u64,
+        abort: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            client: client.clone(),
+            url: url.to_string(),
+            user_agent: user_agent.to_string(),
+            asset_label: asset_label.to_string(),
+            total_bytes,
+            abort,
+        }
+    }
 }
 
 impl Drop for DownloadedManagedAsset {
@@ -100,20 +124,29 @@ pub(crate) fn download_release_asset_to_temp_file(
     asset_label: &str,
     progress: impl FnMut(u64, Option<u64>) -> Result<()>,
 ) -> Result<DownloadedManagedAsset> {
+    let probe_started = Instant::now();
     let response = managed_download_request(client, url, user_agent)
         .header(RANGE, "bytes=0-0")
         .send()
         .with_context(|| format!("downloading {asset_label} from {url}"))?
         .error_for_status()
         .with_context(|| format!("downloading {asset_label} from {url}"))?;
+    let probe_elapsed = probe_started.elapsed();
+    let content_range = response
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(parse_content_range_header);
 
     if response.status() == StatusCode::PARTIAL_CONTENT
-        && let Some(content_range) = response
-            .headers()
-            .get(CONTENT_RANGE)
-            .and_then(parse_content_range_header)
+        && let Some(content_range) = content_range
         && let Some(part_ranges) = choose_parallel_download_ranges(content_range.total)
     {
+        log::info!(
+            "managed runtime download branch: asset_label={asset_label} mode=parallel probe_ms={} total_bytes={} part_count={}",
+            probe_elapsed.as_millis(),
+            content_range.total,
+            part_ranges.len()
+        );
         drop(response);
         return download_release_asset_to_temp_file_in_parallel(
             client,
@@ -127,6 +160,18 @@ pub(crate) fn download_release_asset_to_temp_file(
     }
 
     if response.status() == StatusCode::PARTIAL_CONTENT {
+        if let Some(content_range) = content_range {
+            log::info!(
+                "managed runtime download branch: asset_label={asset_label} mode=serial_refetch probe_ms={} total_bytes={} reason=below_parallel_threshold",
+                probe_elapsed.as_millis(),
+                content_range.total
+            );
+        } else {
+            log::info!(
+                "managed runtime download branch: asset_label={asset_label} mode=serial_refetch probe_ms={} reason=missing_content_range",
+                probe_elapsed.as_millis()
+            );
+        }
         drop(response);
         return download_release_asset_to_temp_file_serial(
             client,
@@ -137,7 +182,20 @@ pub(crate) fn download_release_asset_to_temp_file(
         );
     }
 
-    download_response_to_temp_file(response, asset_label, progress)
+    log::info!(
+        "managed runtime download branch: asset_label={asset_label} mode=serial_reuse_probe_response probe_ms={} status={}",
+        probe_elapsed.as_millis(),
+        response.status().as_u16()
+    );
+    let transfer_started = Instant::now();
+    let download = download_response_to_temp_file(response, asset_label, progress)?;
+    log::info!(
+        "managed runtime download complete: asset_label={asset_label} mode=serial_reuse_probe_response bytes_downloaded={} total_bytes={} transfer_ms={}",
+        download.bytes_downloaded,
+        download.bytes_total.unwrap_or(download.bytes_downloaded),
+        transfer_started.elapsed().as_millis()
+    );
+    Ok(download)
 }
 
 fn download_release_asset_to_temp_file_in_parallel(
@@ -149,6 +207,7 @@ fn download_release_asset_to_temp_file_in_parallel(
     part_ranges: &[DownloadByteRange],
     mut progress: impl FnMut(u64, Option<u64>) -> Result<()>,
 ) -> Result<DownloadedManagedAsset> {
+    let transfer_started = Instant::now();
     let mut download = DownloadedManagedAsset {
         path: temporary_download_path(asset_label),
         bytes_downloaded: 0,
@@ -161,17 +220,25 @@ fn download_release_asset_to_temp_file_in_parallel(
     let mut handles = Vec::with_capacity(part_ranges.len());
     for (index, range) in part_ranges.iter().copied().enumerate() {
         let tx = tx.clone();
-        let request = DownloadByteRangeRequest {
-            client: client.clone(),
-            url: url.to_string(),
-            user_agent: user_agent.to_string(),
-            asset_label: asset_label.to_string(),
+        let request = DownloadByteRangeRequest::new(
+            client,
+            url,
+            user_agent,
+            asset_label,
             total_bytes,
-            abort: Arc::clone(&abort),
-        };
+            Arc::clone(&abort),
+        );
         handles.push(thread::spawn(move || {
-            let result = download_byte_range_to_temp_file(&request, range, &tx)
-                .map_err(|err| err.to_string());
+            let result = download_byte_range_to_temp_file(
+                &request,
+                range,
+                Some(parallel_range_request_timeout(range)),
+                |delta| {
+                    let _ = tx.send(WorkerEvent::Progress(index, delta));
+                    Ok(())
+                },
+            )
+            .map_err(|err| err.to_string());
             let _ = tx.send(WorkerEvent::Done(index, result));
         }));
     }
@@ -180,14 +247,17 @@ fn download_release_asset_to_temp_file_in_parallel(
     let mut progress_error = None;
     let mut worker_error = None;
     let mut completed_workers = 0_usize;
+    let mut worker_bytes_downloaded = vec![0_u64; part_ranges.len()];
     let mut chunks = std::iter::repeat_with(|| None)
         .take(part_ranges.len())
         .collect::<Vec<_>>();
     while completed_workers < part_ranges.len() {
         match rx.recv() {
-            Ok(WorkerEvent::Progress(delta)) => {
+            Ok(WorkerEvent::Progress(index, delta)) => {
                 if progress_error.is_none() && worker_error.is_none() {
-                    download.bytes_downloaded = download.bytes_downloaded.saturating_add(delta);
+                    worker_bytes_downloaded[index] =
+                        worker_bytes_downloaded[index].saturating_add(delta);
+                    download.bytes_downloaded = worker_bytes_downloaded.iter().sum();
                     if let Err(err) = progress(download.bytes_downloaded, download.bytes_total) {
                         progress_error = Some(err);
                         abort.store(true, Ordering::SeqCst);
@@ -198,11 +268,15 @@ fn download_release_asset_to_temp_file_in_parallel(
                 completed_workers = completed_workers.saturating_add(1);
                 match result {
                     Ok(chunk) => {
+                        worker_bytes_downloaded[index] = chunk.bytes_downloaded;
                         chunks[index] = Some(chunk);
                     }
                     Err(err) => {
                         if worker_error.is_none() {
-                            worker_error = Some(anyhow::anyhow!(err));
+                            worker_error = Some(format!(
+                                "range {}-{} failed: {err}",
+                                part_ranges[index].start, part_ranges[index].end
+                            ));
                             abort.store(true, Ordering::SeqCst);
                         }
                     }
@@ -210,9 +284,9 @@ fn download_release_asset_to_temp_file_in_parallel(
             }
             Err(_) => {
                 if worker_error.is_none() {
-                    worker_error = Some(anyhow::anyhow!(
-                        "parallel managed runtime download channel closed unexpectedly"
-                    ));
+                    worker_error = Some(
+                        "parallel managed runtime download channel closed unexpectedly".to_string(),
+                    );
                     abort.store(true, Ordering::SeqCst);
                 }
                 break;
@@ -228,17 +302,60 @@ fn download_release_asset_to_temp_file_in_parallel(
     if let Some(err) = progress_error {
         return Err(err);
     }
+
+    let transfer_elapsed = transfer_started.elapsed();
+    let mut retried_parts = 0_usize;
     if let Some(err) = worker_error {
-        return Err(err);
+        let completed_part_count = chunks.iter().filter(|chunk| chunk.is_some()).count();
+        log::warn!(
+            "managed runtime parallel download degraded to serial retries: asset_label={asset_label} total_bytes={} completed_parts={} part_count={} transfer_ms={} reason={}",
+            total_bytes,
+            completed_part_count,
+            part_ranges.len(),
+            transfer_elapsed.as_millis(),
+            err
+        );
+        download.bytes_downloaded = chunks
+            .iter()
+            .flatten()
+            .map(|chunk| chunk.bytes_downloaded)
+            .sum();
+        progress(download.bytes_downloaded, download.bytes_total)?;
+        let retry_request = DownloadByteRangeRequest::new(
+            client,
+            url,
+            user_agent,
+            asset_label,
+            total_bytes,
+            Arc::new(AtomicBool::new(false)),
+        );
+        retried_parts = retry_missing_parallel_ranges_serially(
+            &retry_request,
+            part_ranges,
+            &mut chunks,
+            &mut download.bytes_downloaded,
+            &mut progress,
+        )?;
     }
 
+    let merge_started = Instant::now();
     let chunks = chunks
         .into_iter()
         .map(|chunk| chunk.context("parallel managed runtime download finished without a chunk"))
         .collect::<Result<Vec<_>>>()?;
     download.sha256_hex = merge_downloaded_chunks_into_file(download.path(), &chunks)?;
+    let merge_elapsed = merge_started.elapsed();
     download.bytes_downloaded = total_bytes;
     progress(download.bytes_downloaded, download.bytes_total)?;
+    log::info!(
+        "managed runtime download complete: asset_label={asset_label} mode=parallel bytes_downloaded={} total_bytes={} part_count={} retried_parts={} transfer_ms={} merge_ms={}",
+        download.bytes_downloaded,
+        download.bytes_total.unwrap_or(download.bytes_downloaded),
+        part_ranges.len(),
+        retried_parts,
+        transfer_elapsed.as_millis(),
+        merge_elapsed.as_millis()
+    );
     Ok(download)
 }
 
@@ -249,12 +366,20 @@ fn download_release_asset_to_temp_file_serial(
     asset_label: &str,
     progress: impl FnMut(u64, Option<u64>) -> Result<()>,
 ) -> Result<DownloadedManagedAsset> {
+    let transfer_started = Instant::now();
     let response = managed_download_request(client, url, user_agent)
         .send()
         .with_context(|| format!("downloading {asset_label} from {url}"))?
         .error_for_status()
         .with_context(|| format!("downloading {asset_label} from {url}"))?;
-    download_response_to_temp_file(response, asset_label, progress)
+    let download = download_response_to_temp_file(response, asset_label, progress)?;
+    log::info!(
+        "managed runtime download complete: asset_label={asset_label} mode=serial_refetch bytes_downloaded={} total_bytes={} transfer_ms={}",
+        download.bytes_downloaded,
+        download.bytes_total.unwrap_or(download.bytes_downloaded),
+        transfer_started.elapsed().as_millis()
+    );
+    Ok(download)
 }
 
 fn download_response_to_temp_file(
@@ -307,30 +432,35 @@ fn download_response_to_temp_file(
 fn download_byte_range_to_temp_file(
     request: &DownloadByteRangeRequest,
     range: DownloadByteRange,
-    progress_tx: &mpsc::Sender<WorkerEvent>,
+    request_timeout: Option<Duration>,
+    mut on_progress: impl FnMut(u64) -> Result<()>,
 ) -> Result<DownloadedManagedChunk> {
     let path = temporary_download_path(&format!(
         "{}-{}-{}",
         request.asset_label, range.start, range.end
     ));
     let result = (|| {
-        let mut response =
+        let mut request_builder =
             managed_download_request(&request.client, &request.url, &request.user_agent)
-                .header(RANGE, format!("bytes={}-{}", range.start, range.end))
-                .send()
-                .with_context(|| {
-                    format!(
-                        "downloading {} range {}-{}",
-                        request.asset_label, range.start, range.end
-                    )
-                })?
-                .error_for_status()
-                .with_context(|| {
-                    format!(
-                        "downloading {} range {}-{}",
-                        request.asset_label, range.start, range.end
-                    )
-                })?;
+                .header(RANGE, format!("bytes={}-{}", range.start, range.end));
+        if let Some(timeout) = request_timeout {
+            request_builder = request_builder.timeout(timeout);
+        }
+        let mut response = request_builder
+            .send()
+            .with_context(|| {
+                format!(
+                    "downloading {} range {}-{}",
+                    request.asset_label, range.start, range.end
+                )
+            })?
+            .error_for_status()
+            .with_context(|| {
+                format!(
+                    "downloading {} range {}-{}",
+                    request.asset_label, range.start, range.end
+                )
+            })?;
         if response.status() != StatusCode::PARTIAL_CONTENT {
             anyhow::bail!(
                 "managed runtime range request {}-{} returned HTTP {} instead of 206",
@@ -349,9 +479,22 @@ fn download_byte_range_to_temp_file(
             .with_context(|| format!("creating temporary chunk file {}", path.display()))?;
         let mut bytes_downloaded = 0_u64;
         let mut chunk = [0_u8; MANAGED_RELEASE_DOWNLOAD_BUFFER_BYTES];
+        let started = Instant::now();
         loop {
             if request.abort.load(Ordering::SeqCst) {
                 anyhow::bail!("parallel managed runtime download aborted");
+            }
+            if let Some(timeout) = request_timeout
+                && started.elapsed() > timeout
+            {
+                anyhow::bail!(
+                    "managed runtime range request {}-{} exceeded {} ms after downloading {} of {} bytes",
+                    range.start,
+                    range.end,
+                    timeout.as_millis(),
+                    bytes_downloaded,
+                    range.len()
+                );
             }
             let read = response.read(&mut chunk).with_context(|| {
                 format!(
@@ -365,7 +508,7 @@ fn download_byte_range_to_temp_file(
             file.write_all(&chunk[..read])
                 .with_context(|| format!("writing temporary chunk file {}", path.display()))?;
             bytes_downloaded = bytes_downloaded.saturating_add(read as u64);
-            let _ = progress_tx.send(WorkerEvent::Progress(read as u64));
+            on_progress(read as u64)?;
         }
         file.flush()
             .with_context(|| format!("flushing temporary chunk file {}", path.display()))?;
@@ -388,6 +531,34 @@ fn download_byte_range_to_temp_file(
         let _ = fs::remove_file(&path);
     }
     result
+}
+
+fn retry_missing_parallel_ranges_serially(
+    request: &DownloadByteRangeRequest,
+    part_ranges: &[DownloadByteRange],
+    chunks: &mut [Option<DownloadedManagedChunk>],
+    bytes_downloaded: &mut u64,
+    progress: &mut impl FnMut(u64, Option<u64>) -> Result<()>,
+) -> Result<usize> {
+    let mut retried_parts = 0_usize;
+    for (index, range) in part_ranges.iter().copied().enumerate() {
+        if chunks[index].is_some() {
+            continue;
+        }
+        retried_parts = retried_parts.saturating_add(1);
+        let chunk = download_byte_range_to_temp_file(request, range, None, |delta| {
+            *bytes_downloaded = (*bytes_downloaded).saturating_add(delta);
+            progress(*bytes_downloaded, Some(request.total_bytes))
+        })
+        .with_context(|| {
+            format!(
+                "retrying {} range {}-{} serially",
+                request.asset_label, range.start, range.end
+            )
+        })?;
+        chunks[index] = Some(chunk);
+    }
+    Ok(retried_parts)
 }
 
 fn merge_downloaded_chunks_into_file(
@@ -471,6 +642,22 @@ fn choose_parallel_download_ranges(total_bytes: u64) -> Option<Vec<DownloadByteR
     Some(ranges)
 }
 
+#[cfg(not(test))]
+fn parallel_range_request_timeout(range: DownloadByteRange) -> Duration {
+    Duration::from_secs(
+        PARALLEL_RANGE_TIMEOUT_GRACE_SECS
+            + range
+                .len()
+                .div_ceil(PARALLEL_RANGE_TIMEOUT_MIN_BYTES_PER_SEC)
+                .max(1),
+    )
+}
+
+#[cfg(test)]
+fn parallel_range_request_timeout(range: DownloadByteRange) -> Duration {
+    Duration::from_millis(80 + range.len().div_ceil(128) * 10)
+}
+
 fn validate_content_range_header(
     header: Option<&reqwest::header::HeaderValue>,
     expected_range: DownloadByteRange,
@@ -544,6 +731,15 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
+    #[derive(Clone, Copy)]
+    enum MockResponseBodyMode {
+        Immediate,
+        Chunked {
+            chunk_size: usize,
+            chunk_delay: Duration,
+        },
+    }
+
     struct MockDownloadServer {
         url: String,
         requests: Arc<Mutex<Vec<String>>>,
@@ -553,8 +749,27 @@ mod tests {
         worker_handles: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
     }
 
+    struct MockDownloadServerContext {
+        asset_bytes: Arc<[u8]>,
+        supports_range: bool,
+        response_delay: Duration,
+        range_body_modes: Arc<Vec<(DownloadByteRange, MockResponseBodyMode)>>,
+        requests: Arc<Mutex<Vec<String>>>,
+        max_in_flight: Arc<AtomicUsize>,
+        active_requests: Arc<AtomicUsize>,
+    }
+
     impl MockDownloadServer {
         fn start(asset_bytes: Vec<u8>, supports_range: bool, response_delay: Duration) -> Self {
+            Self::start_with_body_modes(asset_bytes, supports_range, response_delay, Vec::new())
+        }
+
+        fn start_with_body_modes(
+            asset_bytes: Vec<u8>,
+            supports_range: bool,
+            response_delay: Duration,
+            range_body_modes: Vec<(DownloadByteRange, MockResponseBodyMode)>,
+        ) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock download server");
             listener
                 .set_nonblocking(true)
@@ -565,33 +780,28 @@ mod tests {
             );
             let requests = Arc::new(Mutex::new(Vec::new()));
             let max_in_flight = Arc::new(AtomicUsize::new(0));
-            let active_requests = Arc::new(AtomicUsize::new(0));
             let stop = Arc::new(AtomicBool::new(false));
             let worker_handles = Arc::new(Mutex::new(Vec::new()));
+            let context = Arc::new(MockDownloadServerContext {
+                asset_bytes: Arc::from(asset_bytes),
+                supports_range,
+                response_delay,
+                range_body_modes: Arc::new(range_body_modes),
+                requests: Arc::clone(&requests),
+                max_in_flight: Arc::clone(&max_in_flight),
+                active_requests: Arc::new(AtomicUsize::new(0)),
+            });
 
-            let requests_for_thread = Arc::clone(&requests);
-            let max_in_flight_for_thread = Arc::clone(&max_in_flight);
-            let active_for_thread = Arc::clone(&active_requests);
+            let context_for_thread = Arc::clone(&context);
             let stop_for_thread = Arc::clone(&stop);
             let worker_handles_for_thread = Arc::clone(&worker_handles);
             let accept_handle = thread::spawn(move || {
                 while !stop_for_thread.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            let requests = Arc::clone(&requests_for_thread);
-                            let asset_bytes = asset_bytes.clone();
-                            let max_in_flight = Arc::clone(&max_in_flight_for_thread);
-                            let active_requests = Arc::clone(&active_for_thread);
+                            let context = Arc::clone(&context_for_thread);
                             let handle = thread::spawn(move || {
-                                handle_connection(
-                                    stream,
-                                    &asset_bytes,
-                                    supports_range,
-                                    response_delay,
-                                    requests,
-                                    max_in_flight,
-                                    active_requests,
-                                );
+                                handle_connection(stream, context);
                             });
                             worker_handles_for_thread
                                 .lock()
@@ -631,17 +841,9 @@ mod tests {
         }
     }
 
-    fn handle_connection(
-        mut stream: TcpStream,
-        asset_bytes: &[u8],
-        supports_range: bool,
-        response_delay: Duration,
-        requests: Arc<Mutex<Vec<String>>>,
-        max_in_flight: Arc<AtomicUsize>,
-        active_requests: Arc<AtomicUsize>,
-    ) {
-        let current = active_requests.fetch_add(1, Ordering::SeqCst) + 1;
-        update_max_active(&max_in_flight, current);
+    fn handle_connection(mut stream: TcpStream, context: Arc<MockDownloadServerContext>) {
+        let current = context.active_requests.fetch_add(1, Ordering::SeqCst) + 1;
+        update_max_active(&context.max_in_flight, current);
         let mut request = Vec::new();
         let mut buffer = [0_u8; 4096];
         loop {
@@ -657,11 +859,12 @@ mod tests {
             }
         }
         let request_text = String::from_utf8_lossy(&request).to_string();
-        requests
+        context
+            .requests
             .lock()
             .expect("lock requests")
             .push(request_text.clone());
-        thread::sleep(response_delay);
+        thread::sleep(context.response_delay);
 
         let range_header = request_text
             .lines()
@@ -671,11 +874,11 @@ mod tests {
             })
             .map(str::trim)
             .and_then(parse_range_header);
-        let (status_line, body, headers) = if supports_range {
+        let (status_line, body, headers) = if context.supports_range {
             if let Some(range) = range_header {
                 let start = range.start as usize;
                 let end = range.end as usize;
-                let body = asset_bytes[start..=end].to_vec();
+                let body = context.asset_bytes[start..=end].to_vec();
                 (
                     "HTTP/1.1 206 Partial Content",
                     body,
@@ -685,7 +888,7 @@ mod tests {
                             "Content-Range: bytes {}-{}/{}",
                             range.start,
                             range.end,
-                            asset_bytes.len()
+                            context.asset_bytes.len()
                         ),
                         "Accept-Ranges: bytes".to_string(),
                     ],
@@ -693,9 +896,9 @@ mod tests {
             } else {
                 (
                     "HTTP/1.1 200 OK",
-                    asset_bytes.to_vec(),
+                    context.asset_bytes.to_vec(),
                     vec![
-                        format!("Content-Length: {}", asset_bytes.len()),
+                        format!("Content-Length: {}", context.asset_bytes.len()),
                         "Accept-Ranges: bytes".to_string(),
                     ],
                 )
@@ -703,18 +906,44 @@ mod tests {
         } else {
             (
                 "HTTP/1.1 200 OK",
-                asset_bytes.to_vec(),
-                vec![format!("Content-Length: {}", asset_bytes.len())],
+                context.asset_bytes.to_vec(),
+                vec![format!("Content-Length: {}", context.asset_bytes.len())],
             )
         };
+        let body_mode = range_header
+            .and_then(|range| {
+                context
+                    .range_body_modes
+                    .iter()
+                    .find(|(candidate, _)| *candidate == range)
+                    .map(|(_, mode)| *mode)
+            })
+            .unwrap_or(MockResponseBodyMode::Immediate);
 
         let response = format!(
             "{status_line}\r\n{}\r\nConnection: close\r\n\r\n",
             headers.join("\r\n")
         );
         let _ = stream.write_all(response.as_bytes());
-        let _ = stream.write_all(&body);
-        active_requests.fetch_sub(1, Ordering::SeqCst);
+        match body_mode {
+            MockResponseBodyMode::Immediate => {
+                let _ = stream.write_all(&body);
+            }
+            MockResponseBodyMode::Chunked {
+                chunk_size,
+                chunk_delay,
+            } => {
+                let chunk_size = chunk_size.max(1);
+                for chunk in body.chunks(chunk_size) {
+                    if stream.write_all(chunk).is_err() {
+                        break;
+                    }
+                    let _ = stream.flush();
+                    thread::sleep(chunk_delay);
+                }
+            }
+        }
+        context.active_requests.fetch_sub(1, Ordering::SeqCst);
     }
 
     fn update_max_active(max_in_flight: &AtomicUsize, current: usize) {
@@ -890,5 +1119,61 @@ mod tests {
         for pair in ranges.windows(2) {
             assert_eq!(pair[0].end + 1, pair[1].start);
         }
+    }
+
+    #[test]
+    fn download_retries_straggling_parallel_range_serially() {
+        let repo = TempDir::new().expect("tempdir");
+        let _guard = enter_process_state(Some(repo.path()), &[]);
+        let asset_bytes = (0..4096)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let slow_range =
+            choose_parallel_download_ranges(asset_bytes.len() as u64).expect("parallel ranges")[1];
+        let server = MockDownloadServer::start_with_body_modes(
+            asset_bytes.clone(),
+            true,
+            Duration::ZERO,
+            vec![(
+                slow_range,
+                MockResponseBodyMode::Chunked {
+                    chunk_size: 64,
+                    chunk_delay: Duration::from_millis(20),
+                },
+            )],
+        );
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .expect("build client");
+
+        let download = download_release_asset_to_temp_file(
+            &client,
+            &server.url,
+            "bitloops-test",
+            "test asset",
+            |_downloaded, _total| Ok(()),
+        )
+        .expect("download asset");
+
+        assert_eq!(
+            fs::read(download.path()).expect("read downloaded asset"),
+            asset_bytes
+        );
+
+        let slow_range_header = format!("range: bytes={}-{}", slow_range.start, slow_range.end);
+        let requests = server.requests.lock().expect("lock requests");
+        assert!(
+            requests
+                .iter()
+                .filter(|request| {
+                    request
+                        .to_ascii_lowercase()
+                        .contains(slow_range_header.as_str())
+                })
+                .count()
+                >= 2,
+            "expected the slow range to be retried serially, got: {requests:?}"
+        );
     }
 }

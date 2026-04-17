@@ -9,13 +9,18 @@ use crate::daemon::tasks::queue::{
     sync_task_mode_from_host as queue_sync_task_mode_from_host,
     sync_task_mode_to_host as queue_sync_task_mode_to_host,
 };
-use crate::daemon::types::{DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource};
+use crate::daemon::types::{
+    DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, EmbeddingsBootstrapProgress,
+};
 use crate::host::devql::{
     DevqlConfig, RelationalStorage, RepoIdentity, SyncProgressPhase, SyncProgressUpdate,
 };
 
 use super::super::DevqlTaskCoordinator;
-use super::super::helpers::{enqueue_sync_completed_runs, receive_embeddings_bootstrap_outcome};
+use super::super::helpers::{
+    enqueue_sync_completed_runs, receive_embeddings_bootstrap_outcome,
+    should_persist_embeddings_bootstrap_progress,
+};
 use super::super::observers::{
     IngestCoordinatorObserver, ProgressPersistState, SyncCoordinatorObserver,
 };
@@ -171,7 +176,7 @@ impl DevqlTaskCoordinator {
                         capability_event_coordinator.as_ref(),
                         host,
                         &cfg,
-                        &task.task_id,
+                        &task,
                         &summary,
                         file_diff,
                         artefact_diff,
@@ -249,12 +254,25 @@ impl DevqlTaskCoordinator {
         let repo_root = task.repo_root.clone();
         let (progress_tx, progress_rx) = mpsc::unbounded_channel();
         let execution = tokio::task::spawn_blocking(move || {
+            let mut progress_state: ProgressPersistState<EmbeddingsBootstrapProgress> =
+                ProgressPersistState::default();
             crate::daemon::embeddings_bootstrap::execute_task_with_progress(
                 &runtime_store,
                 &repo_root,
                 &task_id,
                 &spec,
                 |progress| {
+                    let now = Instant::now();
+                    if !should_persist_embeddings_bootstrap_progress(
+                        progress_state.last_persisted.as_ref(),
+                        &progress,
+                        progress_state.last_persisted_at,
+                        now,
+                    ) {
+                        return Ok(());
+                    }
+                    progress_state.last_persisted = Some(progress.clone());
+                    progress_state.last_persisted_at = Some(now);
                     progress_tx
                         .send(progress)
                         .map_err(|_| anyhow!("embeddings bootstrap progress receiver dropped"))?;

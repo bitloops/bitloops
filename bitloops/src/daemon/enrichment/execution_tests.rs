@@ -259,13 +259,17 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
         mailbox_name:
             crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
                 .to_string(),
+        init_session_id: None,
         dedupe_key: Some(
             crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
             ),
         ),
         payload: serde_json::to_value(
-            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(2),
+                artefact_ids: None,
+            },
         )
         .expect("repo backfill payload"),
         status: WorkplaneJobStatus::Pending,
@@ -319,6 +323,83 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
             assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-39"));
         }
         other => panic!("expected summary follow-up batch, got {other:?}"),
+    }
+}
+
+#[test]
+fn repo_backfill_embedding_plan_batches_initial_work_and_queues_follow_up_backfill() {
+    let job = WorkplaneJobRecord {
+        job_id: "embedding-backfill-1".to_string(),
+        repo_id: "repo-embedding-plan".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-embedding-plan"),
+        config_root: PathBuf::from("/tmp/config-embedding-plan"),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        init_session_id: Some("init-session-embedding-plan".to_string()),
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(40),
+                artefact_ids: None,
+            },
+        )
+        .expect("repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+    let inputs = (0..40).map(summary_plan_input).collect::<Vec<_>>();
+
+    let plan = build_embedding_refresh_workplane_plan(
+        &job,
+        SymbolEmbeddingsRefreshScope::Historical,
+        None,
+        None,
+        inputs,
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+    );
+
+    assert_eq!(
+        plan.inputs.len(),
+        WORKPLANE_EMBEDDING_REPO_BACKFILL_BATCH_SIZE
+    );
+    assert!(
+        !plan.manage_active_state,
+        "intermediate repo-backfill batches must not try to activate the setup yet"
+    );
+    assert_eq!(plan.follow_ups.len(), 1);
+
+    match &plan.follow_ups[0] {
+        FollowUpJob::RepoBackfillEmbeddings {
+            artefact_ids,
+            representation_kind,
+            ..
+        } => {
+            assert_eq!(
+                *representation_kind,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+            );
+            assert_eq!(artefact_ids.len(), 8);
+            assert_eq!(
+                artefact_ids.first().map(String::as_str),
+                Some("artefact-32")
+            );
+            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-39"));
+        }
+        other => panic!("expected embedding repo-backfill follow-up, got {other:?}"),
     }
 }
 
@@ -1041,6 +1122,7 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
         mailbox_name:
             crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
                 .to_string(),
+        init_session_id: None,
         dedupe_key: Some(selected.artefact_id.clone()),
         payload: serde_json::json!({ "artefact_id": selected.artefact_id }),
         status: WorkplaneJobStatus::Pending,
@@ -1186,13 +1268,17 @@ async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
         mailbox_name:
             crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
                 .to_string(),
+        init_session_id: None,
         dedupe_key: Some(
             crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
             ),
         ),
         payload: serde_json::to_value(
-            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(2),
+                artefact_ids: None,
+            },
         )
         .expect("serialize repo backfill payload"),
         status: WorkplaneJobStatus::Pending,
@@ -1252,13 +1338,17 @@ async fn workplane_embedding_repo_backfill_job_processes_current_repo_inputs() {
         mailbox_name:
             crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
                 .to_string(),
+        init_session_id: None,
         dedupe_key: Some(
             crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
             ),
         ),
         payload: serde_json::to_value(
-            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill,
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(2),
+                artefact_ids: None,
+            },
         )
         .expect("serialize repo backfill payload"),
         status: WorkplaneJobStatus::Pending,
@@ -1286,6 +1376,11 @@ async fn workplane_embedding_repo_backfill_job_processes_current_repo_inputs() {
         rows.len() >= 2,
         "repo backfill embedding job should process the current repo inputs"
     );
+    assert_eq!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id),
+        0,
+        "workplane embedding backfill should defer clone rebuild to the follow-up job"
+    );
 }
 
 #[tokio::test]
@@ -1312,6 +1407,7 @@ async fn workplane_summary_embedding_mailbox_job_enqueues_clone_rebuild_follow_u
         mailbox_name:
             crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
                 .to_string(),
+        init_session_id: None,
         dedupe_key: Some(selected.artefact_id.clone()),
         payload: serde_json::json!({ "artefact_id": selected.artefact_id }),
         status: WorkplaneJobStatus::Pending,

@@ -1,6 +1,9 @@
 use std::path::Path;
 
 use crate::daemon;
+use crate::runtime_presentation::{
+    RETRY_FAILED_ENRICHMENTS_COMMAND, mailbox_label, workplane_pool_label,
+};
 
 fn current_state_consumer_status(
     report: &daemon::DaemonStatusReport,
@@ -160,53 +163,117 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
         status.state.pending_jobs
     ));
     lines.push(format!(
+        "Enrichment pending work items: {}",
+        status.state.pending_work_items
+    ));
+    lines.push(format!(
         "Enrichment pending semantic jobs: {}",
         status.state.pending_semantic_jobs
+    ));
+    lines.push(format!(
+        "Enrichment pending semantic work items: {}",
+        status.state.pending_semantic_work_items
     ));
     lines.push(format!(
         "Enrichment pending embedding jobs: {}",
         status.state.pending_embedding_jobs
     ));
     lines.push(format!(
+        "Enrichment pending embedding work items: {}",
+        status.state.pending_embedding_work_items
+    ));
+    lines.push(format!(
         "Enrichment pending clone-edge rebuild jobs: {}",
         status.state.pending_clone_edges_rebuild_jobs
+    ));
+    lines.push(format!(
+        "Enrichment pending clone-edge rebuild work items: {}",
+        status.state.pending_clone_edges_rebuild_work_items
+    ));
+    lines.push(format!(
+        "Enrichment completed recent jobs: {}",
+        status.state.completed_recent_jobs
     ));
     lines.push(format!(
         "Enrichment running jobs: {}",
         status.state.running_jobs
     ));
     lines.push(format!(
+        "Enrichment running work items: {}",
+        status.state.running_work_items
+    ));
+    lines.push(format!(
         "Enrichment running semantic jobs: {}",
         status.state.running_semantic_jobs
+    ));
+    lines.push(format!(
+        "Enrichment running semantic work items: {}",
+        status.state.running_semantic_work_items
     ));
     lines.push(format!(
         "Enrichment running embedding jobs: {}",
         status.state.running_embedding_jobs
     ));
     lines.push(format!(
+        "Enrichment running embedding work items: {}",
+        status.state.running_embedding_work_items
+    ));
+    lines.push(format!(
         "Enrichment running clone-edge rebuild jobs: {}",
         status.state.running_clone_edges_rebuild_jobs
+    ));
+    lines.push(format!(
+        "Enrichment running clone-edge rebuild work items: {}",
+        status.state.running_clone_edges_rebuild_work_items
     ));
     lines.push(format!(
         "Enrichment failed jobs: {}",
         status.state.failed_jobs
     ));
     lines.push(format!(
+        "Enrichment failed work items: {}",
+        status.state.failed_work_items
+    ));
+    lines.push(format!(
         "Enrichment failed semantic jobs: {}",
         status.state.failed_semantic_jobs
+    ));
+    lines.push(format!(
+        "Enrichment failed semantic work items: {}",
+        status.state.failed_semantic_work_items
     ));
     lines.push(format!(
         "Enrichment failed embedding jobs: {}",
         status.state.failed_embedding_jobs
     ));
     lines.push(format!(
+        "Enrichment failed embedding work items: {}",
+        status.state.failed_embedding_work_items
+    ));
+    lines.push(format!(
         "Enrichment failed clone-edge rebuild jobs: {}",
         status.state.failed_clone_edges_rebuild_jobs
+    ));
+    lines.push(format!(
+        "Enrichment failed clone-edge rebuild work items: {}",
+        status.state.failed_clone_edges_rebuild_work_items
     ));
     lines.push(format!(
         "Enrichment retried failed jobs: {}",
         status.state.retried_failed_jobs
     ));
+    for pool in &status.state.worker_pools {
+        lines.push(format!(
+            "Enrichment pool {}: budget={} active={} queued={} running={} failed={} completed_recent={}",
+            workplane_pool_label(&pool.kind.to_string()),
+            pool.worker_budget,
+            pool.active_workers,
+            pool.pending_jobs,
+            pool.running_jobs,
+            pool.failed_jobs,
+            pool.completed_recent_jobs
+        ));
+    }
     if let Some(action) = status.state.last_action.as_ref() {
         lines.push(format!("Enrichment last action: {action}"));
     }
@@ -240,7 +307,8 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
     for mailbox in &status.blocked_mailboxes {
         lines.push(format!(
             "Mailbox blocked: {} ({})",
-            mailbox.mailbox_name, mailbox.reason
+            mailbox_label(&mailbox.mailbox_name),
+            mailbox.reason
         ));
     }
     if let Some(failed) = status.last_failed_embedding.as_ref() {
@@ -261,6 +329,11 @@ fn append_enrichment_lines(lines: &mut Vec<String>, status: &daemon::EnrichmentQ
         "Enrichment persisted: {}",
         if status.persisted { "yes" } else { "no" }
     ));
+    if status.state.failed_jobs > 0 {
+        lines.push(format!(
+            "Retry failed enrichment work: {RETRY_FAILED_ENRICHMENTS_COMMAND}"
+        ));
+    }
 }
 
 fn append_capability_event_lines(

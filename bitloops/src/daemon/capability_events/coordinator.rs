@@ -12,6 +12,7 @@ use tokio::sync::Notify;
 use tokio::time::{Duration, sleep};
 
 use crate::config::resolve_repo_runtime_db_path_for_config_root;
+use crate::graphql::SubscriptionHub;
 use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
 use crate::host::devql::{DevqlConfig, SyncSummary, resolve_repo_identity};
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
@@ -22,9 +23,9 @@ use super::super::types::{
 };
 use super::plan::{build_execution_plan, find_current_state_consumer, validate_consumer_result};
 use super::queue::{
-    StoredRunRecord, ensure_consumer_run, insert_artefact_changes, insert_file_changes,
-    load_run_by_id, load_runs, next_generation_seq, prune_terminal_runs, sql_i64,
-    upsert_consumer_row,
+    ConsumerRunRequest, StoredRunRecord, ensure_consumer_run, insert_artefact_changes,
+    insert_file_changes, load_run_by_id, load_runs, next_generation_seq, prune_terminal_runs,
+    sql_i64, upsert_consumer_row,
 };
 
 const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -35,12 +36,20 @@ pub struct CapabilityEventEnqueueResult {
     pub runs: Vec<CapabilityEventRunRecord>,
 }
 
+pub(crate) struct SyncGenerationInput<'a> {
+    pub(crate) file_diff: SyncFileDiff,
+    pub(crate) artefact_diff: SyncArtefactDiff,
+    pub(crate) source_task_id: Option<&'a str>,
+    pub(crate) init_session_id: Option<&'a str>,
+}
+
 #[derive(Debug)]
 pub struct CapabilityEventCoordinator {
     runtime_store: DaemonSqliteRuntimeStore,
     lock: Mutex<()>,
     notify: Notify,
     worker_started: AtomicBool,
+    subscription_hub: Mutex<Option<Arc<SubscriptionHub>>>,
 }
 
 struct WorkerStartedGuard {
@@ -134,7 +143,14 @@ impl CapabilityEventCoordinator {
             lock: Mutex::new(()),
             notify: Notify::new(),
             worker_started: AtomicBool::new(false),
+            subscription_hub: Mutex::new(None),
         })
+    }
+
+    pub(crate) fn set_subscription_hub(&self, subscription_hub: Arc<SubscriptionHub>) {
+        if let Ok(mut slot) = self.subscription_hub.lock() {
+            *slot = Some(subscription_hub);
+        }
     }
 
     pub(crate) fn activate_worker(self: &Arc<Self>) {
@@ -165,9 +181,7 @@ impl CapabilityEventCoordinator {
         host: &DevqlCapabilityHost,
         cfg: &DevqlConfig,
         summary: &SyncSummary,
-        file_diff: SyncFileDiff,
-        artefact_diff: SyncArtefactDiff,
-        source_task_id: Option<&str>,
+        input: SyncGenerationInput<'_>,
     ) -> Result<CapabilityEventEnqueueResult> {
         if !summary.success || summary.mode == "validate" {
             return Ok(CapabilityEventEnqueueResult { runs: Vec::new() });
@@ -184,7 +198,7 @@ impl CapabilityEventCoordinator {
         let now = unix_timestamp_now();
         let repo_id = cfg.repo.repo_id.clone();
         let repo_root = cfg.repo_root.clone();
-        let source_task_id = source_task_id.map(str::to_string);
+        let source_task_id = input.source_task_id.map(str::to_string);
         let requires_full_reconcile = matches!(summary.mode.as_str(), "full" | "repair");
 
         let _guard = self
@@ -210,8 +224,8 @@ impl CapabilityEventCoordinator {
                     ],
                 )
                 .context("inserting current-state generation")?;
-                insert_file_changes(conn, &repo_id, generation_seq, &file_diff)?;
-                insert_artefact_changes(conn, &repo_id, generation_seq, &artefact_diff)?;
+                insert_file_changes(conn, &repo_id, generation_seq, &input.file_diff)?;
+                insert_artefact_changes(conn, &repo_id, generation_seq, &input.artefact_diff)?;
 
                 let mut scheduled_runs = Vec::new();
                 for registration in &registrations {
@@ -230,12 +244,15 @@ impl CapabilityEventCoordinator {
                     )?;
                     if let Some(run) = ensure_consumer_run(
                         conn,
-                        &repo_id,
-                        &repo_root,
-                        registration.capability_id,
-                        registration.mailbox_name,
-                        handler_id,
-                        now,
+                        ConsumerRunRequest {
+                            repo_id: &repo_id,
+                            repo_root: &repo_root,
+                            capability_id: registration.capability_id,
+                            mailbox_name: registration.mailbox_name,
+                            handler_id,
+                            init_session_id: input.init_session_id,
+                            now,
+                        },
                     )? {
                         scheduled_runs.push(run.record);
                     }
@@ -260,6 +277,22 @@ impl CapabilityEventCoordinator {
 
         if !runs.is_empty() {
             self.notify.notify_waiters();
+        }
+
+        for run in &runs {
+            if let Some(init_session_id) = run.init_session_id.clone() {
+                crate::daemon::shared_init_runtime_coordinator().publish_runtime_event(
+                    crate::daemon::RuntimeEventRecord {
+                        domain: "current_state_consumer".to_string(),
+                        repo_id: run.repo_id.clone(),
+                        init_session_id: Some(init_session_id),
+                        updated_at_unix: run.updated_at_unix,
+                        task_id: None,
+                        run_id: Some(run.run_id.clone()),
+                        mailbox_name: Some(run.consumer_id.clone()),
+                    },
+                );
+            }
         }
 
         Ok(CapabilityEventEnqueueResult { runs })
@@ -366,6 +399,19 @@ impl CapabilityEventCoordinator {
         })?;
 
         for run in runs {
+            if let Some(init_session_id) = run.record.init_session_id.clone() {
+                crate::daemon::shared_init_runtime_coordinator().publish_runtime_event(
+                    crate::daemon::RuntimeEventRecord {
+                        domain: "current_state_consumer".to_string(),
+                        repo_id: run.record.repo_id.clone(),
+                        init_session_id: Some(init_session_id),
+                        updated_at_unix: run.record.updated_at_unix,
+                        task_id: None,
+                        run_id: Some(run.record.run_id.clone()),
+                        mailbox_name: Some(run.record.consumer_id.clone()),
+                    },
+                );
+            }
             self.spawn_execution_task(run);
         }
         Ok(())
@@ -418,7 +464,10 @@ impl CapabilityEventCoordinator {
                 ),
             );
         };
-        let context = match host.build_current_state_consumer_context(&plan.record.capability_id) {
+        let context = match host.build_current_state_consumer_context_with_session(
+            &plan.record.capability_id,
+            plan.record.init_session_id.clone(),
+        ) {
             Ok(context) => context,
             Err(err) => {
                 return terminal_or_retry(
@@ -445,6 +494,24 @@ impl CapabilityEventCoordinator {
     }
 
     fn apply_completion(&self, completion: RunCompletion) -> Result<()> {
+        let completion_event = match &completion {
+            RunCompletion::NoopCompleted { run }
+            | RunCompletion::Completed { run, .. }
+            | RunCompletion::RetryableFailure { run, .. }
+            | RunCompletion::Failed { run, .. } => {
+                run.init_session_id.clone().map(|init_session_id| {
+                    crate::daemon::RuntimeEventRecord {
+                        domain: "current_state_consumer".to_string(),
+                        repo_id: run.repo_id.clone(),
+                        init_session_id: Some(init_session_id),
+                        updated_at_unix: unix_timestamp_now(),
+                        task_id: None,
+                        run_id: Some(run.run_id.clone()),
+                        mailbox_name: Some(run.consumer_id.clone()),
+                    }
+                })
+            }
+        };
         let _guard = self
             .lock
             .lock()
@@ -586,7 +653,11 @@ impl CapabilityEventCoordinator {
                     Err(err)
                 }
             }
-        })
+        })?;
+        if let Some(event) = completion_event {
+            crate::daemon::shared_init_runtime_coordinator().publish_runtime_event(event);
+        }
+        Ok(())
     }
 
     fn recover_running_runs(&self) -> Result<()> {
@@ -609,13 +680,13 @@ fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecor
     let now = unix_timestamp_now();
     let candidates = load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1 ORDER BY submitted_at_unix ASC",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1 ORDER BY submitted_at_unix ASC",
         params![CapabilityEventRunStatus::Queued.to_string()],
     )?;
     let mut running_lanes = BTreeMap::<String, ()>::new();
     for run in load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1",
         params![CapabilityEventRunStatus::Running.to_string()],
     )? {
         running_lanes.insert(run.record.lane_key.clone(), ());
@@ -681,7 +752,7 @@ fn load_current_repo_run(
 ) -> Result<Option<CapabilityEventRunRecord>> {
     if let Some(run) = load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
         params![repo_id, CapabilityEventRunStatus::Running.to_string()],
     )?
     .into_iter()
@@ -692,7 +763,7 @@ fn load_current_repo_run(
 
     Ok(load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2 ORDER BY submitted_at_unix ASC LIMIT 1",
         params![repo_id, CapabilityEventRunStatus::Queued.to_string()],
     )?
     .into_iter()
@@ -751,6 +822,7 @@ mod tests {
             event_kind: "current_state_consumer".to_string(),
             lane_key: "repo-1:test_harness.current_state".to_string(),
             event_payload_json: String::new(),
+            init_session_id: None,
             status,
             attempts: 1,
             submitted_at_unix: 10,
@@ -853,9 +925,12 @@ mod tests {
                     head_commit_sha: Some("abc123".to_string()),
                     ..SyncSummary::default()
                 },
-                SyncFileDiff::default(),
-                SyncArtefactDiff::default(),
-                None,
+                SyncGenerationInput {
+                    file_diff: SyncFileDiff::default(),
+                    artefact_diff: SyncArtefactDiff::default(),
+                    source_task_id: None,
+                    init_session_id: None,
+                },
             )
             .expect("record empty sync generation");
 

@@ -78,23 +78,22 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
             let has_removals =
                 !request.file_removals.is_empty() || !request.artefact_removals.is_empty();
             let is_full_reconcile = matches!(request.reconcile_mode, ReconcileMode::FullReconcile);
-            let full_reconcile_work_item_count =
-                if is_full_reconcile
-                    && (intent.summary_refresh_active
-                        || intent.code_embeddings_active
-                        || intent.summary_embeddings_active)
-                {
-                    Some(
-                        current_repo_work_item_count(
-                            context.storage.as_ref(),
-                            &request.repo_root,
-                            &request.repo_id,
-                        )
-                        .await?,
+            let full_reconcile_work_item_count = if is_full_reconcile
+                && (intent.summary_refresh_active
+                    || intent.code_embeddings_active
+                    || intent.summary_embeddings_active)
+            {
+                Some(
+                    current_repo_work_item_count(
+                        context.storage.as_ref(),
+                        &request.repo_root,
+                        &request.repo_id,
                     )
-                } else {
-                    None
-                };
+                    .await?,
+                )
+            } else {
+                None
+            };
 
             let mut jobs = Vec::new();
             let mut summary_job_count = 0_u64;
@@ -250,7 +249,10 @@ fn repo_backfill_job(
     Ok(CapabilityWorkplaneJob::new(
         mailbox_name,
         Some(repo_backfill_dedupe_key(mailbox_name)),
-        serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill { work_item_count })?,
+        serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill {
+            work_item_count,
+            artefact_ids: None,
+        })?,
     ))
 }
 
@@ -393,6 +395,16 @@ mod tests {
         let storage = Arc::new(crate::host::devql::RelationalStorage::local_only(
             sqlite_path.clone(),
         ));
+        crate::host::devql::sqlite_exec_path_allow_create(
+            &sqlite_path,
+            crate::host::devql::devql_schema_sql_sqlite(),
+        )
+        .await?;
+        crate::host::devql::sqlite_exec_path_allow_create(
+            &sqlite_path,
+            crate::host::devql::sync::schema::sync_schema_sql(),
+        )
+        .await?;
         crate::capability_packs::semantic_clones::init_sqlite_semantic_features_schema(
             &sqlite_path,
         )
@@ -415,6 +427,7 @@ mod tests {
             host_services: Arc::new(DefaultHostServicesGateway::new(request.repo_id.clone()))
                 as Arc<dyn HostServicesGateway>,
             workplane: Arc::new(workplane.clone()),
+            init_session_id: None,
         };
 
         Ok(TestContext {
@@ -485,6 +498,9 @@ mod tests {
                     "off"
                 },
                 "ann_neighbors": 5,
+                "summary_workers": 1,
+                "embedding_workers": 1,
+                "clone_rebuild_workers": 1,
                 "enrichment_workers": 1,
                 "inference": Value::Object(inference),
             }
@@ -879,6 +895,30 @@ mod tests {
                 &job.payload,
             )
         }));
+        assert_eq!(
+            crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
+                &jobs[0].payload,
+                jobs[0].mailbox_name.as_str(),
+            ),
+            0,
+            "full reconcile summary backfill should persist the exact current workload size",
+        );
+        assert_eq!(
+            crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
+                &jobs[1].payload,
+                jobs[1].mailbox_name.as_str(),
+            ),
+            0,
+            "full reconcile embedding backfill should persist the exact current workload size",
+        );
+        assert_eq!(
+            crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
+                &jobs[2].payload,
+                jobs[2].mailbox_name.as_str(),
+            ),
+            1,
+            "clone rebuild remains a single logical work item",
+        );
         assert_eq!(metrics["enqueued_summary_jobs"], json!(1));
         assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(1));
         assert_eq!(metrics["enqueued_summary_embedding_jobs"], json!(0));

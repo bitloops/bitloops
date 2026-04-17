@@ -35,10 +35,14 @@ const REPO_BACKFILL_DEDUPE_SUFFIX: &str = "repo_backfill";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SemanticClonesMailboxPayload {
-    Artefact { artefact_id: String },
+    Artefact {
+        artefact_id: String,
+    },
     RepoBackfill {
         #[serde(default)]
         work_item_count: Option<u64>,
+        #[serde(default)]
+        artefact_ids: Option<Vec<String>>,
     },
 }
 
@@ -169,6 +173,15 @@ pub fn payload_is_repo_backfill(payload: &serde_json::Value) -> bool {
     )
 }
 
+pub fn payload_repo_backfill_artefact_ids(payload: &serde_json::Value) -> Option<Vec<String>> {
+    match serde_json::from_value::<LegacySemanticClonesMailboxPayload>(payload.clone()).ok()? {
+        LegacySemanticClonesMailboxPayload::Structured(
+            SemanticClonesMailboxPayload::RepoBackfill { artefact_ids, .. },
+        ) => artefact_ids,
+        _ => None,
+    }
+}
+
 pub fn payload_work_item_count(payload: &serde_json::Value, mailbox_name: &str) -> u64 {
     match serde_json::from_value::<LegacySemanticClonesMailboxPayload>(payload.clone()) {
         Ok(LegacySemanticClonesMailboxPayload::Structured(
@@ -176,8 +189,14 @@ pub fn payload_work_item_count(payload: &serde_json::Value, mailbox_name: &str) 
         ))
         | Ok(LegacySemanticClonesMailboxPayload::LegacyArtefact { .. }) => 1,
         Ok(LegacySemanticClonesMailboxPayload::Structured(
-            SemanticClonesMailboxPayload::RepoBackfill { work_item_count },
-        )) => work_item_count.unwrap_or_else(|| default_work_item_count_for_mailbox(mailbox_name)),
+            SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count,
+                artefact_ids,
+            },
+        )) => artefact_ids
+            .map(|artefact_ids| artefact_ids.len() as u64)
+            .or(work_item_count)
+            .unwrap_or_else(|| default_work_item_count_for_mailbox(mailbox_name)),
         Err(_) => default_work_item_count_for_mailbox(mailbox_name),
     }
 }

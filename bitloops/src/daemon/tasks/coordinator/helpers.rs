@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::daemon::CapabilityEventCoordinator;
+use crate::daemon::{CapabilityEventCoordinator, SyncGenerationInput};
 use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
 use crate::host::devql::{DevqlConfig, IngestionProgressPhase, SyncSummary};
 
 use super::super::super::types::{
-    DevqlTaskKind, DevqlTaskProgress, DevqlTaskSpec, EmbeddingsBootstrapProgress,
+    DevqlTaskKind, DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSpec, EmbeddingsBootstrapProgress,
     EmbeddingsBootstrapResult, SyncTaskSpec,
 };
 
@@ -70,7 +70,7 @@ pub(super) fn enqueue_sync_completed_runs(
     coordinator: &CapabilityEventCoordinator,
     host: &DevqlCapabilityHost,
     cfg: &DevqlConfig,
-    source_task_id: &str,
+    task: &DevqlTaskRecord,
     summary: &SyncSummary,
     file_diff: SyncFileDiff,
     artefact_diff: SyncArtefactDiff,
@@ -79,9 +79,12 @@ pub(super) fn enqueue_sync_completed_runs(
         host,
         cfg,
         summary,
-        file_diff,
-        artefact_diff,
-        Some(source_task_id),
+        SyncGenerationInput {
+            file_diff,
+            artefact_diff,
+            source_task_id: Some(task.task_id.as_str()),
+            init_session_id: task.init_session_id.as_deref(),
+        },
     )?;
     if runs.runs.is_empty() {
         return Ok(0);
@@ -102,6 +105,30 @@ pub(super) fn should_persist_progress<T: PartialEq>(
     let interval_elapsed = last_persisted_at
         .is_none_or(|timestamp| now.duration_since(timestamp) >= PROGRESS_PERSIST_INTERVAL);
     interval_elapsed && previous != update
+}
+
+pub(super) fn should_persist_embeddings_bootstrap_progress(
+    previous: Option<&EmbeddingsBootstrapProgress>,
+    update: &EmbeddingsBootstrapProgress,
+    last_persisted_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    let Some(previous) = previous else {
+        return true;
+    };
+
+    if previous.phase != update.phase
+        || previous.asset_name != update.asset_name
+        || previous.bytes_total != update.bytes_total
+        || previous.version != update.version
+        || previous.message != update.message
+    {
+        return true;
+    }
+
+    let interval_elapsed = last_persisted_at
+        .is_none_or(|timestamp| now.duration_since(timestamp) >= PROGRESS_PERSIST_INTERVAL);
+    interval_elapsed && previous.bytes_downloaded != update.bytes_downloaded
 }
 
 pub(super) fn sync_spec_from_task_spec_mut(spec: &mut DevqlTaskSpec) -> Option<&mut SyncTaskSpec> {

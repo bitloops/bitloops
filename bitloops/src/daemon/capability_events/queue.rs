@@ -49,6 +49,17 @@ pub(super) struct ConsumerCursorRow {
     pub(super) last_applied_generation_seq: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ConsumerRunRequest<'a> {
+    pub(super) repo_id: &'a str,
+    pub(super) repo_root: &'a Path,
+    pub(super) capability_id: &'a str,
+    pub(super) mailbox_name: &'a str,
+    pub(super) handler_id: &'a str,
+    pub(super) init_session_id: Option<&'a str>,
+    pub(super) now: u64,
+}
+
 pub(super) fn insert_file_changes(
     conn: &rusqlite::Connection,
     repo_id: &str,
@@ -211,13 +222,17 @@ pub(super) fn upsert_consumer_row(
 
 pub(super) fn ensure_consumer_run(
     conn: &rusqlite::Connection,
-    repo_id: &str,
-    repo_root: &Path,
-    capability_id: &str,
-    mailbox_name: &str,
-    handler_id: &str,
-    now: u64,
+    request: ConsumerRunRequest<'_>,
 ) -> Result<Option<StoredRunRecord>> {
+    let ConsumerRunRequest {
+        repo_id,
+        repo_root,
+        capability_id,
+        mailbox_name,
+        handler_id,
+        init_session_id,
+        now,
+    } = request;
     let latest_generation = latest_generation_seq(conn, repo_id)?;
     let Some(latest_generation) = latest_generation else {
         return Ok(None);
@@ -234,10 +249,11 @@ pub(super) fn ensure_consumer_run(
         if run.record.status == CapabilityEventRunStatus::Queued {
             let run_id = run.record.run_id.clone();
             conn.execute(
-                "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, updated_at_unix = ?3 WHERE run_id = ?4",
+                "UPDATE capability_workplane_cursor_runs SET from_generation_seq = ?1, to_generation_seq = ?2, init_session_id = COALESCE(init_session_id, ?3), updated_at_unix = ?4 WHERE run_id = ?5",
                 params![
                     sql_i64(last_applied_generation)?,
                     sql_i64(latest_generation)?,
+                    init_session_id,
                     sql_i64(now)?,
                     &run_id,
                 ],
@@ -251,6 +267,9 @@ pub(super) fn ensure_consumer_run(
             let mut refreshed = run.record.clone();
             refreshed.from_generation_seq = last_applied_generation;
             refreshed.to_generation_seq = latest_generation;
+            if refreshed.init_session_id.is_none() {
+                refreshed.init_session_id = init_session_id.map(str::to_string);
+            }
             refreshed.updated_at_unix = now;
             return Ok(Some(StoredRunRecord {
                 record: refreshed,
@@ -265,6 +284,7 @@ pub(super) fn ensure_consumer_run(
         run_id: run_id.clone(),
         repo_id: repo_id.to_string(),
         capability_id: capability_id.to_string(),
+        init_session_id: init_session_id.map(str::to_string),
         consumer_id: mailbox_name.to_string(),
         handler_id: handler_id.to_string(),
         from_generation_seq: last_applied_generation,
@@ -282,13 +302,14 @@ pub(super) fn ensure_consumer_run(
         error: None,
     };
     conn.execute(
-        "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, capability_id, mailbox_name, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12, NULL, NULL)",
+        "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, capability_id, mailbox_name, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, NULL, NULL)",
         params![
             &record.run_id,
             &record.repo_id,
             repo_root.to_string_lossy().to_string(),
             &record.capability_id,
             &record.consumer_id,
+            record.init_session_id.as_deref(),
             sql_i64(record.from_generation_seq)?,
             sql_i64(record.to_generation_seq)?,
             &record.reconcile_mode,
@@ -348,7 +369,7 @@ fn load_active_run_for_lane(
 ) -> Result<Option<StoredRunRecord>> {
     load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND capability_id = ?2 AND mailbox_name = ?3 AND status IN (?4, ?5) ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, submitted_at_unix ASC LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND capability_id = ?2 AND mailbox_name = ?3 AND status IN (?4, ?5) ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END, submitted_at_unix ASC LIMIT 1",
         params![
             repo_id,
             capability_id,
@@ -458,7 +479,7 @@ pub(super) fn load_run_by_id(
 ) -> Result<Option<StoredRunRecord>> {
     load_runs(
         conn,
-        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE run_id = ?1 LIMIT 1",
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE run_id = ?1 LIMIT 1",
         params![run_id],
     )
     .map(|mut runs| runs.pop())
@@ -480,25 +501,26 @@ where
                     run_id: row.get(0)?,
                     repo_id: row.get(1)?,
                     capability_id: row.get(4)?,
+                    init_session_id: row.get(5)?,
                     consumer_id: row.get(3)?,
                     handler_id: row.get(3)?,
-                    from_generation_seq: u64::try_from(row.get::<_, i64>(5)?).unwrap_or_default(),
-                    to_generation_seq: u64::try_from(row.get::<_, i64>(6)?).unwrap_or_default(),
-                    reconcile_mode: row.get(7)?,
+                    from_generation_seq: u64::try_from(row.get::<_, i64>(6)?).unwrap_or_default(),
+                    to_generation_seq: u64::try_from(row.get::<_, i64>(7)?).unwrap_or_default(),
+                    reconcile_mode: row.get(8)?,
                     event_kind: "current_state_consumer".to_string(),
                     lane_key: build_lane_key(&row.get::<_, String>(1)?, &row.get::<_, String>(3)?),
                     event_payload_json: String::new(),
-                    status: parse_run_status(&row.get::<_, String>(8)?),
-                    attempts: row.get(9)?,
-                    submitted_at_unix: u64::try_from(row.get::<_, i64>(10)?).unwrap_or_default(),
+                    status: parse_run_status(&row.get::<_, String>(9)?),
+                    attempts: row.get(10)?,
+                    submitted_at_unix: u64::try_from(row.get::<_, i64>(11)?).unwrap_or_default(),
                     started_at_unix: row
-                        .get::<_, Option<i64>>(11)?
+                        .get::<_, Option<i64>>(12)?
                         .and_then(|value| u64::try_from(value).ok()),
-                    updated_at_unix: u64::try_from(row.get::<_, i64>(12)?).unwrap_or_default(),
+                    updated_at_unix: u64::try_from(row.get::<_, i64>(13)?).unwrap_or_default(),
                     completed_at_unix: row
-                        .get::<_, Option<i64>>(13)?
+                        .get::<_, Option<i64>>(14)?
                         .and_then(|value| u64::try_from(value).ok()),
-                    error: row.get(14)?,
+                    error: row.get(15)?,
                 },
                 repo_root: row.get::<_, String>(2)?.into(),
             })
