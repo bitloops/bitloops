@@ -1,9 +1,9 @@
-Feature: Bitloops checkpoint timeline smoke suite
+Feature: Bitloops checkpoint timeline Agent Smoke suite
   As a Bitloops maintainer
-  I want deterministic smoke coverage for relative-day checkpoint history
-  So that `cargo qat-smoke` and `cargo qat` validate timeline persistence in CI
+  I want deterministic Agent Smoke coverage for relative-day checkpoint history
+  So that `cargo qat-agent-smoke` and `cargo qat` validate timeline persistence in CI
 
-  @smoke
+  @agent_smoke
   Scenario: Preserve relative-day commit timeline
     Given I run CleanStart for flow "SmokeCommitTimeline"
     And I start the daemon in bitloops

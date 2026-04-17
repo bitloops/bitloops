@@ -16,7 +16,7 @@ Feature: DevQL sync workspace reconciliation
     And DevQL sync summary shows 0 parse errors in bitloops
     And DevQL artefacts query returns results in bitloops
 
-  @devql @sync @test_harness_sync
+  @devql @sync @test_harness_sync @develop_gate
   Scenario: Sync materializes test-harness coverage for discovered tests
     Given I run CleanStart for flow "SyncTestHarnessPopulate"
     And I start the daemon in bitloops

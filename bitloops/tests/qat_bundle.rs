@@ -6,7 +6,7 @@ use bundle::{BundleResult, combine_bundle_results};
 fn rerun_alias_for(suite: &'static str) -> &'static str {
     match suite {
         "onboarding" => "cargo qat-onboarding",
-        "smoke" => "cargo qat-smoke",
+        "agent-smoke" => "cargo qat-agent-smoke",
         "devql-sync" => "cargo qat-devql-sync",
         "devql-capabilities" => "cargo qat-devql-capabilities",
         "devql-ingest" => "cargo qat-devql-ingest",
@@ -30,7 +30,7 @@ fn err(suite: &'static str, message: &str) -> BundleResult {
 fn combine_bundle_results_returns_ok_when_all_suites_pass() {
     combine_bundle_results(vec![
         ok("onboarding"),
-        ok("smoke"),
+        ok("agent-smoke"),
         ok("devql-sync"),
         ok("devql-capabilities"),
         ok("devql-ingest"),
@@ -42,7 +42,7 @@ fn combine_bundle_results_returns_ok_when_all_suites_pass() {
 fn combine_bundle_results_returns_onboarding_error_when_only_onboarding_fails() {
     let err = combine_bundle_results(vec![
         err("onboarding", "onboarding failed"),
-        ok("smoke"),
+        ok("agent-smoke"),
         ok("devql-sync"),
         ok("devql-capabilities"),
         ok("devql-ingest"),
@@ -58,7 +58,7 @@ fn combine_bundle_results_returns_onboarding_error_when_only_onboarding_fails() 
 fn combine_bundle_results_names_single_failed_suite() {
     let err = combine_bundle_results(vec![
         err("devql-capabilities", "capabilities failed"),
-        ok("smoke"),
+        ok("agent-smoke"),
         ok("devql-sync"),
         ok("onboarding"),
         ok("devql-ingest"),
@@ -79,7 +79,7 @@ fn combine_bundle_results_names_single_failed_suite() {
 fn combine_bundle_results_returns_sync_error_when_only_sync_fails() {
     let err = combine_bundle_results(vec![
         ok("onboarding"),
-        ok("smoke"),
+        ok("agent-smoke"),
         err("devql-sync", "sync failed"),
         ok("devql-capabilities"),
         ok("devql-ingest"),
@@ -92,17 +92,17 @@ fn combine_bundle_results_returns_sync_error_when_only_sync_fails() {
 }
 
 #[test]
-fn combine_bundle_results_returns_smoke_error_when_only_smoke_fails() {
+fn combine_bundle_results_returns_agent_smoke_error_when_only_agent_smoke_fails() {
     let err = combine_bundle_results(vec![
         ok("onboarding"),
-        err("smoke", "smoke failed"),
+        err("agent-smoke", "agent smoke failed"),
         ok("devql-sync"),
         ok("devql-capabilities"),
         ok("devql-ingest"),
     ])
-    .expect_err("smoke failure should surface");
+    .expect_err("agent smoke failure should surface");
     assert!(
-        format!("{err:#}").contains("smoke failed"),
+        format!("{err:#}").contains("agent smoke failed"),
         "unexpected error: {err:#}"
     );
 }
@@ -111,7 +111,7 @@ fn combine_bundle_results_returns_smoke_error_when_only_smoke_fails() {
 fn combine_bundle_results_returns_devql_capabilities_error_when_only_capabilities_fail() {
     let err = combine_bundle_results(vec![
         ok("onboarding"),
-        ok("smoke"),
+        ok("agent-smoke"),
         ok("devql-sync"),
         err("devql-capabilities", "devql failed"),
         ok("devql-ingest"),
@@ -127,7 +127,7 @@ fn combine_bundle_results_returns_devql_capabilities_error_when_only_capabilitie
 fn combine_bundle_results_returns_devql_ingest_error_when_only_ingest_fails() {
     let err = combine_bundle_results(vec![
         ok("onboarding"),
-        ok("smoke"),
+        ok("agent-smoke"),
         ok("devql-sync"),
         ok("devql-capabilities"),
         err("devql-ingest", "ingest failed"),
@@ -143,7 +143,7 @@ fn combine_bundle_results_returns_devql_ingest_error_when_only_ingest_fails() {
 fn combine_bundle_results_reports_all_failed_suite_names() {
     let err = combine_bundle_results(vec![
         err("onboarding", "onboarding failed"),
-        err("smoke", "smoke failed"),
+        err("agent-smoke", "agent smoke failed"),
         err("devql-sync", "sync failed"),
         err("devql-capabilities", "capabilities failed"),
         err("devql-ingest", "ingest failed"),
@@ -155,8 +155,8 @@ fn combine_bundle_results_reports_all_failed_suite_names() {
         "combined error missing onboarding details: {message}"
     );
     assert!(
-        message.contains("smoke failed"),
-        "combined error missing smoke details: {message}"
+        message.contains("agent smoke failed"),
+        "combined error missing agent smoke details: {message}"
     );
     assert!(
         message.contains("sync failed"),

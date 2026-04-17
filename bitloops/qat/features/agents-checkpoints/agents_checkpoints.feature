@@ -9,7 +9,7 @@ Feature: Agent checkpoint capture flow
     And   I start the daemon in bitloops
     And   I create a Rust project with tests in bitloops
 
-  @agents-checkpoints
+  @agents-checkpoints @develop_gate
   Scenario: Supported agent can complete bootstrap and create the first checkpoint
     Given I run InitCommit for bitloops
     And   I run bitloops init --agent claude-code in bitloops
@@ -19,7 +19,7 @@ Feature: Agent checkpoint capture flow
     Then  checkpoint mapping exists in bitloops
     And   commit_checkpoints count is at least 1 in bitloops
 
-  @agents-checkpoints @agents-checkpoints-precommit
+  @agents-checkpoints @agents-checkpoints-precommit @develop_gate
   Scenario: Agent interaction exists before the first checkpoint is committed
     Given I run InitCommit for bitloops
     And   I run bitloops init --agent claude-code in bitloops

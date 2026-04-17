@@ -8,5 +8,7 @@ pub mod helpers;
 pub mod runner;
 #[path = "qat_support/steps/mod.rs"]
 pub mod steps;
+#[path = "qat_support/subsets.rs"]
+pub mod subsets;
 #[path = "qat_support/world.rs"]
 pub mod world;

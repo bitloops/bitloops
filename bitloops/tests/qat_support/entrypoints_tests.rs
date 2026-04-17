@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn run_bundle_starts_onboarding_and_smoke_before_devql_phase() {
+async fn run_bundle_starts_onboarding_and_agent_smoke_before_devql_phase() {
     use std::sync::Arc;
     use tokio::sync::{Barrier, mpsc};
     use tokio::time::{Duration, timeout};
@@ -27,7 +27,7 @@ async fn run_bundle_starts_onboarding_and_smoke_before_devql_phase() {
 
     let bundle = tokio::spawn(run_bundle_from_futures(
         make_first_phase_suite("onboarding"),
-        make_first_phase_suite("smoke"),
+        make_first_phase_suite("agent-smoke"),
         make_later_suite("devql-sync"),
         make_later_suite("devql-capabilities"),
         make_later_suite("devql-ingest"),
@@ -45,15 +45,15 @@ async fn run_bundle_starts_onboarding_and_smoke_before_devql_phase() {
     assert!(
         matches!(
             (first, second),
-            ("onboarding", "smoke") | ("smoke", "onboarding")
+            ("onboarding", "agent-smoke") | ("agent-smoke", "onboarding")
         ),
-        "bundle should start onboarding and smoke first, observed {first:?} and {second:?}"
+        "bundle should start onboarding and agent-smoke first, observed {first:?} and {second:?}"
     );
     assert!(
         timeout(Duration::from_millis(200), rx.recv())
             .await
             .is_err(),
-        "devql suites should not start until the onboarding/smoke phase completes"
+        "devql suites should not start until the onboarding/agent-smoke phase completes"
     );
 
     first_phase_barrier.wait().await;
@@ -113,7 +113,7 @@ async fn run_bundle_runs_devql_suites_sequentially_after_parallel_phase() {
 
     let bundle = tokio::spawn(run_bundle_from_futures(
         make_first_phase_suite("onboarding"),
-        make_first_phase_suite("smoke"),
+        make_first_phase_suite("agent-smoke"),
         make_serial_devql_suite("devql-sync"),
         make_serial_devql_suite("devql-capabilities"),
         make_serial_devql_suite("devql-ingest"),
@@ -149,5 +149,86 @@ async fn run_bundle_runs_devql_suites_sequentially_after_parallel_phase() {
     assert!(
         completion_order.ends_with(&["devql-sync", "devql-capabilities", "devql-ingest",]),
         "devql-heavy suites should complete in serial order, got {completion_order:?}"
+    );
+}
+
+#[tokio::test]
+async fn run_serial_suites_with_runner_executes_requested_suites_in_order() {
+    use tokio::sync::{Mutex, mpsc};
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<(&'static str, Option<&'static str>)>();
+    let completions = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let suites = [
+        Suite::AgentSmoke,
+        Suite::DevqlSync,
+        Suite::AgentsCheckpoints,
+    ];
+    let rerun_alias = "cargo qat-develop-gate";
+
+    run_serial_suites_with_runner(
+        PathBuf::from("/tmp/bitloops"),
+        &suites,
+        Some("@develop_gate"),
+        rerun_alias,
+        {
+            let completions = std::sync::Arc::clone(&completions);
+            move |_binary, suite, tags_filter| {
+                let tx = tx.clone();
+                let completions = std::sync::Arc::clone(&completions);
+                async move {
+                    tx.send((suite.id(), tags_filter))
+                        .expect("suite start should send");
+                    completions.lock().await.push(suite.id());
+                    Ok(())
+                }
+            }
+        },
+    )
+    .await
+    .expect("serial subset run should succeed");
+
+    let observed = vec![
+        rx.recv().await.expect("first suite should start"),
+        rx.recv().await.expect("second suite should start"),
+        rx.recv().await.expect("third suite should start"),
+    ];
+    assert_eq!(
+        observed,
+        vec![
+            ("agent-smoke", Some("@develop_gate")),
+            ("devql-sync", Some("@develop_gate")),
+            ("agents-checkpoints", Some("@develop_gate")),
+        ],
+        "serial subset run should execute suites in the configured order with the shared tag filter"
+    );
+
+    let completions = completions.lock().await.clone();
+    assert_eq!(
+        completions,
+        vec!["agent-smoke", "devql-sync", "agents-checkpoints"],
+        "serial subset run should complete in the configured order"
+    );
+}
+
+#[tokio::test]
+async fn run_serial_suites_with_runner_reports_develop_gate_rerun_hint() {
+    let err = run_serial_suites_with_runner(
+        PathBuf::from("/tmp/bitloops"),
+        &[Suite::DevqlSync],
+        Some("@develop_gate"),
+        "cargo qat-develop-gate",
+        |_binary, suite, _tags_filter| async move { anyhow::bail!("{} failed", suite.id()) },
+    )
+    .await
+    .expect_err("serial subset run should surface failures");
+
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("devql-sync"),
+        "develop gate failure should name the failing suite: {message}"
+    );
+    assert!(
+        message.contains("cargo qat-develop-gate"),
+        "develop gate failure should point to the gate rerun alias: {message}"
     );
 }

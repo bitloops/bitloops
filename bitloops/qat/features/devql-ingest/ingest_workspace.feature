@@ -5,7 +5,7 @@ Feature: DevQL ingest workspace history coverage
   guarantees and bounded backfill behavior without relying on current-state
   sync side effects.
 
-  @devql @ingest
+  @devql @ingest @develop_gate
   Scenario: Initial backlog ingest completes all reachable history
     Given I run CleanStart for flow "IngestInitialBacklog"
     And I start the daemon in bitloops

@@ -98,8 +98,13 @@ path = "tests/qat.rs"
 required-features = ["qat-tests"]
 
 [[test]]
-name = "qat_smoke"
-path = "tests/qat_smoke.rs"
+name = "qat_agent_smoke"
+path = "tests/qat_agent_smoke.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_develop_gate"
+path = "tests/qat_develop_gate.rs"
 required-features = ["qat-tests"]
 
 [[test]]
