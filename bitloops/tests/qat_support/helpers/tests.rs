@@ -2,15 +2,91 @@ use super::*;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 use crate::qat_support::world::QatRunConfig;
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::daemon::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
-use bitloops::host::runtime_store::DaemonSqliteRuntimeStore;
+use bitloops::host::runtime_store::{DaemonSqliteRuntimeStore, RepoWatcherRegistrationState};
+
+#[cfg(unix)]
+fn spawn_detached_long_lived_process() -> u32 {
+    let output = Command::new("sh")
+        .args(["-c", "sleep 60 >/dev/null 2>&1 & echo $!"])
+        .output()
+        .expect("spawn detached long-lived process");
+    assert!(
+        output.status.success(),
+        "failed to spawn detached long-lived process: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("detached pid stdout should be utf8")
+        .trim()
+        .parse()
+        .expect("detached pid should parse")
+}
+
+#[cfg(windows)]
+fn spawn_detached_long_lived_process() -> u32 {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "$p = Start-Process -FilePath ping -ArgumentList '-n 60 127.0.0.1' -WindowStyle Hidden -PassThru; $p.Id",
+        ])
+        .output()
+        .expect("spawn detached long-lived process");
+    assert!(
+        output.status.success(),
+        "failed to spawn detached long-lived process: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("detached pid stdout should be utf8")
+        .trim()
+        .parse()
+        .expect("detached pid should parse")
+}
+
+#[cfg(unix)]
+fn pid_is_running(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn pid_is_running(pid: u32) -> bool {
+    Command::new("cmd")
+        .args([
+            "/C",
+            &format!("tasklist /FI \"PID eq {pid}\" | findstr {pid}"),
+        ])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn wait_for_pid_exit(pid: u32) {
+    let deadline = Instant::now() + StdDuration::from_secs(5);
+    loop {
+        if !pid_is_running(pid) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected long-lived process {pid} to exit after teardown",
+        );
+        std::thread::sleep(StdDuration::from_millis(25));
+    }
+}
 
 #[test]
 fn sanitize_name_normalizes_user_input() {
@@ -589,7 +665,7 @@ fn expected_commit_path_pairs_rejects_more_paths_than_shas() {
 }
 
 #[test]
-fn build_bitloops_command_applies_daemon_hardening_env() {
+fn build_bitloops_command_applies_watcher_hardening_env_by_default() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo_dir = temp.path().join("repo");
     fs::create_dir_all(&repo_dir).expect("create repo dir");
@@ -618,6 +694,102 @@ fn build_bitloops_command_applies_daemon_hardening_env() {
     assert_eq!(
         command_env_value(&command, DISABLE_VERSION_CHECK_ENV),
         Some("1".into())
+    );
+}
+
+#[test]
+fn build_bitloops_command_skips_watcher_hardening_when_world_allows_autostart() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let bin_dir = temp.path().join("bin");
+    fs::create_dir_all(&bin_dir).expect("create bin dir");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+
+    let world = QatWorld {
+        run_dir: Some(temp.path().join("run")),
+        repo_dir: Some(repo_dir),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: bin_dir.join("bitloops"),
+            suite_root,
+        })),
+        watcher_autostart_enabled: true,
+        ..Default::default()
+    };
+
+    let command =
+        build_bitloops_command(&world, &["daemon", "start"]).expect("build bitloops command");
+
+    assert_eq!(
+        command_env_value(&command, DISABLE_WATCHER_AUTOSTART_ENV),
+        None
+    );
+    assert_eq!(
+        command_env_value(&command, DISABLE_VERSION_CHECK_ENV),
+        Some("1".into())
+    );
+}
+
+#[test]
+fn stop_daemon_for_scenario_terminates_registered_watcher_processes() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = temp.path().join("repo");
+    let terminal_log_path = run_dir.join("terminal.log");
+    fs::create_dir_all(&run_dir).expect("create run dir");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    fs::create_dir_all(repo_dir.join(".git")).expect("create git dir");
+    fs::write(repo_dir.join(".bitloops.local.toml"), "").expect("write local policy marker");
+
+    let mut world = QatWorld {
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir.clone()),
+        terminal_log_path: Some(terminal_log_path),
+        watcher_autostart_enabled: true,
+        ..Default::default()
+    };
+
+    let watcher_pid = spawn_detached_long_lived_process();
+    with_scenario_app_env(&world, || {
+        let config_root = bitloops::config::default_daemon_config_path()
+            .expect("default daemon config path")
+            .parent()
+            .expect("daemon config parent")
+            .to_path_buf();
+        let runtime_store = RepoSqliteRuntimeStore::open_for_roots(&config_root, world.repo_dir())
+            .expect("open runtime store");
+        runtime_store
+            .save_watcher_registration(
+                watcher_pid,
+                "qat-test-restart-token",
+                world.repo_dir(),
+                RepoWatcherRegistrationState::Ready,
+            )
+            .expect("seed watcher registration");
+    });
+    fs::remove_dir_all(repo_dir.join(".git")).expect("remove git dir before teardown");
+    fs::remove_file(repo_dir.join(".bitloops.local.toml"))
+        .expect("remove local policy marker before teardown");
+
+    stop_daemon_for_scenario(&mut world).expect("stop scenario");
+
+    wait_for_pid_exit(watcher_pid);
+    let registration = with_scenario_app_env(&world, || {
+        let config_root = bitloops::config::default_daemon_config_path()
+            .expect("default daemon config path")
+            .parent()
+            .expect("daemon config parent")
+            .to_path_buf();
+        let runtime_store = RepoSqliteRuntimeStore::open_for_roots(&config_root, world.repo_dir())
+            .expect("open runtime store");
+        runtime_store
+            .load_watcher_registration()
+            .expect("load watcher registration")
+    });
+    assert!(
+        registration.is_none(),
+        "watcher teardown should clear the scenario registration"
     );
 }
 

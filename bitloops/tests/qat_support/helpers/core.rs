@@ -34,6 +34,11 @@ pub fn ensure_bitloops_repo_name(repo_name: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn enable_watcher_autostart_for_scenario(world: &mut QatWorld) -> Result<()> {
+    world.watcher_autostart_enabled = true;
+    Ok(())
+}
+
 const QAT_EVENTUAL_TIMEOUT_ENV: &str = "BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS";
 const DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS: u64 = 15;
 const QAT_EVENTUAL_POLL_INTERVAL_MILLIS: u64 = 250;
@@ -155,6 +160,177 @@ fn error_chain_contains_not_found(err: &anyhow::Error) -> bool {
     })
 }
 
+const WATCHER_TEARDOWN_TIMEOUT_SECS: u64 = 5;
+const WATCHER_TEARDOWN_POLL_INTERVAL_MILLIS: u64 = 50;
+
+fn scenario_daemon_config_root(world: &QatWorld) -> Result<PathBuf> {
+    with_scenario_app_env(world, || {
+        bitloops::config::default_daemon_config_path()
+            .context("resolving scenario daemon config path")?
+            .parent()
+            .map(Path::to_path_buf)
+            .context("resolving scenario daemon config directory")
+    })
+}
+
+fn open_scenario_runtime_sqlite(world: &QatWorld) -> Result<bitloops::storage::SqliteConnectionPool> {
+    let config_root = scenario_daemon_config_root(world)?;
+    let db_path = bitloops::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
+    let sqlite = bitloops::storage::SqliteConnectionPool::connect(db_path.clone())
+        .with_context(|| format!("opening scenario runtime sqlite {}", db_path.display()))?;
+    sqlite
+        .initialise_runtime_checkpoint_schema()
+        .context("initialising scenario runtime checkpoint schema")?;
+    Ok(sqlite)
+}
+
+fn watcher_process_is_running(pid: u32) -> Result<bool> {
+    #[cfg(windows)]
+    {
+        Ok(Command::new("cmd")
+            .args([
+                "/C",
+                &format!("tasklist /FI \"PID eq {pid}\" | findstr {pid}"),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("running `tasklist` for DevQL watcher")?
+            .success())
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("running `kill -0` for DevQL watcher")?
+            .success())
+    }
+}
+
+fn terminate_watcher_process(pid: u32) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("running `taskkill` for DevQL watcher")?;
+        ensure!(status.success(), "failed to stop DevQL watcher process {pid}");
+    }
+
+    #[cfg(not(windows))]
+    {
+        let status = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("running `kill -TERM` for DevQL watcher")?;
+        ensure!(status.success(), "failed to stop DevQL watcher process {pid}");
+    }
+
+    Ok(())
+}
+
+fn stop_registered_watcher_for_scenario(world: &QatWorld) -> Result<()> {
+    if !world.watcher_autostart_enabled {
+        return Ok(());
+    }
+
+    let repo_root = world.repo_dir().to_string_lossy().to_string();
+    let sqlite = open_scenario_runtime_sqlite(world)?;
+    let Some((pid, restart_token, state)) = sqlite
+        .with_connection(|conn| {
+            use rusqlite::OptionalExtension as _;
+
+            conn.query_row(
+                "SELECT pid, restart_token, state
+                 FROM repo_watcher_registrations
+                 WHERE repo_root = ?1
+                 LIMIT 1",
+                rusqlite::params![repo_root.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, u32>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .context("loading scenario watcher registration")?
+    else {
+        return Ok(());
+    };
+
+    append_world_log(
+        world,
+        &format!(
+            "Found DevQL watcher registration for scenario repo: pid={} state={}.\n",
+            pid, state
+        ),
+    )?;
+
+    if watcher_process_is_running(pid)? {
+        append_world_log(
+            world,
+            &format!(
+                "Registered DevQL watcher still running during teardown; terminating pid {}.\n",
+                pid
+            ),
+        )?;
+        terminate_watcher_process(pid)?;
+        wait_for_qat_condition(
+            StdDuration::from_secs(WATCHER_TEARDOWN_TIMEOUT_SECS),
+            StdDuration::from_millis(WATCHER_TEARDOWN_POLL_INTERVAL_MILLIS),
+            &format!("DevQL watcher process {} to exit", pid),
+            || watcher_process_is_running(pid),
+            |running| !*running,
+            |running| format!("running={running}"),
+        )
+        .with_context(|| {
+            format!(
+                "waiting for DevQL watcher process {} to exit during scenario teardown",
+                pid
+            )
+        })?;
+    } else {
+        append_world_log(
+            world,
+            &format!(
+                "Registered DevQL watcher pid {} was already stopped.\n",
+                pid
+            ),
+        )?;
+    }
+
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "DELETE FROM repo_watcher_registrations
+                 WHERE repo_root = ?1 AND pid = ?2 AND restart_token = ?3",
+                rusqlite::params![repo_root.as_str(), pid, restart_token.as_str()],
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })
+        .context("clearing scenario watcher registration")?;
+    append_world_log(world, "Cleared DevQL watcher registration for scenario.\n")?;
+
+    Ok(())
+}
+
 pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     if world.run_dir.is_none() || world.repo_dir.is_none() || world.terminal_log_path.is_none() {
         return Ok(());
@@ -234,6 +410,14 @@ pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
                 )?;
             }
         }
+    }
+
+    if let Err(err) = stop_registered_watcher_for_scenario(world) {
+        append_world_log(world, &format!("DevQL watcher teardown failed: {err:#}\n"))?;
+        stop_error = Some(match stop_error.take() {
+            Some(existing) => anyhow!("{existing:#}\n\n{err:#}"),
+            None => err,
+        });
     }
 
     world.daemon_url = None;
@@ -3768,6 +3952,23 @@ pub fn assert_artefacts_current_contains_path(
         count > 0,
         "expected artefacts_current rows for `{path}`, got {count}"
     );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_contains_path_eventually(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("artefacts_current to eventually contain `{path}`"),
+        || assert_artefacts_current_contains_path(world, repo_name, path),
+        |_| true,
+        |_| format!("artefacts_current contains `{path}`"),
+    )?;
     Ok(())
 }
 

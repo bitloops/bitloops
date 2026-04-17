@@ -347,19 +347,17 @@ Feature: DevQL sync workspace reconciliation
     And DevQL sync summary shows 0 removed in bitloops
     And DevQL sync summary shows unchanged greater than 0 in bitloops
 
-  @devql @sync
-  Scenario: Init with sync=true still allows incremental sync for new files
+  @devql @sync @sync_init_sync_true_incremental
+  Scenario: Watcher-driven materialization after init --sync=true
     Given I run CleanStart for flow "SyncInitSyncTrueIncremental"
+    And I enable watcher autostart in bitloops
     And I start the daemon in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=true in bitloops
-    And I run EnableCLI for bitloops
-    And I run DevQL init in bitloops
-    And I add a new source file in bitloops
-    And I commit changes without hooks in bitloops
-    And I enqueue DevQL sync task with status in bitloops
-    Then DevQL sync history shows added greater than 0 for current HEAD in bitloops
+    And artefacts_current does not contain path "src/math.rs" in bitloops
+    And I add a source file "src/math.rs" in bitloops
+    Then artefacts_current eventually contains path "src/math.rs" in bitloops
 
   @devql @sync
   Scenario: Init with sync=true keeps sync validation clean without workspace changes

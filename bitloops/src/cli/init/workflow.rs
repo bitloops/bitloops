@@ -327,6 +327,10 @@ pub(super) async fn run_for_project_root(
             }
         }
     }
+
+    crate::cli::watcher_bootstrap::reconcile_repo_watcher(project_root).map_err(|err| {
+        anyhow::anyhow!("Bitloops init completed, but DevQL watcher reconcile failed: {err:#}")
+    })?;
     Ok(())
 }
 

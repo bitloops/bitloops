@@ -891,7 +891,8 @@ fn count_non_empty_lines(path: &Path) -> Result<usize> {
     if !path.exists() {
         return Ok(0);
     }
-    let content = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(content
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -1129,8 +1130,8 @@ fn apply_smoke_prompt_edit(world: &QatWorld, prompt: &str) -> Result<String> {
         return Ok(relative_path);
     }
 
-    let current =
-        fs::read_to_string(&full_path).with_context(|| format!("reading {}", full_path.display()))?;
+    let current = fs::read_to_string(&full_path)
+        .with_context(|| format!("reading {}", full_path.display()))?;
     if relative_path == "src/lib.rs" {
         let next = if prompt.to_ascii_lowercase().contains("subtract function") {
             if current.contains("pub fn subtract(") {
@@ -1179,7 +1180,10 @@ fn apply_smoke_prompt_edit(world: &QatWorld, prompt: &str) -> Result<String> {
             if current.contains("normalizedName.toLowerCase()") {
                 current
             } else if current.contains("normalizedName.toUpperCase()") {
-                current.replace("normalizedName.toUpperCase()", "normalizedName.toLowerCase()")
+                current.replace(
+                    "normalizedName.toUpperCase()",
+                    "normalizedName.toLowerCase()",
+                )
             } else if current.contains("name: name.trim()") {
                 current.replace(
                     "    return { id: crypto.randomUUID(), name: name.trim() };",
@@ -1221,7 +1225,11 @@ fn apply_smoke_prompt_edit(world: &QatWorld, prompt: &str) -> Result<String> {
     Ok(relative_path)
 }
 
-fn simulate_claude_session_for_prompt(world: &QatWorld, prompt: &str, file_path: &str) -> Result<()> {
+fn simulate_claude_session_for_prompt(
+    world: &QatWorld,
+    prompt: &str,
+    file_path: &str,
+) -> Result<()> {
     let session_id = smoke_session_id(world, AGENT_NAME_CLAUDE_CODE);
     let transcript_path = smoke_transcript_path(world, AGENT_NAME_CLAUDE_CODE, "jsonl");
     append_jsonl_line(
@@ -1349,7 +1357,6 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         .env("ACCESSIBLE", "1")
         .env("BITLOOPS_QAT_ACTIVE", "1")
         .env("BITLOOPS_TEST_TTY", "0")
-        .env(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV, "1")
         .env("BITLOOPS_DEVQL_EMBEDDING_PROVIDER", "disabled")
         .env("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", "disabled")
@@ -1358,6 +1365,14 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
         .env_remove("BITLOOPS_DEVQL_CH_USER")
         .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+    if !world.watcher_autostart_enabled {
+        command.env(
+            bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV,
+            "1",
+        );
+    } else {
+        command.env_remove(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV);
+    }
     Ok(command)
 }
 

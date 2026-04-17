@@ -119,6 +119,7 @@ pub struct QatWorld {
     pub last_test_harness_run_baseline: Option<CapabilityEventRunRecord>,
     pub last_task_id: Option<String>,
     pub agent_name: Option<String>,
+    pub watcher_autostart_enabled: bool,
 }
 
 pub struct ScenarioDaemonProcess {
@@ -175,6 +176,7 @@ impl QatWorld {
         self.last_test_harness_run_baseline = None;
         self.last_task_id = None;
         self.agent_name = None;
+        self.watcher_autostart_enabled = false;
     }
 
     pub fn prepare(

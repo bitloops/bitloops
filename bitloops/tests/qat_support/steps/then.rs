@@ -1286,6 +1286,20 @@ pub(super) fn then_artefacts_current_contains_path(
     })
 }
 
+pub(super) fn then_artefacts_current_contains_path_eventually(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "artefacts_current eventually contains path",
+            helpers::assert_artefacts_current_contains_path_eventually(world, &repo_name, &path),
+        );
+    })
+}
+
 pub(super) fn then_artefacts_current_lacks_path(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

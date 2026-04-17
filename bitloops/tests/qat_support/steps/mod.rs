@@ -174,6 +174,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I enable watcher autostart in (\S+)$"),
+            step_fn(given_enable_watcher_autostart),
+        )
+        .given(
+            None,
             regex(r"^I enqueue DevQL ingest task with status in (\S+)$"),
             step_fn(given_enqueue_devql_ingest_task_with_status),
         )
@@ -969,10 +974,20 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r#"^artefacts_current contains path \"([^\"]+)\" in (\S+)$"#),
             step_fn(then_artefacts_current_contains_path),
         )
+        .given(
+            None,
+            regex(r#"^artefacts_current does not contain path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_lacks_path),
+        )
         .then(
             None,
             regex(r#"^artefacts_current does not contain path \"([^\"]+)\" in (\S+)$"#),
             step_fn(then_artefacts_current_lacks_path),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current eventually contains path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_contains_path_eventually),
         )
         .then(
             None,

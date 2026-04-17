@@ -406,6 +406,20 @@ pub(super) fn given_devql_init(
     })
 }
 
+pub(super) fn given_enable_watcher_autostart(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I enable watcher autostart",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::enable_watcher_autostart_for_scenario(world)),
+        );
+    })
+}
+
 pub(super) fn given_enqueue_devql_ingest_task_with_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

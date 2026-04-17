@@ -118,7 +118,8 @@ Exercises the queue-backed `bitloops devql tasks enqueue --kind sync` workspace
 reconciliation flow: full indexing, TestHarness current-state sync, incremental
 add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
 validation and repair, explicit full and path-scoped modes, task queue control,
-`--require-daemon` failure handling, and `init --sync=true` integration.
+`--require-daemon` failure handling, and watcher-driven `init --sync=true`
+added-file materialization.
 
 ```bash
 cargo qat-devql-sync
@@ -147,7 +148,7 @@ cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only 
 | 11  | Sync validate reports clean after a full sync                             | `SyncValidateClean`             |
 | 12  | Sync repair restores clean state after drift                              | `SyncRepair`                    |
 | 13  | Init with sync=true makes immediate follow-up sync report no changes      | `SyncInitSyncTrueNoop`          |
-| 14  | Init with sync=true still allows incremental sync for new files           | `SyncInitSyncTrueIncremental`   |
+| 14  | Watcher-driven materialization after init --sync=true                     | `SyncInitSyncTrueIncremental`   |
 | 15  | Init with sync=true keeps sync validation clean without workspace changes | `SyncInitSyncTrueValidateClean` |
 
 The helper layer still supports negative drift assertions, and the active sync set now

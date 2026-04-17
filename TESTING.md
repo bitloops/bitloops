@@ -61,7 +61,13 @@ It runs onboarding and smoke in parallel, then runs the DevQL-heavy suites seria
 
 QAT suites support opt-in Cucumber tag filtering via `CUCUMBER_FILTER_TAGS`. If the variable is unset, the full suite runs as before.
 
-- Run only tagged scenarios in the focused DevQL sync suite:
+- Run only the watcher-driven added-file regression after `init --sync=true` in the focused DevQL sync suite:
+
+```bash
+CUCUMBER_FILTER_TAGS='@sync_init_sync_true_incremental' cargo qat-devql-sync
+```
+
+- Run only the tagged TestHarness sync scenarios in the focused DevQL sync suite:
 
 ```bash
 CUCUMBER_FILTER_TAGS='@test_harness_sync' cargo qat-devql-sync
@@ -70,7 +76,7 @@ CUCUMBER_FILTER_TAGS='@test_harness_sync' cargo qat-devql-sync
 - Use the direct `cargo test` form when you want the suite to stream step-by-step output:
 
 ```bash
-CUCUMBER_FILTER_TAGS='@test_harness_sync' \
+CUCUMBER_FILTER_TAGS='@sync_init_sync_true_incremental' \
 cargo test \
   --manifest-path bitloops/Cargo.toml \
   --features qat-tests \
@@ -80,6 +86,7 @@ cargo test \
 ```
 
 - Tag expressions use standard Cucumber syntax, for example:
+  - `@sync_init_sync_true_incremental`
   - `@test_harness_sync`
   - `@devql and @sync`
   - `@test_harness_sync and not @slow`

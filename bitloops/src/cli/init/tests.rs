@@ -758,6 +758,249 @@ fn run_init_binds_repo_to_running_daemon_config() {
 }
 
 #[test]
+fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    setup_git_repo(&repo);
+    let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let reconcile_count = std::rc::Rc::clone(&reconcile_count);
+                let repo_root = repo_root.clone();
+                move |actual_repo_root, capture_enabled| {
+                    assert_eq!(actual_repo_root, repo_root.as_path());
+                    assert!(
+                        capture_enabled,
+                        "init should only reconcile watchers when capture is enabled"
+                    );
+                    *reconcile_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo_root.as_path(),
+                    &mut out,
+                    None,
+                )
+                .expect("run init");
+            },
+        );
+
+        assert_eq!(
+            *reconcile_count.borrow(),
+            1,
+            "successful init should reconcile the watcher exactly once"
+        );
+        assert!(
+            crate::config::settings::is_enabled(repo_root.as_path())
+                .expect("repo capture settings"),
+            "successful init should leave capture enabled in repo settings"
+        );
+    });
+}
+
+#[test]
+fn run_init_surfaces_repo_watcher_reconcile_failures() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let repo_root = repo_root.clone();
+                move |actual_repo_root, capture_enabled| {
+                    assert_eq!(actual_repo_root, repo_root.as_path());
+                    assert!(
+                        capture_enabled,
+                        "init should only reconcile watchers when capture is enabled"
+                    );
+                    anyhow::bail!("watcher reconcile exploded");
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                let err = run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo_root.as_path(),
+                    &mut out,
+                    None,
+                )
+                .expect_err("init should surface watcher reconciliation failures");
+
+                let rendered = format!("{err:#}");
+                assert!(
+                    rendered.contains("watcher reconcile exploded"),
+                    "unexpected init error: {rendered}"
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let project_root = repo.path().join("apps/nested-project");
+    std::fs::create_dir_all(&project_root).expect("create nested project root");
+    setup_git_repo(&repo);
+    let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let reconcile_count = std::rc::Rc::clone(&reconcile_count);
+                let project_root = project_root.clone();
+                move |actual_repo_root, capture_enabled| {
+                    assert_eq!(actual_repo_root, project_root.as_path());
+                    assert!(
+                        capture_enabled,
+                        "nested init should reconcile watchers when nested-project capture is enabled"
+                    );
+                    *reconcile_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    project_root.as_path(),
+                    &mut out,
+                    None,
+                )
+                .expect("run init for nested project");
+            },
+        );
+
+        assert_eq!(
+            *reconcile_count.borrow(),
+            1,
+            "successful nested init should reconcile the watcher exactly once"
+        );
+        assert!(
+            crate::config::settings::is_enabled(project_root.as_path())
+                .expect("nested project capture settings"),
+            "successful nested init should leave capture enabled in nested project settings"
+        );
+    });
+}
+
+#[test]
+fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    setup_git_repo(&repo);
+    let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let select_fn = |_available: &[String]| -> std::result::Result<Vec<String>, String> {
+        Err("selector refused to choose an agent".to_string())
+    };
+
+    with_temp_app_dirs(&app_dirs, true, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let reconcile_count = std::rc::Rc::clone(&reconcile_count);
+                move |_repo_root, _capture_enabled| {
+                    *reconcile_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                let err = run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo_root.as_path(),
+                    &mut out,
+                    Some(&select_fn),
+                )
+                .expect_err("init should fail before watcher reconciliation");
+
+                let rendered = format!("{err:#}");
+                assert!(
+                    rendered.contains("selector refused to choose an agent"),
+                    "unexpected init error: {rendered}"
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        *reconcile_count.borrow(),
+        0,
+        "watcher reconciliation should not run when init exits early"
+    );
+}
+
+#[test]
 fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
