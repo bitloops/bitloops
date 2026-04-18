@@ -3695,6 +3695,40 @@ fn choose_final_setup_options_preselects_telemetry_when_shown() {
 }
 
 #[test]
+fn choose_final_setup_options_defaults_auto_start_to_disabled_when_not_interactive() {
+    with_test_tty_override(false, || {
+        let mut out = Vec::new();
+        let mut input = Cursor::new("");
+
+        let selection = choose_final_setup_options(
+            Some(false),
+            &mut out,
+            &mut input,
+            Some(false),
+            InitFinalSetupPromptOptions {
+                show_telemetry: false,
+                show_auto_start_daemon: true,
+            },
+        )
+        .expect("default auto-start selection");
+
+        assert_eq!(
+            selection,
+            InitFinalSetupSelection {
+                sync: false,
+                ingest: false,
+                telemetry: false,
+                auto_start_daemon: false,
+            }
+        );
+        assert!(
+            out.is_empty(),
+            "non-interactive auto-start should not prompt"
+        );
+    });
+}
+
+#[test]
 fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();

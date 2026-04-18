@@ -17,7 +17,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex as StdMutex, MutexGuard as StdMutexGuard, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration as StdDuration, Instant};
 use tempfile::TempDir;
 use tokio::sync::{Mutex, Notify};
@@ -71,11 +71,9 @@ fn sample_input_with_artefact_id(artefact_id: &str) -> semantic_features::Semant
     input
 }
 
-fn performance_suite_lock() -> StdMutexGuard<'static, ()> {
-    static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| StdMutex::new(()))
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
+async fn performance_suite_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().await
 }
 
 fn latency_budget_from_env(var: &str, default_ms: u64) -> StdDuration {
@@ -313,17 +311,14 @@ async fn run_summary_refresh_perf_jobs(
         workers.spawn(async move {
             let control_state = default_state();
             let mut metrics = Vec::new();
-            loop {
-                let Some(job) = claim_next_workplane_job(
+            while let Some(job) = claim_next_workplane_job(
                     &workplane_store,
                     &runtime_store,
                     &control_state,
                     super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
                 )
                 .map_err(|err| format!("claim summary perf job: {err:#}"))?
-                else {
-                    break;
-                };
+            {
 
                 let queue_wait = started.elapsed();
                 let artefact_id = summary_refresh_perf_job_artefact_id(&job);
@@ -2683,16 +2678,14 @@ async fn enqueue_symbol_embeddings_splits_large_batches_into_smaller_jobs() {
         .await
         .expect("enqueue embedding jobs");
 
-    let embedding_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending)
-        .iter()
-        .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX)
-        .map(|job| {
-            job.payload["artefact_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect::<Vec<_>>();
+    let embedding_jobs =
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending)
+            .iter()
+            .filter(|item| {
+                item.representation_kind == EmbeddingRepresentationKind::Code.to_string()
+            })
+            .filter_map(|item| item.artefact_id.clone())
+            .collect::<Vec<_>>();
 
     assert_eq!(embedding_jobs.len(), input_count);
     assert!(
@@ -2725,16 +2718,11 @@ async fn enqueue_semantic_summaries_keeps_larger_semantic_batches() {
         .await
         .expect("enqueue semantic jobs");
 
-    let semantic_jobs = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending)
-        .iter()
-        .filter(|job| job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
-        .map(|job| {
-            job.payload["artefact_id"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string()
-        })
-        .collect::<Vec<_>>();
+    let semantic_jobs =
+        load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending)
+            .iter()
+            .filter_map(|item| item.artefact_id.clone())
+            .collect::<Vec<_>>();
 
     assert_eq!(
         semantic_jobs.len(),
@@ -2756,55 +2744,77 @@ fn requeue_running_jobs_moves_stale_running_jobs_back_to_pending() {
         .runtime_store
         .save_enrichment_queue_state(&default_state())
         .expect("write initial control state");
-    insert_workplane_job(
+    insert_summary_mailbox_item(
         &coordinator,
         &target,
-        WorkplaneJobFixture {
+        SummaryMailboxItemFixture {
             repo_id: &repo_id,
-            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-            status: WorkplaneJobStatus::Running,
+            item_id: "semantic-a",
+            status: SemanticMailboxItemStatus::Leased,
+            item_kind: SemanticMailboxItemKind::Artefact,
             artefact_id: Some("artefact-semantic-a"),
-            job_id: "semantic-a",
+            payload_json: None,
+            submitted_at_unix: 1,
             updated_at_unix: 1,
             attempts: 1,
+            lease_token: Some("lease-summary-a"),
+            lease_expires_at_unix: Some(60),
             last_error: None,
         },
     );
-    insert_workplane_job(
+    insert_embedding_mailbox_item(
         &coordinator,
         &target,
-        WorkplaneJobFixture {
+        EmbeddingMailboxItemFixture {
             repo_id: &repo_id,
-            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-            status: WorkplaneJobStatus::Running,
+            item_id: "embedding-a",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Leased,
+            item_kind: SemanticMailboxItemKind::Artefact,
             artefact_id: Some("artefact-embedding-a"),
-            job_id: "embedding-a",
+            payload_json: None,
+            submitted_at_unix: 1,
             updated_at_unix: 1,
             attempts: 1,
+            lease_token: Some("lease-embedding-a"),
+            lease_expires_at_unix: Some(60),
             last_error: None,
         },
     );
-    insert_workplane_job(
+    insert_embedding_mailbox_item(
         &coordinator,
         &target,
-        WorkplaneJobFixture {
+        EmbeddingMailboxItemFixture {
             repo_id: &repo_id,
-            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-            status: WorkplaneJobStatus::Pending,
+            item_id: "embedding-b",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
             artefact_id: Some("artefact-embedding-b"),
-            job_id: "embedding-b",
+            payload_json: None,
+            submitted_at_unix: 1,
             updated_at_unix: 1,
             attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
             last_error: None,
         },
     );
 
     coordinator.requeue_running_jobs();
 
-    let recovered_running = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Running);
-    let recovered_pending = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
-    assert_eq!(recovered_running.len(), 0);
-    assert_eq!(recovered_pending.len(), 3);
+    let recovered_summary_leased =
+        load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Leased);
+    let recovered_summary_pending =
+        load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending);
+    let recovered_embedding_leased =
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Leased);
+    let recovered_embedding_pending =
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending);
+    assert_eq!(recovered_summary_leased.len(), 0);
+    assert_eq!(recovered_embedding_leased.len(), 0);
+    assert_eq!(recovered_summary_pending.len(), 1);
+    assert_eq!(recovered_embedding_pending.len(), 2);
     assert_eq!(
         coordinator
             .runtime_store
@@ -2828,55 +2838,77 @@ fn ensure_started_recovers_stale_running_jobs_on_startup() {
         .runtime_store
         .save_enrichment_queue_state(&default_state())
         .expect("write initial control state");
-    insert_workplane_job(
+    insert_summary_mailbox_item(
         &coordinator,
         &target,
-        WorkplaneJobFixture {
+        SummaryMailboxItemFixture {
             repo_id: &repo_id,
-            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-            status: WorkplaneJobStatus::Running,
+            item_id: "semantic-a",
+            status: SemanticMailboxItemStatus::Leased,
+            item_kind: SemanticMailboxItemKind::Artefact,
             artefact_id: Some("artefact-semantic-a"),
-            job_id: "semantic-a",
+            payload_json: None,
+            submitted_at_unix: 1,
             updated_at_unix: 1,
             attempts: 1,
+            lease_token: Some("lease-summary-a"),
+            lease_expires_at_unix: Some(60),
             last_error: None,
         },
     );
-    insert_workplane_job(
+    insert_embedding_mailbox_item(
         &coordinator,
         &target,
-        WorkplaneJobFixture {
+        EmbeddingMailboxItemFixture {
             repo_id: &repo_id,
-            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-            status: WorkplaneJobStatus::Running,
+            item_id: "embedding-a",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Leased,
+            item_kind: SemanticMailboxItemKind::Artefact,
             artefact_id: Some("artefact-embedding-a"),
-            job_id: "embedding-a",
+            payload_json: None,
+            submitted_at_unix: 1,
             updated_at_unix: 1,
             attempts: 1,
+            lease_token: Some("lease-embedding-a"),
+            lease_expires_at_unix: Some(60),
             last_error: None,
         },
     );
-    insert_workplane_job(
+    insert_embedding_mailbox_item(
         &coordinator,
         &target,
-        WorkplaneJobFixture {
+        EmbeddingMailboxItemFixture {
             repo_id: &repo_id,
-            mailbox_name: SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-            status: WorkplaneJobStatus::Pending,
+            item_id: "embedding-b",
+            representation_kind: "code",
+            status: SemanticMailboxItemStatus::Pending,
+            item_kind: SemanticMailboxItemKind::Artefact,
             artefact_id: Some("artefact-embedding-b"),
-            job_id: "embedding-b",
+            payload_json: None,
+            submitted_at_unix: 1,
             updated_at_unix: 1,
             attempts: 0,
+            lease_token: None,
+            lease_expires_at_unix: None,
             last_error: None,
         },
     );
 
     coordinator.ensure_started();
 
-    let recovered_running = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Running);
-    let recovered_pending = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
-    assert_eq!(recovered_running.len(), 0);
-    assert_eq!(recovered_pending.len(), 3);
+    let recovered_summary_leased =
+        load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Leased);
+    let recovered_summary_pending =
+        load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending);
+    let recovered_embedding_leased =
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Leased);
+    let recovered_embedding_pending =
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending);
+    assert_eq!(recovered_summary_leased.len(), 0);
+    assert_eq!(recovered_embedding_leased.len(), 0);
+    assert_eq!(recovered_summary_pending.len(), 1);
+    assert_eq!(recovered_embedding_pending.len(), 2);
     assert_eq!(
         coordinator
             .runtime_store
@@ -3575,7 +3607,7 @@ fn summary_refresh_perf_report_includes_percentiles_and_slowest_jobs() {
 #[tokio::test]
 #[ignore = "performance smoke test; run locally with `cargo nextest run -p bitloops --lib summary_refresh_perf_200_jobs_calls_actual_gateway --run-ignored ignored-only`"]
 async fn summary_refresh_perf_200_jobs_calls_actual_gateway() {
-    let _guard = performance_suite_lock();
+    let _guard = performance_suite_lock().await;
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
     let runtime_command = match summary_refresh_perf_platform_prerequisites() {

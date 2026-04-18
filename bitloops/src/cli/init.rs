@@ -411,25 +411,32 @@ fn choose_final_setup_options(
     ingest: Option<bool>,
     prompt_options: InitFinalSetupPromptOptions,
 ) -> Result<InitFinalSetupSelection> {
+    let can_prompt = telemetry_consent::can_prompt_interactively();
     let defaults = InitFinalSetupSelection {
         sync: sync.unwrap_or(true),
         ingest: ingest.unwrap_or(true),
         telemetry: prompt_options.show_telemetry,
-        auto_start_daemon: prompt_options.show_auto_start_daemon,
+        auto_start_daemon: prompt_options.show_auto_start_daemon && can_prompt,
     };
     let requires_prompt = sync.is_none()
         || ingest.is_none()
         || prompt_options.show_telemetry
-        || prompt_options.show_auto_start_daemon;
+        || (prompt_options.show_auto_start_daemon && can_prompt);
 
     if !requires_prompt {
         return Ok(defaults);
     }
 
-    if !telemetry_consent::can_prompt_interactively() {
-        bail!(
-            "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
-        );
+    if !can_prompt {
+        if sync.is_none() || ingest.is_none() {
+            bail!(
+                "`bitloops init` requires explicit `--sync=true|false` and `--ingest=true|false` choices when not running interactively."
+            );
+        }
+        if prompt_options.show_telemetry {
+            bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
+        }
+        return Ok(defaults);
     }
 
     prompt_final_setup_selection(out, input, defaults, prompt_options)
@@ -1018,7 +1025,7 @@ async fn maybe_enable_default_daemon_service(
             return result;
         }
 
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(test))]

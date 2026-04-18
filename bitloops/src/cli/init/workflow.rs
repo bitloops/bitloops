@@ -261,15 +261,18 @@ pub(super) async fn run_for_project_root(
     }
 
     maybe_install_default_daemon(args.install_default_daemon, telemetry_choice).await?;
-    telemetry_consent::ensure_default_daemon_running().await?;
     let daemon_status = crate::daemon::status().await?;
     let daemon_config_path = if let Some(runtime) = daemon_status.runtime.as_ref() {
-        runtime
-            .config_path
-            .canonicalize()
-            .unwrap_or_else(|_| runtime.config_path.clone())
+        Some(
+            runtime
+                .config_path
+                .canonicalize()
+                .unwrap_or_else(|_| runtime.config_path.clone()),
+        )
+    } else if args.install_default_daemon {
+        Some(bound_running_daemon_config_path().await?)
     } else {
-        bound_running_daemon_config_path().await?
+        None
     };
     if args.install_default_daemon {
         let port = daemon_status
@@ -277,29 +280,46 @@ pub(super) async fn run_for_project_root(
             .as_ref()
             .map(|runtime| runtime.port)
             .unwrap_or(crate::api::DEFAULT_DASHBOARD_PORT);
-        write_default_daemon_bootstrap(out, &daemon_config_path, port)?;
+        write_default_daemon_bootstrap(
+            out,
+            daemon_config_path
+                .as_deref()
+                .expect("install default daemon should resolve a daemon config path"),
+            port,
+        )?;
     }
-    let should_prompt_for_telemetry = if let Some(choice) = telemetry_choice {
-        let persisted =
-            telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, Some(choice))
-                .await?;
-        if persisted.needs_prompt {
-            bail!("failed to persist telemetry consent");
+    let should_manage_telemetry_via_daemon =
+        args.install_default_daemon || daemon_config_existed_at_entry;
+    let should_prompt_for_telemetry = if should_manage_telemetry_via_daemon {
+        telemetry_consent::ensure_default_daemon_running().await?;
+        if let Some(choice) = telemetry_choice {
+            let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
+                project_root,
+                Some(choice),
+            )
+            .await?;
+            if persisted.needs_prompt {
+                bail!("failed to persist telemetry consent");
+            }
+            false
+        } else {
+            let state =
+                telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, None)
+                    .await?;
+            if state.needs_prompt && !telemetry_consent::can_prompt_interactively() {
+                bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
+            }
+            state.needs_prompt
         }
-        false
     } else {
-        let state =
-            telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, None).await?;
-        if state.needs_prompt && !telemetry_consent::can_prompt_interactively() {
-            bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
-        }
-        state.needs_prompt
+        false
     };
-    let daemon_already_always_on = daemon_status
-        .runtime
-        .as_ref()
-        .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Service)
-        || daemon_status.service.is_some();
+    let daemon_already_always_on = args.install_default_daemon
+        && (daemon_status
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Service)
+            || daemon_status.service.is_some());
     ensure_repo_local_policy_excluded(&git_root, project_root)?;
 
     let selection = if !args.agent.is_empty() {
@@ -321,7 +341,7 @@ pub(super) async fn run_for_project_root(
         &local_policy_path,
         &strategy,
         &selected_agents,
-        Some(&daemon_config_path),
+        daemon_config_path.as_deref(),
     )?;
     if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
         set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
@@ -471,7 +491,9 @@ pub(super) async fn run_for_project_root(
     if args.install_default_daemon {
         maybe_enable_default_daemon_service(
             final_setup_selection.auto_start_daemon,
-            daemon_config_path.as_path(),
+            daemon_config_path
+                .as_deref()
+                .expect("install default daemon should resolve a daemon config path"),
             should_prompt_for_telemetry
                 .then_some(final_setup_selection.telemetry)
                 .or(telemetry_choice),

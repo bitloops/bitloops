@@ -512,6 +512,45 @@ pub(super) fn recover_expired_semantic_inbox_leases(
     })
 }
 
+pub(super) fn requeue_leased_semantic_inbox_items(
+    workplane_store: &DaemonSqliteRuntimeStore,
+) -> Result<u64> {
+    let now = unix_timestamp_now();
+    workplane_store.with_connection(|conn| {
+        let summary = conn.execute(
+            "UPDATE semantic_summary_mailbox_items
+             SET status = ?1,
+                 leased_at_unix = NULL,
+                 lease_expires_at_unix = NULL,
+                 lease_token = NULL,
+                 updated_at_unix = ?2,
+                 last_error = NULL
+             WHERE status = ?3",
+            params![
+                SemanticMailboxItemStatus::Pending.as_str(),
+                sql_i64(now)?,
+                SemanticMailboxItemStatus::Leased.as_str(),
+            ],
+        )?;
+        let embedding = conn.execute(
+            "UPDATE semantic_embedding_mailbox_items
+             SET status = ?1,
+                 leased_at_unix = NULL,
+                 lease_expires_at_unix = NULL,
+                 lease_token = NULL,
+                 updated_at_unix = ?2,
+                 last_error = NULL
+             WHERE status = ?3",
+            params![
+                SemanticMailboxItemStatus::Pending.as_str(),
+                sql_i64(now)?,
+                SemanticMailboxItemStatus::Leased.as_str(),
+            ],
+        )?;
+        Ok(u64::try_from(summary + embedding).unwrap_or_default())
+    })
+}
+
 pub(super) fn prune_failed_semantic_inbox_items(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<()> {

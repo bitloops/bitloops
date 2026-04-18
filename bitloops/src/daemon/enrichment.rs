@@ -18,10 +18,9 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
-use crate::config::{
-    resolve_repo_runtime_db_path_for_config_root, resolve_store_backend_config_for_repo,
-};
+use crate::config::resolve_repo_runtime_db_path_for_config_root;
 use crate::graphql::SubscriptionHub;
+use crate::host::relational_store::DefaultRelationalStore;
 use crate::host::runtime_store::{DaemonSqliteRuntimeStore, WorkplaneJobStatus};
 use rusqlite::params;
 
@@ -53,8 +52,8 @@ use self::workplane::{
     persist_embedding_mailbox_batch_failure, persist_workplane_job_completion,
     project_workplane_status, prune_failed_semantic_inbox_items,
     recover_expired_semantic_inbox_leases, requeue_embedding_mailbox_batch,
-    requeue_summary_mailbox_batch, retry_failed_semantic_inbox_items, retry_failed_workplane_jobs,
-    sql_i64,
+    requeue_leased_semantic_inbox_items, requeue_summary_mailbox_batch,
+    retry_failed_semantic_inbox_items, retry_failed_workplane_jobs, sql_i64,
 };
 use worker_count::{
     EnrichmentWorkerBudgets, EnrichmentWorkerPool, configured_enrichment_worker_budgets_for_repo,
@@ -281,8 +280,8 @@ impl EnrichmentCoordinator {
         if !self.state_initialised.swap(true, Ordering::AcqRel) {
             self.ensure_state_file();
             let _ = migrate_legacy_semantic_workplane_rows(&self.workplane_store);
-            let _ = recover_expired_semantic_inbox_leases(&self.workplane_store);
             self.requeue_running_jobs();
+            let _ = recover_expired_semantic_inbox_leases(&self.workplane_store);
             let _ = prune_failed_semantic_inbox_items(&self.workplane_store);
             let _ = compact_and_prune_workplane_jobs(&self.workplane_store);
         }
@@ -507,7 +506,9 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
     }
 
     fn requeue_running_jobs(&self) {
-        let recovered = self
+        let recovered_mailbox_items =
+            requeue_leased_semantic_inbox_items(&self.workplane_store).unwrap_or_default();
+        let recovered_clone_rebuild_jobs = self
             .workplane_store
             .with_connection(|conn| {
                 conn.execute(
@@ -529,6 +530,8 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
                 .map_err(anyhow::Error::from)
             })
             .unwrap_or_default();
+        let recovered = recovered_mailbox_items
+            .saturating_add(u64::try_from(recovered_clone_rebuild_jobs).unwrap_or_default());
         if recovered == 0 {
             return;
         }
@@ -619,14 +622,13 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         };
         let inference_ms = inference_started.elapsed().as_millis() as u64;
         let flush_started = Instant::now();
-        let relational_db_path = resolve_store_backend_config_for_repo(&batch.config_root)?
-            .relational
-            .resolve_sqlite_db_path_for_repo(&batch.repo_root)?;
+        let relational_store =
+            DefaultRelationalStore::open_local_for_roots(&batch.config_root, &batch.repo_root)?;
         let expanded_count = prepared.expanded_count;
         let attempts = prepared.attempts;
         let flush_result = commit_summary_batch(
             self.workplane_store.db_path(),
-            &relational_db_path,
+            relational_store.sqlite_path(),
             prepared.commit,
         )
         .await;
@@ -718,14 +720,13 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         };
         let inference_ms = inference_started.elapsed().as_millis() as u64;
         let flush_started = Instant::now();
-        let relational_db_path = resolve_store_backend_config_for_repo(&batch.config_root)?
-            .relational
-            .resolve_sqlite_db_path_for_repo(&batch.repo_root)?;
+        let relational_store =
+            DefaultRelationalStore::open_local_for_roots(&batch.config_root, &batch.repo_root)?;
         let expanded_count = prepared.expanded_count;
         let attempts = prepared.attempts;
         let flush_result = commit_embedding_batch(
             self.workplane_store.db_path(),
-            &relational_db_path,
+            relational_store.sqlite_path(),
             prepared.commit,
         )
         .await;
