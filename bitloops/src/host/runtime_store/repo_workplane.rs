@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS capability_workplane_jobs (
 CREATE INDEX IF NOT EXISTS idx_capability_workplane_jobs_repo_mailbox_status
 ON capability_workplane_jobs (repo_id, capability_id, mailbox_name, status, available_at_unix, submitted_at_unix);
 
+CREATE INDEX IF NOT EXISTS idx_capability_workplane_jobs_status_mailbox_available_submitted
+ON capability_workplane_jobs (status, mailbox_name, available_at_unix, submitted_at_unix);
+
 CREATE INDEX IF NOT EXISTS idx_capability_workplane_jobs_dedupe
 ON capability_workplane_jobs (repo_id, capability_id, mailbox_name, dedupe_key);
 "#;

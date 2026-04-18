@@ -36,6 +36,9 @@ use super::{
     WORKPLANE_TERMINAL_RETENTION_SECS, WORKPLANE_TERMINAL_ROW_LIMIT, WorkplaneMailboxReadiness,
 };
 
+const WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT: usize = 32;
+const WORKPLANE_TRANSIENT_EMBEDDING_RETRY_LIMIT: u32 = 3;
+
 pub(super) fn default_state() -> EnrichmentControlState {
     EnrichmentControlState {
         version: 1,
@@ -504,37 +507,39 @@ pub(super) fn claim_next_workplane_job(
             .context("starting capability workplane job claim transaction")?;
         let result = (|| {
             let now = unix_timestamp_now();
-            let jobs = load_workplane_jobs_by_status(conn, WorkplaneJobStatus::Pending)?;
+            let jobs = load_workplane_claim_candidates(conn, pool, now)?;
             let mut readiness_cache = BTreeMap::new();
             for mut job in jobs {
-                if mailbox_worker_pool(job.mailbox_name.as_str()) != Some(pool) {
-                    continue;
-                }
                 if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
                     continue;
                 }
                 if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
                     continue;
                 }
-                if job.available_at_unix > now {
-                    continue;
-                }
-                conn.execute(
-                    "UPDATE capability_workplane_jobs
+                let updated = conn
+                    .execute(
+                        "UPDATE capability_workplane_jobs
                      SET status = ?1,
                          attempts = ?2,
                          started_at_unix = COALESCE(started_at_unix, ?3),
                          updated_at_unix = ?4
-                     WHERE job_id = ?5",
-                    params![
-                        WorkplaneJobStatus::Running.as_str(),
-                        job.attempts + 1,
-                        sql_i64(now)?,
-                        sql_i64(now)?,
-                        &job.job_id,
-                    ],
-                )
-                .with_context(|| format!("claiming capability workplane job `{}`", job.job_id))?;
+                     WHERE job_id = ?5
+                       AND status = ?6",
+                        params![
+                            WorkplaneJobStatus::Running.as_str(),
+                            job.attempts + 1,
+                            sql_i64(now)?,
+                            sql_i64(now)?,
+                            &job.job_id,
+                            WorkplaneJobStatus::Pending.as_str(),
+                        ],
+                    )
+                    .with_context(|| {
+                        format!("claiming capability workplane job `{}`", job.job_id)
+                    })?;
+                if updated == 0 {
+                    continue;
+                }
                 job.status = WorkplaneJobStatus::Running;
                 job.attempts += 1;
                 job.started_at_unix = Some(job.started_at_unix.unwrap_or(now));
@@ -558,46 +563,248 @@ pub(super) fn claim_next_workplane_job(
     })
 }
 
+fn load_workplane_claim_candidates(
+    conn: &rusqlite::Connection,
+    pool: EnrichmentWorkerPool,
+    now: u64,
+) -> Result<Vec<WorkplaneJobRecord>> {
+    let limit = i64::try_from(WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT)
+        .context("converting workplane claim candidate limit")?;
+    let now = sql_i64(now)?;
+    let mut values = Vec::new();
+    match pool {
+        EnrichmentWorkerPool::SummaryRefresh => {
+            let mut stmt = conn.prepare(
+                "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                        init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                        started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                        lease_expires_at_unix, last_error
+                 FROM capability_workplane_jobs
+                 WHERE status = ?1
+                   AND mailbox_name = ?2
+                   AND available_at_unix <= ?3
+                 ORDER BY CASE mailbox_name
+                              WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.summary' THEN 0
+                              WHEN 'semantic_clones.summary_refresh' THEN 1
+                              WHEN 'semantic_clones.clone_rebuild' THEN 2
+                          ELSE 3
+                          END ASC,
+                          available_at_unix ASC,
+                          submitted_at_unix ASC
+                 LIMIT ?4",
+            )?;
+            let rows = stmt.query_map(
+                params![
+                    WorkplaneJobStatus::Pending.as_str(),
+                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                    now,
+                    limit,
+                ],
+                map_workplane_job_row,
+            )?;
+            for row in rows {
+                values.push(row?);
+            }
+        }
+        EnrichmentWorkerPool::Embeddings => {
+            let mut stmt = conn.prepare(
+                "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                        init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                        started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                        lease_expires_at_unix, last_error
+                 FROM capability_workplane_jobs
+                 WHERE status = ?1
+                   AND mailbox_name IN (?2, ?3)
+                   AND available_at_unix <= ?4
+                 ORDER BY CASE mailbox_name
+                              WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.summary' THEN 0
+                              WHEN 'semantic_clones.summary_refresh' THEN 1
+                              WHEN 'semantic_clones.clone_rebuild' THEN 2
+                          ELSE 3
+                          END ASC,
+                          available_at_unix ASC,
+                          submitted_at_unix ASC
+                 LIMIT ?5",
+            )?;
+            let rows = stmt.query_map(
+                params![
+                    WorkplaneJobStatus::Pending.as_str(),
+                    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+                    now,
+                    limit,
+                ],
+                map_workplane_job_row,
+            )?;
+            for row in rows {
+                values.push(row?);
+            }
+        }
+        EnrichmentWorkerPool::CloneRebuild => {
+            let mut stmt = conn.prepare(
+                "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                        init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                        started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                        lease_expires_at_unix, last_error
+                 FROM capability_workplane_jobs
+                 WHERE status = ?1
+                   AND mailbox_name = ?2
+                   AND available_at_unix <= ?3
+                 ORDER BY CASE mailbox_name
+                              WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.summary' THEN 0
+                              WHEN 'semantic_clones.summary_refresh' THEN 1
+                              WHEN 'semantic_clones.clone_rebuild' THEN 2
+                          ELSE 3
+                          END ASC,
+                          available_at_unix ASC,
+                          submitted_at_unix ASC
+                 LIMIT ?4",
+            )?;
+            let rows = stmt.query_map(
+                params![
+                    WorkplaneJobStatus::Pending.as_str(),
+                    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+                    now,
+                    limit,
+                ],
+                map_workplane_job_row,
+            )?;
+            for row in rows {
+                values.push(row?);
+            }
+        }
+    }
+    Ok(values)
+}
+
 pub(super) fn persist_workplane_job_completion(
     workplane_store: &DaemonSqliteRuntimeStore,
     job: &WorkplaneJobRecord,
     outcome: &JobExecutionOutcome,
-) -> Result<()> {
+) -> Result<WorkplaneJobCompletionDisposition> {
     let now = unix_timestamp_now();
+    let disposition = classify_workplane_job_completion(job, outcome, now);
     workplane_store.with_connection(|conn| {
-        conn.execute(
-            "UPDATE capability_workplane_jobs
-             SET status = ?1,
-                 updated_at_unix = ?2,
-                 completed_at_unix = ?3,
-                 last_error = ?4,
-                 lease_owner = NULL,
-                 lease_expires_at_unix = NULL
-             WHERE job_id = ?5",
-            params![
-                if outcome.error.is_some() {
-                    WorkplaneJobStatus::Failed.as_str()
-                } else {
-                    WorkplaneJobStatus::Completed.as_str()
-                },
-                sql_i64(now)?,
-                sql_i64(now)?,
-                outcome.error.as_deref(),
-                &job.job_id,
-            ],
-        )
-        .with_context(|| {
-            format!(
-                "persisting completion for capability workplane job `{}`",
-                job.job_id
-            )
-        })?;
+        match disposition {
+            WorkplaneJobCompletionDisposition::Completed
+            | WorkplaneJobCompletionDisposition::Failed => {
+                conn.execute(
+                    "UPDATE capability_workplane_jobs
+                     SET status = ?1,
+                         updated_at_unix = ?2,
+                         completed_at_unix = ?3,
+                         last_error = ?4,
+                         lease_owner = NULL,
+                         lease_expires_at_unix = NULL
+                     WHERE job_id = ?5",
+                    params![
+                        if matches!(disposition, WorkplaneJobCompletionDisposition::Failed) {
+                            WorkplaneJobStatus::Failed.as_str()
+                        } else {
+                            WorkplaneJobStatus::Completed.as_str()
+                        },
+                        sql_i64(now)?,
+                        sql_i64(now)?,
+                        outcome.error.as_deref(),
+                        &job.job_id,
+                    ],
+                )
+                .with_context(|| {
+                    format!(
+                        "persisting completion for capability workplane job `{}`",
+                        job.job_id
+                    )
+                })?;
+            }
+            WorkplaneJobCompletionDisposition::RetryScheduled {
+                available_at_unix, ..
+            } => {
+                conn.execute(
+                    "UPDATE capability_workplane_jobs
+                     SET status = ?1,
+                         available_at_unix = ?2,
+                         started_at_unix = NULL,
+                         updated_at_unix = ?3,
+                         completed_at_unix = NULL,
+                         last_error = ?4,
+                         lease_owner = NULL,
+                         lease_expires_at_unix = NULL
+                     WHERE job_id = ?5",
+                    params![
+                        WorkplaneJobStatus::Pending.as_str(),
+                        sql_i64(available_at_unix)?,
+                        sql_i64(now)?,
+                        outcome.error.as_deref(),
+                        &job.job_id,
+                    ],
+                )
+                .with_context(|| {
+                    format!(
+                        "scheduling retry for capability workplane job `{}`",
+                        job.job_id
+                    )
+                })?;
+            }
+        }
         Ok(())
     })?;
-    if let Some(error) = outcome.error.as_ref() {
+    log::info!(
+        "{}",
+        format_workplane_job_completion_log_with_disposition(job, now, outcome, disposition)
+    );
+    if let Some(error) = outcome.error.as_ref()
+        && matches!(disposition, WorkplaneJobCompletionDisposition::Failed)
+    {
         log_workplane_job_failure(job, error);
     }
-    Ok(())
+    Ok(disposition)
+}
+
+pub(super) fn format_workplane_job_completion_log(
+    job: &WorkplaneJobRecord,
+    completed_at_unix: u64,
+    outcome: &JobExecutionOutcome,
+) -> String {
+    let disposition = if outcome.error.is_some() {
+        WorkplaneJobCompletionDisposition::Failed
+    } else {
+        WorkplaneJobCompletionDisposition::Completed
+    };
+    format_workplane_job_completion_log_with_disposition(
+        job,
+        completed_at_unix,
+        outcome,
+        disposition,
+    )
+}
+
+fn format_workplane_job_completion_log_with_disposition(
+    job: &WorkplaneJobRecord,
+    completed_at_unix: u64,
+    _outcome: &JobExecutionOutcome,
+    disposition: WorkplaneJobCompletionDisposition,
+) -> String {
+    let started_at_unix = job.started_at_unix.unwrap_or(completed_at_unix);
+    let queue_wait_secs = started_at_unix.saturating_sub(job.submitted_at_unix);
+    let run_secs = completed_at_unix.saturating_sub(started_at_unix);
+    let mut line = format!(
+        "capability workplane job completed: id={} repo={} mailbox_name={} payload_work_item_count={} queue_wait_secs={} run_secs={} attempts={} outcome={}",
+        job.job_id,
+        job.repo_id,
+        job.mailbox_name,
+        payload_work_item_count(&job.payload, &job.mailbox_name),
+        queue_wait_secs,
+        run_secs,
+        job.attempts,
+        disposition.outcome_label(),
+    );
+    if let WorkplaneJobCompletionDisposition::RetryScheduled { retry_in_secs, .. } = disposition {
+        line.push_str(&format!(" retry_in_secs={retry_in_secs}"));
+    }
+    line
 }
 
 pub(super) fn project_workplane_status(
@@ -722,6 +929,7 @@ pub(super) fn retry_failed_workplane_jobs(
         conn.execute(
             "UPDATE capability_workplane_jobs
                  SET status = ?1,
+                     started_at_unix = NULL,
                      updated_at_unix = ?2,
                      completed_at_unix = NULL,
                      last_error = NULL
@@ -813,6 +1021,65 @@ fn count_workplane_job_buckets(
         }
         Ok((summary, embeddings, rebuilds))
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorkplaneJobCompletionDisposition {
+    Completed,
+    Failed,
+    RetryScheduled {
+        available_at_unix: u64,
+        retry_in_secs: u64,
+    },
+}
+
+impl WorkplaneJobCompletionDisposition {
+    const fn outcome_label(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::RetryScheduled { .. } => "retry_scheduled",
+        }
+    }
+}
+
+fn classify_workplane_job_completion(
+    job: &WorkplaneJobRecord,
+    outcome: &JobExecutionOutcome,
+    now: u64,
+) -> WorkplaneJobCompletionDisposition {
+    let Some(error) = outcome.error.as_deref() else {
+        return WorkplaneJobCompletionDisposition::Completed;
+    };
+    if should_retry_transient_embedding_failure(job, error) {
+        let retry_in_secs = transient_embedding_retry_backoff_secs(job.attempts);
+        return WorkplaneJobCompletionDisposition::RetryScheduled {
+            available_at_unix: now.saturating_add(retry_in_secs),
+            retry_in_secs,
+        };
+    }
+    WorkplaneJobCompletionDisposition::Failed
+}
+
+fn should_retry_transient_embedding_failure(job: &WorkplaneJobRecord, error: &str) -> bool {
+    is_embedding_mailbox(job.mailbox_name.as_str())
+        && job.attempts < WORKPLANE_TRANSIENT_EMBEDDING_RETRY_LIMIT
+        && error.contains("timed out after")
+}
+
+fn transient_embedding_retry_backoff_secs(attempts: u32) -> u64 {
+    match attempts {
+        0 | 1 => 5,
+        2 => 15,
+        _ => 30,
+    }
+}
+
+fn is_embedding_mailbox(mailbox_name: &str) -> bool {
+    matches!(
+        mailbox_name,
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+    )
 }
 
 pub(super) fn current_workplane_mailbox_blocked_statuses(
@@ -1081,17 +1348,6 @@ fn workplane_mailbox_registration(
             )
             .backlog_policy(CapabilityMailboxBacklogPolicy::RepoCoalesced),
         ),
-        _ => None,
-    }
-}
-
-fn mailbox_worker_pool(mailbox_name: &str) -> Option<EnrichmentWorkerPool> {
-    match mailbox_name {
-        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => Some(EnrichmentWorkerPool::SummaryRefresh),
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
-            Some(EnrichmentWorkerPool::Embeddings)
-        }
-        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => Some(EnrichmentWorkerPool::CloneRebuild),
         _ => None,
     }
 }

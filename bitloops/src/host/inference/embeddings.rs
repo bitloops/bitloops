@@ -19,6 +19,7 @@ use super::{BITLOOPS_EMBEDDINGS_IPC_DRIVER, EmbeddingInputType, EmbeddingService
 const PYTHON_EMBEDDINGS_DIMENSION_PROBE_TEXT: &str = "bitloops python embedding dimension probe";
 const SHARED_EMBEDDINGS_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const SHARED_EMBEDDINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
+const SHARED_EMBEDDINGS_REQUEST_TIMEOUT_GUARD_SECS: u64 = 5;
 const BITLOOPS_EMBEDDINGS_CACHE_DIR_ENV: &str = "BITLOOPS_EMBEDDINGS_CACHE_DIR";
 const HF_HUB_OFFLINE_ENV: &str = "HF_HUB_OFFLINE";
 const TRANSFORMERS_OFFLINE_ENV: &str = "TRANSFORMERS_OFFLINE";
@@ -224,6 +225,9 @@ impl SharedBitloopsEmbeddingsSession {
             }
             Err(first_err) => {
                 state.session = None;
+                if embeddings_runtime_error_is_timeout(&first_err) {
+                    return Err(first_err);
+                }
                 let restarted = PythonEmbeddingsSession::start(&self.config).context(
                     "restarting standalone `bitloops-local-embeddings` runtime after failure",
                 )?;
@@ -393,6 +397,18 @@ fn runtime_command_uses_script_argument(command: &Path) -> bool {
 fn sha256_hex(data: &[u8]) -> String {
     let digest = Sha256::digest(data);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn embeddings_runtime_request_timeout_secs(configured_timeout_secs: u64) -> u64 {
+    if configured_timeout_secs > SHARED_EMBEDDINGS_REQUEST_TIMEOUT_GUARD_SECS {
+        configured_timeout_secs - SHARED_EMBEDDINGS_REQUEST_TIMEOUT_GUARD_SECS
+    } else {
+        configured_timeout_secs
+    }
+}
+
+fn embeddings_runtime_error_is_timeout(err: &anyhow::Error) -> bool {
+    format!("{err:#}").contains("timed out after")
 }
 
 fn platform_runtime_api_key_env(args: &[String]) -> &str {
@@ -579,7 +595,7 @@ impl PythonEmbeddingsSession {
         });
         self.write_json_line(&request)?;
         let value = self.read_json_response(
-            self.config.request_timeout_secs,
+            embeddings_runtime_request_timeout_secs(self.config.request_timeout_secs),
             "waiting for standalone embeddings runtime response",
         )?;
         if value.get("id").and_then(Value::as_str) != Some(request_id.as_str()) {
@@ -726,6 +742,11 @@ impl PythonEmbeddingsSession {
     }
 
     fn terminate_child(&mut self) {
+        match self.child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(_) => {}
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -954,7 +975,7 @@ done
     }
 
     #[test]
-    fn ipc_service_restarts_after_request_timeout() {
+    fn ipc_service_recovers_on_next_request_after_request_timeout() {
         let temp = TempDir::new().expect("temp dir");
         let script_path = temp.path().join("fake_embeddings_runtime.sh");
         let launch_log = temp.path().join("launches.log");
@@ -966,15 +987,23 @@ done
             BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
                 .expect("build ipc service");
 
-        let vector = service
+        let err = service
             .embed("hello world", EmbeddingInputType::Document)
-            .expect("embedding request should recover after timeout");
+            .expect_err("first embedding request should time out");
 
-        assert_eq!(vector, vec![1.0, 2.0]);
+        assert!(
+            format!("{err:#}").contains("timed out after"),
+            "unexpected timeout error: {err:#}"
+        );
         assert!(
             timeout_marker.exists(),
             "first request should have timed out"
         );
+
+        let vector = service
+            .embed("hello world", EmbeddingInputType::Document)
+            .expect("next embedding request should recover after timeout");
+        assert_eq!(vector, vec![1.0, 2.0]);
     }
 
     #[test]

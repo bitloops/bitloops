@@ -34,8 +34,8 @@ use crate::host::runtime_store::WorkplaneJobRecord;
 use super::workplane::fallback_repo_identity;
 use super::{EnrichmentJobTarget, FollowUpJob, JobExecutionOutcome};
 
-const WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE: usize = 32;
-const WORKPLANE_EMBEDDING_REPO_BACKFILL_BATCH_SIZE: usize = 32;
+const WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE: usize = 16;
+const WORKPLANE_EMBEDDING_REPO_BACKFILL_BATCH_SIZE: usize = 8;
 
 #[cfg(test)]
 use anyhow::Context;

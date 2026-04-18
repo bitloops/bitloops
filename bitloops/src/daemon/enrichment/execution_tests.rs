@@ -295,10 +295,16 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
 
     match &plan.follow_ups[0] {
         FollowUpJob::SymbolEmbeddings {
+            target,
             artefact_ids,
             representation_kind,
             ..
         } => {
+            assert_eq!(target.repo_root, PathBuf::from("/tmp/repo-summary-plan"));
+            assert_eq!(
+                target.config_root,
+                PathBuf::from("/tmp/config-summary-plan")
+            );
             assert_eq!(
                 *representation_kind,
                 crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
@@ -308,17 +314,25 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
                 WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE
             );
             assert_eq!(artefact_ids.first().map(String::as_str), Some("artefact-0"));
-            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-31"));
+            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-15"));
         }
         other => panic!("expected summary-embedding follow-up, got {other:?}"),
     }
 
     match &plan.follow_ups[1] {
-        FollowUpJob::SemanticSummaries { artefact_ids, .. } => {
-            assert_eq!(artefact_ids.len(), 8);
+        FollowUpJob::SemanticSummaries {
+            target,
+            artefact_ids,
+        } => {
+            assert_eq!(target.repo_root, PathBuf::from("/tmp/repo-summary-plan"));
+            assert_eq!(
+                target.config_root,
+                PathBuf::from("/tmp/config-summary-plan")
+            );
+            assert_eq!(artefact_ids.len(), 24);
             assert_eq!(
                 artefact_ids.first().map(String::as_str),
-                Some("artefact-32")
+                Some("artefact-16")
             );
             assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-39"));
         }
@@ -384,19 +398,22 @@ fn repo_backfill_embedding_plan_batches_initial_work_and_queues_follow_up_backfi
 
     match &plan.follow_ups[0] {
         FollowUpJob::RepoBackfillEmbeddings {
+            target,
             artefact_ids,
             representation_kind,
             ..
         } => {
+            assert_eq!(target.repo_root, PathBuf::from("/tmp/repo-embedding-plan"));
+            assert_eq!(
+                target.config_root,
+                PathBuf::from("/tmp/config-embedding-plan")
+            );
             assert_eq!(
                 *representation_kind,
                 crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
             );
-            assert_eq!(artefact_ids.len(), 8);
-            assert_eq!(
-                artefact_ids.first().map(String::as_str),
-                Some("artefact-32")
-            );
+            assert_eq!(artefact_ids.len(), 32);
+            assert_eq!(artefact_ids.first().map(String::as_str), Some("artefact-8"));
             assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-39"));
         }
         other => panic!("expected embedding repo-backfill follow-up, got {other:?}"),

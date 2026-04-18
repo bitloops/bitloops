@@ -36,7 +36,7 @@ mod workplane;
 #[cfg(test)]
 use self::workplane::load_workplane_jobs_by_status;
 use self::workplane::{
-    claim_next_workplane_job, compact_and_prune_workplane_jobs,
+    WorkplaneJobCompletionDisposition, claim_next_workplane_job, compact_and_prune_workplane_jobs,
     current_workplane_mailbox_blocked_statuses,
     current_workplane_mailbox_blocked_statuses_for_repo, default_state,
     enqueue_workplane_clone_rebuild, enqueue_workplane_embedding_jobs,
@@ -155,6 +155,7 @@ pub struct EnrichmentCoordinator {
     lock: Mutex<()>,
     notify: Notify,
     state_initialised: AtomicBool,
+    maintenance_started: AtomicBool,
     started_worker_counts: std::sync::Mutex<EnrichmentWorkerBudgets>,
     subscription_hub: std::sync::Mutex<Option<Arc<SubscriptionHub>>>,
 }
@@ -247,6 +248,7 @@ impl EnrichmentCoordinator {
                         lock: Mutex::new(()),
                         notify: Notify::new(),
                         state_initialised: AtomicBool::new(false),
+                        maintenance_started: AtomicBool::new(false),
                         started_worker_counts: std::sync::Mutex::new(
                             EnrichmentWorkerBudgets::default(),
                         ),
@@ -270,7 +272,35 @@ impl EnrichmentCoordinator {
             self.requeue_running_jobs();
             let _ = compact_and_prune_workplane_jobs(&self.workplane_store);
         }
+        self.ensure_maintenance_loop();
         self.ensure_worker_capacity();
+    }
+
+    fn ensure_maintenance_loop(self: &Arc<Self>) {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if self.maintenance_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let coordinator = Arc::clone(self);
+        handle.spawn(async move {
+            coordinator.maintenance_loop().await;
+        });
+    }
+
+    async fn maintenance_loop(self: Arc<Self>) {
+        loop {
+            sleep(Duration::from_secs(60)).await;
+            if let Err(err) = self.run_maintenance_pass().await {
+                log::warn!("capability workplane maintenance failed: {err:#}");
+            }
+        }
+    }
+
+    async fn run_maintenance_pass(&self) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        compact_and_prune_workplane_jobs(&self.workplane_store)
     }
 
     fn ensure_worker_capacity(self: &Arc<Self>) {
@@ -333,7 +363,6 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
-        compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,
@@ -359,7 +388,6 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
-        compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -379,7 +407,6 @@ impl EnrichmentCoordinator {
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_clone_edges_rebuild".to_string());
         self.save_state(&mut state)?;
-        compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,
@@ -448,9 +475,6 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             }
             Ok(u64::try_from(job_ids.len()).unwrap_or_default())
         })?;
-        if deleted > 0 {
-            compact_and_prune_workplane_jobs(&self.workplane_store)?;
-        }
         Ok(deleted)
     }
 
@@ -520,7 +544,6 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let job = {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            compact_and_prune_workplane_jobs(&self.workplane_store)?;
             let Some(job) =
                 claim_next_workplane_job(&self.workplane_store, &self.runtime_store, &state, pool)?
             else {
@@ -537,10 +560,14 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            persist_workplane_job_completion(&self.workplane_store, &job, &outcome)?;
-            state.last_action = Some(match outcome.error {
-                Some(_) => "failed".to_string(),
-                None => "completed".to_string(),
+            let disposition =
+                persist_workplane_job_completion(&self.workplane_store, &job, &outcome)?;
+            state.last_action = Some(match disposition {
+                WorkplaneJobCompletionDisposition::Completed => "completed".to_string(),
+                WorkplaneJobCompletionDisposition::Failed => "failed".to_string(),
+                WorkplaneJobCompletionDisposition::RetryScheduled { .. } => {
+                    "retry_scheduled".to_string()
+                }
             });
             self.save_state(&mut state)?;
         }
@@ -617,7 +644,6 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
-        compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -641,7 +667,6 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_embeddings".to_string());
         self.save_state(&mut state)?;
-        compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
@@ -664,7 +689,6 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;
-        compact_and_prune_workplane_jobs(&self.workplane_store)?;
         self.notify.notify_waiters();
         publish_workplane_runtime_event(
             &target,
@@ -748,6 +772,12 @@ pub(crate) fn blocked_mailboxes_for_repo(
     current_workplane_mailbox_blocked_statuses_for_repo(workplane_store, runtime_store, repo_id)
 }
 
+fn retry_failed_jobs_in_store(workplane_store: &DaemonSqliteRuntimeStore) -> Result<u64> {
+    let retried = retry_failed_workplane_jobs(workplane_store)?;
+    compact_and_prune_workplane_jobs(workplane_store)?;
+    Ok(retried)
+}
+
 pub fn pause_enrichments(reason: Option<String>) -> Result<EnrichmentControlResult> {
     let runtime_store = DaemonSqliteRuntimeStore::open()?;
     let daemon_config = crate::daemon::resolve_daemon_config(None)?;
@@ -811,7 +841,7 @@ pub fn retry_failed_enrichments() -> Result<EnrichmentControlResult> {
     let mut state = runtime_store
         .load_enrichment_queue_state()?
         .unwrap_or_else(default_state);
-    let retried = retry_failed_workplane_jobs(&workplane_store)?;
+    let retried = retry_failed_jobs_in_store(&workplane_store)?;
     state.retried_failed_jobs += retried;
     state.last_action = Some("retry_failed".to_string());
     runtime_store.save_enrichment_queue_state(&state)?;
