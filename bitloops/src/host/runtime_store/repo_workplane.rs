@@ -8,6 +8,10 @@ use uuid::Uuid;
 use super::types::RepoSqliteRuntimeStore;
 use crate::storage::SqliteConnectionPool;
 
+const SEMANTIC_SUMMARY_REFRESH_MAILBOX_NAME: &str = "semantic_clones.summary_refresh";
+const SEMANTIC_CODE_EMBEDDING_MAILBOX_NAME: &str = "semantic_clones.embedding.code";
+const SEMANTIC_SUMMARY_EMBEDDING_MAILBOX_NAME: &str = "semantic_clones.embedding.summary";
+
 pub(crate) const REPO_WORKPLANE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS capability_workplane_cursor_generations (
     repo_id TEXT NOT NULL,
@@ -128,6 +132,67 @@ ON capability_workplane_jobs (status, mailbox_name, available_at_unix, submitted
 
 CREATE INDEX IF NOT EXISTS idx_capability_workplane_jobs_dedupe
 ON capability_workplane_jobs (repo_id, capability_id, mailbox_name, dedupe_key);
+
+CREATE TABLE IF NOT EXISTS semantic_summary_mailbox_items (
+    item_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    repo_root TEXT NOT NULL,
+    config_root TEXT NOT NULL,
+    init_session_id TEXT,
+    item_kind TEXT NOT NULL,
+    artefact_id TEXT,
+    payload_json TEXT,
+    dedupe_key TEXT,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at_unix INTEGER NOT NULL,
+    submitted_at_unix INTEGER NOT NULL,
+    leased_at_unix INTEGER,
+    lease_expires_at_unix INTEGER,
+    lease_token TEXT,
+    updated_at_unix INTEGER NOT NULL,
+    last_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_summary_mailbox_items_repo_status
+ON semantic_summary_mailbox_items (repo_id, status, available_at_unix, submitted_at_unix);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_summary_mailbox_items_status_available
+ON semantic_summary_mailbox_items (status, available_at_unix, submitted_at_unix);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_summary_mailbox_items_dedupe
+ON semantic_summary_mailbox_items (repo_id, dedupe_key);
+
+CREATE TABLE IF NOT EXISTS semantic_embedding_mailbox_items (
+    item_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    repo_root TEXT NOT NULL,
+    config_root TEXT NOT NULL,
+    init_session_id TEXT,
+    representation_kind TEXT NOT NULL,
+    item_kind TEXT NOT NULL,
+    artefact_id TEXT,
+    payload_json TEXT,
+    dedupe_key TEXT,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    available_at_unix INTEGER NOT NULL,
+    submitted_at_unix INTEGER NOT NULL,
+    leased_at_unix INTEGER,
+    lease_expires_at_unix INTEGER,
+    lease_token TEXT,
+    updated_at_unix INTEGER NOT NULL,
+    last_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_embedding_mailbox_items_repo_status
+ON semantic_embedding_mailbox_items (repo_id, representation_kind, status, available_at_unix, submitted_at_unix);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_embedding_mailbox_items_status_available
+ON semantic_embedding_mailbox_items (status, representation_kind, available_at_unix, submitted_at_unix);
+
+CREATE INDEX IF NOT EXISTS idx_semantic_embedding_mailbox_items_dedupe
+ON semantic_embedding_mailbox_items (repo_id, representation_kind, dedupe_key);
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +201,155 @@ pub struct CapabilityWorkplaneJobInsert {
     pub init_session_id: Option<String>,
     pub dedupe_key: Option<String>,
     pub payload: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticMailboxItemKind {
+    Artefact,
+    RepoBackfill,
+}
+
+impl SemanticMailboxItemKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Artefact => "artefact",
+            Self::RepoBackfill => "repo_backfill",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "repo_backfill" => Self::RepoBackfill,
+            _ => Self::Artefact,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticMailboxItemStatus {
+    Pending,
+    Leased,
+    Failed,
+}
+
+impl SemanticMailboxItemStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Leased => "leased",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "leased" => Self::Leased,
+            "failed" => Self::Failed,
+            _ => Self::Pending,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticSummaryMailboxItemInsert {
+    pub init_session_id: Option<String>,
+    pub item_kind: SemanticMailboxItemKind,
+    pub artefact_id: Option<String>,
+    pub payload_json: Option<Value>,
+    pub dedupe_key: Option<String>,
+}
+
+impl SemanticSummaryMailboxItemInsert {
+    pub fn new(
+        init_session_id: Option<String>,
+        item_kind: SemanticMailboxItemKind,
+        artefact_id: Option<String>,
+        payload_json: Option<Value>,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            init_session_id,
+            item_kind,
+            artefact_id,
+            payload_json,
+            dedupe_key,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticEmbeddingMailboxItemInsert {
+    pub init_session_id: Option<String>,
+    pub representation_kind: String,
+    pub item_kind: SemanticMailboxItemKind,
+    pub artefact_id: Option<String>,
+    pub payload_json: Option<Value>,
+    pub dedupe_key: Option<String>,
+}
+
+impl SemanticEmbeddingMailboxItemInsert {
+    pub fn new(
+        init_session_id: Option<String>,
+        representation_kind: impl Into<String>,
+        item_kind: SemanticMailboxItemKind,
+        artefact_id: Option<String>,
+        payload_json: Option<Value>,
+        dedupe_key: Option<String>,
+    ) -> Self {
+        Self {
+            init_session_id,
+            representation_kind: representation_kind.into(),
+            item_kind,
+            artefact_id,
+            payload_json,
+            dedupe_key,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticSummaryMailboxItemRecord {
+    pub item_id: String,
+    pub repo_id: String,
+    pub repo_root: PathBuf,
+    pub config_root: PathBuf,
+    pub init_session_id: Option<String>,
+    pub item_kind: SemanticMailboxItemKind,
+    pub artefact_id: Option<String>,
+    pub payload_json: Option<Value>,
+    pub dedupe_key: Option<String>,
+    pub status: SemanticMailboxItemStatus,
+    pub attempts: u32,
+    pub available_at_unix: u64,
+    pub submitted_at_unix: u64,
+    pub leased_at_unix: Option<u64>,
+    pub lease_expires_at_unix: Option<u64>,
+    pub lease_token: Option<String>,
+    pub updated_at_unix: u64,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticEmbeddingMailboxItemRecord {
+    pub item_id: String,
+    pub repo_id: String,
+    pub repo_root: PathBuf,
+    pub config_root: PathBuf,
+    pub init_session_id: Option<String>,
+    pub representation_kind: String,
+    pub item_kind: SemanticMailboxItemKind,
+    pub artefact_id: Option<String>,
+    pub payload_json: Option<Value>,
+    pub dedupe_key: Option<String>,
+    pub status: SemanticMailboxItemStatus,
+    pub attempts: u32,
+    pub available_at_unix: u64,
+    pub submitted_at_unix: u64,
+    pub leased_at_unix: Option<u64>,
+    pub lease_expires_at_unix: Option<u64>,
+    pub lease_token: Option<String>,
+    pub updated_at_unix: u64,
+    pub last_error: Option<String>,
 }
 
 impl CapabilityWorkplaneJobInsert {
@@ -422,6 +636,218 @@ impl RepoSqliteRuntimeStore {
         })
     }
 
+    pub fn enqueue_semantic_summary_mailbox_items(
+        &self,
+        items: Vec<SemanticSummaryMailboxItemInsert>,
+    ) -> Result<CapabilityWorkplaneEnqueueResult> {
+        if items.is_empty() {
+            return Ok(CapabilityWorkplaneEnqueueResult::default());
+        }
+
+        let sqlite = self.connect_repo_sqlite()?;
+        sqlite.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+                .context("starting semantic summary mailbox enqueue transaction")?;
+            let result = (|| {
+                let now = unix_timestamp_now();
+                let mut inserted_jobs = 0u64;
+                let mut updated_jobs = 0u64;
+                for item in items {
+                    if let Some(existing) = load_deduped_summary_mailbox_item(
+                        conn,
+                        &self.repo_id,
+                        item.dedupe_key.as_deref(),
+                    )? {
+                        if existing.status == SemanticMailboxItemStatus::Pending {
+                            conn.execute(
+                                "UPDATE semantic_summary_mailbox_items
+                                 SET init_session_id = COALESCE(init_session_id, ?1),
+                                     payload_json = ?2,
+                                     updated_at_unix = ?3,
+                                     available_at_unix = ?4,
+                                     last_error = NULL
+                                 WHERE item_id = ?5",
+                                params![
+                                    item.init_session_id.as_deref(),
+                                    item.payload_json.as_ref().map(Value::to_string),
+                                    sql_i64(now)?,
+                                    sql_i64(now)?,
+                                    existing.item_id,
+                                ],
+                            )
+                            .with_context(|| {
+                                format!(
+                                    "refreshing pending semantic summary mailbox item `{}`",
+                                    existing.item_id
+                                )
+                            })?;
+                        }
+                        updated_jobs += 1;
+                        continue;
+                    }
+
+                    let item_id = format!("semantic-summary-mailbox-item-{}", Uuid::new_v4());
+                    conn.execute(
+                        "INSERT INTO semantic_summary_mailbox_items (
+                            item_id, repo_id, repo_root, config_root, init_session_id, item_kind,
+                            artefact_id, payload_json, dedupe_key, status, attempts,
+                            available_at_unix, submitted_at_unix, leased_at_unix,
+                            lease_expires_at_unix, lease_token, updated_at_unix, last_error
+                         ) VALUES (
+                            ?1, ?2, ?3, ?4, ?5, ?6,
+                            ?7, ?8, ?9, ?10, 0,
+                            ?11, ?12, NULL,
+                            NULL, NULL, ?13, NULL
+                         )",
+                        params![
+                            &item_id,
+                            &self.repo_id,
+                            self.repo_root.to_string_lossy().to_string(),
+                            self.config_root.to_string_lossy().to_string(),
+                            item.init_session_id.as_deref(),
+                            item.item_kind.as_str(),
+                            item.artefact_id.as_deref(),
+                            item.payload_json.as_ref().map(Value::to_string),
+                            item.dedupe_key.as_deref(),
+                            SemanticMailboxItemStatus::Pending.as_str(),
+                            sql_i64(now)?,
+                            sql_i64(now)?,
+                            sql_i64(now)?,
+                        ],
+                    )
+                    .with_context(|| {
+                        format!("inserting semantic summary mailbox item `{item_id}`")
+                    })?;
+                    inserted_jobs += 1;
+                }
+                Ok(CapabilityWorkplaneEnqueueResult {
+                    inserted_jobs,
+                    updated_jobs,
+                })
+            })();
+
+            match result {
+                Ok(result) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing semantic summary mailbox enqueue transaction")?;
+                    Ok(result)
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
+    pub fn enqueue_semantic_embedding_mailbox_items(
+        &self,
+        items: Vec<SemanticEmbeddingMailboxItemInsert>,
+    ) -> Result<CapabilityWorkplaneEnqueueResult> {
+        if items.is_empty() {
+            return Ok(CapabilityWorkplaneEnqueueResult::default());
+        }
+
+        let sqlite = self.connect_repo_sqlite()?;
+        sqlite.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+                .context("starting semantic embedding mailbox enqueue transaction")?;
+            let result = (|| {
+                let now = unix_timestamp_now();
+                let mut inserted_jobs = 0u64;
+                let mut updated_jobs = 0u64;
+                for item in items {
+                    if let Some(existing) = load_deduped_embedding_mailbox_item(
+                        conn,
+                        &self.repo_id,
+                        &item.representation_kind,
+                        item.dedupe_key.as_deref(),
+                    )? {
+                        if existing.status == SemanticMailboxItemStatus::Pending {
+                            conn.execute(
+                                "UPDATE semantic_embedding_mailbox_items
+                                 SET init_session_id = COALESCE(init_session_id, ?1),
+                                     payload_json = ?2,
+                                     updated_at_unix = ?3,
+                                     available_at_unix = ?4,
+                                     last_error = NULL
+                                 WHERE item_id = ?5",
+                                params![
+                                    item.init_session_id.as_deref(),
+                                    item.payload_json.as_ref().map(Value::to_string),
+                                    sql_i64(now)?,
+                                    sql_i64(now)?,
+                                    existing.item_id,
+                                ],
+                            )
+                            .with_context(|| {
+                                format!(
+                                    "refreshing pending semantic embedding mailbox item `{}`",
+                                    existing.item_id
+                                )
+                            })?;
+                        }
+                        updated_jobs += 1;
+                        continue;
+                    }
+
+                    let item_id = format!("semantic-embedding-mailbox-item-{}", Uuid::new_v4());
+                    conn.execute(
+                        "INSERT INTO semantic_embedding_mailbox_items (
+                            item_id, repo_id, repo_root, config_root, init_session_id,
+                            representation_kind, item_kind, artefact_id, payload_json,
+                            dedupe_key, status, attempts, available_at_unix,
+                            submitted_at_unix, leased_at_unix, lease_expires_at_unix,
+                            lease_token, updated_at_unix, last_error
+                         ) VALUES (
+                            ?1, ?2, ?3, ?4, ?5,
+                            ?6, ?7, ?8, ?9,
+                            ?10, ?11, 0, ?12,
+                            ?13, NULL, NULL,
+                            NULL, ?14, NULL
+                         )",
+                        params![
+                            &item_id,
+                            &self.repo_id,
+                            self.repo_root.to_string_lossy().to_string(),
+                            self.config_root.to_string_lossy().to_string(),
+                            item.init_session_id.as_deref(),
+                            &item.representation_kind,
+                            item.item_kind.as_str(),
+                            item.artefact_id.as_deref(),
+                            item.payload_json.as_ref().map(Value::to_string),
+                            item.dedupe_key.as_deref(),
+                            SemanticMailboxItemStatus::Pending.as_str(),
+                            sql_i64(now)?,
+                            sql_i64(now)?,
+                            sql_i64(now)?,
+                        ],
+                    )
+                    .with_context(|| {
+                        format!("inserting semantic embedding mailbox item `{item_id}`")
+                    })?;
+                    inserted_jobs += 1;
+                }
+                Ok(CapabilityWorkplaneEnqueueResult {
+                    inserted_jobs,
+                    updated_jobs,
+                })
+            })();
+
+            match result {
+                Ok(result) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing semantic embedding mailbox enqueue transaction")?;
+                    Ok(result)
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
     pub fn load_capability_workplane_mailbox_status<'a>(
         &self,
         capability_id: &str,
@@ -483,6 +909,64 @@ impl RepoSqliteRuntimeStore {
                         WorkplaneJobStatus::Running => entry.running_jobs += count,
                         WorkplaneJobStatus::Completed => entry.completed_recent_jobs += count,
                         WorkplaneJobStatus::Failed => entry.failed_jobs += count,
+                    }
+                }
+            }
+
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT status, COUNT(*)
+                     FROM semantic_summary_mailbox_items
+                     WHERE repo_id = ?1
+                     GROUP BY status",
+                )?;
+                let rows = stmt.query_map(params![&self.repo_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?;
+                for row in rows {
+                    let (status, count) = row?;
+                    let Some(entry) =
+                        status_by_mailbox.get_mut(SEMANTIC_SUMMARY_REFRESH_MAILBOX_NAME)
+                    else {
+                        continue;
+                    };
+                    let count = u64::try_from(count).unwrap_or_default();
+                    match SemanticMailboxItemStatus::parse(&status) {
+                        SemanticMailboxItemStatus::Pending => entry.pending_jobs += count,
+                        SemanticMailboxItemStatus::Leased => entry.running_jobs += count,
+                        SemanticMailboxItemStatus::Failed => entry.failed_jobs += count,
+                    }
+                }
+            }
+
+            {
+                let mut stmt = conn.prepare(
+                    "SELECT representation_kind, status, COUNT(*)
+                     FROM semantic_embedding_mailbox_items
+                     WHERE repo_id = ?1
+                     GROUP BY representation_kind, status",
+                )?;
+                let rows = stmt.query_map(params![&self.repo_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (representation_kind, status, count) = row?;
+                    let mailbox_name = match representation_kind.as_str() {
+                        "summary" => SEMANTIC_SUMMARY_EMBEDDING_MAILBOX_NAME,
+                        _ => SEMANTIC_CODE_EMBEDDING_MAILBOX_NAME,
+                    };
+                    let Some(entry) = status_by_mailbox.get_mut(mailbox_name) else {
+                        continue;
+                    };
+                    let count = u64::try_from(count).unwrap_or_default();
+                    match SemanticMailboxItemStatus::parse(&status) {
+                        SemanticMailboxItemStatus::Pending => entry.pending_jobs += count,
+                        SemanticMailboxItemStatus::Leased => entry.running_jobs += count,
+                        SemanticMailboxItemStatus::Failed => entry.failed_jobs += count,
                     }
                 }
             }
@@ -594,6 +1078,83 @@ fn load_deduped_job(
     .map_err(anyhow::Error::from)
 }
 
+fn load_deduped_summary_mailbox_item(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    dedupe_key: Option<&str>,
+) -> Result<Option<SemanticSummaryMailboxItemRecord>> {
+    let Some(dedupe_key) = dedupe_key else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT item_id, repo_id, repo_root, config_root, init_session_id, item_kind,
+                artefact_id, payload_json, dedupe_key, status, attempts, available_at_unix,
+                submitted_at_unix, leased_at_unix, lease_expires_at_unix, lease_token,
+                updated_at_unix, last_error
+         FROM semantic_summary_mailbox_items
+         WHERE repo_id = ?1
+           AND dedupe_key = ?2
+           AND status IN (?3, ?4, ?5)
+         ORDER BY CASE status
+                      WHEN 'leased' THEN 0
+                      WHEN 'pending' THEN 1
+                      ELSE 2
+                  END,
+                  submitted_at_unix ASC
+         LIMIT 1",
+        params![
+            repo_id,
+            dedupe_key,
+            SemanticMailboxItemStatus::Leased.as_str(),
+            SemanticMailboxItemStatus::Pending.as_str(),
+            SemanticMailboxItemStatus::Failed.as_str(),
+        ],
+        map_summary_mailbox_item_record_row,
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
+fn load_deduped_embedding_mailbox_item(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    representation_kind: &str,
+    dedupe_key: Option<&str>,
+) -> Result<Option<SemanticEmbeddingMailboxItemRecord>> {
+    let Some(dedupe_key) = dedupe_key else {
+        return Ok(None);
+    };
+    conn.query_row(
+        "SELECT item_id, repo_id, repo_root, config_root, init_session_id, representation_kind,
+                item_kind, artefact_id, payload_json, dedupe_key, status, attempts,
+                available_at_unix, submitted_at_unix, leased_at_unix, lease_expires_at_unix,
+                lease_token, updated_at_unix, last_error
+         FROM semantic_embedding_mailbox_items
+         WHERE repo_id = ?1
+           AND representation_kind = ?2
+           AND dedupe_key = ?3
+           AND status IN (?4, ?5, ?6)
+         ORDER BY CASE status
+                      WHEN 'leased' THEN 0
+                      WHEN 'pending' THEN 1
+                      ELSE 2
+                  END,
+                  submitted_at_unix ASC
+         LIMIT 1",
+        params![
+            repo_id,
+            representation_kind,
+            dedupe_key,
+            SemanticMailboxItemStatus::Leased.as_str(),
+            SemanticMailboxItemStatus::Pending.as_str(),
+            SemanticMailboxItemStatus::Failed.as_str(),
+        ],
+        map_embedding_mailbox_item_record_row,
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
 fn map_workplane_job_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkplaneJobRecord> {
     let payload_raw = row.get::<_, String>(8)?;
     let payload = serde_json::from_str(&payload_raw).unwrap_or(Value::Null);
@@ -616,6 +1177,63 @@ fn map_workplane_job_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Wor
         completed_at_unix: row.get::<_, Option<i64>>(15)?.map(parse_u64),
         lease_owner: row.get(16)?,
         lease_expires_at_unix: row.get::<_, Option<i64>>(17)?.map(parse_u64),
+        last_error: row.get(18)?,
+    })
+}
+
+fn map_summary_mailbox_item_record_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SemanticSummaryMailboxItemRecord> {
+    let payload_json = row
+        .get::<_, Option<String>>(7)?
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    Ok(SemanticSummaryMailboxItemRecord {
+        item_id: row.get(0)?,
+        repo_id: row.get(1)?,
+        repo_root: PathBuf::from(row.get::<_, String>(2)?),
+        config_root: PathBuf::from(row.get::<_, String>(3)?),
+        init_session_id: row.get(4)?,
+        item_kind: SemanticMailboxItemKind::parse(&row.get::<_, String>(5)?),
+        artefact_id: row.get(6)?,
+        payload_json,
+        dedupe_key: row.get(8)?,
+        status: SemanticMailboxItemStatus::parse(&row.get::<_, String>(9)?),
+        attempts: row.get(10)?,
+        available_at_unix: parse_u64(row.get::<_, i64>(11)?),
+        submitted_at_unix: parse_u64(row.get::<_, i64>(12)?),
+        leased_at_unix: row.get::<_, Option<i64>>(13)?.map(parse_u64),
+        lease_expires_at_unix: row.get::<_, Option<i64>>(14)?.map(parse_u64),
+        lease_token: row.get(15)?,
+        updated_at_unix: parse_u64(row.get::<_, i64>(16)?),
+        last_error: row.get(17)?,
+    })
+}
+
+fn map_embedding_mailbox_item_record_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SemanticEmbeddingMailboxItemRecord> {
+    let payload_json = row
+        .get::<_, Option<String>>(8)?
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    Ok(SemanticEmbeddingMailboxItemRecord {
+        item_id: row.get(0)?,
+        repo_id: row.get(1)?,
+        repo_root: PathBuf::from(row.get::<_, String>(2)?),
+        config_root: PathBuf::from(row.get::<_, String>(3)?),
+        init_session_id: row.get(4)?,
+        representation_kind: row.get(5)?,
+        item_kind: SemanticMailboxItemKind::parse(&row.get::<_, String>(6)?),
+        artefact_id: row.get(7)?,
+        payload_json,
+        dedupe_key: row.get(9)?,
+        status: SemanticMailboxItemStatus::parse(&row.get::<_, String>(10)?),
+        attempts: row.get(11)?,
+        available_at_unix: parse_u64(row.get::<_, i64>(12)?),
+        submitted_at_unix: parse_u64(row.get::<_, i64>(13)?),
+        leased_at_unix: row.get::<_, Option<i64>>(14)?.map(parse_u64),
+        lease_expires_at_unix: row.get::<_, Option<i64>>(15)?.map(parse_u64),
+        lease_token: row.get(16)?,
+        updated_at_unix: parse_u64(row.get::<_, i64>(17)?),
         last_error: row.get(18)?,
     })
 }

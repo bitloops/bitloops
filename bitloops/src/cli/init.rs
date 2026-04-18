@@ -499,7 +499,7 @@ fn prompt_final_setup_selection_with_picker(
         telemetry: false,
         auto_start_daemon: false,
     };
-    for (option, is_selected) in options.iter().zip(selected.into_iter()) {
+    for (option, is_selected) in options.iter().zip(selected) {
         set_final_setup_selection_value(&mut selection, option.kind, is_selected);
     }
     Ok(selection)

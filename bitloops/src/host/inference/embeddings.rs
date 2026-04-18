@@ -437,6 +437,12 @@ fn platform_runtime_auth_environment(
         });
     }
 
+    if let Ok(token) = std::env::var(api_key_env)
+        && !token.trim().is_empty()
+    {
+        return vec![(api_key_env.to_string(), token)];
+    }
+
     match crate::daemon::platform_gateway_bearer_token() {
         Ok(Some(token)) => vec![(api_key_env.to_string(), token)],
         Ok(None) => Vec::new(),
@@ -459,7 +465,8 @@ fn ensure_platform_runtime_auth_environment_available(
     }
 
     bail!(
-        "platform-backed embeddings profile requires an authenticated Bitloops session; run `bitloops login`"
+        "platform-backed embeddings profile requires an authenticated Bitloops session or `{}` to be set",
+        crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV
     );
 }
 

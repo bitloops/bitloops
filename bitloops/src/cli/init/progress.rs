@@ -377,7 +377,7 @@ fn compact_queue_status_text(
         return None;
     }
     Some(format!(
-        "Queue: {} waiting · {} running · {} failed",
+        "Work items: {} waiting · {} in flight · {} failed",
         compact_count_column(queued, 3),
         compact_count_column(running, 3),
         compact_count_column(failed, 3)
@@ -1217,7 +1217,7 @@ mod tests {
 
         assert_eq!(
             queue_status_text(&lane),
-            "Queue: 66 waiting · 0 running · 1 failed"
+            "Work items: 66 waiting · 0 in flight · 1 failed"
         );
     }
 
@@ -1245,7 +1245,7 @@ mod tests {
 
         assert_eq!(
             compact_queue_status_text(&lane),
-            Some("Queue:  66 waiting ·   0 running ·   1 failed".to_string())
+            Some("Work items:  66 waiting ·   0 in flight ·   1 failed".to_string())
         );
     }
 

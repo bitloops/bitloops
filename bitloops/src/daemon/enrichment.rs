@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, sleep};
 
@@ -17,7 +18,9 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
-use crate::config::resolve_repo_runtime_db_path_for_config_root;
+use crate::config::{
+    resolve_repo_runtime_db_path_for_config_root, resolve_store_backend_config_for_repo,
+};
 use crate::graphql::SubscriptionHub;
 use crate::host::runtime_store::{DaemonSqliteRuntimeStore, WorkplaneJobStatus};
 use rusqlite::params;
@@ -28,21 +31,29 @@ use super::types::{
 
 #[path = "enrichment/execution.rs"]
 mod execution;
+#[path = "enrichment/semantic_writer.rs"]
+mod semantic_writer;
 #[path = "enrichment/worker_count.rs"]
 pub(crate) mod worker_count;
 #[path = "enrichment/workplane.rs"]
 mod workplane;
 
+use self::semantic_writer::{commit_embedding_batch, commit_summary_batch};
 #[cfg(test)]
 use self::workplane::load_workplane_jobs_by_status;
 use self::workplane::{
-    WorkplaneJobCompletionDisposition, claim_next_workplane_job, compact_and_prune_workplane_jobs,
+    WorkplaneJobCompletionDisposition, claim_embedding_mailbox_batch, claim_next_workplane_job,
+    claim_summary_mailbox_batch, compact_and_prune_workplane_jobs,
     current_workplane_mailbox_blocked_statuses,
     current_workplane_mailbox_blocked_statuses_for_repo, default_state,
     enqueue_workplane_clone_rebuild, enqueue_workplane_embedding_jobs,
     enqueue_workplane_embedding_repo_backfill_job, enqueue_workplane_summary_jobs,
-    iter_workplane_job_config_roots, last_failed_embedding_job_from_workplane,
-    persist_workplane_job_completion, project_workplane_status, retry_failed_workplane_jobs,
+    fail_summary_mailbox_batch, iter_workplane_job_config_roots,
+    last_failed_embedding_job_from_workplane, migrate_legacy_semantic_workplane_rows,
+    persist_embedding_mailbox_batch_failure, persist_workplane_job_completion,
+    project_workplane_status, prune_failed_semantic_inbox_items,
+    recover_expired_semantic_inbox_leases, requeue_embedding_mailbox_batch,
+    requeue_summary_mailbox_batch, retry_failed_semantic_inbox_items, retry_failed_workplane_jobs,
     sql_i64,
 };
 use worker_count::{
@@ -51,7 +62,7 @@ use worker_count::{
 
 #[cfg(test)]
 const MAX_SEMANTIC_ENRICHMENT_JOB_ARTEFACTS: usize = 32;
-const WORKPLANE_PENDING_COMPACTION_MIN_AGE_SECS: u64 = 900;
+#[cfg(test)]
 const WORKPLANE_PENDING_COMPACTION_MIN_COUNT: u64 = 10_000;
 const WORKPLANE_TERMINAL_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 const WORKPLANE_TERMINAL_ROW_LIMIT: u64 = 1_000;
@@ -269,7 +280,10 @@ impl EnrichmentCoordinator {
     pub(crate) fn ensure_started(self: &Arc<Self>) {
         if !self.state_initialised.swap(true, Ordering::AcqRel) {
             self.ensure_state_file();
+            let _ = migrate_legacy_semantic_workplane_rows(&self.workplane_store);
+            let _ = recover_expired_semantic_inbox_leases(&self.workplane_store);
             self.requeue_running_jobs();
+            let _ = prune_failed_semantic_inbox_items(&self.workplane_store);
             let _ = compact_and_prune_workplane_jobs(&self.workplane_store);
         }
         self.ensure_maintenance_loop();
@@ -293,13 +307,15 @@ impl EnrichmentCoordinator {
         loop {
             sleep(Duration::from_secs(60)).await;
             if let Err(err) = self.run_maintenance_pass().await {
-                log::warn!("capability workplane maintenance failed: {err:#}");
+                log::warn!("semantic inbox maintenance failed: {err:#}");
             }
         }
     }
 
     async fn run_maintenance_pass(&self) -> Result<()> {
         let _guard = self.lock.lock().await;
+        recover_expired_semantic_inbox_leases(&self.workplane_store)?;
+        prune_failed_semantic_inbox_items(&self.workplane_store)?;
         compact_and_prune_workplane_jobs(&self.workplane_store)
     }
 
@@ -501,11 +517,13 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
                          updated_at_unix = ?2,
                          lease_owner = NULL,
                          lease_expires_at_unix = NULL
-                     WHERE status = ?3",
+                     WHERE status = ?3
+                       AND mailbox_name = ?4",
                     params![
                         WorkplaneJobStatus::Pending.as_str(),
                         sql_i64(unix_timestamp_now())?,
                         WorkplaneJobStatus::Running.as_str(),
+                        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
                     ],
                 )
                 .map_err(anyhow::Error::from)
@@ -541,15 +559,221 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
     }
 
     async fn process_next_job(&self, pool: EnrichmentWorkerPool) -> Result<bool> {
-        let job = {
+        match pool {
+            EnrichmentWorkerPool::SummaryRefresh => self.process_next_summary_batch().await,
+            EnrichmentWorkerPool::Embeddings => self.process_next_embedding_batch().await,
+            EnrichmentWorkerPool::CloneRebuild => self.process_next_clone_rebuild_job().await,
+        }
+    }
+
+    async fn process_next_summary_batch(&self) -> Result<bool> {
+        let batch = {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            let Some(job) =
-                claim_next_workplane_job(&self.workplane_store, &self.runtime_store, &state, pool)?
+            let Some(batch) =
+                claim_summary_mailbox_batch(&self.workplane_store, &self.runtime_store, &state)?
             else {
                 return Ok(false);
             };
-            state.last_action = Some(format!("running:{}", pool.as_str()));
+            state.last_action = Some("running:summary_refresh".to_string());
+            self.save_state(&mut state)?;
+            batch
+        };
+
+        let queue_wait_ms = batch
+            .items
+            .iter()
+            .map(|item| unix_timestamp_now().saturating_sub(item.submitted_at_unix) * 1_000)
+            .max()
+            .unwrap_or(0);
+        let inference_started = Instant::now();
+        let prepared = match execution::prepare_summary_mailbox_batch(&batch).await {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                fail_summary_mailbox_batch(&self.workplane_store, &batch, &format!("{err:#}"))?;
+                let _guard = self.lock.lock().await;
+                let mut state = self.load_state()?;
+                state.last_action = Some("failed".to_string());
+                self.save_state(&mut state)?;
+                log::warn!(
+                    "semantic mailbox batch failed: pipeline=summary_refresh repo_id={} leased_count={} outcome=failed error={err:#}",
+                    batch.repo_id,
+                    batch.items.len(),
+                );
+                return Ok(true);
+            }
+        };
+        let inference_ms = inference_started.elapsed().as_millis() as u64;
+        let flush_started = Instant::now();
+        let relational_db_path = resolve_store_backend_config_for_repo(&batch.config_root)?
+            .relational
+            .resolve_sqlite_db_path_for_repo(&batch.repo_root)?;
+        let expanded_count = prepared.expanded_count;
+        let attempts = prepared.attempts;
+        let flush_result = commit_summary_batch(
+            self.workplane_store.db_path(),
+            &relational_db_path,
+            prepared.commit,
+        )
+        .await;
+        let flush_ms = flush_started.elapsed().as_millis() as u64;
+
+        {
+            let _guard = self.lock.lock().await;
+            let mut state = self.load_state()?;
+            state.last_action = Some(if flush_result.is_ok() {
+                "completed".to_string()
+            } else {
+                "retry_scheduled".to_string()
+            });
+            self.save_state(&mut state)?;
+        }
+
+        if let Err(err) = flush_result {
+            requeue_summary_mailbox_batch(&self.workplane_store, &batch, 5, &format!("{err:#}"))?;
+            log::warn!(
+                "semantic mailbox batch completed: pipeline=summary_refresh repo_id={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=retry_scheduled retry_in_ms=5000",
+                batch.repo_id,
+                batch.items.len(),
+                expanded_count,
+                queue_wait_ms,
+                inference_ms,
+                flush_ms,
+                inference_ms.saturating_add(flush_ms),
+                attempts,
+            );
+            return Ok(true);
+        }
+
+        log::info!(
+            "semantic mailbox batch completed: pipeline=summary_refresh repo_id={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=completed",
+            batch.repo_id,
+            batch.items.len(),
+            expanded_count,
+            queue_wait_ms,
+            inference_ms,
+            flush_ms,
+            inference_ms.saturating_add(flush_ms),
+            attempts,
+        );
+
+        Ok(true)
+    }
+
+    async fn process_next_embedding_batch(&self) -> Result<bool> {
+        let batch = {
+            let _guard = self.lock.lock().await;
+            let mut state = self.load_state()?;
+            let Some(batch) =
+                claim_embedding_mailbox_batch(&self.workplane_store, &self.runtime_store, &state)?
+            else {
+                return Ok(false);
+            };
+            state.last_action = Some("running:embeddings".to_string());
+            self.save_state(&mut state)?;
+            batch
+        };
+
+        let queue_wait_ms = batch
+            .items
+            .iter()
+            .map(|item| unix_timestamp_now().saturating_sub(item.submitted_at_unix) * 1_000)
+            .max()
+            .unwrap_or(0);
+        let inference_started = Instant::now();
+        let prepared = match execution::prepare_embedding_mailbox_batch(&batch).await {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                let disposition = persist_embedding_mailbox_batch_failure(
+                    &self.workplane_store,
+                    &batch,
+                    &format!("{err:#}"),
+                )?;
+                let _guard = self.lock.lock().await;
+                let mut state = self.load_state()?;
+                state.last_action = Some(match disposition {
+                    WorkplaneJobCompletionDisposition::RetryScheduled { .. } => {
+                        "retry_scheduled".to_string()
+                    }
+                    _ => "failed".to_string(),
+                });
+                self.save_state(&mut state)?;
+                return Ok(true);
+            }
+        };
+        let inference_ms = inference_started.elapsed().as_millis() as u64;
+        let flush_started = Instant::now();
+        let relational_db_path = resolve_store_backend_config_for_repo(&batch.config_root)?
+            .relational
+            .resolve_sqlite_db_path_for_repo(&batch.repo_root)?;
+        let expanded_count = prepared.expanded_count;
+        let attempts = prepared.attempts;
+        let flush_result = commit_embedding_batch(
+            self.workplane_store.db_path(),
+            &relational_db_path,
+            prepared.commit,
+        )
+        .await;
+        let flush_ms = flush_started.elapsed().as_millis() as u64;
+
+        {
+            let _guard = self.lock.lock().await;
+            let mut state = self.load_state()?;
+            state.last_action = Some(if flush_result.is_ok() {
+                "completed".to_string()
+            } else {
+                "retry_scheduled".to_string()
+            });
+            self.save_state(&mut state)?;
+        }
+
+        if let Err(err) = flush_result {
+            requeue_embedding_mailbox_batch(&self.workplane_store, &batch, 5, &format!("{err:#}"))?;
+            log::warn!(
+                "semantic mailbox batch completed: pipeline=embedding repo_id={} representation_kind={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=retry_scheduled retry_in_ms=5000",
+                batch.repo_id,
+                batch.representation_kind,
+                batch.items.len(),
+                expanded_count,
+                queue_wait_ms,
+                inference_ms,
+                flush_ms,
+                inference_ms.saturating_add(flush_ms),
+                attempts,
+            );
+            return Ok(true);
+        }
+
+        log::info!(
+            "semantic mailbox batch completed: pipeline=embedding repo_id={} representation_kind={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=completed",
+            batch.repo_id,
+            batch.representation_kind,
+            batch.items.len(),
+            expanded_count,
+            queue_wait_ms,
+            inference_ms,
+            flush_ms,
+            inference_ms.saturating_add(flush_ms),
+            attempts,
+        );
+
+        Ok(true)
+    }
+
+    async fn process_next_clone_rebuild_job(&self) -> Result<bool> {
+        let job = {
+            let _guard = self.lock.lock().await;
+            let mut state = self.load_state()?;
+            let Some(job) = claim_next_workplane_job(
+                &self.workplane_store,
+                &self.runtime_store,
+                &state,
+                EnrichmentWorkerPool::CloneRebuild,
+            )?
+            else {
+                return Ok(false);
+            };
+            state.last_action = Some("running:clone_rebuild".to_string());
             self.save_state(&mut state)?;
             job
         };
@@ -773,7 +997,10 @@ pub(crate) fn blocked_mailboxes_for_repo(
 }
 
 fn retry_failed_jobs_in_store(workplane_store: &DaemonSqliteRuntimeStore) -> Result<u64> {
-    let retried = retry_failed_workplane_jobs(workplane_store)?;
+    let retried = retry_failed_workplane_jobs(workplane_store)?
+        .saturating_add(retry_failed_semantic_inbox_items(workplane_store)?);
+    migrate_legacy_semantic_workplane_rows(workplane_store)?;
+    prune_failed_semantic_inbox_items(workplane_store)?;
     compact_and_prune_workplane_jobs(workplane_store)?;
     Ok(retried)
 }

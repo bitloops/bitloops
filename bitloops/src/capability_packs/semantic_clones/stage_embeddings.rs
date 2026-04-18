@@ -22,21 +22,21 @@ pub(crate) use self::persistence::{
 pub(crate) use self::schema::{
     init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,
 };
+pub(crate) use self::sql::{
+    build_active_embedding_setup_persist_sql, build_current_symbol_embedding_persist_sql,
+    build_embedding_setup_persist_sql, build_sqlite_symbol_embedding_persist_sql,
+};
 pub(crate) use self::storage::{
     determine_repo_embedding_sync_action, load_active_embedding_setup,
-    load_current_repo_embedding_states,
+    load_current_repo_embedding_states, load_current_semantic_summary_map,
+    load_current_symbol_embedding_index_state, load_semantic_summary_map,
+    load_symbol_embedding_index_state, parse_symbol_embedding_index_state_rows,
 };
 
 #[cfg(test)]
 use self::sql::{
     build_postgres_symbol_embedding_persist_sql, build_semantic_summary_lookup_sql,
-    build_sqlite_symbol_embedding_persist_sql, build_symbol_embedding_index_state_sql,
-    sql_json_string, sql_vector_string,
-};
-#[cfg(test)]
-use self::storage::{
-    load_semantic_summary_map, load_symbol_embedding_index_state,
-    parse_symbol_embedding_index_state_rows,
+    build_symbol_embedding_index_state_sql, sql_json_string, sql_vector_string,
 };
 use anyhow::Result;
 
@@ -61,9 +61,19 @@ pub(crate) struct CurrentRepoEmbeddingRefreshResult {
 pub(crate) async fn ensure_semantic_embeddings_schema(
     relational: &RelationalStorage,
 ) -> Result<()> {
-    init_sqlite_semantic_embeddings_schema(relational.sqlite_path()).await?;
+    crate::host::devql::ensure_sqlite_schema_once(
+        relational.sqlite_path(),
+        "semantic_embeddings_sqlite",
+        |sqlite_path| async move { init_sqlite_semantic_embeddings_schema(&sqlite_path).await },
+    )
+    .await?;
     if let Some(remote_client) = relational.remote_client() {
-        init_postgres_semantic_embeddings_schema(remote_client).await?;
+        crate::host::devql::ensure_sqlite_schema_once(
+            relational.sqlite_path(),
+            "semantic_embeddings_postgres",
+            |_| async move { init_postgres_semantic_embeddings_schema(remote_client).await },
+        )
+        .await?;
     }
     Ok(())
 }

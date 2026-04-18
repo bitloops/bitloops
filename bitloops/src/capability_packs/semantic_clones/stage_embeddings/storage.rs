@@ -83,7 +83,7 @@ pub(crate) async fn load_current_repo_embedding_states(
     Ok(parse_active_embedding_state_rows(&rows))
 }
 
-pub(super) async fn load_symbol_embedding_index_state(
+pub(crate) async fn load_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,
@@ -100,7 +100,7 @@ pub(super) async fn load_symbol_embedding_index_state(
     Ok(parse_symbol_embedding_index_state_rows(&rows))
 }
 
-pub(super) async fn load_current_symbol_embedding_index_state(
+pub(crate) async fn load_current_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,
@@ -117,7 +117,7 @@ pub(super) async fn load_current_symbol_embedding_index_state(
     Ok(parse_symbol_embedding_index_state_rows(&rows))
 }
 
-pub(super) async fn load_semantic_summary_map(
+pub(crate) async fn load_semantic_summary_map(
     relational: &RelationalStorage,
     artefact_ids: &[String],
     representation_kind: embeddings::EmbeddingRepresentationKind,
@@ -132,7 +132,7 @@ pub(super) async fn load_semantic_summary_map(
 }
 
 #[allow(dead_code)]
-pub(super) async fn load_current_semantic_summary_map(
+pub(crate) async fn load_current_semantic_summary_map(
     relational: &RelationalStorage,
     artefact_ids: &[String],
     representation_kind: embeddings::EmbeddingRepresentationKind,
@@ -146,7 +146,7 @@ pub(super) async fn load_current_semantic_summary_map(
     .await
 }
 
-pub(super) fn parse_symbol_embedding_index_state_rows(
+pub(crate) fn parse_symbol_embedding_index_state_rows(
     rows: &[Value],
 ) -> embeddings::SymbolEmbeddingIndexState {
     let Some(row) = rows.first() else {

@@ -22,7 +22,7 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
 ) -> Result<()> {
     ensure_semantic_embeddings_schema(relational).await?;
     relational
-        .exec_batch_transactional(&[
+        .exec_serialized_batch_transactional(&[
             format!(
                 "DELETE FROM symbol_embeddings WHERE repo_id = '{}'",
                 esc_pg(repo_id),
@@ -43,7 +43,7 @@ pub(crate) async fn clear_repo_symbol_embedding_rows_for_representation(
     ensure_semantic_embeddings_schema(relational).await?;
     let predicate = representation_kind_sql_predicate("representation_kind", representation_kind);
     relational
-        .exec_batch_transactional(&[
+        .exec_serialized_batch_transactional(&[
             format!(
                 "DELETE FROM symbol_embeddings WHERE repo_id = '{repo_id}' AND {predicate}",
                 repo_id = esc_pg(repo_id),
@@ -70,7 +70,7 @@ pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
         esc_pg(repo_id),
         esc_pg(path),
     );
-    relational.exec(&sql).await
+    relational.exec_serialized(&sql).await
 }
 
 pub(crate) async fn clear_repo_active_embedding_setup(
@@ -82,7 +82,7 @@ pub(crate) async fn clear_repo_active_embedding_setup(
         "DELETE FROM semantic_clone_embedding_setup_state WHERE repo_id = '{}'",
         esc_pg(repo_id),
     );
-    relational.exec(&sql).await
+    relational.exec_serialized(&sql).await
 }
 
 pub(crate) async fn clear_repo_active_embedding_setup_for_representation(
@@ -97,7 +97,7 @@ pub(crate) async fn clear_repo_active_embedding_setup_for_representation(
         representation_predicate =
             representation_kind_sql_predicate("representation_kind", representation_kind),
     );
-    relational.exec(&sql).await
+    relational.exec_serialized(&sql).await
 }
 
 pub(crate) async fn persist_active_embedding_setup(
@@ -106,27 +106,29 @@ pub(crate) async fn persist_active_embedding_setup(
     active_state: &embeddings::ActiveEmbeddingRepresentationState,
 ) -> Result<()> {
     ensure_semantic_embeddings_schema(relational).await?;
-    persist_embedding_setup(relational, &active_state.setup).await?;
-    let sql = build_active_embedding_setup_persist_sql(repo_id, active_state);
-    relational.exec(&sql).await
+    relational
+        .exec_serialized_batch_transactional(&[
+            build_embedding_setup_persist_sql(&active_state.setup),
+            build_active_embedding_setup_persist_sql(repo_id, active_state),
+        ])
+        .await
 }
 
 pub(super) async fn persist_symbol_embedding_row(
     relational: &RelationalStorage,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
-    persist_embedding_setup(
-        relational,
-        &embeddings::EmbeddingSetup {
-            provider: row.provider.clone(),
-            model: row.model.clone(),
-            dimension: row.dimension,
-            setup_fingerprint: row.setup_fingerprint.clone(),
-        },
-    )
-    .await?;
-    let sql = build_sqlite_symbol_embedding_persist_sql(row)?;
-    relational.exec(&sql).await
+    relational
+        .exec_serialized_batch_transactional(&[
+            build_embedding_setup_persist_sql(&embeddings::EmbeddingSetup {
+                provider: row.provider.clone(),
+                model: row.model.clone(),
+                dimension: row.dimension,
+                setup_fingerprint: row.setup_fingerprint.clone(),
+            }),
+            build_sqlite_symbol_embedding_persist_sql(row)?,
+        ])
+        .await
 }
 
 #[allow(dead_code)]
@@ -137,18 +139,17 @@ pub(super) async fn persist_current_symbol_embedding_row(
     content_id: &str,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
-    persist_embedding_setup(
-        relational,
-        &embeddings::EmbeddingSetup {
-            provider: row.provider.clone(),
-            model: row.model.clone(),
-            dimension: row.dimension,
-            setup_fingerprint: row.setup_fingerprint.clone(),
-        },
-    )
-    .await?;
-    let sql = build_current_symbol_embedding_persist_sql(input, path, content_id, row)?;
-    relational.exec(&sql).await
+    relational
+        .exec_serialized_batch_transactional(&[
+            build_embedding_setup_persist_sql(&embeddings::EmbeddingSetup {
+                provider: row.provider.clone(),
+                model: row.model.clone(),
+                dimension: row.dimension,
+                setup_fingerprint: row.setup_fingerprint.clone(),
+            }),
+            build_current_symbol_embedding_persist_sql(input, path, content_id, row)?,
+        ])
+        .await
 }
 
 pub(super) async fn delete_stale_current_symbol_embedding_rows_for_path(
@@ -178,7 +179,7 @@ WHERE repo_id = '{repo_id}' AND path = '{path}' AND {representation_predicate} \
             representation_kind_sql_predicate("representation_kind", representation_kind),
         extra_delete_clause = extra_delete_clause,
     );
-    relational.exec(&sql).await
+    relational.exec_serialized(&sql).await
 }
 
 pub(super) async fn upsert_current_repo_symbol_embedding_rows(
@@ -212,13 +213,4 @@ pub(super) async fn upsert_current_repo_symbol_embedding_rows(
         stats.skipped += path_stats.skipped;
     }
     Ok(stats)
-}
-
-async fn persist_embedding_setup(
-    relational: &RelationalStorage,
-    setup: &embeddings::EmbeddingSetup,
-) -> Result<()> {
-    relational
-        .exec(&build_embedding_setup_persist_sql(setup))
-        .await
 }

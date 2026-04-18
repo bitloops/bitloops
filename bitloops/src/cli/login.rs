@@ -12,14 +12,20 @@ pub struct LoginArgs {
 pub enum LoginCommand {
     /// Show the current login session status.
     Status(LoginStatusArgs),
+    /// Print the current platform bearer token, refreshing it if needed.
+    Token(LoginTokenArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct LoginStatusArgs {}
 
+#[derive(Args, Debug, Clone, Default)]
+pub struct LoginTokenArgs {}
+
 pub async fn run(args: LoginArgs) -> Result<()> {
     match args.command {
         Some(LoginCommand::Status(_args)) => run_status().await,
+        Some(LoginCommand::Token(_args)) => run_token(),
         None => {
             ensure_logged_in().await?;
             Ok(())
@@ -79,6 +85,14 @@ async fn run_status() -> Result<()> {
     Ok(())
 }
 
+fn run_token() -> Result<()> {
+    let Some(token) = crate::daemon::platform_gateway_bearer_token()? else {
+        bail!("not signed in or no platform bearer token is available; run `bitloops login` first");
+    };
+    println!("{token}");
+    Ok(())
+}
+
 fn render_status_lines(session: &crate::daemon::WorkosSessionDetails) -> Result<Vec<String>> {
     let mut lines = vec![format!("Signed in as {}.", session.display_label())];
     if let Some(email) = session.user_email.as_deref() {
@@ -118,6 +132,20 @@ mod tests {
         assert!(matches!(
             args.command,
             Some(super::LoginCommand::Status(super::LoginStatusArgs {}))
+        ));
+    }
+
+    #[test]
+    fn login_token_subcommand_parses() {
+        let parsed =
+            Cli::try_parse_from(["bitloops", "login", "token"]).expect("login token parses");
+
+        let Some(Commands::Login(args)) = parsed.command else {
+            panic!("expected login command");
+        };
+        assert!(matches!(
+            args.command,
+            Some(super::LoginCommand::Token(super::LoginTokenArgs {}))
         ));
     }
 

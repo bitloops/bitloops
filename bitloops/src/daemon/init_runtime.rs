@@ -23,7 +23,9 @@ use crate::graphql::SubscriptionHub;
 use crate::host::capability_host::gateways::CapabilityMailboxStatus;
 use crate::host::devql::{DevqlConfig, SyncMode};
 use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
-use crate::host::runtime_store::{DaemonSqliteRuntimeStore, RepoSqliteRuntimeStore};
+use crate::host::runtime_store::{
+    DaemonSqliteRuntimeStore, RepoSqliteRuntimeStore, SemanticMailboxItemKind,
+};
 use crate::runtime_presentation::{
     RETRY_FAILED_ENRICHMENTS_COMMAND, lane_activity_label, mailbox_label, task_kind_label,
     warning_summary, workplane_pool_label, workplane_warning_message,
@@ -170,7 +172,7 @@ pub struct InitRuntimeSnapshot {
     pub current_init_session: Option<InitRuntimeSessionView>,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct StatusCounts {
     pending: u64,
     running: u64,
@@ -241,10 +243,17 @@ impl SummaryFreshnessState {
 }
 
 impl SessionWorkplaneStats {
+    fn refresh_lane_counts(&mut self) {
+        self.summary_jobs = self.summary_refresh_jobs.counts;
+        self.embedding_jobs = merge_status_counts([
+            self.code_embedding_jobs.counts,
+            self.summary_embedding_jobs.counts,
+        ]);
+    }
+
     fn warning_failed_jobs_total(&self) -> u64 {
         self.code_embedding_jobs.counts.failed
             + self.summary_embedding_jobs.counts.failed
-            + self.clone_rebuild_jobs.counts.failed
             + self.summary_refresh_jobs.counts.failed
     }
 
@@ -257,10 +266,6 @@ impl SessionWorkplaneStats {
             (
                 SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
                 &self.summary_embedding_jobs.counts,
-            ),
-            (
-                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-                &self.clone_rebuild_jobs.counts,
             ),
         ]
         .into_iter()
@@ -288,10 +293,6 @@ impl SessionWorkplaneStats {
                 SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
                 &self.summary_embedding_jobs,
             ),
-            mailbox_warning(
-                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-                &self.clone_rebuild_jobs,
-            ),
         ]
         .into_iter()
         .flatten()
@@ -308,6 +309,13 @@ fn mailbox_warning(
         message: workplane_warning_message(mailbox.counts.failed, mailbox.latest_error.as_deref()),
         retry_command: RETRY_FAILED_ENRICHMENTS_COMMAND.to_string(),
     })
+}
+
+fn is_init_embeddings_mailbox(mailbox_name: &str) -> bool {
+    matches!(
+        mailbox_name,
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+    )
 }
 
 #[derive(Debug)]
@@ -537,7 +545,7 @@ impl InitRuntimeCoordinator {
                 vec![cfg.daemon_config_root.clone()],
             )?;
         let summaries_bootstrap = self.current_summary_bootstrap_run(&repo_id)?;
-        let current_session = self.current_session_view(cfg, &repo_store, &blocked_mailboxes)?;
+        let current_session = self.current_session_view(cfg, &repo_store)?;
 
         Ok(InitRuntimeSnapshot {
             repo_id,
@@ -570,7 +578,6 @@ impl InitRuntimeCoordinator {
         &self,
         cfg: &DevqlConfig,
         repo_store: &RepoSqliteRuntimeStore,
-        blocked_mailboxes: &[BlockedMailboxStatus],
     ) -> Result<Option<InitRuntimeSessionView>> {
         let state = self
             .runtime_store
@@ -698,11 +705,6 @@ impl InitRuntimeCoordinator {
             Some("waiting_for_follow_up_sync".to_string())
         } else if !semantic_bootstraps_terminal {
             Some("waiting_for_bootstrap".to_string())
-        } else if blocked_mailboxes.iter().any(|blocked| {
-            blocked.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
-                && (stats.embedding_jobs.pending > 0 || stats.embedding_jobs.running > 0)
-        }) {
-            Some("waiting_on_blocked_mailbox".to_string())
         } else {
             None
         };
@@ -1926,12 +1928,15 @@ fn load_session_workplane_stats(
                 _ => {}
             }
         }
-        stats.summary_jobs = stats.summary_refresh_jobs.counts;
-        stats.embedding_jobs = merge_status_counts([
-            stats.code_embedding_jobs.counts,
-            stats.summary_embedding_jobs.counts,
-            stats.clone_rebuild_jobs.counts,
-        ]);
+        load_semantic_summary_session_mailbox_counts(
+            conn,
+            &mut stats,
+            repo_id,
+            init_session_id,
+            &summary_freshness,
+        )?;
+        load_semantic_embedding_session_mailbox_counts(conn, &mut stats, repo_id, init_session_id)?;
+        stats.refresh_lane_counts();
         stats.summary_refresh_jobs.latest_error = latest_mailbox_error(
             conn,
             repo_id,
@@ -1966,7 +1971,9 @@ fn load_session_workplane_stats(
                 }
                 continue;
             }
-            if stats_for_mailbox(&stats, blocked.mailbox_name.as_str()).has_pending_or_running() {
+            if is_init_embeddings_mailbox(blocked.mailbox_name.as_str())
+                && stats_for_mailbox(&stats, blocked.mailbox_name.as_str()).has_pending_or_running()
+            {
                 stats
                     .blocked_embedding_reason
                     .get_or_insert(blocked.reason.clone());
@@ -2295,20 +2302,214 @@ fn latest_mailbox_error(
     init_session_id: &str,
     mailbox_name: &str,
 ) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT last_error
-         FROM capability_workplane_jobs
-         WHERE repo_id = ?1
-           AND init_session_id = ?2
-           AND status = 'failed'
-           AND mailbox_name = ?3
-         ORDER BY updated_at_unix DESC
-         LIMIT 1",
-        params![repo_id, init_session_id, mailbox_name],
-        |row| row.get::<_, Option<String>>(0),
-    )
-    .optional()
-    .map(|error| error.flatten())
+    let legacy = conn
+        .query_row(
+            "SELECT last_error, updated_at_unix
+             FROM capability_workplane_jobs
+             WHERE repo_id = ?1
+               AND init_session_id = ?2
+               AND status = 'failed'
+               AND mailbox_name = ?3
+             ORDER BY updated_at_unix DESC
+             LIMIT 1",
+            params![repo_id, init_session_id, mailbox_name],
+            |row| Ok((row.get::<_, i64>(1)?, row.get::<_, Option<String>>(0)?)),
+        )
+        .optional()?;
+    let semantic = latest_semantic_mailbox_error(conn, repo_id, init_session_id, mailbox_name)?;
+    Ok(match (legacy, semantic) {
+        (Some((legacy_updated_at, legacy_error)), Some((semantic_updated_at, semantic_error))) => {
+            if semantic_updated_at >= legacy_updated_at {
+                semantic_error
+            } else {
+                legacy_error
+            }
+        }
+        (Some((_, error)), None) | (None, Some((_, error))) => error,
+        (None, None) => None,
+    })
+}
+
+fn latest_semantic_mailbox_error(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    init_session_id: &str,
+    mailbox_name: &str,
+) -> rusqlite::Result<Option<(i64, Option<String>)>> {
+    match mailbox_name {
+        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => conn
+            .query_row(
+                "SELECT last_error, updated_at_unix
+                 FROM semantic_summary_mailbox_items
+                 WHERE repo_id = ?1
+                   AND init_session_id = ?2
+                   AND status = 'failed'
+                 ORDER BY updated_at_unix DESC
+                 LIMIT 1",
+                params![repo_id, init_session_id],
+                |row| Ok((row.get::<_, i64>(1)?, row.get::<_, Option<String>>(0)?)),
+            )
+            .optional(),
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
+            let representation_kind =
+                semantic_embedding_representation_kind_for_mailbox(mailbox_name);
+            conn.query_row(
+                "SELECT last_error, updated_at_unix
+                 FROM semantic_embedding_mailbox_items
+                 WHERE repo_id = ?1
+                   AND init_session_id = ?2
+                   AND representation_kind = ?3
+                   AND status = 'failed'
+                 ORDER BY updated_at_unix DESC
+                 LIMIT 1",
+                params![repo_id, init_session_id, representation_kind],
+                |row| Ok((row.get::<_, i64>(1)?, row.get::<_, Option<String>>(0)?)),
+            )
+            .optional()
+        }
+        _ => Ok(None),
+    }
+}
+
+fn load_semantic_summary_session_mailbox_counts(
+    conn: &rusqlite::Connection,
+    stats: &mut SessionWorkplaneStats,
+    repo_id: &str,
+    init_session_id: &str,
+    summary_freshness: &SummaryFreshnessState,
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT status, item_kind, artefact_id, payload_json
+         FROM semantic_summary_mailbox_items
+         WHERE repo_id = ?1 AND init_session_id = ?2",
+    )?;
+    let rows = stmt.query_map(params![repo_id, init_session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (status, item_kind, artefact_id, payload_json) = row?;
+        let count = effective_session_summary_mailbox_item_count(
+            status.as_str(),
+            item_kind.as_str(),
+            artefact_id.as_deref(),
+            payload_json.as_deref(),
+            summary_freshness,
+        );
+        record_session_mailbox_count(
+            &mut stats.summary_refresh_jobs.counts,
+            status.as_str(),
+            count,
+        );
+    }
+    Ok(())
+}
+
+fn load_semantic_embedding_session_mailbox_counts(
+    conn: &rusqlite::Connection,
+    stats: &mut SessionWorkplaneStats,
+    repo_id: &str,
+    init_session_id: &str,
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT representation_kind, status, item_kind, payload_json
+         FROM semantic_embedding_mailbox_items
+         WHERE repo_id = ?1 AND init_session_id = ?2",
+    )?;
+    let rows = stmt.query_map(params![repo_id, init_session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    for row in rows {
+        let (representation_kind, status, item_kind, payload_json) = row?;
+        let mailbox_name =
+            semantic_embedding_mailbox_name_for_representation(representation_kind.as_str());
+        let count =
+            semantic_mailbox_item_work_item_count(item_kind.as_str(), payload_json.as_deref());
+        let target = mailbox_stats_mut(stats, mailbox_name);
+        record_session_mailbox_count(&mut target.counts, status.as_str(), count);
+    }
+    Ok(())
+}
+
+fn record_session_mailbox_count(counts: &mut StatusCounts, status: &str, count: u64) {
+    match status {
+        "pending" => counts.pending += count,
+        "running" | "leased" => counts.running += count,
+        "completed" => counts.completed += count,
+        "failed" => counts.failed += count,
+        _ => {}
+    }
+}
+
+fn effective_session_summary_mailbox_item_count(
+    status: &str,
+    item_kind: &str,
+    artefact_id: Option<&str>,
+    payload_json: Option<&str>,
+    summary_freshness: &SummaryFreshnessState,
+) -> u64 {
+    if !matches!(status, "pending" | "leased" | "failed") {
+        return semantic_mailbox_item_work_item_count(item_kind, payload_json);
+    }
+
+    match SemanticMailboxItemKind::parse(item_kind) {
+        SemanticMailboxItemKind::RepoBackfill => {
+            let payload = parse_semantic_mailbox_payload_json(payload_json);
+            payload
+                .as_ref()
+                .and_then(payload_repo_backfill_artefact_ids)
+                .map(|artefact_ids| {
+                    summary_freshness.outstanding_work_item_count_for_artefacts(&artefact_ids)
+                })
+                .unwrap_or_else(|| summary_freshness.outstanding_work_item_count())
+        }
+        SemanticMailboxItemKind::Artefact => artefact_id
+            .map(|artefact_id| u64::from(summary_freshness.artefact_needs_refresh(artefact_id)))
+            .unwrap_or(1),
+    }
+}
+
+fn semantic_mailbox_item_work_item_count(item_kind: &str, payload_json: Option<&str>) -> u64 {
+    match SemanticMailboxItemKind::parse(item_kind) {
+        SemanticMailboxItemKind::RepoBackfill => {
+            let payload = parse_semantic_mailbox_payload_json(payload_json);
+            payload
+                .as_ref()
+                .and_then(payload_repo_backfill_artefact_ids)
+                .map(|artefact_ids| artefact_ids.len() as u64)
+                .unwrap_or(1)
+        }
+        SemanticMailboxItemKind::Artefact => 1,
+    }
+}
+
+fn parse_semantic_mailbox_payload_json(payload_json: Option<&str>) -> Option<serde_json::Value> {
+    payload_json.and_then(|payload_json| serde_json::from_str(payload_json).ok())
+}
+
+fn semantic_embedding_mailbox_name_for_representation(representation_kind: &str) -> &'static str {
+    if representation_kind.eq_ignore_ascii_case(&EmbeddingRepresentationKind::Summary.to_string()) {
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+    } else {
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+    }
+}
+
+fn semantic_embedding_representation_kind_for_mailbox(mailbox_name: &str) -> &'static str {
+    if mailbox_name == SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX {
+        "summary"
+    } else {
+        "code"
+    }
 }
 
 fn repo_blocked_mailboxes(db_path: PathBuf, repo_id: &str) -> Result<Vec<BlockedMailboxStatus>> {
@@ -2380,10 +2581,11 @@ fn is_summary_mailbox(mailbox_name: &str) -> bool {
 mod tests {
     use super::{
         InitRuntimeLaneProgressView, SessionMailboxStats, SessionWorkplaneStats, StatusCounts,
-        SummaryFreshnessState, derive_embeddings_completed_count, derive_session_status,
-        derive_summaries_lane, derive_top_pipeline_lane, is_summary_mailbox,
-        semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync,
-        summary_effective_work_item_count,
+        SummaryFreshnessState, derive_embeddings_completed_count, derive_embeddings_lane,
+        derive_session_status, derive_summaries_lane, derive_top_pipeline_lane, is_summary_mailbox,
+        load_semantic_embedding_session_mailbox_counts,
+        load_semantic_summary_session_mailbox_counts, semantic_bootstrap_waiting_reason,
+        semantic_follow_up_ready_for_sync, summary_effective_work_item_count,
     };
     use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
@@ -2396,6 +2598,7 @@ mod tests {
         SummaryBootstrapRequest, SummaryBootstrapRunRecord, SummaryBootstrapStatus, SyncTaskMode,
         SyncTaskSpec,
     };
+    use rusqlite::Connection;
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -2426,6 +2629,43 @@ mod tests {
             error: None,
             progress: crate::daemon::DevqlTaskProgress::Sync(Default::default()),
             result: None,
+        }
+    }
+
+    fn embeddings_only_session() -> InitSessionRecord {
+        InitSessionRecord {
+            init_session_id: "init-session-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_root: PathBuf::from("/tmp/repo-1"),
+            daemon_config_root: PathBuf::from("/tmp/config-1"),
+            selections: StartInitSessionSelections {
+                run_sync: true,
+                run_ingest: false,
+                ingest_backfill: None,
+                embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                    config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                    profile_name: "local_code".to_string(),
+                    mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                    gateway_url_override: None,
+                    api_key_env: None,
+                }),
+                summaries_bootstrap: None,
+            },
+            initial_sync_task_id: None,
+            ingest_task_id: None,
+            embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+            summary_bootstrap_task_id: None,
+            follow_up_sync_required: false,
+            follow_up_sync_task_id: None,
+            next_completion_seq: 0,
+            initial_sync_completion_seq: None,
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: None,
+            follow_up_sync_completion_seq: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            terminal_status: None,
+            terminal_error: None,
         }
     }
 
@@ -2478,6 +2718,89 @@ mod tests {
     }
 
     #[test]
+    fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        conn.execute_batch(
+            "CREATE TABLE semantic_summary_mailbox_items (
+                 repo_id TEXT NOT NULL,
+                 init_session_id TEXT,
+                 status TEXT NOT NULL,
+                 item_kind TEXT NOT NULL,
+                 artefact_id TEXT,
+                 payload_json TEXT
+             );
+             CREATE TABLE semantic_embedding_mailbox_items (
+                 repo_id TEXT NOT NULL,
+                 init_session_id TEXT,
+                 representation_kind TEXT NOT NULL,
+                 status TEXT NOT NULL,
+                 item_kind TEXT NOT NULL,
+                 payload_json TEXT
+             );",
+        )
+        .expect("create semantic inbox tables");
+        conn.execute(
+            "INSERT INTO semantic_summary_mailbox_items (
+                 repo_id, init_session_id, status, item_kind, artefact_id, payload_json
+             ) VALUES (?1, ?2, 'pending', 'artefact', 'artefact-1', NULL)",
+            ("repo-1", "init-session-1"),
+        )
+        .expect("insert summary inbox row");
+        conn.execute(
+            "INSERT INTO semantic_summary_mailbox_items (
+                 repo_id, init_session_id, status, item_kind, artefact_id, payload_json
+             ) VALUES (?1, ?2, 'leased', 'artefact', 'artefact-2', NULL)",
+            ("repo-1", "other-session"),
+        )
+        .expect("insert other session summary inbox row");
+        conn.execute(
+            "INSERT INTO semantic_embedding_mailbox_items (
+                 repo_id, init_session_id, representation_kind, status, item_kind, payload_json
+             ) VALUES (?1, ?2, 'code', 'pending', 'artefact', NULL)",
+            ("repo-1", "init-session-1"),
+        )
+        .expect("insert code embedding inbox row");
+        conn.execute(
+            "INSERT INTO semantic_embedding_mailbox_items (
+                 repo_id, init_session_id, representation_kind, status, item_kind, payload_json
+             ) VALUES (?1, ?2, 'summary', 'leased', 'artefact', NULL)",
+            ("repo-1", "init-session-1"),
+        )
+        .expect("insert summary embedding inbox row");
+
+        let freshness = SummaryFreshnessState {
+            eligible_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
+            fresh_model_backed_artefact_ids: Default::default(),
+        };
+        let mut stats = SessionWorkplaneStats::default();
+
+        load_semantic_summary_session_mailbox_counts(
+            &conn,
+            &mut stats,
+            "repo-1",
+            "init-session-1",
+            &freshness,
+        )
+        .expect("load semantic summary mailbox counts");
+        load_semantic_embedding_session_mailbox_counts(
+            &conn,
+            &mut stats,
+            "repo-1",
+            "init-session-1",
+        )
+        .expect("load semantic embedding mailbox counts");
+        stats.refresh_lane_counts();
+
+        assert_eq!(stats.summary_refresh_jobs.counts.pending, 1);
+        assert_eq!(stats.summary_refresh_jobs.counts.running, 0);
+        assert_eq!(stats.code_embedding_jobs.counts.pending, 1);
+        assert_eq!(stats.summary_embedding_jobs.counts.running, 1);
+        assert_eq!(stats.summary_jobs.pending, 1);
+        assert_eq!(stats.embedding_jobs.pending, 1);
+        assert_eq!(stats.embedding_jobs.running, 1);
+    }
+
+    #[test]
     fn embeddings_completed_count_uses_queue_backlog_until_current_projection_catches_up() {
         let completed = derive_embeddings_completed_count(
             278,
@@ -2525,6 +2848,107 @@ mod tests {
         );
 
         assert_eq!(completed, 313);
+    }
+
+    #[test]
+    fn refresh_lane_counts_excludes_clone_rebuild_from_embeddings_lane() {
+        let mut stats = SessionWorkplaneStats {
+            code_embedding_jobs: SessionMailboxStats {
+                counts: StatusCounts {
+                    pending: 2,
+                    running: 1,
+                    failed: 1,
+                    completed: 3,
+                },
+                latest_error: None,
+            },
+            summary_embedding_jobs: SessionMailboxStats {
+                counts: StatusCounts {
+                    pending: 4,
+                    running: 0,
+                    failed: 0,
+                    completed: 5,
+                },
+                latest_error: None,
+            },
+            clone_rebuild_jobs: SessionMailboxStats {
+                counts: StatusCounts {
+                    pending: 8,
+                    running: 9,
+                    failed: 10,
+                    completed: 11,
+                },
+                latest_error: Some("clone rebuild failed".to_string()),
+            },
+            summary_refresh_jobs: SessionMailboxStats {
+                counts: StatusCounts {
+                    pending: 6,
+                    running: 7,
+                    failed: 2,
+                    completed: 12,
+                },
+                latest_error: None,
+            },
+            ..SessionWorkplaneStats::default()
+        };
+
+        stats.refresh_lane_counts();
+
+        assert_eq!(
+            stats.embedding_jobs,
+            StatusCounts {
+                pending: 6,
+                running: 1,
+                failed: 1,
+                completed: 8,
+            }
+        );
+        assert_eq!(
+            stats.summary_jobs,
+            StatusCounts {
+                pending: 6,
+                running: 7,
+                failed: 2,
+                completed: 12,
+            }
+        );
+        assert_eq!(stats.warning_failed_jobs_total(), 3);
+    }
+
+    #[test]
+    fn embeddings_lane_ignores_clone_rebuild_activity_and_warnings() {
+        let session = embeddings_only_session();
+        let mut stats = SessionWorkplaneStats {
+            code_embedding_jobs: SessionMailboxStats {
+                counts: StatusCounts {
+                    pending: 1,
+                    running: 0,
+                    failed: 0,
+                    completed: 2,
+                },
+                latest_error: None,
+            },
+            clone_rebuild_jobs: SessionMailboxStats {
+                counts: StatusCounts {
+                    pending: 30,
+                    running: 40,
+                    failed: 5,
+                    completed: 10,
+                },
+                latest_error: Some("clone rebuild failed".to_string()),
+            },
+            ..SessionWorkplaneStats::default()
+        };
+        stats.refresh_lane_counts();
+
+        let lane = derive_embeddings_lane(&session, None, None, None, &stats, None);
+
+        assert_eq!(lane.status, "queued");
+        assert_eq!(lane.queue.queued, 1);
+        assert_eq!(lane.queue.running, 0);
+        assert_eq!(lane.queue.failed, 0);
+        assert_eq!(lane.activity_label.as_deref(), Some("Indexing source code"));
+        assert!(lane.warnings.is_empty());
     }
 
     #[test]

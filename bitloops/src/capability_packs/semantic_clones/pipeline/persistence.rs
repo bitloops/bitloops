@@ -31,7 +31,7 @@ pub(super) async fn delete_repo_symbol_clone_edges_for_projection(
 ) -> Result<()> {
     ensure_semantic_clones_schema(relational).await?;
     let sql = build_delete_repo_symbol_clone_edges_sql(repo_id, projection);
-    relational.exec(&sql).await
+    relational.exec_serialized(&sql).await
 }
 
 pub(super) async fn replace_repo_symbol_clone_edges_for_projection(
@@ -47,7 +47,9 @@ pub(super) async fn replace_repo_symbol_clone_edges_for_projection(
     statements.extend(build_persist_symbol_clone_edge_statements(
         relational, projection, rows,
     ));
-    relational.exec_batch_transactional(&statements).await
+    relational
+        .exec_serialized_batch_transactional(&statements)
+        .await
 }
 
 fn build_delete_repo_symbol_clone_edges_sql(repo_id: &str, projection: CloneProjection) -> String {

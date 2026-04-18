@@ -21,9 +21,19 @@ pub(crate) async fn init_sqlite_semantic_features_schema(sqlite_path: &Path) -> 
 }
 
 pub(crate) async fn ensure_semantic_features_schema(relational: &RelationalStorage) -> Result<()> {
-    init_sqlite_semantic_features_schema(relational.sqlite_path()).await?;
+    crate::host::devql::ensure_sqlite_schema_once(
+        relational.sqlite_path(),
+        "semantic_features_sqlite",
+        |sqlite_path| async move { init_sqlite_semantic_features_schema(&sqlite_path).await },
+    )
+    .await?;
     if let Some(remote_client) = relational.remote_client() {
-        init_postgres_semantic_features_schema(remote_client).await?;
+        crate::host::devql::ensure_sqlite_schema_once(
+            relational.sqlite_path(),
+            "semantic_features_postgres",
+            |_| async move { init_postgres_semantic_features_schema(remote_client).await },
+        )
+        .await?;
     }
     Ok(())
 }

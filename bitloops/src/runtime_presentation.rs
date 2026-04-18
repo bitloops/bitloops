@@ -143,7 +143,7 @@ pub(crate) fn summary_bootstrap_phase_label(phase: &str) -> &'static str {
 }
 
 pub(crate) fn queue_state_summary(queued: u64, running: u64, failed: u64) -> String {
-    format!("Queue: {queued} waiting · {running} running · {failed} failed")
+    format!("Work items: {queued} waiting · {running} in flight · {failed} failed")
 }
 
 pub(crate) fn workplane_warning_message(failed_jobs: u64, latest_error: Option<&str>) -> String {

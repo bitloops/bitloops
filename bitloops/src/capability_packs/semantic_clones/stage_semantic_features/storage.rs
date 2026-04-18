@@ -348,7 +348,7 @@ pub(super) fn parse_semantic_dependency_rows(
     Ok(dependencies)
 }
 
-pub(super) fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
+pub(crate) fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
     format!(
         "SELECT \
             (SELECT semantic_features_input_hash FROM symbol_semantics WHERE artefact_id = '{artefact_id}') AS semantics_hash, \
@@ -402,7 +402,7 @@ pub(super) fn build_delete_current_symbol_features_sql(repo_id: &str, path: &str
     )
 }
 
-pub(super) fn parse_semantic_index_state_rows(
+pub(crate) fn parse_semantic_index_state_rows(
     rows: &[Value],
 ) -> semantic::SemanticFeatureIndexState {
     let Some(row) = rows.first() else {
@@ -428,7 +428,7 @@ fn semantic_generated_at_now_sql(dialect: RelationalDialect) -> &'static str {
     }
 }
 
-pub(super) fn build_semantic_persist_rows_sql(
+pub(crate) fn build_semantic_persist_rows_sql(
     rows: &semantic::SemanticFeatureRows,
     dialect: RelationalDialect,
 ) -> Result<String> {
@@ -517,7 +517,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
     ))
 }
 
-pub(super) fn build_conditional_current_semantic_persist_rows_sql(
+pub(crate) fn build_conditional_current_semantic_persist_rows_sql(
     rows: &semantic::SemanticFeatureRows,
     input: &semantic::SemanticFeatureInput,
     dialect: RelationalDialect,

@@ -425,6 +425,12 @@ fn platform_runtime_auth_environment() -> Vec<(String, String)> {
         });
     }
 
+    if let Ok(token) = std::env::var(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV)
+        && !token.trim().is_empty()
+    {
+        return vec![(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV.to_string(), token)];
+    }
+
     match crate::daemon::platform_gateway_bearer_token() {
         Ok(Some(token)) => vec![(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV.to_string(), token)],
         Ok(None) => Vec::new(),
@@ -447,8 +453,9 @@ fn ensure_runtime_auth_environment_available(
     }
 
     bail!(
-        "platform-backed text-generation profile `{}` requires an authenticated Bitloops session; run `bitloops login`",
-        config.profile_name
+        "platform-backed text-generation profile `{}` requires an authenticated Bitloops session or `{}` to be set",
+        config.profile_name,
+        crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV
     );
 }
 

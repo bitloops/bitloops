@@ -52,6 +52,8 @@ pub(crate) mod identity;
 mod plain_text;
 #[path = "devql/producer_spool.rs"]
 mod producer_spool;
+mod sqlite_schema_once;
+mod sqlite_write_actor;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
 mod types;
@@ -100,6 +102,7 @@ pub(crate) use self::producer_spool::{
     recover_running_producer_spool_jobs, requeue_producer_spool_job,
 };
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
+pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;
 pub use self::sync::types::SyncMode;
 pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
 pub(crate) use identity::deterministic_uuid;

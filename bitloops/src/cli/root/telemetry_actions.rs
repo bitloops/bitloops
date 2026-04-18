@@ -229,11 +229,14 @@ fn login_action(
     args: &crate::cli::login::LoginArgs,
 ) -> crate::telemetry::analytics::ActionDescriptor {
     let mut props = HashMap::new();
-    if matches!(
-        args.command,
-        Some(crate::cli::login::LoginCommand::Status(_))
-    ) {
-        insert_string_property(&mut props, "subcommand", "status");
+    match args.command {
+        Some(crate::cli::login::LoginCommand::Status(_)) => {
+            insert_string_property(&mut props, "subcommand", "status");
+        }
+        Some(crate::cli::login::LoginCommand::Token(_)) => {
+            insert_string_property(&mut props, "subcommand", "token");
+        }
+        None => {}
     }
     new_action("bitloops login", props)
 }
