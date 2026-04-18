@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Queued SQLite current-edge reconciliation now survives very large sync path sets**: the post-sync local dependency reconciliation path now loads touched paths into a temporary SQLite table and joins resolved current edges against canonical `to_symbol_ref` paths instead of building one `LIKE ... OR ...` predicate per touched file. This preserves the existing queue-driven sync flow while preventing `Expression tree is too large (maximum depth 1000)` failures on large repositories such as Ruff.
+- **`bitloops init` now keeps repo-managed agent skill files out of git status**: after resolving the selected agents, init now adds the installed repo-local DevQL skill paths for Claude Code, Codex, Gemini CLI, Copilot CLI, and OpenCode to `.git/info/exclude` alongside `.bitloops.local.toml`. This prevents the managed skill files from showing up as untracked changes in repos that bootstrap agent guidance through `bitloops init`.
+
 ## [0.0.16] - 2026-04-17
 
 ### Changed

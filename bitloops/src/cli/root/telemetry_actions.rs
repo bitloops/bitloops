@@ -57,6 +57,21 @@ fn insert_string_property(props: &mut HashMap<String, Value>, key: &str, value: 
     props.insert(key.to_string(), Value::String(value.to_string()));
 }
 
+fn insert_string_array_property(
+    props: &mut HashMap<String, Value>,
+    key: &str,
+    values: Vec<String>,
+) {
+    if values.is_empty() {
+        return;
+    }
+
+    props.insert(
+        key.to_string(),
+        Value::Array(values.into_iter().map(Value::String).collect()),
+    );
+}
+
 fn stage_sequence_from_devql_query(query: &str) -> Vec<String> {
     query
         .split("->")
@@ -222,6 +237,14 @@ fn daemon_logs_action(
     }
     insert_flags(&mut props, flags);
     insert_optional_count_property(&mut props, "tail_lines", args.tail);
+    insert_string_array_property(
+        &mut props,
+        "levels",
+        args.levels
+            .iter()
+            .map(|level| level.as_str().to_string())
+            .collect(),
+    );
     new_action("bitloops daemon logs", props)
 }
 
@@ -860,6 +883,38 @@ mod telemetry_actions_unit_tests {
         assert!(
             !action.properties.contains_key("max_checkpoints"),
             "devql task enqueue should not emit the removed max_checkpoints property"
+        );
+    }
+
+    #[test]
+    fn telemetry_action_for_daemon_logs_records_level_filters() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "bitloops", "daemon", "logs", "--level", "warning", "--level", "ERROR", "--follow",
+        ])
+        .expect("daemon logs should parse");
+        let action = telemetry_action_for_command(
+            cli.command
+                .as_ref()
+                .expect("daemon logs should produce a subcommand"),
+        )
+        .expect("daemon logs telemetry action should be emitted");
+
+        assert_eq!(action.event, "bitloops daemon logs");
+        assert_eq!(
+            action
+                .properties
+                .get("flags")
+                .and_then(Value::as_array)
+                .map(|flags| { flags.iter().filter_map(Value::as_str).collect::<Vec<_>>() }),
+            Some(vec!["follow"])
+        );
+        assert_eq!(
+            action
+                .properties
+                .get("levels")
+                .and_then(Value::as_array)
+                .map(|levels| { levels.iter().filter_map(Value::as_str).collect::<Vec<_>>() }),
+            Some(vec!["warn", "error"])
         );
     }
 }

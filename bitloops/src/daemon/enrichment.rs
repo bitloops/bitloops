@@ -281,9 +281,17 @@ impl EnrichmentCoordinator {
             self.ensure_state_file();
             let _ = migrate_legacy_semantic_workplane_rows(&self.workplane_store);
             self.requeue_running_jobs();
-            let _ = recover_expired_semantic_inbox_leases(&self.workplane_store);
-            let _ = prune_failed_semantic_inbox_items(&self.workplane_store);
-            let _ = compact_and_prune_workplane_jobs(&self.workplane_store);
+            if let Err(err) = recover_expired_semantic_inbox_leases(&self.workplane_store) {
+                log::warn!(
+                    "failed to recover expired semantic inbox leases during startup: {err:#}"
+                );
+            }
+            if let Err(err) = prune_failed_semantic_inbox_items(&self.workplane_store) {
+                log::warn!("failed to prune failed semantic inbox items during startup: {err:#}");
+            }
+            if let Err(err) = compact_and_prune_workplane_jobs(&self.workplane_store) {
+                log::warn!("failed to compact enrichment workplane jobs during startup: {err:#}");
+            }
         }
         self.ensure_maintenance_loop();
         self.ensure_worker_capacity();
@@ -291,6 +299,7 @@ impl EnrichmentCoordinator {
 
     fn ensure_maintenance_loop(self: &Arc<Self>) {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            log::error!("enrichment worker activation requested without an active tokio runtime");
             return;
         };
         if self.maintenance_started.swap(true, Ordering::AcqRel) {
@@ -494,25 +503,35 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
     }
 
     fn ensure_state_file(&self) {
-        if self
-            .runtime_store
-            .enrichment_state_exists()
-            .unwrap_or(false)
-        {
-            return;
+        match self.runtime_store.enrichment_state_exists() {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!(
+                    "failed to check persisted enrichment queue state during startup: {err:#}"
+                );
+            }
         }
         let mut state = default_state();
-        let _ = self.save_state(&mut state);
+        if let Err(err) = self.save_state(&mut state) {
+            log::warn!("failed to initialise persisted enrichment queue state: {err:#}");
+        }
     }
 
     fn requeue_running_jobs(&self) {
         let recovered_mailbox_items =
-            requeue_leased_semantic_inbox_items(&self.workplane_store).unwrap_or_default();
-        let recovered_clone_rebuild_jobs = self
-            .workplane_store
-            .with_connection(|conn| {
-                conn.execute(
-                    "UPDATE capability_workplane_jobs
+            match requeue_leased_semantic_inbox_items(&self.workplane_store) {
+                Ok(recovered) => recovered,
+                Err(err) => {
+                    log::warn!(
+                        "failed to recover leased semantic inbox items during startup: {err:#}"
+                    );
+                    0
+                }
+            };
+        let recovered_clone_rebuild_jobs = match self.workplane_store.with_connection(|conn| {
+            conn.execute(
+                "UPDATE capability_workplane_jobs
                      SET status = ?1,
                          started_at_unix = NULL,
                          updated_at_unix = ?2,
@@ -520,24 +539,40 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
                          lease_expires_at_unix = NULL
                      WHERE status = ?3
                        AND mailbox_name = ?4",
-                    params![
-                        WorkplaneJobStatus::Pending.as_str(),
-                        sql_i64(unix_timestamp_now())?,
-                        WorkplaneJobStatus::Running.as_str(),
-                        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-                    ],
-                )
-                .map_err(anyhow::Error::from)
-            })
-            .unwrap_or_default();
-        let recovered = recovered_mailbox_items
-            .saturating_add(u64::try_from(recovered_clone_rebuild_jobs).unwrap_or_default());
+                params![
+                    WorkplaneJobStatus::Pending.as_str(),
+                    sql_i64(unix_timestamp_now())?,
+                    WorkplaneJobStatus::Running.as_str(),
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+                ],
+            )
+            .map_err(anyhow::Error::from)
+        }) {
+            Ok(recovered) => u64::try_from(recovered).unwrap_or_default(),
+            Err(err) => {
+                log::warn!(
+                    "failed to recover stale clone rebuild enrichment jobs during startup: {err:#}"
+                );
+                0
+            }
+        };
+        let recovered = recovered_mailbox_items.saturating_add(recovered_clone_rebuild_jobs);
         if recovered == 0 {
             return;
         }
-        let mut state = self.load_state().unwrap_or_else(|_| default_state());
+        let mut state = match self.load_state() {
+            Ok(state) => state,
+            Err(err) => {
+                log::warn!(
+                    "failed to load enrichment queue state during startup recovery: {err:#}"
+                );
+                default_state()
+            }
+        };
         state.last_action = Some("requeue_running".to_string());
-        let _ = self.save_state(&mut state);
+        if let Err(err) = self.save_state(&mut state) {
+            log::warn!("failed to persist enrichment queue recovery state: {err:#}");
+        }
         log::warn!("requeued {recovered} stale running enrichment jobs on daemon startup");
     }
 

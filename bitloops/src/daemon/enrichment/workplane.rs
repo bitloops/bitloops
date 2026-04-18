@@ -2464,8 +2464,8 @@ fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str)
 }
 
 fn log_workplane_job_failure(job: &WorkplaneJobRecord, error: &str) {
-    log::warn!(
-        "capability workplane job failed: id={} repo={} mailbox={} attempts={} error={}",
+    log::error!(
+        "daemon enrichment job failed: id={} repo={} mailbox={} attempts={} error={}",
         job.job_id,
         job.repo_id,
         job.mailbox_name,

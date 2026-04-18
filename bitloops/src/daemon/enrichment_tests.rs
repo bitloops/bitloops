@@ -12,6 +12,7 @@ use crate::host::runtime_store::{
     WorkplaneJobRecord, WorkplaneJobStatus,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
+use crate::test_support::log_capture::capture_logs;
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -2574,6 +2575,45 @@ fn set_workplane_job_schedule(
 }
 
 #[tokio::test]
+async fn daemon_enrichment_worker_logs_terminal_failure() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let job = WorkplaneJobRecord {
+        job_id: "job-terminal-failure".to_string(),
+        repo_id,
+        repo_root: target.repo_root.clone(),
+        config_root: target.config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX.to_string(),
+        init_session_id: None,
+        dedupe_key: None,
+        payload: serde_json::json!({}),
+        status: WorkplaneJobStatus::Running,
+        attempts: 1,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+    let outcome = JobExecutionOutcome::failed(anyhow::anyhow!("simulated enrichment failure"));
+
+    let (result, logs) = capture_logs(|| {
+        persist_workplane_job_completion(&coordinator.workplane_store, &job, &outcome)
+    });
+
+    result.expect("persist workplane completion");
+    assert!(
+        logs.iter().any(|entry| entry.level == log::Level::Error
+            && entry.message.contains("daemon enrichment job failed")),
+        "expected terminal enrichment failure log, got logs: {logs:?}"
+    );
+}
+
+#[tokio::test]
 async fn enqueue_clone_edges_rebuild_waits_for_embedding_and_semantic_jobs_to_drain() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
@@ -2919,6 +2959,23 @@ fn ensure_started_recovers_stale_running_jobs_on_startup() {
             .as_deref(),
         Some("requeue_running")
     );
+}
+
+#[test]
+fn ensure_started_logs_missing_runtime_activation_error() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
+    let coordinator = Arc::new(coordinator);
+    configure_summary_refresh_for_repo(&target);
+
+    let (_, logs) = capture_logs(|| coordinator.ensure_started());
+
+    assert!(logs.iter().any(|entry| {
+        entry.level == log::Level::Error
+            && entry
+                .message
+                .contains("enrichment worker activation requested without an active tokio runtime")
+    }));
 }
 
 #[test]

@@ -31,7 +31,7 @@ use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitAgentSelection, InitArgs,
     InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions, choose_final_setup_options,
-    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_local_policy_excluded,
+    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
     maybe_enable_default_daemon_service, maybe_install_default_daemon, normalize_cli_exclusions,
     normalize_exclude_from_paths, should_install_embeddings_during_init,
 };
@@ -320,8 +320,6 @@ pub(super) async fn run_for_project_root(
             .as_ref()
             .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Service)
             || daemon_status.service.is_some());
-    ensure_repo_local_policy_excluded(&git_root, project_root)?;
-
     let selection = if !args.agent.is_empty() {
         InitAgentSelection {
             agents: resolve_cli_agents(&args.agent)?,
@@ -331,6 +329,7 @@ pub(super) async fn run_for_project_root(
         detect_or_select_agent(project_root, out, !args.disable_bitloops_skill, select_fn)?
     };
     let selected_agents = selection.agents;
+    ensure_repo_init_files_excluded(&git_root, project_root, &selected_agents)?;
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
@@ -542,6 +541,10 @@ pub(super) async fn run_for_project_root(
         )
         .await?;
     }
+
+    crate::cli::watcher_bootstrap::reconcile_repo_watcher(project_root).map_err(|err| {
+        anyhow::anyhow!("Bitloops init completed, but DevQL watcher reconcile failed: {err:#}")
+    })?;
     Ok(())
 }
 

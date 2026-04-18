@@ -150,7 +150,7 @@ impl SyncCoordinator {
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
-            log::warn!("sync worker activation requested without an active tokio runtime");
+            log::error!("sync worker activation requested without an active tokio runtime");
             return;
         };
         let coordinator = Arc::clone(self);

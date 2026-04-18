@@ -40,6 +40,8 @@ mod graphql_client;
 mod init_runtime;
 #[path = "daemon/lifecycle.rs"]
 mod lifecycle;
+#[path = "daemon/log_file.rs"]
+mod log_file;
 #[path = "daemon/logger.rs"]
 mod logger;
 #[path = "daemon/process.rs"]

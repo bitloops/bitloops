@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::log_capture::capture_logs_async;
 
 fn dashboard_app(repo_root: &Path, mode: ServeMode, bundle_dir: PathBuf) -> axum::Router {
     build_dashboard_router(test_state(repo_root.to_path_buf(), mode, bundle_dir))
@@ -845,6 +846,41 @@ async fn dashboard_query_reports_bad_user_input_for_ambiguous_repo_selector() {
             .as_str()
             .expect("error message")
             .contains("ambiguous")
+    );
+}
+
+#[tokio::test]
+async fn dashboard_query_logs_repo_checkout_unknown_failure() {
+    let repo = seed_dashboard_repo();
+    let unrelated_root = TempDir::new().expect("temp dir");
+    let mut state = test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+    state.repo_root = unrelated_root.path().to_path_buf();
+    let app = build_dashboard_router(state);
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+
+    let (response, logs) = capture_logs_async(request_dashboard_graphql(
+        app,
+        &format!(r#"{{ branches(repoId: "{repo_id}") {{ branch checkpointCommits }} }}"#),
+    ))
+    .await;
+    let (status, payload) = response;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(payload["errors"][0]["extensions"]["code"], "internal");
+    assert!(
+        payload["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dashboard GraphQL wrapper failed")
+    );
+    assert!(
+        logs.iter().any(|entry| entry.level == log::Level::Error
+            && entry.message.contains("repo checkout unknown")),
+        "expected dashboard repo checkout failure to be logged, got logs: {logs:?}"
     );
 }
 

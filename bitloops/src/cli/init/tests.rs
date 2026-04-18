@@ -771,6 +771,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
+        assert!(exclude.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
         assert!(!exclude.contains(".bitloops/"));
         assert!(!exclude.contains("config.local.json"));
         assert!(!exclude.contains(".bitloops/config.local.json"));
@@ -941,6 +942,259 @@ fn run_init_binds_repo_to_running_daemon_config() {
             "expected daemon binding in local policy:\n{local_policy}"
         );
     });
+}
+
+#[test]
+fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    setup_git_repo(&repo);
+    let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let reconcile_count = std::rc::Rc::clone(&reconcile_count);
+                let repo_root = repo_root.clone();
+                move |actual_repo_root, capture_enabled| {
+                    assert_eq!(actual_repo_root, repo_root.as_path());
+                    assert!(
+                        capture_enabled,
+                        "init should only reconcile watchers when capture is enabled"
+                    );
+                    *reconcile_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        disable_bitloops_skill: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        no_embeddings: false,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo_root.as_path(),
+                    &mut out,
+                    None,
+                )
+                .expect("run init");
+            },
+        );
+
+        assert_eq!(
+            *reconcile_count.borrow(),
+            1,
+            "successful init should reconcile the watcher exactly once"
+        );
+        assert!(
+            crate::config::settings::is_enabled(repo_root.as_path())
+                .expect("repo capture settings"),
+            "successful init should leave capture enabled in repo settings"
+        );
+    });
+}
+
+#[test]
+fn run_init_surfaces_repo_watcher_reconcile_failures() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let repo_root = repo_root.clone();
+                move |actual_repo_root, capture_enabled| {
+                    assert_eq!(actual_repo_root, repo_root.as_path());
+                    assert!(
+                        capture_enabled,
+                        "init should only reconcile watchers when capture is enabled"
+                    );
+                    anyhow::bail!("watcher reconcile exploded");
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                let err = run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        disable_bitloops_skill: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        no_embeddings: false,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo_root.as_path(),
+                    &mut out,
+                    None,
+                )
+                .expect_err("init should surface watcher reconciliation failures");
+
+                let rendered = format!("{err:#}");
+                assert!(
+                    rendered.contains("watcher reconcile exploded"),
+                    "unexpected init error: {rendered}"
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let project_root = repo.path().join("apps/nested-project");
+    std::fs::create_dir_all(&project_root).expect("create nested project root");
+    setup_git_repo(&repo);
+    let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let reconcile_count = std::rc::Rc::clone(&reconcile_count);
+                let project_root = project_root.clone();
+                move |actual_repo_root, capture_enabled| {
+                    assert_eq!(actual_repo_root, project_root.as_path());
+                    assert!(
+                        capture_enabled,
+                        "nested init should reconcile watchers when nested-project capture is enabled"
+                    );
+                    *reconcile_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        disable_bitloops_skill: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        no_embeddings: false,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    project_root.as_path(),
+                    &mut out,
+                    None,
+                )
+                .expect("run init for nested project");
+            },
+        );
+
+        assert_eq!(
+            *reconcile_count.borrow(),
+            1,
+            "successful nested init should reconcile the watcher exactly once"
+        );
+        assert!(
+            crate::config::settings::is_enabled(project_root.as_path())
+                .expect("nested project capture settings"),
+            "successful nested init should leave capture enabled in nested project settings"
+        );
+    });
+}
+
+#[test]
+fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    setup_git_repo(&repo);
+    let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let select_fn = |_available: &[String],
+                     _enable_bitloops_skill: bool|
+     -> std::result::Result<InitAgentSelection, String> {
+        Err("selector refused to choose an agent".to_string())
+    };
+
+    with_temp_app_dirs(&app_dirs, true, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let reconcile_count = std::rc::Rc::clone(&reconcile_count);
+                move |_repo_root, _capture_enabled| {
+                    *reconcile_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                let mut out = Vec::new();
+                let err = run_with_writer_for_project_root(
+                    InitArgs {
+                        install_default_daemon: false,
+                        force: false,
+                        disable_bitloops_skill: false,
+                        agent: Vec::new(),
+                        telemetry: None,
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        no_embeddings: false,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo_root.as_path(),
+                    &mut out,
+                    Some(&select_fn),
+                )
+                .expect_err("init should fail before watcher reconciliation");
+
+                let rendered = format!("{err:#}");
+                assert!(
+                    rendered.contains("selector refused to choose an agent"),
+                    "unexpected init error: {rendered}"
+                );
+            },
+        );
+    });
+
+    assert_eq!(
+        *reconcile_count.borrow(),
+        0,
+        "watcher reconciliation should not run when init exits early"
+    );
 }
 
 #[test]
@@ -1152,6 +1406,9 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                     repo_skill.exists(),
                     "expected Codex repo-local skill to be installed"
                 );
+                let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
+                    .expect("read git exclude");
+                assert!(exclude.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
                 assert!(!repo.path().join(".claude/settings.json").exists());
             });
         },
@@ -1199,6 +1456,9 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                 .join(".gemini/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let exclude =
+            std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
+        assert!(exclude.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
     });
 }
 
@@ -1241,6 +1501,9 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 .join(".github/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let exclude =
+            std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
+        assert!(exclude.contains(".github/skills/bitloops/using-devql/SKILL.md"));
     });
 }
 
@@ -1283,6 +1546,9 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 .join(".opencode/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let exclude =
+            std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
+        assert!(exclude.contains(".opencode/skills/bitloops/using-devql/SKILL.md"));
     });
 }
 

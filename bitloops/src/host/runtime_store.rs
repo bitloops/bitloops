@@ -27,6 +27,6 @@ pub use repo_workplane::{
 pub use types::{
     DaemonSqliteRuntimeStore, LegacySyncTaskRecord, PersistedCapabilityEventQueueState,
     PersistedDevqlTaskQueueState, PersistedSyncQueueState, RepoSqliteRuntimeStore,
-    RepoWatcherRegistration, RuntimeMetadataBlobType, RuntimeStore, SessionMetadataSnapshot,
-    SqliteRuntimeStore, TaskCheckpointArtefact,
+    RepoWatcherRegistration, RepoWatcherRegistrationState, RuntimeMetadataBlobType, RuntimeStore,
+    SessionMetadataSnapshot, SqliteRuntimeStore, TaskCheckpointArtefact,
 };

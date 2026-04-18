@@ -388,8 +388,8 @@ fn text_has_missing_production_artefacts_error(text: &str) -> bool {
 fn run_claude_code_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
     ensure_claude_authenticated(world)?;
     if claude_fallback_marker_exists(world) {
-        apply_claude_prompt_fallback_edit(world, prompt)?;
-        simulate_claude_session_for_prompt(world, prompt)?;
+        let file_path = apply_smoke_prompt_edit(world, prompt)?;
+        simulate_claude_session_for_prompt(world, prompt, &file_path)?;
         return Ok(());
     }
 
@@ -424,8 +424,8 @@ fn run_claude_code_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
         ),
     )?;
 
-    apply_claude_prompt_fallback_edit(world, prompt)?;
-    simulate_claude_session_for_prompt(world, prompt)?;
+    let file_path = apply_smoke_prompt_edit(world, prompt)?;
+    simulate_claude_session_for_prompt(world, prompt, &file_path)?;
     fs::write(world.run_dir().join(CLAUDE_FALLBACK_MARKER), b"1")
         .with_context(|| format!("writing fallback marker in {}", world.run_dir().display()))?;
     Ok(())
@@ -496,8 +496,8 @@ fn run_bitloops_with_stdin(
 }
 
 fn run_deterministic_claude_smoke_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
-    apply_smoke_prompt_edit(world, prompt)?;
-    simulate_claude_session_for_prompt(world, prompt)
+    let file_path = apply_smoke_prompt_edit(world, prompt)?;
+    simulate_claude_session_for_prompt(world, prompt, &file_path)
 }
 
 fn run_cursor_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
@@ -840,6 +840,8 @@ fn smoke_target_relative_path(world: &QatWorld) -> String {
     let app_path = world.repo_dir().join("my-app").join("src").join("App.tsx");
     if app_path.exists() {
         "my-app/src/App.tsx".to_string()
+    } else if world.repo_dir().join("src").join("lib.rs").exists() {
+        "src/lib.rs".to_string()
     } else if world
         .repo_dir()
         .join("src")
@@ -889,7 +891,8 @@ fn count_non_empty_lines(path: &Path) -> Result<usize> {
     if !path.exists() {
         return Ok(0);
     }
-    let content = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(content
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -1127,8 +1130,40 @@ fn apply_smoke_prompt_edit(world: &QatWorld, prompt: &str) -> Result<String> {
         return Ok(relative_path);
     }
 
-    let current =
-        fs::read_to_string(&full_path).with_context(|| format!("reading {}", full_path.display()))?;
+    let current = fs::read_to_string(&full_path)
+        .with_context(|| format!("reading {}", full_path.display()))?;
+    if relative_path == "src/lib.rs" {
+        let next = if prompt.to_ascii_lowercase().contains("subtract function") {
+            if current.contains("pub fn subtract(") {
+                current
+            } else {
+                format!(
+                    "{current}\n\npub fn subtract(a: i32, b: i32) -> i32 {{\n    a - b\n}}\n\n#[cfg(test)]\nmod subtract_tests {{\n    use super::*;\n\n    #[test]\n    fn test_subtract() {{\n        assert_eq!(subtract(7, 4), 3);\n    }}\n}}\n"
+                )
+            }
+        } else if prompt.to_ascii_lowercase().contains("divide function") {
+            if current.contains("pub fn divide(") {
+                current
+            } else {
+                format!(
+                    "{current}\n\npub fn divide(a: i32, b: i32) -> i32 {{\n    a / b\n}}\n\n#[cfg(test)]\nmod divide_tests {{\n    use super::*;\n\n    #[test]\n    fn test_divide() {{\n        assert_eq!(divide(8, 2), 4);\n    }}\n}}\n"
+                )
+            }
+        } else if prompt.to_ascii_lowercase().contains("modulo function") {
+            if current.contains("pub fn modulo(") {
+                current
+            } else {
+                format!(
+                    "{current}\n\npub fn modulo(a: i32, b: i32) -> i32 {{\n    a % b\n}}\n\n#[cfg(test)]\nmod modulo_tests {{\n    use super::*;\n\n    #[test]\n    fn test_modulo() {{\n        assert_eq!(modulo(9, 4), 1);\n    }}\n}}\n"
+                )
+            }
+        } else {
+            current
+        };
+        fs::write(&full_path, next).with_context(|| format!("writing {}", full_path.display()))?;
+        return Ok(relative_path);
+    }
+
     if relative_path == "src/services/user-service.ts" {
         let next = if prompt == FIRST_CLAUDE_PROMPT {
             if current.contains("const normalizedName = name.trim();")
@@ -1145,7 +1180,10 @@ fn apply_smoke_prompt_edit(world: &QatWorld, prompt: &str) -> Result<String> {
             if current.contains("normalizedName.toLowerCase()") {
                 current
             } else if current.contains("normalizedName.toUpperCase()") {
-                current.replace("normalizedName.toUpperCase()", "normalizedName.toLowerCase()")
+                current.replace(
+                    "normalizedName.toUpperCase()",
+                    "normalizedName.toLowerCase()",
+                )
             } else if current.contains("name: name.trim()") {
                 current.replace(
                     "    return { id: crypto.randomUUID(), name: name.trim() };",
@@ -1187,23 +1225,44 @@ fn apply_smoke_prompt_edit(world: &QatWorld, prompt: &str) -> Result<String> {
     Ok(relative_path)
 }
 
-fn apply_claude_prompt_fallback_edit(world: &QatWorld, prompt: &str) -> Result<()> {
-    apply_smoke_prompt_edit(world, prompt).map(|_| ())
-}
-
-fn simulate_claude_session_for_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
+fn simulate_claude_session_for_prompt(
+    world: &QatWorld,
+    prompt: &str,
+    file_path: &str,
+) -> Result<()> {
     let session_id = smoke_session_id(world, AGENT_NAME_CLAUDE_CODE);
     let transcript_path = smoke_transcript_path(world, AGENT_NAME_CLAUDE_CODE, "jsonl");
     append_jsonl_line(
         &transcript_path,
-        &serde_json::json!({ "role": "user", "content": prompt, "agent": AGENT_NAME_CLAUDE_CODE }),
+        &serde_json::json!({
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{ "type": "text", "text": prompt }]
+            }
+        }),
     )?;
     append_jsonl_line(
         &transcript_path,
         &serde_json::json!({
-            "role": "assistant",
-            "content": smoke_response_text(prompt),
-            "agent": AGENT_NAME_CLAUDE_CODE
+            "type": "assistant",
+            "uuid": format!("assistant-{}", count_non_empty_lines(&transcript_path)? + 1),
+            "message": {
+                "model": "claude-opus-4-1",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": smoke_response_text(prompt)
+                    },
+                    {
+                        "type": "tool_use",
+                        "name": if prompt == FIRST_CLAUDE_PROMPT { "Write" } else { "Edit" },
+                        "input": {
+                            "file_path": file_path
+                        }
+                    }
+                ]
+            }
         }),
     )?;
 
@@ -1298,7 +1357,6 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         .env("ACCESSIBLE", "1")
         .env("BITLOOPS_QAT_ACTIVE", "1")
         .env("BITLOOPS_TEST_TTY", "0")
-        .env(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV, "1")
         .env("BITLOOPS_DEVQL_EMBEDDING_PROVIDER", "disabled")
         .env("BITLOOPS_DEVQL_SEMANTIC_PROVIDER", "disabled")
@@ -1307,6 +1365,14 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         .env_remove("BITLOOPS_DEVQL_CH_DATABASE")
         .env_remove("BITLOOPS_DEVQL_CH_USER")
         .env_remove("BITLOOPS_DEVQL_CH_PASSWORD");
+    if !world.watcher_autostart_enabled {
+        command.env(
+            bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV,
+            "1",
+        );
+    } else {
+        command.env_remove(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV);
+    }
     Ok(command)
 }
 

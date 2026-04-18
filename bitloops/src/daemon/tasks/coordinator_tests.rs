@@ -1,5 +1,6 @@
 use super::helpers::{PROGRESS_PERSIST_INTERVAL, should_persist_embeddings_bootstrap_progress};
 use super::*;
+use crate::test_support::log_capture::capture_logs;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -217,5 +218,60 @@ async fn producer_spool_claim_prunes_jobs_for_now_excluded_paths() {
     assert!(
         jobs.is_empty(),
         "excluded path-only producer spool jobs should be dropped before claim"
+    );
+}
+
+#[test]
+fn daemon_devql_task_execution_logs_terminal_failure() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)
+        .expect("build devql config");
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+    let task = coordinator
+        .enqueue(
+            &cfg,
+            DevqlTaskSource::Watcher,
+            DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                mode: SyncTaskMode::Full,
+                post_commit_snapshot: None,
+            }),
+        )
+        .expect("enqueue sync task")
+        .task;
+
+    let (result, logs) = capture_logs(|| {
+        coordinator.finish_task_failed(
+            &task.task_id,
+            anyhow::anyhow!("simulated DevQL task execution failure"),
+        )
+    });
+
+    result.expect("finish task failed should update task state");
+    assert!(
+        logs.iter()
+            .any(|entry| entry.level == log::Level::Error
+                && entry.message.contains("DevQL task failed")),
+        "expected terminal task failure log, got logs: {logs:?}"
     );
 }
