@@ -564,6 +564,8 @@ pub(crate) struct RuntimeInitLaneObject {
 #[derive(Debug, Clone, SimpleObject)]
 pub(crate) struct RuntimeInitLaneProgressObject {
     pub completed: i32,
+    #[graphql(name = "inMemoryCompleted")]
+    pub in_memory_completed: i32,
     pub total: i32,
     pub remaining: i32,
 }
@@ -821,6 +823,7 @@ impl From<InitRuntimeLaneProgressView> for RuntimeInitLaneProgressObject {
     fn from(value: InitRuntimeLaneProgressView) -> Self {
         Self {
             completed: to_graphql_i32(value.completed),
+            in_memory_completed: to_graphql_i32(value.in_memory_completed),
             total: to_graphql_i32(value.total),
             remaining: to_graphql_i32(value.remaining),
         }

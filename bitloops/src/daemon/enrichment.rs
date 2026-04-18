@@ -579,6 +579,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             self.save_state(&mut state)?;
             batch
         };
+        let init_runtime = crate::daemon::shared_init_runtime_coordinator();
 
         let queue_wait_ms = batch
             .items
@@ -587,9 +588,22 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             .max()
             .unwrap_or(0);
         let inference_started = Instant::now();
-        let prepared = match execution::prepare_summary_mailbox_batch(&batch).await {
+        let prepared = match execution::prepare_summary_mailbox_batch(
+            &batch,
+            |artefact_id, init_session_ids| {
+                init_runtime.record_summary_in_memory_artefact(
+                    &batch.repo_id,
+                    &batch.lease_token,
+                    artefact_id,
+                    init_session_ids,
+                );
+            },
+        )
+        .await
+        {
             Ok(prepared) => prepared,
             Err(err) => {
+                init_runtime.clear_summary_in_memory_batch(&batch.lease_token);
                 fail_summary_mailbox_batch(&self.workplane_store, &batch, &format!("{err:#}"))?;
                 let _guard = self.lock.lock().await;
                 let mut state = self.load_state()?;
@@ -617,6 +631,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         )
         .await;
         let flush_ms = flush_started.elapsed().as_millis() as u64;
+        init_runtime.clear_summary_in_memory_batch(&batch.lease_token);
 
         {
             let _guard = self.lock.lock().await;

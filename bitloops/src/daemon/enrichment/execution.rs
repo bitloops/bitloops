@@ -724,9 +724,13 @@ async fn execute_clone_edges_rebuild_workplane_job(
     }
 }
 
-pub(super) async fn prepare_summary_mailbox_batch(
+pub(super) async fn prepare_summary_mailbox_batch<F>(
     batch: &ClaimedSummaryMailboxBatch,
-) -> Result<PreparedSummaryMailboxBatch> {
+    mut on_item_prepared: F,
+) -> Result<PreparedSummaryMailboxBatch>
+where
+    F: FnMut(&str, &BTreeSet<String>),
+{
     let repo = resolve_repo_identity(&batch.repo_root)
         .unwrap_or_else(|_| fallback_repo_identity(&batch.repo_root, &batch.repo_id));
     let cfg = DevqlConfig::from_roots(batch.config_root.clone(), batch.repo_root.clone(), repo)?;
@@ -755,6 +759,7 @@ pub(super) async fn prepare_summary_mailbox_batch(
         .collect::<HashMap<_, _>>();
 
     let mut expanded_inputs = Vec::new();
+    let mut artefact_session_ids = HashMap::<String, BTreeSet<String>>::new();
     let mut replacement_backfill_item = None;
     for item in &batch.items {
         match item.item_kind {
@@ -763,6 +768,12 @@ pub(super) async fn prepare_summary_mailbox_batch(
                     && let Some(input) = current_by_artefact.get(artefact_id)
                 {
                     expanded_inputs.push(input.clone());
+                    if let Some(init_session_id) = item.init_session_id.as_ref() {
+                        artefact_session_ids
+                            .entry(input.artefact_id.clone())
+                            .or_default()
+                            .insert(init_session_id.clone());
+                    }
                 }
             }
             SemanticMailboxItemKind::RepoBackfill => {
@@ -794,6 +805,14 @@ pub(super) async fn prepare_summary_mailbox_batch(
                         Some(serde_json::to_value(remaining_ids)?),
                         item.dedupe_key.clone(),
                     ));
+                }
+                if let Some(init_session_id) = item.init_session_id.as_ref() {
+                    for input in &selected {
+                        artefact_session_ids
+                            .entry(input.artefact_id.clone())
+                            .or_default()
+                            .insert(init_session_id.clone());
+                    }
                 }
                 expanded_inputs.extend(selected);
             }
@@ -848,6 +867,9 @@ pub(super) async fn prepare_summary_mailbox_batch(
                     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, input.artefact_id
                 )),
             ));
+        }
+        if let Some(init_session_ids) = artefact_session_ids.get(&input.artefact_id) {
+            on_item_prepared(&input.artefact_id, init_session_ids);
         }
     }
 

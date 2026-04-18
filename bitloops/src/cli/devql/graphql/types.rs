@@ -526,6 +526,8 @@ pub(crate) struct RuntimeInitLaneGraphqlRecord {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimeInitLaneProgressGraphqlRecord {
     pub completed: i32,
+    #[serde(default)]
+    pub in_memory_completed: i32,
     pub total: i32,
     pub remaining: i32,
 }

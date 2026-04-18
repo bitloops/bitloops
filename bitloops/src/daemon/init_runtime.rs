@@ -103,6 +103,7 @@ pub struct InitRuntimeWorkplanePoolSnapshot {
 #[derive(Debug, Clone, Serialize)]
 pub struct InitRuntimeLaneProgressView {
     pub completed: u64,
+    pub in_memory_completed: u64,
     pub total: u64,
     pub remaining: u64,
 }
@@ -217,6 +218,12 @@ struct RuntimeLaneProgressState {
 }
 
 #[derive(Debug, Clone, Default)]
+struct SummaryInMemoryBatchProgress {
+    repo_id: String,
+    artefact_ids_by_session: BTreeMap<String, BTreeSet<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
 struct SummaryFreshnessState {
     eligible_artefact_ids: BTreeSet<String>,
     fresh_model_backed_artefact_ids: BTreeSet<String>,
@@ -322,6 +329,7 @@ fn is_init_embeddings_mailbox(mailbox_name: &str) -> bool {
 pub struct InitRuntimeCoordinator {
     runtime_store: DaemonSqliteRuntimeStore,
     subscription_hub: Mutex<Option<Arc<SubscriptionHub>>>,
+    summary_in_memory_batches: Mutex<BTreeMap<String, SummaryInMemoryBatchProgress>>,
 }
 
 impl InitRuntimeCoordinator {
@@ -332,6 +340,7 @@ impl InitRuntimeCoordinator {
                 runtime_store: DaemonSqliteRuntimeStore::open()
                     .expect("opening daemon runtime store for init runtime orchestration"),
                 subscription_hub: Mutex::new(None),
+                summary_in_memory_batches: Mutex::new(BTreeMap::new()),
             })
         }))
     }
@@ -604,17 +613,24 @@ impl InitRuntimeCoordinator {
         let ingest_task = load_task_by_id(session.ingest_task_id.as_deref())?;
         let follow_up_sync = load_task_by_id(session.follow_up_sync_task_id.as_deref())?;
         let embeddings_task = load_task_by_id(session.embeddings_bootstrap_task_id.as_deref())?;
-        let lane_progress =
-            match load_runtime_lane_progress(&cfg.repo_root, &cfg.repo.repo_id, &session, &stats) {
-                Ok(progress) => progress,
-                Err(err) => {
-                    log::debug!(
-                        "failed to load runtime lane progress for repo `{}`: {err:#}",
-                        cfg.repo.repo_id
-                    );
-                    RuntimeLaneProgressState::default()
-                }
-            };
+        let summary_in_memory_completed =
+            self.summary_in_memory_completed(&cfg.repo.repo_id, &session.init_session_id);
+        let lane_progress = match load_runtime_lane_progress(
+            &cfg.repo_root,
+            &cfg.repo.repo_id,
+            &session,
+            &stats,
+            summary_in_memory_completed,
+        ) {
+            Ok(progress) => progress,
+            Err(err) => {
+                log::debug!(
+                    "failed to load runtime lane progress for repo `{}`: {err:#}",
+                    cfg.repo.repo_id
+                );
+                RuntimeLaneProgressState::default()
+            }
+        };
 
         let top_pipeline_lane = derive_top_pipeline_lane(
             &session,
@@ -896,6 +912,92 @@ impl InitRuntimeCoordinator {
 
     pub(crate) fn publish_runtime_event(&self, event: RuntimeEventRecord) {
         self.publish_event(event);
+    }
+
+    pub(crate) fn record_summary_in_memory_artefact(
+        &self,
+        repo_id: &str,
+        lease_token: &str,
+        artefact_id: &str,
+        init_session_ids: &BTreeSet<String>,
+    ) {
+        if init_session_ids.is_empty() {
+            return;
+        }
+
+        let mut updated_sessions = Vec::new();
+        if let Ok(mut batches) = self.summary_in_memory_batches.lock() {
+            let batch = batches.entry(lease_token.to_string()).or_insert_with(|| {
+                SummaryInMemoryBatchProgress {
+                    repo_id: repo_id.to_string(),
+                    artefact_ids_by_session: BTreeMap::new(),
+                }
+            });
+            for init_session_id in init_session_ids {
+                let artefact_ids = batch
+                    .artefact_ids_by_session
+                    .entry(init_session_id.clone())
+                    .or_default();
+                if artefact_ids.insert(artefact_id.to_string()) {
+                    updated_sessions.push(init_session_id.clone());
+                }
+            }
+        }
+
+        self.publish_summary_progress_events(repo_id, updated_sessions);
+    }
+
+    pub(crate) fn clear_summary_in_memory_batch(&self, lease_token: &str) {
+        let mut cleared = None;
+        if let Ok(mut batches) = self.summary_in_memory_batches.lock() {
+            cleared = batches.remove(lease_token);
+        }
+
+        let Some(batch) = cleared else {
+            return;
+        };
+        self.publish_summary_progress_events(
+            &batch.repo_id,
+            batch
+                .artefact_ids_by_session
+                .into_keys()
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    pub(crate) fn summary_in_memory_completed(&self, repo_id: &str, init_session_id: &str) -> u64 {
+        let Ok(batches) = self.summary_in_memory_batches.lock() else {
+            return 0;
+        };
+
+        let mut artefact_ids = BTreeSet::new();
+        for batch in batches.values() {
+            if batch.repo_id != repo_id {
+                continue;
+            }
+            if let Some(batch_artefacts) = batch.artefact_ids_by_session.get(init_session_id) {
+                artefact_ids.extend(batch_artefacts.iter().cloned());
+            }
+        }
+        artefact_ids.len() as u64
+    }
+
+    fn publish_summary_progress_events<I>(&self, repo_id: &str, init_session_ids: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let updated_at_unix = unix_timestamp_now();
+        for init_session_id in init_session_ids.into_iter().collect::<BTreeSet<_>>() {
+            self.publish_event(RuntimeEventRecord {
+                domain: "workplane".to_string(),
+                repo_id: repo_id.to_string(),
+                init_session_id: Some(init_session_id),
+                updated_at_unix,
+                task_id: None,
+                run_id: None,
+                mailbox_name: Some(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX.to_string()),
+            });
+        }
     }
 }
 
@@ -2073,6 +2175,7 @@ fn load_runtime_lane_progress(
     repo_id: &str,
     session: &InitSessionRecord,
     stats: &SessionWorkplaneStats,
+    summary_in_memory_completed: u64,
 ) -> Result<RuntimeLaneProgressState> {
     let relational =
         DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
@@ -2108,17 +2211,22 @@ fn load_runtime_lane_progress(
     } else {
         0
     };
+    let summaries_completed = summaries_completed.min(summaries_total);
+    let summary_in_memory_completed =
+        summary_in_memory_completed.min(summaries_total.saturating_sub(summaries_completed));
 
     Ok(RuntimeLaneProgressState {
         embeddings: (session.selections.embeddings_bootstrap.is_some() && embeddings_total > 0)
             .then(|| InitRuntimeLaneProgressView {
                 completed: embeddings_completed,
+                in_memory_completed: 0,
                 total: embeddings_total,
                 remaining: embeddings_total.saturating_sub(embeddings_completed),
             }),
         summaries: (session.selections.summaries_bootstrap.is_some() && summaries_total > 0).then(
             || InitRuntimeLaneProgressView {
-                completed: summaries_completed.min(summaries_total),
+                completed: summaries_completed,
+                in_memory_completed: summary_in_memory_completed,
                 total: summaries_total,
                 remaining: summaries_total.saturating_sub(summaries_completed),
             },
@@ -2580,9 +2688,10 @@ fn is_summary_mailbox(mailbox_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        InitRuntimeLaneProgressView, SessionMailboxStats, SessionWorkplaneStats, StatusCounts,
-        SummaryFreshnessState, derive_embeddings_completed_count, derive_embeddings_lane,
-        derive_session_status, derive_summaries_lane, derive_top_pipeline_lane, is_summary_mailbox,
+        InitRuntimeCoordinator, InitRuntimeLaneProgressView, SessionMailboxStats,
+        SessionWorkplaneStats, StatusCounts, SummaryFreshnessState,
+        derive_embeddings_completed_count, derive_embeddings_lane, derive_session_status,
+        derive_summaries_lane, derive_top_pipeline_lane, is_summary_mailbox,
         load_semantic_embedding_session_mailbox_counts,
         load_semantic_summary_session_mailbox_counts, semantic_bootstrap_waiting_reason,
         semantic_follow_up_ready_for_sync, summary_effective_work_item_count,
@@ -2598,9 +2707,13 @@ mod tests {
         SummaryBootstrapRequest, SummaryBootstrapRunRecord, SummaryBootstrapStatus, SyncTaskMode,
         SyncTaskSpec,
     };
+    use crate::host::runtime_store::DaemonSqliteRuntimeStore;
     use rusqlite::Connection;
     use serde_json::json;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
+    use std::sync::Mutex;
+    use uuid::Uuid;
 
     fn completed_sync_task(task_id: &str, completed_at_unix: u64) -> DevqlTaskRecord {
         DevqlTaskRecord {
@@ -2667,6 +2780,67 @@ mod tests {
             terminal_status: None,
             terminal_error: None,
         }
+    }
+
+    fn test_init_runtime_coordinator() -> InitRuntimeCoordinator {
+        let db_path = std::env::temp_dir().join(format!(
+            "bitloops-init-runtime-test-{}.sqlite",
+            Uuid::new_v4()
+        ));
+        InitRuntimeCoordinator {
+            runtime_store: DaemonSqliteRuntimeStore::open_at(db_path)
+                .expect("opening test init runtime store"),
+            subscription_hub: Mutex::new(None),
+            summary_in_memory_batches: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    #[test]
+    fn summary_in_memory_progress_dedupes_artefacts_across_active_batches() {
+        let coordinator = test_init_runtime_coordinator();
+        let session_ids = BTreeSet::from(["init-session-1".to_string()]);
+
+        coordinator.record_summary_in_memory_artefact(
+            "repo-1",
+            "lease-1",
+            "artefact-a",
+            &session_ids,
+        );
+        coordinator.record_summary_in_memory_artefact(
+            "repo-1",
+            "lease-1",
+            "artefact-a",
+            &session_ids,
+        );
+        coordinator.record_summary_in_memory_artefact(
+            "repo-1",
+            "lease-2",
+            "artefact-a",
+            &session_ids,
+        );
+        coordinator.record_summary_in_memory_artefact(
+            "repo-1",
+            "lease-2",
+            "artefact-b",
+            &session_ids,
+        );
+
+        assert_eq!(
+            coordinator.summary_in_memory_completed("repo-1", "init-session-1"),
+            2
+        );
+
+        coordinator.clear_summary_in_memory_batch("lease-1");
+        assert_eq!(
+            coordinator.summary_in_memory_completed("repo-1", "init-session-1"),
+            2
+        );
+
+        coordinator.clear_summary_in_memory_batch("lease-2");
+        assert_eq!(
+            coordinator.summary_in_memory_completed("repo-1", "init-session-1"),
+            0
+        );
     }
 
     #[test]
@@ -3308,6 +3482,7 @@ mod tests {
             &stats,
             Some(InitRuntimeLaneProgressView {
                 completed: 277,
+                in_memory_completed: 0,
                 total: 278,
                 remaining: 1,
             }),
@@ -3388,6 +3563,7 @@ mod tests {
             &SessionWorkplaneStats::default(),
             Some(InitRuntimeLaneProgressView {
                 completed: 272,
+                in_memory_completed: 0,
                 total: 285,
                 remaining: 13,
             }),

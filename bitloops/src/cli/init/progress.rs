@@ -335,7 +335,11 @@ fn compact_lane_heading(
     let reserved = label_width + percent.chars().count() + 2;
     let bar_width = available_width.saturating_sub(reserved).max(8);
     let bar = if let Some(ratio) = compact_lane_ratio(title, lane, task, summary_run) {
-        render_determinate_progress_bar(bar_width, ratio)
+        render_determinate_progress_bar(
+            bar_width,
+            ratio,
+            compact_lane_in_memory_ratio(lane, task, summary_run),
+        )
     } else {
         render_indeterminate_progress_bar(bar_width, render_context.spinner_index)
     };
@@ -365,6 +369,19 @@ fn compact_lane_percent(
 ) -> Option<usize> {
     compact_lane_ratio(title, lane, task, summary_run)
         .map(|ratio| ((ratio * 100.0).round() as usize).min(100))
+}
+
+fn compact_lane_in_memory_ratio(
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+    task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
+    summary_run: Option<&crate::cli::devql::graphql::RuntimeSummaryBootstrapRunGraphqlRecord>,
+) -> f64 {
+    if task.is_some_and(|task| is_active_runtime_status(task.status.as_str()))
+        || summary_run.is_some_and(|run| is_active_runtime_status(run.status.as_str()))
+    {
+        return 0.0;
+    }
+    lane_in_memory_ratio(lane)
 }
 
 fn compact_queue_status_text(
@@ -410,30 +427,72 @@ fn compact_lane_detail(
         })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LaneProgressCounts {
+    completed: u64,
+    in_memory_completed: u64,
+    total: u64,
+    visible_completed: u64,
+    remaining: u64,
+}
+
+fn lane_progress_counts(
+    progress: &crate::cli::devql::graphql::RuntimeInitLaneProgressGraphqlRecord,
+) -> Option<LaneProgressCounts> {
+    let total = progress.total.max(0) as u64;
+    if total == 0 {
+        return None;
+    }
+
+    let completed = (progress.completed.max(0) as u64).min(total);
+    let in_memory_completed =
+        (progress.in_memory_completed.max(0) as u64).min(total.saturating_sub(completed));
+    let visible_completed = completed.saturating_add(in_memory_completed).min(total);
+    Some(LaneProgressCounts {
+        completed,
+        in_memory_completed,
+        total,
+        visible_completed,
+        remaining: total.saturating_sub(visible_completed),
+    })
+}
+
+fn lane_in_memory_ratio(lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord) -> f64 {
+    lane.progress
+        .as_ref()
+        .and_then(lane_progress_counts)
+        .map(|counts| counts.in_memory_completed as f64 / counts.total as f64)
+        .unwrap_or(0.0)
+}
+
 fn compact_ready_summary(
     lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
     include_percent: bool,
 ) -> Option<String> {
-    let progress = lane.progress.as_ref()?;
-    let total = progress.total.max(0);
-    if total == 0 {
-        return None;
-    }
-    let completed = progress.completed.max(0).min(total);
+    let counts = lane_progress_counts(lane.progress.as_ref()?)?;
     if include_percent {
-        let ratio = (completed as f64 / total as f64).clamp(0.0, 1.0);
-        let total_width = total.to_string().len();
+        let ratio = (counts.visible_completed as f64 / counts.total as f64).clamp(0.0, 1.0);
+        let total_width = counts.total.to_string().len();
+        if counts.in_memory_completed > 0 {
+            return Some(format!(
+                "{:>3}% · {} / {} generated · {} persisted",
+                (ratio * 100.0).round() as usize,
+                compact_count_column(counts.visible_completed, total_width),
+                counts.total,
+                compact_count_column(counts.completed, total_width),
+            ));
+        }
         return Some(format!(
             "{:>3}% · {} / {} ready",
             (ratio * 100.0).round() as usize,
-            compact_count_column(completed as u64, total_width),
-            total
+            compact_count_column(counts.completed, total_width),
+            counts.total
         ));
     }
     Some(format!(
         "{} / {} ready",
-        compact_count_column(completed as u64, total.to_string().len()),
-        total
+        compact_count_column(counts.completed, counts.total.to_string().len()),
+        counts.total
     ))
 }
 
@@ -731,7 +790,11 @@ fn render_lane_progress_bar(
     }
     let bar_width = available_width - reserved;
     let bar = if let Some(ratio) = ratio {
-        render_determinate_progress_bar(bar_width, ratio)
+        render_determinate_progress_bar(
+            bar_width,
+            ratio,
+            compact_lane_in_memory_ratio(lane, task, summary_run),
+        )
     } else {
         render_indeterminate_progress_bar(bar_width, spinner_index)
     };
@@ -851,15 +914,8 @@ fn progress_summary(
     title: &str,
     lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
 ) -> Option<(f64, String)> {
-    let progress = lane.progress.as_ref()?;
-    if progress.total <= 0 {
-        return None;
-    }
-
-    let completed = progress.completed.max(0).min(progress.total.max(0));
-    let total = progress.total.max(0);
-    let remaining = progress.remaining.max(0);
-    let ratio = (completed as f64 / total as f64).clamp(0.0, 1.0);
+    let counts = lane_progress_counts(lane.progress.as_ref()?)?;
+    let ratio = (counts.visible_completed as f64 / counts.total as f64).clamp(0.0, 1.0);
     let noun = if title == INIT_SUMMARIES_LANE_LABEL {
         "summaries"
     } else if title == INIT_EMBEDDINGS_LANE_LABEL {
@@ -868,15 +924,29 @@ fn progress_summary(
         "items"
     };
 
+    if title == INIT_SUMMARIES_LANE_LABEL && counts.in_memory_completed > 0 {
+        return Some((
+            ratio,
+            format!(
+                " {:>3}% {} of {} summaries generated · {} persisted · {} left",
+                (ratio * 100.0).round() as usize,
+                counts.visible_completed,
+                counts.total,
+                counts.completed,
+                counts.remaining
+            ),
+        ));
+    }
+
     Some((
         ratio,
         format!(
             " {:>3}% {} of {} {} ready · {} left",
             (ratio * 100.0).round() as usize,
-            completed,
-            total,
+            counts.completed,
+            counts.total,
             noun,
-            remaining
+            counts.remaining
         ),
     ))
 }
@@ -1019,12 +1089,28 @@ fn visible_terminal_width(text: &str) -> usize {
     width
 }
 
-fn render_determinate_progress_bar(width: usize, ratio: f64) -> String {
+fn determinate_progress_bar_segments(
+    width: usize,
+    ratio: f64,
+    in_memory_ratio: f64,
+) -> (usize, usize, usize) {
+    let ratio = ratio.clamp(0.0, 1.0);
+    let in_memory_ratio = in_memory_ratio.clamp(0.0, ratio);
     let filled = ((width as f64) * ratio).round() as usize;
     let filled = filled.min(width);
-    let fill = color_hex_if_enabled(&"█".repeat(filled), BITLOOPS_PURPLE_HEX);
-    let empty = "░".repeat(width.saturating_sub(filled));
-    format!("{fill}{empty}")
+    let persisted_ratio = (ratio - in_memory_ratio).clamp(0.0, 1.0);
+    let persisted = (((width as f64) * persisted_ratio).round() as usize).min(filled);
+    let in_memory = filled.saturating_sub(persisted);
+    (persisted, in_memory, width.saturating_sub(filled))
+}
+
+fn render_determinate_progress_bar(width: usize, ratio: f64, in_memory_ratio: f64) -> String {
+    let (persisted, in_memory, empty) =
+        determinate_progress_bar_segments(width, ratio, in_memory_ratio);
+    let persisted_fill = color_hex_if_enabled(&"█".repeat(persisted), BITLOOPS_PURPLE_HEX);
+    let in_memory_fill = color_hex_if_enabled(&"█".repeat(in_memory), SUCCESS_GREEN_HEX);
+    let empty = "░".repeat(empty);
+    format!("{persisted_fill}{in_memory_fill}{empty}")
 }
 
 fn render_indeterminate_progress_bar(width: usize, spinner_index: usize) -> String {
@@ -1068,7 +1154,8 @@ mod tests {
     use super::{
         INIT_EMBEDDINGS_LANE_LABEL, INIT_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_LANE_LABEL,
         INIT_SUMMARIES_SECTION_TITLE, compact_lane_detail, compact_queue_status_text,
-        is_active_runtime_status, lane_progress, queue_status_text,
+        determinate_progress_bar_segments, is_active_runtime_status, lane_progress,
+        queue_status_text,
     };
     use crate::cli::devql::graphql::{
         RuntimeInitLaneGraphqlRecord, RuntimeInitLaneProgressGraphqlRecord,
@@ -1139,6 +1226,7 @@ mod tests {
             run_id: None,
             progress: Some(RuntimeInitLaneProgressGraphqlRecord {
                 completed: 262,
+                in_memory_completed: 0,
                 total: 556,
                 remaining: 294,
             }),
@@ -1172,6 +1260,7 @@ mod tests {
             run_id: None,
             progress: Some(RuntimeInitLaneProgressGraphqlRecord {
                 completed: 225,
+                in_memory_completed: 0,
                 total: 225,
                 remaining: 0,
             }),
@@ -1191,6 +1280,43 @@ mod tests {
 
         assert_eq!(ratio, Some(1.0));
         assert_eq!(summary, " 100% 225 of 225 summaries ready · 0 left");
+    }
+
+    #[test]
+    fn summary_lane_progress_counts_in_memory_completions() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "running".to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: Some("Generating summaries".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 10,
+                in_memory_completed: 15,
+                total: 100,
+                remaining: 90,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord {
+                queued: 20,
+                running: 3,
+                failed: 0,
+            },
+            warnings: Vec::new(),
+            pending_count: 20,
+            running_count: 3,
+            failed_count: 0,
+            completed_count: 10,
+        };
+
+        let (ratio, summary) = lane_progress(INIT_SUMMARIES_LANE_LABEL, &lane);
+
+        let ratio = ratio.expect("summary lane should render a determinate ratio");
+        assert!((ratio - 0.25).abs() < f64::EPSILON);
+        assert_eq!(
+            summary,
+            "  25% 25 of 100 summaries generated · 10 persisted · 75 left"
+        );
     }
 
     #[test]
@@ -1260,6 +1386,7 @@ mod tests {
             run_id: None,
             progress: Some(RuntimeInitLaneProgressGraphqlRecord {
                 completed: 7,
+                in_memory_completed: 0,
                 total: 570,
                 remaining: 563,
             }),
@@ -1279,5 +1406,39 @@ mod tests {
             compact_lane_detail(INIT_SUMMARIES_SECTION_TITLE, &lane),
             Some("  1% ·   7 / 570 ready".to_string())
         );
+    }
+
+    #[test]
+    fn compact_lane_detail_shows_generated_and_persisted_summary_counts() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "running".to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: Some("Generating summaries".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 10,
+                in_memory_completed: 15,
+                total: 100,
+                remaining: 90,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 0,
+        };
+
+        assert_eq!(
+            compact_lane_detail(INIT_SUMMARIES_SECTION_TITLE, &lane),
+            Some(" 25% ·  25 / 100 generated ·  10 persisted".to_string())
+        );
+    }
+
+    #[test]
+    fn determinate_progress_bar_segments_place_in_memory_fill_after_persisted_fill() {
+        assert_eq!(determinate_progress_bar_segments(10, 0.6, 0.2), (4, 2, 4));
     }
 }

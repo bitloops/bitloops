@@ -20,7 +20,7 @@ const SEMANTIC_CLONES_CLONE_REBUILD_WORKER_COUNT_ENV: &str =
 const SEMANTIC_CLONES_ENRICHMENT_WORKER_COUNT_ENV: &str =
     "BITLOOPS_SEMANTIC_CLONES_ENRICHMENT_WORKERS";
 const MAX_ENRICHMENT_WORKER_COUNT: usize = 32;
-const DEFAULT_REMOTE_SUMMARY_WORKERS: usize = 6;
+const DEFAULT_REMOTE_SUMMARY_WORKERS: usize = 12;
 const DEFAULT_REMOTE_EMBEDDING_WORKERS: usize = 6;
 const OLLAMA_CHAT_DRIVER: &str = "ollama_chat";
 const OPENAI_CHAT_COMPLETIONS_DRIVER: &str = "openai_chat_completions";
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_budgets_default_remote_summary_and_embeddings_to_six() {
+    fn worker_budgets_default_remote_summary_to_twelve_and_embeddings_to_six() {
         assert_eq!(
             resolve_worker_budgets_from_sources(WorkerBudgetSources {
                 summary_remote: true,
@@ -353,7 +353,7 @@ mod tests {
                 ..WorkerBudgetSources::default()
             }),
             EnrichmentWorkerBudgets {
-                summary_refresh: 6,
+                summary_refresh: 12,
                 embeddings: 6,
                 clone_rebuild: 1,
             }

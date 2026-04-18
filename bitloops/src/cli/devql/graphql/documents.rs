@@ -687,6 +687,7 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
             runId
             progress {
               completed
+              inMemoryCompleted
               total
               remaining
             }
@@ -714,6 +715,7 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
             runId
             progress {
               completed
+              inMemoryCompleted
               total
               remaining
             }
@@ -741,6 +743,7 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
             runId
             progress {
               completed
+              inMemoryCompleted
               total
               remaining
             }

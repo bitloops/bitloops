@@ -26,14 +26,13 @@ pub(crate) use self::client::{
     task_queue_status_via_graphql, watch_task_id_via_graphql, watch_task_via_graphql,
 };
 pub(crate) use self::subscription::next_runtime_event_via_subscription;
+#[cfg(test)]
+pub(crate) use self::types::RuntimeInitLaneQueueGraphqlRecord;
 pub(crate) use self::types::{
     EmbeddingsBootstrapResultGraphqlRecord, RuntimeEmbeddingsBootstrapRequestInput,
-    RuntimeInitLaneGraphqlRecord, RuntimeInitSessionGraphqlRecord, RuntimeSnapshotGraphqlRecord,
-    RuntimeStartInitInput, RuntimeSummaryBootstrapRequestInput,
-    RuntimeSummaryBootstrapRunGraphqlRecord, SummaryBootstrapResultGraphqlRecord,
-    TaskGraphqlRecord, TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord,
-};
-#[cfg(test)]
-pub(crate) use self::types::{
-    RuntimeInitLaneProgressGraphqlRecord, RuntimeInitLaneQueueGraphqlRecord,
+    RuntimeInitLaneGraphqlRecord, RuntimeInitLaneProgressGraphqlRecord,
+    RuntimeInitSessionGraphqlRecord, RuntimeSnapshotGraphqlRecord, RuntimeStartInitInput,
+    RuntimeSummaryBootstrapRequestInput, RuntimeSummaryBootstrapRunGraphqlRecord,
+    SummaryBootstrapResultGraphqlRecord, TaskGraphqlRecord, TaskQueueControlGraphqlRecord,
+    TaskQueueGraphqlRecord,
 };
