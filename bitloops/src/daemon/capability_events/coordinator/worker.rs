@@ -1,0 +1,278 @@
+use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use anyhow::{Context, Result, anyhow};
+use futures_util::FutureExt;
+use rusqlite::params;
+use tokio::time::sleep;
+
+use crate::daemon::capability_events::plan::{
+    build_execution_plan, find_current_state_consumer, validate_consumer_result,
+};
+use crate::daemon::capability_events::queue::{StoredRunRecord, load_runs, sql_i64};
+use crate::daemon::types::{
+    CapabilityEventRunRecord, CapabilityEventRunStatus, unix_timestamp_now,
+};
+use crate::host::capability_host::DevqlCapabilityHost;
+use crate::host::devql::resolve_repo_identity;
+
+use super::types::{
+    CapabilityEventCoordinator, MAX_RUN_ATTEMPTS, RunCompletion, WORKER_POLL_INTERVAL,
+    WorkerStartedGuard,
+};
+
+impl CapabilityEventCoordinator {
+    pub(crate) fn activate_worker(self: &Arc<Self>) {
+        if self.worker_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Err(err) = self.recover_running_runs() {
+            log::warn!("failed to recover current-state consumer runs: {err:#}");
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            self.worker_started.store(false, Ordering::SeqCst);
+            log::error!(
+                "current-state consumer worker activation requested without an active tokio runtime"
+            );
+            return;
+        };
+        let coordinator = Arc::clone(self);
+        handle.spawn(async move {
+            let _guard = WorkerStartedGuard {
+                coordinator: Arc::clone(&coordinator),
+            };
+            coordinator.run_loop().await;
+        });
+    }
+
+    async fn run_loop(self: Arc<Self>) {
+        loop {
+            if let Err(err) = self.launch_runnable_runs() {
+                log::warn!("current-state consumer scheduling failed: {err:#}");
+            }
+            tokio::select! {
+                _ = self.notify.notified() => {}
+                _ = sleep(WORKER_POLL_INTERVAL) => {}
+            }
+        }
+    }
+
+    fn launch_runnable_runs(self: &Arc<Self>) -> Result<()> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
+        let runs = self.runtime_store.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+                .context("starting current-state consumer claim transaction")?;
+            let result = (|| {
+                let candidates = load_claimable_runs(conn)?;
+                let mut claimed = Vec::new();
+                let now = unix_timestamp_now();
+                for run in candidates {
+                    conn.execute(
+                        "UPDATE capability_workplane_cursor_runs SET status = ?1, attempts = ?2, started_at_unix = ?3, updated_at_unix = ?4 WHERE run_id = ?5",
+                        params![
+                            CapabilityEventRunStatus::Running.to_string(),
+                            run.record.attempts + 1,
+                            sql_i64(now)?,
+                            sql_i64(now)?,
+                            run.record.run_id,
+                        ],
+                    )
+                    .with_context(|| {
+                        format!("marking current-state consumer run `{}` as running", run.record.run_id)
+                    })?;
+                    let mut claimed_run = run.record.clone();
+                    claimed_run.status = CapabilityEventRunStatus::Running;
+                    claimed_run.attempts += 1;
+                    claimed_run.started_at_unix = Some(now);
+                    claimed_run.updated_at_unix = now;
+                    claimed.push(StoredRunRecord {
+                        record: claimed_run,
+                        repo_root: run.repo_root.clone(),
+                    });
+                }
+                Ok(claimed)
+            })();
+
+            match result {
+                Ok(runs) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing current-state consumer claim transaction")?;
+                    Ok(runs)
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })?;
+
+        for run in runs {
+            if let Some(init_session_id) = run.record.init_session_id.clone() {
+                crate::daemon::shared_init_runtime_coordinator().publish_runtime_event(
+                    crate::daemon::RuntimeEventRecord {
+                        domain: "current_state_consumer".to_string(),
+                        repo_id: run.record.repo_id.clone(),
+                        init_session_id: Some(init_session_id),
+                        updated_at_unix: run.record.updated_at_unix,
+                        task_id: None,
+                        run_id: Some(run.record.run_id.clone()),
+                        mailbox_name: Some(run.record.consumer_id.clone()),
+                    },
+                );
+            }
+            self.spawn_execution_task(run);
+        }
+        Ok(())
+    }
+
+    fn spawn_execution_task(self: &Arc<Self>, run: StoredRunRecord) {
+        let coordinator = Arc::clone(self);
+        tokio::spawn(async move {
+            let completion = coordinator.execute_run(run).await;
+            if let Err(err) = coordinator.apply_completion(completion) {
+                log::warn!("failed to persist current-state consumer completion: {err:#}");
+            }
+            coordinator.notify.notify_waiters();
+        });
+    }
+
+    async fn execute_run(&self, run: StoredRunRecord) -> RunCompletion {
+        let plan = match self
+            .runtime_store
+            .with_connection(|conn| build_execution_plan(conn, &run.record, &run.repo_root))
+        {
+            Ok(Some(plan)) => plan,
+            Ok(None) => return RunCompletion::NoopCompleted { run: run.record },
+            Err(err) => {
+                return terminal_or_retry(run.record, err);
+            }
+        };
+
+        let repo = match resolve_repo_identity(&plan.repo_root) {
+            Ok(repo) => repo,
+            Err(err) => {
+                return terminal_or_retry(plan.record, err.context("resolving repo identity"));
+            }
+        };
+        let host = match DevqlCapabilityHost::builtin(plan.repo_root.clone(), repo) {
+            Ok(host) => host,
+            Err(err) => {
+                return terminal_or_retry(plan.record, err.context("building capability host"));
+            }
+        };
+        let Some(consumer) = find_current_state_consumer(&host, &plan.record) else {
+            let capability_id = plan.record.capability_id.clone();
+            let consumer_id = plan.record.consumer_id.clone();
+            return terminal_or_retry(
+                plan.record,
+                anyhow!(
+                    "current-state consumer `{}` for capability `{}` is not registered",
+                    consumer_id,
+                    capability_id
+                ),
+            );
+        };
+        let context = match host.build_current_state_consumer_context_with_session(
+            &plan.record.capability_id,
+            plan.record.init_session_id.clone(),
+        ) {
+            Ok(context) => context,
+            Err(err) => {
+                return terminal_or_retry(
+                    plan.record,
+                    err.context("building current-state consumer context"),
+                );
+            }
+        };
+
+        let outcome = AssertUnwindSafe(consumer.reconcile(&plan.request, &context))
+            .catch_unwind()
+            .await;
+        match outcome {
+            Ok(Ok(result)) => match validate_consumer_result(&plan.request, &result) {
+                Ok(()) => RunCompletion::Completed {
+                    run: plan.record,
+                    applied_to_generation_seq: result.applied_to_generation_seq,
+                },
+                Err(err) => terminal_or_retry(plan.record, err),
+            },
+            Ok(Err(err)) => terminal_or_retry(plan.record, err),
+            Err(_) => terminal_or_retry(plan.record, anyhow!("current-state consumer panicked")),
+        }
+    }
+}
+
+fn load_claimable_runs(conn: &rusqlite::Connection) -> Result<Vec<StoredRunRecord>> {
+    let now = unix_timestamp_now();
+    let candidates = load_runs(
+        conn,
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1 ORDER BY submitted_at_unix ASC",
+        params![CapabilityEventRunStatus::Queued.to_string()],
+    )?;
+    let mut running_lanes = BTreeMap::<String, ()>::new();
+    for run in load_runs(
+        conn,
+        "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error FROM capability_workplane_cursor_runs WHERE status = ?1",
+        params![CapabilityEventRunStatus::Running.to_string()],
+    )? {
+        running_lanes.insert(run.record.lane_key.clone(), ());
+    }
+
+    let mut claimable = Vec::new();
+    for run in candidates {
+        if running_lanes.contains_key(&run.record.lane_key) {
+            continue;
+        }
+        if run.record.updated_at_unix + retry_backoff_seconds(run.record.attempts) > now {
+            continue;
+        }
+        running_lanes.insert(run.record.lane_key.clone(), ());
+        claimable.push(run);
+    }
+    Ok(claimable)
+}
+
+pub(crate) fn terminal_or_retry(
+    run: CapabilityEventRunRecord,
+    err: impl Into<anyhow::Error>,
+) -> RunCompletion {
+    let error = format!("{:#}", err.into());
+    if run.attempts >= MAX_RUN_ATTEMPTS {
+        log::error!(
+            "current-state consumer run failed: run_id={} repo_id={} capability_id={} consumer_id={} attempts={} error={}",
+            run.run_id,
+            run.repo_id,
+            run.capability_id,
+            run.consumer_id,
+            run.attempts,
+            error
+        );
+        RunCompletion::Failed { run, error }
+    } else {
+        log::warn!(
+            "current-state consumer run failed and will retry: run_id={} repo_id={} capability_id={} consumer_id={} attempts={} error={}",
+            run.run_id,
+            run.repo_id,
+            run.capability_id,
+            run.consumer_id,
+            run.attempts,
+            error
+        );
+        RunCompletion::RetryableFailure { run, error }
+    }
+}
+
+fn retry_backoff_seconds(attempts: u32) -> u64 {
+    match attempts {
+        0 | 1 => 0,
+        2 => 5,
+        3 => 15,
+        4 => 30,
+        _ => 60,
+    }
+}

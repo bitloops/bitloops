@@ -15,14 +15,14 @@ use crate::host::runtime_store::{
 };
 
 #[derive(Debug, Clone)]
-pub(super) struct SemanticBatchRepoContext {
+pub(crate) struct SemanticBatchRepoContext {
     pub repo_id: String,
     pub repo_root: PathBuf,
     pub config_root: PathBuf,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct CommitSummaryBatchRequest {
+pub(crate) struct CommitSummaryBatchRequest {
     pub repo: SemanticBatchRepoContext,
     pub lease_token: String,
     pub semantic_statements: Vec<String>,
@@ -32,7 +32,7 @@ pub(super) struct CommitSummaryBatchRequest {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct CommitEmbeddingBatchRequest {
+pub(crate) struct CommitEmbeddingBatchRequest {
     pub repo: SemanticBatchRepoContext,
     pub lease_token: String,
     pub embedding_statements: Vec<String>,
@@ -138,7 +138,7 @@ impl RepoSemanticWriterActor {
     }
 }
 
-pub(super) async fn commit_summary_batch(
+pub(crate) async fn commit_summary_batch(
     runtime_db_path: &Path,
     relational_db_path: &Path,
     request: CommitSummaryBatchRequest,
@@ -148,7 +148,7 @@ pub(super) async fn commit_summary_batch(
         .await
 }
 
-pub(super) async fn commit_embedding_batch(
+pub(crate) async fn commit_embedding_batch(
     runtime_db_path: &Path,
     relational_db_path: &Path,
     request: CommitEmbeddingBatchRequest,

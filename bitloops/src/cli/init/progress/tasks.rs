@@ -14,7 +14,7 @@ use super::EmbeddingQueueSnapshot;
 const CURRENT_CODE_EMBEDDINGS_TABLE: &str = "symbol_embeddings_current";
 const CURRENT_SUMMARY_SEMANTICS_TABLE: &str = "symbol_semantics_current";
 
-pub(super) async fn current_embedding_queue_snapshot(
+pub(crate) async fn current_embedding_queue_snapshot(
     repo_root: &std::path::Path,
     repo_id: &str,
 ) -> Result<Option<EmbeddingQueueSnapshot>> {
@@ -43,7 +43,7 @@ pub(super) async fn current_embedding_queue_snapshot(
     }))
 }
 
-pub(super) async fn current_code_embedding_artefact_count(
+pub(crate) async fn current_code_embedding_artefact_count(
     repo_root: &std::path::Path,
     repo_id: &str,
 ) -> Result<u64> {
@@ -52,7 +52,7 @@ pub(super) async fn current_code_embedding_artefact_count(
         .completed)
 }
 
-pub(super) async fn current_summary_queue_snapshot(
+pub(crate) async fn current_summary_queue_snapshot(
     repo_root: &std::path::Path,
     repo_id: &str,
 ) -> Result<Option<EmbeddingQueueSnapshot>> {
@@ -81,7 +81,7 @@ pub(super) async fn current_summary_queue_snapshot(
     }))
 }
 
-pub(super) async fn refresh_init_progress_task(
+pub(crate) async fn refresh_init_progress_task(
     scope: &SlimCliRepoScope,
     current: &crate::cli::devql::graphql::TaskGraphqlRecord,
 ) -> Result<Option<crate::cli::devql::graphql::TaskGraphqlRecord>> {

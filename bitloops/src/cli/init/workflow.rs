@@ -224,7 +224,7 @@ fn planned_hook_count(agent: &str) -> usize {
     }
 }
 
-pub(super) async fn run_for_project_root(
+pub(crate) async fn run_for_project_root(
     args: InitArgs,
     project_root: &Path,
     out: &mut dyn Write,

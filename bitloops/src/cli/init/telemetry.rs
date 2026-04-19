@@ -8,7 +8,7 @@ use crate::config::{load_daemon_settings, persist_daemon_cli_settings};
 
 use super::agent_selection::can_prompt_interactively;
 
-pub(super) const TELEMETRY_OPTOUT_ENV: &str = "BITLOOPS_TELEMETRY_OPTOUT";
+pub(crate) const TELEMETRY_OPTOUT_ENV: &str = "BITLOOPS_TELEMETRY_OPTOUT";
 
 fn persist_telemetry_choice(choice: bool) -> Result<()> {
     let loaded = load_daemon_settings(None)?;
@@ -18,7 +18,7 @@ fn persist_telemetry_choice(choice: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn prompt_telemetry_consent(
+pub(crate) fn prompt_telemetry_consent(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<bool> {
@@ -46,7 +46,7 @@ pub(super) fn prompt_telemetry_consent(
     }
 }
 
-pub(super) fn maybe_capture_telemetry_consent(
+pub(crate) fn maybe_capture_telemetry_consent(
     repo_root: &Path,
     telemetry_flag: bool,
     allow_prompt: bool,

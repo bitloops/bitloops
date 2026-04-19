@@ -4,19 +4,28 @@ use axum::{
     extract::State,
     routing::{get, post},
 };
+// NOTE: Several of the imports below are not used directly in this file but are
+// re-exported into sibling submodules via `use super::*;` (e.g. `state_store.rs`,
+// `service_files.rs`, `process.rs`). The `unused_imports` lint cannot see those
+// transitive uses, so we silence it here.
+#[allow(unused_imports)]
 use clap::{Args, ValueEnum};
 use reqwest::StatusCode as ReqwestStatusCode;
+use serde::Deserialize;
+#[allow(unused_imports)]
+use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::ffi::OsString;
+#[allow(unused_imports)]
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+#[allow(unused_imports)]
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
