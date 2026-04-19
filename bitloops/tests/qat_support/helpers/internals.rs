@@ -672,6 +672,20 @@ fn run_codex_prompt(world: &QatWorld, prompt: &str) -> Result<()> {
         )?;
     }
 
+    let prompt_submit_payload = serde_json::json!({
+        "session_id": session_id,
+        "transcript_path": transcript_path.display().to_string(),
+        "prompt": prompt,
+        "model": model,
+    })
+    .to_string();
+    run_bitloops_with_stdin(
+        world,
+        &["hooks", "codex", "user-prompt-submit"],
+        "bitloops hooks codex user-prompt-submit",
+        &prompt_submit_payload,
+    )?;
+
     let file_path = apply_smoke_prompt_edit(world, prompt)?;
     append_codex_transcript_turn(
         &transcript_path,

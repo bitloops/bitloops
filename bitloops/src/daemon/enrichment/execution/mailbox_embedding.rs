@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -17,7 +17,7 @@ use crate::capability_packs::semantic_clones::{
     build_active_embedding_setup_persist_sql, build_current_symbol_embedding_persist_sql,
     build_embedding_setup_persist_sql, build_sqlite_symbol_embedding_persist_sql,
     determine_repo_embedding_sync_action, load_current_semantic_summary_map,
-    load_semantic_feature_inputs_for_current_repo, load_symbol_embedding_index_state,
+    load_symbol_embedding_index_state,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -31,7 +31,10 @@ use super::super::semantic_writer::{CommitEmbeddingBatchRequest, SemanticBatchRe
 use super::super::workplane::{
     ClaimedEmbeddingMailboxBatch, SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE, fallback_repo_identity,
 };
-use super::helpers::{dedupe_inputs_by_artefact_id, payload_artefact_ids_from_value};
+use super::helpers::{
+    dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
+    select_current_semantic_input_scope,
+};
 
 pub(crate) struct PreparedEmbeddingMailboxBatch {
     pub commit: CommitEmbeddingBatchRequest,
@@ -65,10 +68,12 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     };
     let setup = resolve_embedding_setup(provider.as_ref())?;
 
-    let current_inputs = load_semantic_feature_inputs_for_current_repo(
+    let current_input_selection = select_current_semantic_input_scope(&batch.items);
+    let current_inputs = load_current_semantic_inputs(
         &relational,
         &batch.repo_root,
         &batch.repo_id,
+        current_input_selection.requested_artefact_ids(),
     )
     .await?;
     let current_by_artefact = current_inputs
@@ -97,11 +102,9 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                 let mut selected = if requested_ids.is_empty() {
                     current_inputs.clone()
                 } else {
-                    let requested_ids = requested_ids.into_iter().collect::<BTreeSet<_>>();
-                    current_inputs
+                    requested_ids
                         .iter()
-                        .filter(|input| requested_ids.contains(&input.artefact_id))
-                        .cloned()
+                        .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
                         .collect::<Vec<_>>()
                 };
                 if selected.len() > SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE {
