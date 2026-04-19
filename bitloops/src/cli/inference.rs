@@ -15,12 +15,12 @@ pub(crate) use managed::{
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
 pub(crate) use setup::{
-    PreparedSummarySetupPlan, SummarySetupExecutionResult, SummarySetupOutcome, SummarySetupPhase,
-    SummarySetupProgress, SummarySetupSelection, configure_cloud_summary_generation,
-    configure_local_summary_generation, execute_prepared_summary_setup_with_progress,
-    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
-    prepare_local_summary_generation_plan, prompt_summary_setup_selection,
-    summary_generation_configured,
+    PreparedSummarySetupAction, PreparedSummarySetupPlan, SummarySetupExecutionResult,
+    SummarySetupOutcome, SummarySetupPhase, SummarySetupProgress, SummarySetupSelection,
+    configure_cloud_summary_generation, configure_local_summary_generation,
+    execute_prepared_summary_setup_with_progress, platform_summary_gateway_url_override,
+    prepare_cloud_summary_generation_plan, prepare_local_summary_generation_plan,
+    prompt_summary_setup_selection, summary_generation_configured,
 };
 
 #[cfg(test)]

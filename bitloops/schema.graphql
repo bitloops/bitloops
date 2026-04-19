@@ -450,24 +450,109 @@ type InitSchemaResult {
 	eventsBackend: String!
 }
 
+type InteractionActorObject {
+	id: String
+	name: String
+	email: String
+	source: String
+}
+
+type InteractionCommitAuthorObject {
+	checkpointId: String!
+	commitSha: String!
+	name: String
+	email: String
+	committedAt: String
+}
+
+type InteractionEventConnection {
+	edges: [InteractionEventEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type InteractionEventEdge {
+	node: InteractionEventObject!
+	cursor: String!
+}
+
 type InteractionEventObject {
 	id: ID!
 	sessionId: String!
 	turnId: String
+	branch: String
+	actor: InteractionActorObject
 	eventType: String!
 	eventTime: String!
 	agentType: String!
 	model: String
+	toolUseId: String
+	toolKind: String
+	taskDescription: String
+	subagentId: String
 	payload: JSON
+}
+
+input InteractionFilterInput {
+	since: DateTime
+	until: DateTime
+	actor: String
+	actorId: String
+	actorEmail: String
+	commitAuthor: String
+	commitAuthorEmail: String
+	agent: String
+	model: String
+	branch: String
+	sessionId: String
+	turnId: String
+	checkpointId: String
+	toolUseId: String
+	toolKind: String
+	hasCheckpoint: Boolean
+	path: String
+}
+
+input InteractionSearchInputObject {
+	filter: InteractionFilterInput
+	query: String!
+	limit: Int
+}
+
+type InteractionSessionConnection {
+	edges: [InteractionSessionEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type InteractionSessionEdge {
+	node: InteractionSessionObject!
+	cursor: String!
 }
 
 type InteractionSessionObject {
 	id: ID!
+	branch: String
+	actor: InteractionActorObject
 	agentType: String!
 	model: String
 	firstPrompt: String
 	startedAt: String!
 	endedAt: String
+	lastEventAt: String
+	turnCount: Int!
+	checkpointCount: Int!
+	tokenUsage: InteractionTokenUsage
+	filePaths: [String!]!
+	toolUses: [InteractionToolUseObject!]!
+	linkedCheckpoints: [InteractionCommitAuthorObject!]!
+	latestCommitAuthor: InteractionCommitAuthorObject
+}
+
+type InteractionSessionSearchHitObject {
+	session: InteractionSessionObject!
+	score: Int!
+	matchedFields: [String!]!
 }
 
 type InteractionTokenUsage {
@@ -478,11 +563,37 @@ type InteractionTokenUsage {
 	apiCallCount: Int!
 }
 
+type InteractionToolUseObject {
+	id: ID!
+	sessionId: String!
+	turnId: String
+	toolKind: String
+	taskDescription: String
+	subagentId: String
+	transcriptPath: String
+	startedAt: String
+	endedAt: String
+}
+
+type InteractionTurnConnection {
+	edges: [InteractionTurnEdge!]!
+	pageInfo: PageInfo!
+	totalCount: Int!
+}
+
+type InteractionTurnEdge {
+	node: InteractionTurnObject!
+	cursor: String!
+}
+
 type InteractionTurnObject {
 	id: ID!
 	sessionId: String!
+	branch: String
+	actor: InteractionActorObject
 	turnNumber: Int!
 	prompt: String
+	summary: String
 	agentType: String!
 	model: String
 	startedAt: String!
@@ -490,6 +601,16 @@ type InteractionTurnObject {
 	tokenUsage: InteractionTokenUsage
 	filesModified: [String!]!
 	checkpointId: String
+	toolUses: [InteractionToolUseObject!]!
+	linkedCheckpoints: [InteractionCommitAuthorObject!]!
+	latestCommitAuthor: InteractionCommitAuthorObject
+}
+
+type InteractionTurnSearchHitObject {
+	turn: InteractionTurnObject!
+	session: InteractionSessionObject!
+	score: Int!
+	matchedFields: [String!]!
 }
 
 """
@@ -686,9 +807,11 @@ type Repository {
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
-	interactionSessions(agent: String, first: Int): [InteractionSessionObject!]!
-	interactionTurns(sessionId: String!, first: Int): [InteractionTurnObject!]!
-	interactionEvents(sessionId: String, turnId: String, type: String, since: String, first: Int): [InteractionEventObject!]!
+	interactionSessions(filter: InteractionFilterInput, first: Int, after: String, last: Int, before: String): InteractionSessionConnection!
+	interactionTurns(filter: InteractionFilterInput, first: Int, after: String, last: Int, before: String): InteractionTurnConnection!
+	interactionEvents(filter: InteractionFilterInput, first: Int, after: String, last: Int, before: String): InteractionEventConnection!
+	searchInteractionSessions(input: InteractionSearchInputObject!): [InteractionSessionSearchHitObject!]!
+	searchInteractionTurns(input: InteractionSearchInputObject!): [InteractionTurnSearchHitObject!]!
 }
 
 enum SaveSelector {
@@ -698,6 +821,28 @@ enum SaveSelector {
 type SubscriptionRoot {
 	checkpointIngested(repoName: String!): Checkpoint!
 	taskProgress(taskId: String!): TaskProgressEvent!
+}
+
+type SummaryBootstrapProgress {
+	phase: String!
+	assetName: String
+	bytesDownloaded: Int!
+	bytesTotal: Int
+	version: String
+	message: String
+}
+
+type SummaryBootstrapResult {
+	outcomeKind: String!
+	modelName: String
+	message: String!
+}
+
+type SummaryBootstrapTaskSpec {
+	action: String!
+	message: String
+	modelName: String
+	gatewayUrlOverride: String
 }
 
 type SyncResult {
@@ -781,18 +926,22 @@ type Task {
 	syncSpec: SyncTaskSpec
 	ingestSpec: IngestTaskSpec
 	embeddingsBootstrapSpec: EmbeddingsBootstrapTaskSpec
+	summaryBootstrapSpec: SummaryBootstrapTaskSpec
 	syncProgress: SyncTaskProgress
 	ingestProgress: IngestionProgressEvent
 	embeddingsBootstrapProgress: EmbeddingsBootstrapProgress
+	summaryBootstrapProgress: SummaryBootstrapProgress
 	syncResult: SyncResult
 	ingestResult: IngestResult
 	embeddingsBootstrapResult: EmbeddingsBootstrapResult
+	summaryBootstrapResult: SummaryBootstrapResult
 }
 
 enum TaskKind {
 	SYNC
 	INGEST
 	EMBEDDINGS_BOOTSTRAP
+	SUMMARY_BOOTSTRAP
 }
 
 type TaskKindCounts {

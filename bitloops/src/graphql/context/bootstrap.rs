@@ -12,7 +12,7 @@ use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_repo};
 use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::graphql::subscriptions::SubscriptionHub;
@@ -262,6 +262,7 @@ impl DevqlGraphqlContext {
             Err(err) if is_missing_repositories_table_error(&err) => Vec::new(),
             Err(err) => return Err(err),
         };
+        let repo_sync_roots = self.load_repo_sync_roots().await?;
         let registry = match self.repo_registry_path() {
             Some(path) => index_repo_path_registry(&load_repo_path_registry(path)?),
             None => Default::default(),
@@ -273,6 +274,7 @@ impl DevqlGraphqlContext {
             let repo_root = registry
                 .get(&repo_id)
                 .map(|entry| entry.repo_root.clone())
+                .or_else(|| repo_sync_roots.get(&repo_id).cloned())
                 .or_else(|| {
                     (repo_id == self.default_repository.repo_id())
                         .then(|| self.default_repository.repo_root().cloned())
@@ -314,6 +316,24 @@ impl DevqlGraphqlContext {
         Ok(repositories.into_values().collect())
     }
 
+    async fn load_repo_sync_roots(&self) -> Result<BTreeMap<String, PathBuf>> {
+        let sql = "SELECT repo_id, repo_root FROM repo_sync_state";
+        let rows = match self.query_devql_sqlite_rows(sql).await {
+            Ok(rows) => rows,
+            Err(err) if is_missing_repo_sync_state_table_error(&err) => return Ok(BTreeMap::new()),
+            Err(err) => return Err(err),
+        };
+
+        let mut repo_sync_roots = BTreeMap::new();
+        for row in rows {
+            let repo_id = required_row_string_in_table(&row, "repo_id", "repo_sync_state")?;
+            let repo_root = required_row_string_in_table(&row, "repo_root", "repo_sync_state")?;
+            repo_sync_roots.insert(repo_id, PathBuf::from(repo_root));
+        }
+
+        Ok(repo_sync_roots)
+    }
+
     fn repository_from_selection(&self, selection: SelectedRepository) -> Repository {
         Repository::new(
             selection.name(),
@@ -341,12 +361,16 @@ impl DevqlGraphqlContext {
 }
 
 fn required_row_string(row: &Value, key: &str) -> Result<String> {
+    required_row_string_in_table(row, key, "repositories")
+}
+
+fn required_row_string_in_table(row: &Value, key: &str, table: &str) -> Result<String> {
     row.get(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("missing `{key}` in repositories row"))
+        .ok_or_else(|| anyhow::anyhow!("missing `{key}` in {table} row"))
 }
 
 fn optional_row_string(row: &Value, key: &str) -> Option<String> {
@@ -361,6 +385,12 @@ fn is_missing_repositories_table_error(err: &anyhow::Error) -> bool {
     let message = format!("{err:#}");
     message.contains("no such table: repositories")
         || message.contains("relation \"repositories\" does not exist")
+}
+
+fn is_missing_repo_sync_state_table_error(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    message.contains("no such table: repo_sync_state")
+        || message.contains("relation \"repo_sync_state\" does not exist")
 }
 
 fn map_backend_health(backend: &str, health: BackendHealth) -> HealthBackendStatus {

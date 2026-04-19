@@ -17,6 +17,7 @@ pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode}
 pub(crate) use subscriptions::SubscriptionHub;
 pub(crate) use types::Checkpoint;
 pub(crate) use types::HealthStatus;
+pub(crate) use types::TaskQueueStatusObject;
 pub(crate) use types::{ArtefactFilterInput, CanonicalKind};
 
 #[cfg(test)]
@@ -187,6 +188,11 @@ pub(crate) async fn slim_graphql_handler(
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
+        log::error!(
+            "devql slim GraphQL request failed to register repo checkout: repo_root={} branch={:?} error={err:#}",
+            scope.repo_root.display(),
+            scope.branch_name
+        );
         let response = graphql_error_response(err).into_response();
         track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),
@@ -344,6 +350,11 @@ pub(crate) async fn slim_graphql_ws_handler(
     if let (Some(scope), Some(registry_path)) = (scope.as_ref(), state.repo_registry_path())
         && let Err(err) = upsert_repo_path_registry_scope(registry_path, scope)
     {
+        log::error!(
+            "devql slim GraphQL websocket failed to register repo checkout: repo_root={} branch={:?} error={err:#}",
+            scope.repo_root.display(),
+            scope.branch_name
+        );
         let response = graphql_error_response(err).into_response();
         track_graphql_action(GraphqlActionTelemetry {
             repo_root: state.repo_root.as_path(),
@@ -435,7 +446,7 @@ pub(crate) async fn global_graphql_ws_handler(
     response
 }
 
-fn validate_repo_daemon_binding(
+pub(crate) fn validate_repo_daemon_binding(
     headers: &HeaderMap,
     state: &crate::api::DashboardState,
     repo_root: Option<&Path>,
@@ -702,7 +713,7 @@ fn map_execution_error(error: &ServerError) -> anyhow::Error {
     }
 }
 
-fn graphql_error_response(err: anyhow::Error) -> GraphQLResponse {
+pub(crate) fn graphql_error_response(err: anyhow::Error) -> GraphQLResponse {
     Response::from_errors(vec![
         bad_user_input_error(err.to_string()).into_server_error(Pos::default()),
     ])

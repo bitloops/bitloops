@@ -109,15 +109,13 @@ fn prompt_summary_setup_selection_defaults_to_cloud() {
     assert_eq!(selection, SummarySetupSelection::Cloud);
     let rendered = String::from_utf8(out).expect("utf8 output");
     assert!(rendered.starts_with('\n'));
-    assert!(rendered.contains("How would you like Bitloops to configure semantic summaries?"));
-    assert!(rendered.contains("Use ↑/↓ to move and enter to confirm."));
-    assert!(rendered.contains("Bitloops cloud (recommended)"));
-    assert!(rendered.contains(
-        "Requires you to create or use your free Bitloops account. No local model needed."
-    ));
-    assert!(rendered.contains(
-        "No code leaves your machine but requires RAM >32GB and GPU acceleration (64GB+ recommended)."
-    ));
+    assert!(rendered.contains("Configure semantic summaries"));
+    assert!(rendered.contains("Summaries help agents understand your code structure"));
+    assert!(rendered.contains("(e.g. file purposes, module responsibilities)."));
+    assert!(rendered.contains("Bitloops Cloud (recommended)"));
+    assert!(rendered.contains("Fast setup. No local compute required."));
+    assert!(rendered.contains("Local (Ollama)"));
+    assert!(rendered.contains("Runs locally (32GB+ RAM, GPU strongly recommended)."));
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use super::args::DaemonLogLevel;
 use super::*;
 use crate::cli::{Cli, Commands};
 use crate::daemon::{
@@ -5,7 +6,8 @@ use crate::daemon::{
     CapabilityEventRunStatus, DaemonServiceMetadata, DaemonStatusReport, DevqlTaskKind,
     DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState, DevqlTaskQueueStatus,
     DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus, EnrichmentQueueMode,
-    EnrichmentQueueState, EnrichmentQueueStatus, FailedEmbeddingJobSummary, RepoTaskControlState,
+    EnrichmentQueueState, EnrichmentQueueStatus, EnrichmentWorkerPoolKind,
+    EnrichmentWorkerPoolStatus, FailedEmbeddingJobSummary, RepoTaskControlState,
     ServiceManagerKind, SyncTaskMode, SyncTaskSpec,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
@@ -58,6 +60,7 @@ fn sample_capability_event_run(status: CapabilityEventRunStatus) -> CapabilityEv
         event_kind: "current_state_consumer".to_string(),
         lane_key: "repo-1:test_harness.current_state".to_string(),
         event_payload_json: String::new(),
+        init_session_id: None,
         status,
         attempts: 1,
         submitted_at_unix: 1,
@@ -260,6 +263,42 @@ fn daemon_logs_cli_parses_tail_follow_and_path_flags() {
     assert_eq!(args.tail, Some(25));
     assert!(args.follow);
     assert!(!args.path);
+    assert!(args.levels.is_empty());
+}
+
+#[test]
+fn daemon_logs_cli_parses_repeatable_level_filters() {
+    let parsed = Cli::try_parse_from([
+        "bitloops", "daemon", "logs", "--level", "warn", "--level", "error",
+    ])
+    .expect("daemon logs should parse repeatable levels");
+
+    let Some(Commands::Daemon(daemon)) = parsed.command else {
+        panic!("expected daemon command");
+    };
+    let Some(DaemonCommand::Logs(args)) = daemon.command else {
+        panic!("expected daemon logs command");
+    };
+
+    assert_eq!(
+        args.levels,
+        vec![DaemonLogLevel::Warn, DaemonLogLevel::Error]
+    );
+}
+
+#[test]
+fn daemon_logs_cli_normalizes_warning_alias_to_warn() {
+    let parsed = Cli::try_parse_from(["bitloops", "daemon", "logs", "--level", "warning"])
+        .expect("daemon logs should normalize warning alias");
+
+    let Some(Commands::Daemon(daemon)) = parsed.command else {
+        panic!("expected daemon command");
+    };
+    let Some(DaemonCommand::Logs(args)) = daemon.command else {
+        panic!("expected daemon logs command");
+    };
+
+    assert_eq!(args.levels, vec![DaemonLogLevel::Warn]);
 }
 
 #[test]
@@ -272,6 +311,14 @@ fn daemon_logs_cli_rejects_conflicting_path_flags() {
     let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--tail", "5"])
         .err()
         .expect("daemon logs should reject --path with --tail");
+    assert!(err.to_string().contains("--path"));
+}
+
+#[test]
+fn daemon_logs_cli_rejects_level_with_path_flag() {
+    let err = Cli::try_parse_from(["bitloops", "daemon", "logs", "--path", "--level", "error"])
+        .err()
+        .expect("daemon logs should reject --path with --level");
     assert!(err.to_string().contains("--path"));
 }
 
@@ -476,18 +523,60 @@ fn status_lines_show_global_supervisor_install_and_state() {
             state: EnrichmentQueueState {
                 version: 1,
                 mode: EnrichmentQueueMode::Paused,
+                worker_pools: vec![
+                    EnrichmentWorkerPoolStatus {
+                        kind: EnrichmentWorkerPoolKind::SummaryRefresh,
+                        worker_budget: 1,
+                        active_workers: 1,
+                        pending_jobs: 1,
+                        running_jobs: 1,
+                        failed_jobs: 1,
+                        completed_recent_jobs: 2,
+                    },
+                    EnrichmentWorkerPoolStatus {
+                        kind: EnrichmentWorkerPoolKind::Embeddings,
+                        worker_budget: 1,
+                        active_workers: 0,
+                        pending_jobs: 1,
+                        running_jobs: 0,
+                        failed_jobs: 1,
+                        completed_recent_jobs: 3,
+                    },
+                    EnrichmentWorkerPoolStatus {
+                        kind: EnrichmentWorkerPoolKind::CloneRebuild,
+                        worker_budget: 1,
+                        active_workers: 0,
+                        pending_jobs: 0,
+                        running_jobs: 0,
+                        failed_jobs: 1,
+                        completed_recent_jobs: 1,
+                    },
+                ],
                 pending_jobs: 2,
+                pending_work_items: 17,
                 pending_semantic_jobs: 1,
+                pending_semantic_work_items: 12,
                 pending_embedding_jobs: 1,
+                pending_embedding_work_items: 5,
                 pending_clone_edges_rebuild_jobs: 0,
+                pending_clone_edges_rebuild_work_items: 0,
+                completed_recent_jobs: 6,
                 running_jobs: 1,
+                running_work_items: 32,
                 running_semantic_jobs: 1,
+                running_semantic_work_items: 32,
                 running_embedding_jobs: 0,
+                running_embedding_work_items: 0,
                 running_clone_edges_rebuild_jobs: 0,
+                running_clone_edges_rebuild_work_items: 0,
                 failed_jobs: 3,
+                failed_work_items: 9,
                 failed_semantic_jobs: 1,
+                failed_semantic_work_items: 4,
                 failed_embedding_jobs: 1,
+                failed_embedding_work_items: 3,
                 failed_clone_edges_rebuild_jobs: 1,
+                failed_clone_edges_rebuild_work_items: 2,
                 retried_failed_jobs: 4,
                 last_action: Some("paused".to_string()),
                 last_updated_unix: 0,
@@ -525,23 +614,40 @@ fn status_lines_show_global_supervisor_install_and_state() {
             "Last URL: https://127.0.0.1:5173".to_string(),
             "Enrichment mode: paused".to_string(),
             "Enrichment pending jobs: 2".to_string(),
+            "Enrichment pending work items: 17".to_string(),
             "Enrichment pending semantic jobs: 1".to_string(),
+            "Enrichment pending semantic work items: 12".to_string(),
             "Enrichment pending embedding jobs: 1".to_string(),
+            "Enrichment pending embedding work items: 5".to_string(),
             "Enrichment pending clone-edge rebuild jobs: 0".to_string(),
+            "Enrichment pending clone-edge rebuild work items: 0".to_string(),
+            "Enrichment completed recent jobs: 6".to_string(),
             "Enrichment running jobs: 1".to_string(),
+            "Enrichment running work items: 32".to_string(),
             "Enrichment running semantic jobs: 1".to_string(),
+            "Enrichment running semantic work items: 32".to_string(),
             "Enrichment running embedding jobs: 0".to_string(),
+            "Enrichment running embedding work items: 0".to_string(),
             "Enrichment running clone-edge rebuild jobs: 0".to_string(),
+            "Enrichment running clone-edge rebuild work items: 0".to_string(),
             "Enrichment failed jobs: 3".to_string(),
+            "Enrichment failed work items: 9".to_string(),
             "Enrichment failed semantic jobs: 1".to_string(),
+            "Enrichment failed semantic work items: 4".to_string(),
             "Enrichment failed embedding jobs: 1".to_string(),
+            "Enrichment failed embedding work items: 3".to_string(),
             "Enrichment failed clone-edge rebuild jobs: 1".to_string(),
+            "Enrichment failed clone-edge rebuild work items: 2".to_string(),
             "Enrichment retried failed jobs: 4".to_string(),
+            "Enrichment pool Code summaries: budget=1 active=1 queued=1 running=1 failed=1 completed_recent=2".to_string(),
+            "Enrichment pool Semantic search indexing: budget=1 active=0 queued=1 running=0 failed=1 completed_recent=3".to_string(),
+            "Enrichment pool Clone matching: budget=1 active=0 queued=0 running=0 failed=1 completed_recent=1".to_string(),
             "Enrichment last action: paused".to_string(),
             "Enrichment pause reason: maintenance".to_string(),
             "Last failed embedding job: embedding-job-1 (repo=repo-1, branch=main, kind=code, artefacts=1, attempts=3)".to_string(),
             "Last failed embedding error: [capability_host:timeout] capability ingester timed out after 300s".to_string(),
             "Enrichment persisted: yes".to_string(),
+            "Retry failed enrichment work: bitloops daemon enrichments retry-failed".to_string(),
         ]
     );
 }
@@ -680,6 +786,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
                     mode: SyncTaskMode::Full,
                     post_commit_snapshot: None,
                 }),
+                init_session_id: None,
                 status: DevqlTaskStatus::Running,
                 submitted_at_unix: 1,
                 started_at_unix: Some(2),
@@ -850,6 +957,7 @@ fn run_logs_honours_explicit_line_count() {
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: Some(3),
+                levels: vec![],
                 follow: false,
                 path: false,
             },
@@ -865,6 +973,74 @@ fn run_logs_honours_explicit_line_count() {
 }
 
 #[test]
+fn run_logs_filters_tail_output_by_exact_levels() {
+    let (_log_dir, log_path) = temp_log_path();
+    write_log_lines(
+        &log_path,
+        &[
+            "{\"line\":1,\"level\":\"ERROR\",\"message\":\"before-tail\"}".to_string(),
+            "{\"line\":2,\"level\":\"INFO\",\"message\":\"before-tail\"}".to_string(),
+            "{\"line\":3,\"level\":\"DEBUG\",\"message\":\"tail-debug\"}".to_string(),
+            "{\"line\":4,\"level\":\"WARNING\",\"message\":\"tail-warning\"}".to_string(),
+            "{\"line\":5,\"level\":\"ERROR\",\"message\":\"tail-error\"}".to_string(),
+        ],
+    );
+    let mut out = Vec::new();
+
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs {
+                tail: Some(3),
+                levels: vec![DaemonLogLevel::Warn, DaemonLogLevel::Error],
+                follow: false,
+                path: false,
+            },
+            &mut out,
+            log_path,
+        ))
+        .expect("run filtered daemon logs");
+
+    assert_eq!(
+        String::from_utf8(out).expect("utf8 output"),
+        "{\"line\":4,\"level\":\"WARNING\",\"message\":\"tail-warning\"}\n{\"line\":5,\"level\":\"ERROR\",\"message\":\"tail-error\"}\n"
+    );
+}
+
+#[test]
+fn run_logs_skips_malformed_lines_during_filtered_view() {
+    let (_log_dir, log_path) = temp_log_path();
+    write_log_lines(
+        &log_path,
+        &[
+            "{\"line\":1,\"level\":\"INFO\",\"message\":\"before-tail\"}".to_string(),
+            "not-json".to_string(),
+            "{\"line\":3,\"level\":\"ERROR\",\"message\":\"wanted\"}".to_string(),
+            "{\"line\":4,\"level\":".to_string(),
+            "{\"line\":5,\"level\":\"WARN\",\"message\":\"other\"}".to_string(),
+        ],
+    );
+    let mut out = Vec::new();
+
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs {
+                tail: Some(4),
+                levels: vec![DaemonLogLevel::Error],
+                follow: false,
+                path: false,
+            },
+            &mut out,
+            log_path,
+        ))
+        .expect("run filtered daemon logs with malformed input");
+
+    assert_eq!(
+        String::from_utf8(out).expect("utf8 output"),
+        "{\"line\":3,\"level\":\"ERROR\",\"message\":\"wanted\"}\n"
+    );
+}
+
+#[test]
 fn run_logs_prints_log_path() {
     let (_log_dir, log_path) = temp_log_path();
     let mut out = Vec::new();
@@ -873,6 +1049,7 @@ fn run_logs_prints_log_path() {
         .block_on(run_logs_with_io_at_path(
             DaemonLogsArgs {
                 tail: None,
+                levels: vec![],
                 follow: false,
                 path: true,
             },
@@ -992,6 +1169,7 @@ async fn run_logs_follow_stops_when_async_shutdown_resolves() {
         run_logs_with_io_and_shutdown_at_path(
             DaemonLogsArgs {
                 tail: Some(1),
+                levels: vec![],
                 follow: true,
                 path: false,
             },
@@ -1008,4 +1186,74 @@ async fn run_logs_follow_stops_when_async_shutdown_resolves() {
     .expect("follow should stop cleanly");
 
     assert_eq!(out.contents(), "{\"line\":1}\n");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn run_logs_follow_filters_appended_lines_by_level() {
+    let (_log_dir, log_path) = temp_log_path();
+    write_log_lines(
+        &log_path,
+        &[
+            "{\"line\":1,\"level\":\"INFO\",\"message\":\"initial-info\"}".to_string(),
+            "{\"line\":2,\"level\":\"WARN\",\"message\":\"initial-warn\"}".to_string(),
+        ],
+    );
+    let mut out = SharedBuffer::default();
+    let append_path = log_path.clone();
+    let append_handle = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(30));
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&append_path)
+            .expect("open daemon log for filtered append");
+        writeln!(
+            file,
+            "{{\"line\":3,\"level\":\"INFO\",\"message\":\"skip\"}}"
+        )
+        .expect("append info line");
+        writeln!(
+            file,
+            "{{\"line\":4,\"level\":\"WARNING\",\"message\":\"keep-warning\"}}"
+        )
+        .expect("append warning line");
+        writeln!(
+            file,
+            "{{\"line\":5,\"level\":\"ERROR\",\"message\":\"skip-error\"}}"
+        )
+        .expect("append error line");
+        writeln!(
+            file,
+            "{{\"line\":6,\"level\":\"WARN\",\"message\":\"keep-warn\"}}"
+        )
+        .expect("append warn line");
+        file.flush().expect("flush appended daemon log");
+    });
+
+    tokio::time::timeout(
+        Duration::from_millis(250),
+        run_logs_with_io_and_shutdown_at_path(
+            DaemonLogsArgs {
+                tail: Some(2),
+                levels: vec![DaemonLogLevel::Warn],
+                follow: true,
+                path: false,
+            },
+            &mut out,
+            async {
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            },
+            Duration::from_millis(10),
+            log_path,
+        ),
+    )
+    .await
+    .expect("filtered follow should not block the runtime")
+    .expect("filtered follow should stop cleanly");
+
+    append_handle.join().expect("join filtered append thread");
+
+    assert_eq!(
+        out.contents(),
+        "{\"line\":2,\"level\":\"WARN\",\"message\":\"initial-warn\"}\n{\"line\":4,\"level\":\"WARNING\",\"message\":\"keep-warning\"}\n{\"line\":6,\"level\":\"WARN\",\"message\":\"keep-warn\"}\n"
+    );
 }

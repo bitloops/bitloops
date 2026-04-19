@@ -6,6 +6,16 @@ pub struct InteractionSession {
     pub session_id: String,
     pub repo_id: String,
     #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub actor_name: String,
+    #[serde(default)]
+    pub actor_email: String,
+    #[serde(default)]
+    pub actor_source: String,
+    #[serde(default)]
     pub agent_type: String,
     #[serde(default)]
     pub model: String,
@@ -31,6 +41,16 @@ pub struct InteractionTurn {
     pub turn_id: String,
     pub session_id: String,
     pub repo_id: String,
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub actor_name: String,
+    #[serde(default)]
+    pub actor_email: String,
+    #[serde(default)]
+    pub actor_source: String,
     #[serde(default)]
     pub turn_number: u32,
     #[serde(default)]
@@ -60,12 +80,22 @@ pub struct InteractionTurn {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct InteractionEvent {
     pub event_id: String,
     pub session_id: String,
     pub turn_id: Option<String>,
     pub repo_id: String,
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub actor_id: String,
+    #[serde(default)]
+    pub actor_name: String,
+    #[serde(default)]
+    pub actor_email: String,
+    #[serde(default)]
+    pub actor_source: String,
     pub event_type: InteractionEventType,
     pub event_time: String,
     #[serde(default)]
@@ -73,7 +103,37 @@ pub struct InteractionEvent {
     #[serde(default)]
     pub model: String,
     #[serde(default)]
+    pub tool_use_id: String,
+    #[serde(default)]
+    pub tool_kind: String,
+    #[serde(default)]
+    pub task_description: String,
+    #[serde(default)]
+    pub subagent_id: String,
+    #[serde(default)]
     pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct InteractionToolUse {
+    pub tool_use_id: String,
+    pub repo_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub turn_id: String,
+    #[serde(default)]
+    pub tool_kind: String,
+    #[serde(default)]
+    pub task_description: String,
+    #[serde(default)]
+    pub subagent_id: String,
+    #[serde(default)]
+    pub transcript_path: String,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -199,6 +259,8 @@ mod tests {
         let session = InteractionSession {
             session_id: "sess-1".into(),
             repo_id: "repo-1".into(),
+            branch: "main".into(),
+            actor_email: "alice@example.com".into(),
             agent_type: "claude-code".into(),
             model: "claude-opus-4-6".into(),
             first_prompt: "hello".into(),
@@ -210,7 +272,9 @@ mod tests {
         let json = serde_json::to_string(&session).unwrap();
         let parsed: InteractionSession = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.session_id, "sess-1");
+        assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.agent_type, "claude-code");
+        assert_eq!(parsed.actor_email, "alice@example.com");
         assert!(parsed.ended_at.is_none());
     }
 
@@ -220,6 +284,8 @@ mod tests {
             turn_id: "turn-1".into(),
             session_id: "sess-1".into(),
             repo_id: "repo-1".into(),
+            branch: "main".into(),
+            actor_email: "alice@example.com".into(),
             turn_number: 1,
             prompt: "fix the bug".into(),
             agent_type: "claude-code".into(),
@@ -241,8 +307,10 @@ mod tests {
         let json = serde_json::to_string(&turn).unwrap();
         let parsed: InteractionTurn = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.turn_id, "turn-1");
+        assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.turn_number, 1);
         assert_eq!(parsed.token_usage.unwrap().input_tokens, 100);
+        assert_eq!(parsed.actor_email, "alice@example.com");
         assert_eq!(parsed.summary, "fixed bug");
         assert_eq!(parsed.prompt_count, 2);
         assert_eq!(parsed.transcript_offset_start, Some(4));

@@ -39,7 +39,7 @@ Use `--sync=true` when you want the initial current-state sync immediately:
 bitloops init --install-default-daemon --sync=true
 ```
 
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile, installs the managed standalone `bitloops-local-embeddings` runtime when the default local runtime is selected, and warms that profile. If init also runs sync or ingest, the managed runtime download happens afterwards.
+When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Bitloops cloud is the recommended default. If you choose the local runtime, Bitloops installs the managed standalone `bitloops-local-embeddings` binary when needed and warms that profile. If init also runs sync or ingest, that managed runtime download happens afterwards.
 
 In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
 

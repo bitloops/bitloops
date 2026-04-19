@@ -33,7 +33,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
       - name: Check Rust file size limits
         run: cargo dev-file-size
 
@@ -43,7 +43,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt
       - name: cargo fmt
@@ -57,7 +57,7 @@ jobs:
       DUCKDB_DOWNLOAD_LIB: '0'
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -74,7 +74,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
@@ -90,7 +90,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
@@ -100,13 +100,29 @@ jobs:
       - name: Run merge smoke lane
         run: cargo dev-test-smoke
 
+  develop-gate-qat:
+    name: Develop Gate QAT
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: dev-ci
+          cache-workspace-crates: true
+      - name: Run develop gate QAT
+        run: cargo qat-develop-gate
+
   test-full:
     name: Full test suite
     if: ${{ github.event_name == 'push' }}
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.95.0
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:

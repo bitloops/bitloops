@@ -46,7 +46,7 @@ impl DevqlTaskCoordinator {
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
-            log::warn!("DevQL task worker activation requested without an active tokio runtime");
+            log::error!("DevQL task worker activation requested without an active tokio runtime");
             return;
         };
         let coordinator = Arc::clone(self);
@@ -176,6 +176,7 @@ impl DevqlTaskCoordinator {
             DevqlTaskKind::Sync => self.run_sync_task(task).await,
             DevqlTaskKind::Ingest => self.run_ingest_task(task).await,
             DevqlTaskKind::EmbeddingsBootstrap => self.run_embeddings_bootstrap_task(task).await,
+            DevqlTaskKind::SummaryBootstrap => self.run_summary_bootstrap_task(task).await,
         }
     }
 }

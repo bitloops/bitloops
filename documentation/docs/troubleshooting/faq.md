@@ -54,7 +54,7 @@ Machine-scoped settings such as:
 - dashboard defaults
 - daemon runtime defaults
 
-`bitloops enable --install-embeddings` and `bitloops init --install-default-daemon` can create the default local embeddings profile for you when it is missing.
+`bitloops enable --install-embeddings` can create the default local embeddings profile for you when it is missing. `bitloops init --install-default-daemon` can instead configure Bitloops cloud, the local runtime, or skip embeddings when the repo does not already have an active embeddings profile.
 
 ### How do I turn on local embeddings now?
 

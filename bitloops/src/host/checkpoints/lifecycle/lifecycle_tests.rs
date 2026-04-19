@@ -108,6 +108,21 @@ fn latest_turn_end_payload(repo_root: &Path) -> serde_json::Value {
     serde_json::from_str(&payload).expect("parse turn_end payload")
 }
 
+fn codex_response_item_line(role: &str, kind: &str, text: &str) -> String {
+    serde_json::json!({
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": role,
+            "content": [{
+                "type": kind,
+                "text": text,
+            }],
+        }
+    })
+    .to_string()
+}
+
 #[test]
 fn test_apply_session_id_policy_strict_rejects_empty() {
     let err = apply_session_id_policy("  ", SessionIdPolicy::Strict).expect_err("expected error");
@@ -380,6 +395,9 @@ fn test_handle_lifecycle_turn_end_empty_transcript_ref() {
 
     let err = handle_lifecycle_turn_end(&adapter, &event).unwrap_err();
     assert!(err.to_string().contains("transcript file not specified"));
+    assert!(err.to_string().contains("hook payload transcript_path"));
+    assert!(err.to_string().contains("pre-prompt state"));
+    assert!(err.to_string().contains("session state"));
 }
 
 #[test]
@@ -461,6 +479,135 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
         assert_eq!(latest_session_model(dir.path()), "gemini-2.5-pro");
         assert_eq!(latest_turn_model(dir.path()), "gemini-2.5-pro");
     });
+}
+
+#[test]
+fn route_codex_second_turn_uses_transcript_offsets_for_fragment() -> anyhow::Result<()> {
+    let repo = tempfile::tempdir().expect("tempdir");
+    setup_git_repo(&repo);
+    let session_id = "codex-offset-session";
+    let transcript_path = repo.path().join("codex-rollout.jsonl");
+    std::fs::write(&transcript_path, "").expect("write transcript");
+
+    with_process_state(Some(repo.path()), &[], || -> anyhow::Result<()> {
+        let session_payload = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": transcript_path.to_string_lossy().to_string(),
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_SESSION_START,
+            &session_payload,
+        )?;
+
+        let turn_one_payload = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": transcript_path.to_string_lossy().to_string(),
+            "prompt": "Prompt 1",
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            &turn_one_payload,
+        )?;
+        std::fs::write(
+            &transcript_path,
+            format!(
+                "{}\n{}\n{}\n",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": { "id": session_id }
+                }),
+                codex_response_item_line("user", "input_text", "Prompt 1"),
+                codex_response_item_line("assistant", "output_text", "Answer 1"),
+            ),
+        )
+        .expect("write first turn transcript");
+        std::fs::write(repo.path().join("tracked.txt"), "two\n").expect("modify tracked file");
+        let turn_one_stop = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": transcript_path.to_string_lossy().to_string(),
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_STOP,
+            &turn_one_stop,
+        )?;
+
+        let turn_two_payload = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": transcript_path.to_string_lossy().to_string(),
+            "prompt": "Prompt 2",
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            &turn_two_payload,
+        )?;
+        std::fs::write(
+            &transcript_path,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n",
+                serde_json::json!({
+                    "type": "session_meta",
+                    "payload": { "id": session_id }
+                }),
+                codex_response_item_line("user", "input_text", "Prompt 1"),
+                codex_response_item_line("assistant", "output_text", "Answer 1"),
+                codex_response_item_line("user", "input_text", "Prompt 2"),
+                codex_response_item_line("assistant", "output_text", "Answer 2"),
+            ),
+        )
+        .expect("write second turn transcript");
+        std::fs::write(repo.path().join("tracked.txt"), "three\n").expect("modify tracked file");
+        let turn_two_stop = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": transcript_path.to_string_lossy().to_string(),
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_STOP,
+            &turn_two_stop,
+        )?;
+        Ok(())
+    })?;
+
+    with_process_state(Some(repo.path()), &[], || -> anyhow::Result<()> {
+        let conn = open_events_duckdb(repo.path());
+        let mut stmt = conn
+            .prepare(
+                "SELECT transcript_fragment FROM interaction_turns WHERE session_id = ?1 ORDER BY turn_number ASC",
+            )
+            .expect("prepare fragment query");
+        let fragments = stmt
+            .query_map([session_id], |row| row.get::<_, String>(0))
+            .expect("query fragments")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect fragments");
+        assert_eq!(fragments.len(), 2);
+        assert!(fragments[0].contains("Prompt 1"));
+        assert!(fragments[0].contains("Answer 1"));
+        assert!(!fragments[0].contains("Prompt 2"));
+        assert!(fragments[1].contains("Prompt 2"));
+        assert!(fragments[1].contains("Answer 2"));
+        assert!(
+            !fragments[1].contains("Prompt 1"),
+            "second turn fragment should exclude the first turn transcript"
+        );
+        Ok(())
+    })?;
+
+    Ok(())
 }
 
 // CLI-869

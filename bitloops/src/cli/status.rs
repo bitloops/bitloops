@@ -1,6 +1,10 @@
 use crate::adapters::agents::agent_display_name;
 use crate::cli::enable::find_repo_root;
 use crate::config::settings;
+use crate::runtime_presentation::{
+    INIT_CODEBASE_LANE_LABEL, INIT_EMBEDDINGS_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL,
+    queue_state_summary, session_status_label, task_kind_label, waiting_reason_label,
+};
 use crate::utils::strings;
 use anyhow::Result;
 use clap::Args;
@@ -194,35 +198,171 @@ pub async fn run(args: StatusArgs) -> Result<()> {
     let start = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if find_repo_root(&start).is_ok()
         && let Ok(scope) = crate::devql_transport::discover_slim_cli_repo_scope(Some(&start))
-        && let Ok(status) = crate::cli::devql::graphql::task_queue_status_via_graphql(&scope).await
+        && let Ok(snapshot) =
+            crate::cli::devql::graphql::runtime_snapshot_via_graphql(&scope, &scope.repo.repo_id)
+                .await
     {
         writeln!(out)?;
-        writeln!(out, "DevQL Task Queue:")?;
+        if let Some(session) = snapshot.current_init_session.as_ref() {
+            writeln!(out, "Current Init Session:")?;
+            writeln!(out, "  id: {}", session.init_session_id)?;
+            writeln!(out, "  status: {}", session_status_label(&session.status))?;
+            if let Some(reason) = session.waiting_reason.as_ref() {
+                writeln!(out, "  waiting: {}", waiting_reason_label(reason))?;
+            }
+            if let Some(summary) = session.warning_summary.as_ref() {
+                writeln!(out, "  warning: {summary}")?;
+            }
+            writeln!(
+                out,
+                "  codebase: {}",
+                format_runtime_lane_summary(INIT_CODEBASE_LANE_LABEL, &session.top_pipeline_lane)
+            )?;
+            writeln!(
+                out,
+                "  embeddings: {}",
+                format_runtime_lane_summary(INIT_EMBEDDINGS_LANE_LABEL, &session.embeddings_lane,)
+            )?;
+            writeln!(
+                out,
+                "  summaries: {}",
+                format_runtime_lane_summary(INIT_SUMMARIES_LANE_LABEL, &session.summaries_lane,)
+            )?;
+            if let Some(error) = session.terminal_error.as_ref() {
+                writeln!(out, "  error: {error}")?;
+            }
+            writeln!(out)?;
+        }
+
+        writeln!(out, "Runtime Task Queue:")?;
         writeln!(
             out,
             "  state: {}",
-            if status.paused { "paused" } else { "running" }
+            if snapshot.task_queue.paused {
+                "paused"
+            } else {
+                "running"
+            }
         )?;
-        writeln!(out, "  queued: {}", status.queued_tasks)?;
-        writeln!(out, "  running: {}", status.running_tasks)?;
-        writeln!(out, "  failed: {}", status.failed_tasks)?;
-        for counts in status.by_kind {
+        writeln!(out, "  queued: {}", snapshot.task_queue.queued_tasks)?;
+        writeln!(out, "  running: {}", snapshot.task_queue.running_tasks)?;
+        writeln!(out, "  failed: {}", snapshot.task_queue.failed_tasks)?;
+        for counts in &snapshot.task_queue.by_kind {
             writeln!(
                 out,
                 "  {}: queued={} running={} failed={} completed_recent={}",
-                counts.kind.to_ascii_lowercase(),
+                task_kind_label(&counts.kind),
                 counts.queued_tasks,
                 counts.running_tasks,
                 counts.failed_tasks,
                 counts.completed_recent_tasks
             )?;
         }
-        if let Some(reason) = status.paused_reason {
+        if let Some(reason) = snapshot.task_queue.paused_reason.as_ref() {
             writeln!(out, "  pause reason: {reason}")?;
+        }
+
+        writeln!(out)?;
+        writeln!(out, "Current-State Consumer:")?;
+        writeln!(
+            out,
+            "  queued={} running={} failed={} completed_recent={}",
+            snapshot.current_state_consumer.pending_runs,
+            snapshot.current_state_consumer.running_runs,
+            snapshot.current_state_consumer.failed_runs,
+            snapshot.current_state_consumer.completed_recent_runs
+        )?;
+        if let Some(run) = snapshot.current_state_consumer.current_repo_run.as_ref() {
+            writeln!(
+                out,
+                "  active run: {} status={} capability={} lane={}",
+                run.run_id, run.status, run.capability_id, run.reconcile_mode
+            )?;
+        }
+
+        writeln!(out)?;
+        writeln!(out, "Workplane:")?;
+        writeln!(
+            out,
+            "  queued={} running={} failed={} completed_recent={}",
+            snapshot.workplane.pending_jobs,
+            snapshot.workplane.running_jobs,
+            snapshot.workplane.failed_jobs,
+            snapshot.workplane.completed_recent_jobs
+        )?;
+        for pool in &snapshot.workplane.pools {
+            writeln!(
+                out,
+                "  pool {}: budget={} active={} queued={} running={} failed={} completed_recent={}",
+                pool.display_name,
+                pool.worker_budget,
+                pool.active_workers,
+                pool.pending_jobs,
+                pool.running_jobs,
+                pool.failed_jobs,
+                pool.completed_recent_jobs
+            )?;
+        }
+        for mailbox in &snapshot.workplane.mailboxes {
+            writeln!(
+                out,
+                "  {}: queued={} running={} failed={} cursor_running={}{}",
+                mailbox.display_name,
+                mailbox.pending_jobs,
+                mailbox.running_jobs,
+                mailbox.failed_jobs,
+                mailbox.running_cursor_runs,
+                mailbox
+                    .blocked_reason
+                    .as_ref()
+                    .map(|reason| format!(" blocked={reason}"))
+                    .unwrap_or_default()
+            )?;
+        }
+
+        if !snapshot.blocked_mailboxes.is_empty() {
+            writeln!(out)?;
+            writeln!(out, "Blocked Worker Pools:")?;
+            for blocked in &snapshot.blocked_mailboxes {
+                writeln!(out, "  {}: {}", blocked.display_name, blocked.reason)?;
+            }
         }
     }
 
     Ok(())
+}
+
+fn format_runtime_lane_summary(
+    lane_label: &str,
+    lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
+) -> String {
+    let mut summary = lane
+        .activity_label
+        .clone()
+        .unwrap_or_else(|| lane_label.to_string());
+    if let Some(reason) = lane.waiting_reason.as_ref() {
+        summary.push_str(&format!(" ({})", waiting_reason_label(reason)));
+    }
+    if let Some(progress) = lane.progress.as_ref()
+        && progress.total > 0
+    {
+        summary.push_str(&format!(
+            " · {} of {} ready · {} left",
+            progress.completed, progress.total, progress.remaining
+        ));
+    }
+    summary.push_str(&format!(
+        " · {}",
+        queue_state_summary(
+            lane.queue.queued.max(0) as u64,
+            lane.queue.running.max(0) as u64,
+            lane.queue.failed.max(0) as u64,
+        )
+    ));
+    if let Some(warning) = lane.warnings.first() {
+        summary.push_str(&format!(" · Warning: {}", warning.message));
+    }
+    summary
 }
 
 #[cfg(test)]

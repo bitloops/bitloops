@@ -12,14 +12,20 @@ pub struct LoginArgs {
 pub enum LoginCommand {
     /// Show the current login session status.
     Status(LoginStatusArgs),
+    /// Print the current platform bearer token, refreshing it if needed.
+    Token(LoginTokenArgs),
 }
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct LoginStatusArgs {}
 
+#[derive(Args, Debug, Clone, Default)]
+pub struct LoginTokenArgs {}
+
 pub async fn run(args: LoginArgs) -> Result<()> {
     match args.command {
         Some(LoginCommand::Status(_args)) => run_status().await,
+        Some(LoginCommand::Token(_args)) => run_token(),
         None => {
             ensure_logged_in().await?;
             Ok(())
@@ -34,7 +40,10 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
             Ok(session)
         }
         crate::daemon::WorkosLoginStart::Pending(start) => {
-            println!("Open this URL to sign in to Bitloops:");
+            println!();
+            println!("Sign in to Bitloops");
+            println!();
+            println!("Open the following URL in your browser:");
             println!(
                 "{}",
                 start
@@ -43,7 +52,7 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
                     .unwrap_or(&start.verification_url)
             );
             println!();
-            println!("If prompted, enter this code: {}", start.user_code);
+            println!("Verification Code: {}", start.user_code);
 
             if let Some(url) = start
                 .verification_url_complete
@@ -54,9 +63,11 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
                 eprintln!("[bitloops] Warning: failed to open browser automatically: {err:#}");
             }
 
-            println!("Waiting for Bitloops sign-in to complete...");
+            println!();
+            println!("Waiting for authentication…");
             let session = crate::daemon::complete_workos_device_login(&start).await?;
-            println!("Signed in as {}.", session.display_label());
+            println!("🔒 Signed in as {}", session.display_label());
+            println!();
             Ok(session)
         }
     }
@@ -71,6 +82,14 @@ async fn run_status() -> Result<()> {
     for line in render_status_lines(&session)? {
         println!("{line}");
     }
+    Ok(())
+}
+
+fn run_token() -> Result<()> {
+    let Some(token) = crate::daemon::platform_gateway_bearer_token()? else {
+        bail!("not signed in or no platform bearer token is available; run `bitloops login` first");
+    };
+    println!("{token}");
     Ok(())
 }
 
@@ -113,6 +132,20 @@ mod tests {
         assert!(matches!(
             args.command,
             Some(super::LoginCommand::Status(super::LoginStatusArgs {}))
+        ));
+    }
+
+    #[test]
+    fn login_token_subcommand_parses() {
+        let parsed =
+            Cli::try_parse_from(["bitloops", "login", "token"]).expect("login token parses");
+
+        let Some(Commands::Login(args)) = parsed.command else {
+            panic!("expected login command");
+        };
+        assert!(matches!(
+            args.command,
+            Some(super::LoginCommand::Token(super::LoginTokenArgs {}))
         ));
     }
 

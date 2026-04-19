@@ -129,6 +129,73 @@ fn test_spool() -> (tempfile::TempDir, SqliteInteractionSpool) {
     )
 }
 
+#[test]
+fn initialising_spool_migrates_legacy_event_schema_before_creating_indexes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sqlite =
+        SqliteConnectionPool::connect(dir.path().join("interaction-spool.sqlite")).expect("sqlite");
+    sqlite
+        .execute_batch(
+            r#"
+CREATE TABLE interaction_sessions (
+    session_id TEXT PRIMARY KEY
+);
+CREATE TABLE interaction_turns (
+    turn_id TEXT PRIMARY KEY
+);
+CREATE TABLE interaction_events (
+    event_id TEXT PRIMARY KEY
+);
+"#,
+        )
+        .expect("create legacy interaction tables");
+
+    let spool =
+        SqliteInteractionSpool::new(sqlite.clone(), "repo-test".into()).expect("initialise spool");
+
+    spool
+        .with_connection(|conn| {
+            let mut stmt = conn
+                .prepare("PRAGMA table_info(interaction_events)")
+                .expect("prepare pragma");
+            let mut rows = stmt.query([]).expect("query pragma");
+            let mut saw_tool_use_id = false;
+            while let Some(row) = rows.next().expect("next pragma row") {
+                let column_name: String = row.get(1).expect("column name");
+                if column_name == "tool_use_id" {
+                    saw_tool_use_id = true;
+                    break;
+                }
+            }
+            assert!(saw_tool_use_id, "expected interaction_events.tool_use_id");
+
+            let tool_use_index_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM sqlite_master
+                     WHERE type = 'index' AND name = 'interaction_events_tool_use_idx'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("tool-use index count");
+            assert_eq!(tool_use_index_count, 1);
+
+            let tool_use_table_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM sqlite_master
+                     WHERE type = 'table' AND name = 'interaction_tool_uses'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("tool-use table count");
+            assert_eq!(tool_use_table_count, 1);
+
+            Ok(())
+        })
+        .expect("inspect migrated spool schema");
+}
+
 fn sample_session() -> InteractionSession {
     InteractionSession {
         session_id: "session-1".into(),
@@ -184,6 +251,7 @@ fn sample_event() -> InteractionEvent {
         agent_type: "codex".into(),
         model: "gpt-5.4".into(),
         payload: serde_json::json!({"files_modified": ["src/main.rs"]}),
+        ..Default::default()
     }
 }
 
@@ -259,4 +327,126 @@ fn list_uncheckpointed_turns_excludes_assigned_turns() {
         .assign_checkpoint_to_turns(&["turn-1".to_string()], "cp-1", "2026-04-05T10:10:00Z")
         .expect("assign checkpoint");
     assert!(spool.list_uncheckpointed_turns().unwrap().is_empty());
+}
+
+#[test]
+fn recording_tool_events_refreshes_tool_use_and_search_projections() {
+    let (_dir, spool) = test_spool();
+    let mut session = sample_session();
+    session.branch = "main".into();
+    session.actor_email = "alice@example.com".into();
+    let mut turn = sample_turn();
+    turn.branch = "main".into();
+    turn.actor_email = "alice@example.com".into();
+
+    spool.record_session(&session).expect("record session");
+    spool.record_turn(&turn).expect("record turn");
+    spool
+        .record_event(&InteractionEvent {
+            event_id: "event-tool-start".into(),
+            session_id: session.session_id.clone(),
+            turn_id: Some(turn.turn_id.clone()),
+            repo_id: spool.repo_id().to_string(),
+            branch: "main".into(),
+            actor_email: "alice@example.com".into(),
+            event_type: InteractionEventType::SubagentStart,
+            event_time: "2026-04-05T10:00:01Z".into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            tool_use_id: "tool-1".into(),
+            tool_kind: "edit".into(),
+            task_description: "Update src/main.rs".into(),
+            subagent_id: "subagent-1".into(),
+            payload: serde_json::json!({"phase": "start"}),
+            ..Default::default()
+        })
+        .expect("record tool start");
+    spool
+        .record_event(&InteractionEvent {
+            event_id: "event-tool-end".into(),
+            session_id: session.session_id.clone(),
+            turn_id: Some(turn.turn_id.clone()),
+            repo_id: spool.repo_id().to_string(),
+            branch: "main".into(),
+            actor_email: "alice@example.com".into(),
+            event_type: InteractionEventType::SubagentEnd,
+            event_time: "2026-04-05T10:00:02Z".into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            tool_use_id: "tool-1".into(),
+            tool_kind: "edit".into(),
+            task_description: "Update src/main.rs".into(),
+            subagent_id: "subagent-1".into(),
+            payload: serde_json::json!({"phase": "end"}),
+            ..Default::default()
+        })
+        .expect("record tool end");
+    spool
+        .assign_checkpoint_to_turns(&[turn.turn_id.clone()], "cp-1", "2026-04-05T10:00:03Z")
+        .expect("assign checkpoint");
+
+    spool
+        .with_connection(|conn| {
+            let tool_use: (String, String, String, Option<String>, Option<String>) = conn
+                .query_row(
+                    "SELECT tool_kind, task_description, session_id, started_at, ended_at
+                     FROM interaction_tool_uses
+                     WHERE repo_id = ?1 AND tool_use_id = 'tool-1'",
+                    rusqlite::params![spool.repo_id()],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .expect("tool use row");
+            assert_eq!(tool_use.0, "edit");
+            assert_eq!(tool_use.1, "Update src/main.rs");
+            assert_eq!(tool_use.2, "session-1");
+            assert_eq!(tool_use.3.as_deref(), Some("2026-04-05T10:00:01Z"));
+            assert_eq!(tool_use.4.as_deref(), Some("2026-04-05T10:00:02Z"));
+
+            let turn_doc: (String, String, String) = conn
+                .query_row(
+                    "SELECT prompt_text, tool_text, paths_text
+                     FROM interaction_turn_search_documents
+                     WHERE repo_id = ?1 AND turn_id = 'turn-1'",
+                    rusqlite::params![spool.repo_id()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .expect("turn search document");
+            assert!(turn_doc.0.contains("fix it"));
+            assert!(turn_doc.1.contains("Update src/main.rs"));
+            assert!(turn_doc.2.contains("src/main.rs"));
+
+            let session_doc: String = conn
+                .query_row(
+                    "SELECT combined_text
+                     FROM interaction_session_search_documents
+                     WHERE repo_id = ?1 AND session_id = 'session-1'",
+                    rusqlite::params![spool.repo_id()],
+                    |row| row.get(0),
+                )
+                .expect("session search document");
+            assert!(session_doc.contains("hello"));
+            assert!(session_doc.contains("Update src/main.rs"));
+
+            let tool_term_count: i64 = conn
+                .query_row(
+                    "SELECT occurrences
+                     FROM interaction_turn_search_terms
+                     WHERE repo_id = ?1 AND turn_id = 'turn-1' AND term = 'update' AND field = 'tool'",
+                    rusqlite::params![spool.repo_id()],
+                    |row| row.get(0),
+                )
+                .expect("tool term row");
+            assert_eq!(tool_term_count, 1);
+
+            Ok(())
+        })
+        .expect("query projections");
 }

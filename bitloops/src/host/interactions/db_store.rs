@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::storage::sqlite::SqliteConnectionPool;
 
+mod projections;
 mod row_mapping;
 mod schema;
 mod spool;
@@ -38,16 +39,23 @@ pub struct SqliteInteractionSpool {
 impl SqliteInteractionSpool {
     pub fn new(sqlite: SqliteConnectionPool, repo_id: String) -> Result<Self> {
         sqlite
-            .execute_batch(schema::SCHEMA)
+            .with_connection(schema::initialise_schema)
             .context("initialising interaction spool schema")?;
         sqlite
-            .with_connection(schema::ensure_additive_columns)
-            .context("ensuring additive interaction spool columns")?;
+            .with_connection(|conn| projections::rebuild_all_projections(conn, &repo_id))
+            .context("rebuilding interaction search projections")?;
         Ok(Self { sqlite, repo_id })
     }
 
     pub fn repo_id(&self) -> &str {
         &self.repo_id
+    }
+
+    pub(crate) fn with_connection<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&rusqlite::Connection) -> Result<T>,
+    {
+        self.sqlite.with_connection(f)
     }
 }
 

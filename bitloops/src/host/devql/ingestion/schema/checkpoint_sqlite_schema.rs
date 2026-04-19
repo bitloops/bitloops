@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS repo_watcher_registrations (
     repo_root TEXT NOT NULL,
     pid INTEGER NOT NULL,
     restart_token TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'ready',
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

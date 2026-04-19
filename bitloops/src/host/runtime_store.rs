@@ -19,12 +19,14 @@ mod tests;
 pub(crate) use repo_open::open_runtime_sqlite_for_config_root;
 pub use repo_workplane::{
     CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneJobInsert,
-    CapabilityWorkplaneMailboxStatus, WorkplaneCursorRunRecord, WorkplaneCursorRunStatus,
-    WorkplaneJobRecord, WorkplaneJobStatus,
+    CapabilityWorkplaneMailboxStatus, SemanticEmbeddingMailboxItemInsert,
+    SemanticEmbeddingMailboxItemRecord, SemanticMailboxItemKind, SemanticMailboxItemStatus,
+    SemanticSummaryMailboxItemInsert, SemanticSummaryMailboxItemRecord, WorkplaneCursorRunRecord,
+    WorkplaneCursorRunStatus, WorkplaneJobRecord, WorkplaneJobStatus,
 };
 pub use types::{
     DaemonSqliteRuntimeStore, LegacySyncTaskRecord, PersistedCapabilityEventQueueState,
     PersistedDevqlTaskQueueState, PersistedSyncQueueState, RepoSqliteRuntimeStore,
-    RepoWatcherRegistration, RuntimeMetadataBlobType, RuntimeStore, SessionMetadataSnapshot,
-    SqliteRuntimeStore, TaskCheckpointArtefact,
+    RepoWatcherRegistration, RepoWatcherRegistrationState, RuntimeMetadataBlobType, RuntimeStore,
+    SessionMetadataSnapshot, SqliteRuntimeStore, TaskCheckpointArtefact,
 };

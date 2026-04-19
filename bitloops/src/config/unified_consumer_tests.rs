@@ -8,9 +8,11 @@ use super::unified_config::{
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DashboardLocalDashboardConfig,
-    ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS, InferenceTask, SemanticCloneEmbeddingMode,
-    SemanticClonesInferenceBindings, SemanticSummaryMode,
+    DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS, DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS,
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS,
+    DashboardLocalDashboardConfig, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
+    InferenceTask, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
+    SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -85,6 +87,9 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
         semantic_clones: Some(json!({
             "summary_mode": "auto",
             "embedding_mode": "semantic_aware_once",
+            "summary_workers": 3,
+            "embedding_workers": 12,
+            "clone_rebuild_workers": 2,
             "enrichment_workers": 12,
             "inference": {
                 "summary_generation": "summary_llm",
@@ -148,6 +153,9 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
         }
     );
     assert_eq!(semantic_clones.ann_neighbors, 5);
+    assert_eq!(semantic_clones.summary_workers, 3);
+    assert_eq!(semantic_clones.embedding_workers, 12);
+    assert_eq!(semantic_clones.clone_rebuild_workers, 2);
     assert_eq!(semantic_clones.enrichment_workers, 12);
     assert!(inference.warnings.is_empty());
     assert_eq!(
@@ -224,6 +232,18 @@ fn semantic_clones_from_unified_reads_mode_fields() {
     assert_eq!(semantic_clones.inference.code_embeddings, None);
     assert_eq!(semantic_clones.ann_neighbors, 17);
     assert_eq!(
+        semantic_clones.summary_workers,
+        DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS
+    );
+    assert_eq!(
+        semantic_clones.embedding_workers,
+        DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS
+    );
+    assert_eq!(
+        semantic_clones.clone_rebuild_workers,
+        DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS
+    );
+    assert_eq!(
         semantic_clones.enrichment_workers,
         DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
     );
@@ -238,6 +258,18 @@ fn semantic_clones_from_unified_clamps_ann_neighbors_from_env() {
     });
     assert_eq!(semantic_clones.ann_neighbors, 50);
     assert_eq!(
+        semantic_clones.summary_workers,
+        DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS
+    );
+    assert_eq!(
+        semantic_clones.embedding_workers,
+        DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS
+    );
+    assert_eq!(
+        semantic_clones.clone_rebuild_workers,
+        DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS
+    );
+    assert_eq!(
         semantic_clones.enrichment_workers,
         DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS
     );
@@ -251,6 +283,21 @@ fn semantic_clones_from_unified_reads_enrichment_workers_from_env() {
         _ => None,
     });
     assert_eq!(semantic_clones.enrichment_workers, 16);
+    assert_eq!(semantic_clones.embedding_workers, 16);
+}
+
+#[test]
+fn semantic_clones_from_unified_reads_per_pool_workers_from_env() {
+    let settings = UnifiedSettings::default();
+    let semantic_clones = resolve_semantic_clones_from_unified(&settings, |key| match key {
+        "BITLOOPS_SEMANTIC_CLONES_SUMMARY_WORKERS" => Some("2".to_string()),
+        "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_WORKERS" => Some("5".to_string()),
+        "BITLOOPS_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS" => Some("3".to_string()),
+        _ => None,
+    });
+    assert_eq!(semantic_clones.summary_workers, 2);
+    assert_eq!(semantic_clones.embedding_workers, 5);
+    assert_eq!(semantic_clones.clone_rebuild_workers, 3);
 }
 
 // ---------------------------------------------------------------------------

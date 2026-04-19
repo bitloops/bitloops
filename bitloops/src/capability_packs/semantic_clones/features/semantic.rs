@@ -6,7 +6,6 @@ use super::common::{normalize_repo_path, render_dependency_context, split_identi
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
 
 const MINIMUM_SUMMARY_LENGTH: usize = 12;
-const MAXIMUM_SUMMARY_LENGTH: usize = 200;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSummaryCandidate {
@@ -200,19 +199,30 @@ pub(super) fn build_semantics_row(
     summary_provider: &dyn SemanticSummaryProvider,
 ) -> SymbolSemanticsRow {
     let docstring_summary = extract_summary_from_docstring(input.docstring.as_deref());
-    let llm_candidate = summary_provider.generate(input);
+    let llm_candidate = summary_provider.generate(input).and_then(|candidate| {
+        let normalized_summary = normalize_summary_text(&candidate.summary);
+        if !is_valid_summary(&normalized_summary) {
+            return None;
+        }
+        Some(SemanticSummaryCandidate {
+            summary: normalized_summary,
+            confidence: candidate.confidence,
+            source_model: candidate.source_model,
+        })
+    });
     let llm_summary = llm_candidate
         .as_ref()
-        .map(|candidate| normalize_summary_text(&candidate.summary))
-        .filter(|summary| !summary.is_empty());
-    let valid_llm_summary = llm_summary
-        .as_deref()
-        .filter(|summary| is_valid_summary(summary))
-        .map(ensure_terminal_period);
+        .map(|candidate| candidate.summary.clone());
+    let canonical_llm_summary = llm_candidate
+        .as_ref()
+        .map(|candidate| ensure_terminal_period(candidate.summary.as_str()));
     let template_summary = build_template_summary(input);
     let llm_confidence = llm_candidate
         .as_ref()
         .map(|candidate| candidate.confidence.clamp(0.0, 1.0));
+    let source_model = llm_candidate
+        .as_ref()
+        .and_then(|candidate| candidate.source_model.clone());
 
     // Persist every candidate, then synthesize a single canonical summary for Stage 3 and
     // other downstream consumers. Template stays as stable scaffolding, LLM adds the current
@@ -220,11 +230,11 @@ pub(super) fn build_semantics_row(
     let summary = synthesize_summary(
         &template_summary,
         docstring_summary.as_deref(),
-        valid_llm_summary.as_deref(),
+        canonical_llm_summary.as_deref(),
     );
     let confidence = synthesize_summary_confidence(
         docstring_summary.as_deref(),
-        valid_llm_summary.as_deref(),
+        canonical_llm_summary.as_deref(),
         llm_confidence,
     );
 
@@ -237,7 +247,7 @@ pub(super) fn build_semantics_row(
         template_summary,
         summary,
         confidence,
-        source_model: llm_candidate.and_then(|candidate| candidate.source_model),
+        source_model,
     }
 }
 
@@ -349,7 +359,6 @@ fn is_valid_summary(summary: &str) -> bool {
     !trimmed.is_empty()
         && !trimmed.contains('\n')
         && trimmed.len() >= MINIMUM_SUMMARY_LENGTH
-        && trimmed.len() <= MAXIMUM_SUMMARY_LENGTH
         && trimmed.chars().any(|ch| ch.is_ascii_alphabetic())
 }
 
@@ -400,6 +409,26 @@ fn summary_subject(input: &SemanticFeatureInput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StaticSummaryProvider {
+        summary: Option<String>,
+        confidence: f32,
+        source_model: Option<String>,
+    }
+
+    impl SemanticSummaryProvider for StaticSummaryProvider {
+        fn cache_key(&self) -> String {
+            "provider=test".to_string()
+        }
+
+        fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
+            Some(SemanticSummaryCandidate {
+                summary: self.summary.clone()?,
+                confidence: self.confidence,
+                source_model: self.source_model.clone(),
+            })
+        }
+    }
 
     fn sample_input(kind: &str, name: &str) -> SemanticFeatureInput {
         SemanticFeatureInput {
@@ -514,6 +543,25 @@ mod tests {
     }
 
     #[test]
+    fn semantic_features_build_semantics_row_drops_invalid_llm_candidate() {
+        let input = sample_input("method", "getById");
+
+        let row = build_semantics_row(
+            &input,
+            &StaticSummaryProvider {
+                summary: Some("short".to_string()),
+                confidence: 0.91,
+                source_model: Some("ollama:ministral-3:3b".to_string()),
+            },
+        );
+
+        assert_eq!(row.template_summary, "Method get by id.");
+        assert_eq!(row.summary, "Method get by id.");
+        assert_eq!(row.llm_summary, None);
+        assert_eq!(row.source_model, None);
+    }
+
+    #[test]
     fn semantic_features_synthesize_summary_confidence_boosts_when_doc_and_llm_align() {
         let confidence = synthesize_summary_confidence(
             Some("Loads a user record by id from storage."),
@@ -522,6 +570,33 @@ mod tests {
         );
 
         assert_eq!(confidence, 0.88);
+    }
+
+    #[test]
+    fn semantic_features_build_semantics_row_keeps_overlong_llm_summary_as_canonical_summary() {
+        let input = sample_input("file", "cache");
+        let llm_summary = "Creates and ensures the existence of a directory for caching local embeddings by validating and creating the specified path, defaulting to a user-specific cache location if no explicit path is provided.";
+        assert!(
+            llm_summary.chars().count() > 200,
+            "test summary must stay over the previous hard limit"
+        );
+
+        let row = build_semantics_row(
+            &input,
+            &StaticSummaryProvider {
+                summary: Some(llm_summary.to_string()),
+                confidence: 0.91,
+                source_model: Some("ollama:ministral-3:3b".to_string()),
+            },
+        );
+
+        assert_eq!(row.llm_summary.as_deref(), Some(llm_summary));
+        assert_eq!(
+            row.summary,
+            format!("Defines the typescript source file. {llm_summary}")
+        );
+        assert_eq!(row.confidence, 0.91);
+        assert_eq!(row.source_model.as_deref(), Some("ollama:ministral-3:3b"));
     }
 
     #[test]

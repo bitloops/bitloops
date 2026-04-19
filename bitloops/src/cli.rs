@@ -26,6 +26,7 @@ pub(crate) mod telemetry_consent;
 pub(crate) mod terminal_picker;
 pub mod uninstall;
 pub mod versioncheck;
+pub(crate) mod watcher_bootstrap;
 
 /// Bitloops CLI
 #[derive(Parser)]
@@ -192,7 +193,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         && let Err(err) =
             crate::host::devql::watch::ensure_watcher_running(&repo_root, &config_root)
     {
-        log::debug!("skipping DevQL watcher auto-start: {err:#}");
+        log::warn!("failed to auto-start DevQL watcher: {err:#}");
     }
 
     let telemetry_action = root::telemetry_action_for_command(&command);

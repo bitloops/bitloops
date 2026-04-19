@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use super::types::Checkpoint;
-use crate::daemon::DevqlTaskRecord;
+use crate::daemon::{DevqlTaskRecord, RuntimeEventRecord};
 
 const SUBSCRIPTION_CHANNEL_CAPACITY: usize = 128;
 
@@ -23,15 +23,18 @@ pub(crate) struct TaskProgressMessage {
 pub(crate) struct SubscriptionHub {
     checkpoint_ingested: broadcast::Sender<CheckpointIngestedEvent>,
     task_progress: broadcast::Sender<TaskProgressMessage>,
+    runtime_events: broadcast::Sender<RuntimeEventRecord>,
 }
 
 impl Default for SubscriptionHub {
     fn default() -> Self {
         let (checkpoint_ingested, _) = broadcast::channel(SUBSCRIPTION_CHANNEL_CAPACITY);
         let (task_progress, _) = broadcast::channel(SUBSCRIPTION_CHANNEL_CAPACITY);
+        let (runtime_events, _) = broadcast::channel(SUBSCRIPTION_CHANNEL_CAPACITY);
         Self {
             checkpoint_ingested,
             task_progress,
+            runtime_events,
         }
     }
 }
@@ -49,6 +52,10 @@ impl SubscriptionHub {
         self.task_progress.subscribe()
     }
 
+    pub(crate) fn subscribe_runtime_events(&self) -> broadcast::Receiver<RuntimeEventRecord> {
+        self.runtime_events.subscribe()
+    }
+
     pub(crate) fn publish_checkpoint(&self, repo_name: impl Into<String>, checkpoint: Checkpoint) {
         let repo_name = repo_name.into();
         let _ = self.checkpoint_ingested.send(CheckpointIngestedEvent {
@@ -62,5 +69,9 @@ impl SubscriptionHub {
         let _ = self
             .task_progress
             .send(TaskProgressMessage { task_id, task });
+    }
+
+    pub(crate) fn publish_runtime_event(&self, event: RuntimeEventRecord) {
+        let _ = self.runtime_events.send(event);
     }
 }

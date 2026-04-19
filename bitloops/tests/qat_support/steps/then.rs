@@ -103,6 +103,32 @@ pub(super) fn then_repo_local_path_exists(
     })
 }
 
+pub(super) fn then_repo_local_path_missing(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let relative_path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "the repo-local path does not exist",
+            helpers::assert_file_missing_in_repo(world, &repo_name, &relative_path),
+        );
+    })
+}
+
+pub(super) fn then_global_runtime_artefacts_removed(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "global Bitloops runtime artefacts are removed",
+            helpers::assert_global_runtime_artefacts_removed(world),
+        );
+    })
+}
+
 pub(super) fn then_agent_hooks_exist(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -131,18 +157,6 @@ pub(super) fn then_agent_hooks_removed(
     })
 }
 
-pub(super) fn then_bitloops_binary_not_found(
-    world: &mut QatWorld,
-    _ctx: cucumber::step::Context,
-) -> LocalBoxFuture<'_, ()> {
-    Box::pin(async move {
-        run_step(
-            "bitloops binary is not found",
-            helpers::assert_bitloops_binary_removed(world),
-        );
-    })
-}
-
 pub(super) fn then_git_hooks_removed(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -152,6 +166,19 @@ pub(super) fn then_git_hooks_removed(
         run_step(
             "git hooks are removed",
             helpers::assert_git_hooks_removed(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_git_post_commit_hook_exists(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "git post-commit hook exists",
+            helpers::assert_git_post_commit_hook_installed(world, &repo_name),
         );
     })
 }
@@ -193,10 +220,36 @@ pub(super) fn then_commit_timeline_is_correct(
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "commit timeline and contents are correct",
+            "checkpoint timeline and contents are correct",
             helpers::assert_init_yesterday_and_final_today_commit_checkpoints_for_repo(
                 world, &repo_name,
             ),
+        );
+    })
+}
+
+pub(super) fn then_git_timeline_is_correct(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "git timeline and contents are correct",
+            helpers::assert_relative_day_git_timeline_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_captured_commit_history_is_ordered(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "checkpointed captured commits are ordered",
+            helpers::assert_captured_commit_history_is_ordered_for_repo(world, &repo_name),
         );
     })
 }
@@ -210,6 +263,24 @@ pub(super) fn then_claude_session_exists(
         run_step(
             "claude-code session exists",
             helpers::assert_claude_session_exists_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_agent_interaction_exists_before_commit(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "agent interaction exists before commit",
+            helpers::assert_agent_interaction_exists_before_commit_for_repo(
+                world,
+                &repo_name,
+                &agent_name,
+            ),
         );
     })
 }
@@ -842,12 +913,30 @@ pub(super) fn then_knowledge_provider_and_kind(
 
 pub(super) fn then_knowledge_has_commit_association(
     world: &mut QatWorld,
-    _ctx: cucumber::step::Context,
+    ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
         run_step(
             "knowledge item is associated to a commit",
-            helpers::assert_knowledge_item_has_commit_association(world),
+            helpers::assert_knowledge_item_has_commit_association(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_knowledge_associated_to_knowledge(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let source = ctx.matches[1].1.clone();
+        let target = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "knowledge is associated to knowledge",
+            helpers::assert_knowledge_item_associated_to_knowledge_item(
+                world, &repo_name, &source, &target,
+            ),
         );
     })
 }
@@ -865,6 +954,82 @@ pub(super) fn then_knowledge_versions_count(
         run_step(
             "knowledge versions count matches",
             helpers::assert_knowledge_versions_count(world, &input, expected_count),
+        );
+    })
+}
+
+pub(super) fn then_devql_task_id_captured(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "DevQL task id is captured",
+            helpers::assert_last_task_id_captured(world),
+        );
+    })
+}
+
+pub(super) fn then_last_devql_task_kind_is(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_kind = ctx.matches[1].1.clone();
+        run_step(
+            "last DevQL task kind matches",
+            helpers::assert_last_task_id_matches_kind(world, &expected_kind),
+        );
+    })
+}
+
+pub(super) fn then_devql_task_queue_state(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_state = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL task queue state matches",
+            helpers::assert_task_queue_state_in_last_output(world, &expected_state),
+        );
+    })
+}
+
+pub(super) fn then_devql_task_queue_pause_reason(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_reason = ctx.matches[1].1.clone();
+        run_step(
+            "DevQL task queue pause reason matches",
+            helpers::assert_task_queue_pause_reason_in_last_output(world, &expected_reason),
+        );
+    })
+}
+
+pub(super) fn then_devql_tasks_list_includes_last_task(
+    world: &mut QatWorld,
+    _ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        run_step(
+            "DevQL tasks list includes the last task",
+            helpers::assert_task_list_in_last_output_contains_last_task(world),
+        );
+    })
+}
+
+pub(super) fn then_last_devql_task_has_status(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_status = ctx.matches[1].1.clone();
+        run_step(
+            "last DevQL task status matches",
+            helpers::assert_last_task_status_in_last_output(world, &expected_status),
         );
     })
 }
@@ -1040,6 +1205,21 @@ pub(super) fn then_expected_shas_have_file_state_rows(
     })
 }
 
+pub(super) fn then_expected_paths_have_file_state_rows_for_expected_shas(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "expected paths have file_state rows for expected SHAs",
+            helpers::assert_expected_paths_have_file_state_rows_for_expected_shas(
+                world, &repo_name,
+            ),
+        );
+    })
+}
+
 pub(super) fn then_exact_expected_shas_newly_completed_since_snapshot(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -1115,6 +1295,66 @@ pub(super) fn then_artefacts_current_contains_path(
         run_step(
             "artefacts_current contains path",
             helpers::assert_artefacts_current_contains_path(world, &repo_name, &path),
+        );
+    })
+}
+
+pub(super) fn then_artefacts_current_contains_path_eventually(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "artefacts_current eventually contains path",
+            helpers::assert_artefacts_current_contains_path_eventually(world, &repo_name, &path),
+        );
+    })
+}
+
+pub(super) fn then_artefacts_current_lacks_path(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "artefacts_current does not contain path",
+            helpers::assert_artefacts_current_lacks_path(world, &repo_name, &path),
+        );
+    })
+}
+
+pub(super) fn then_current_file_state_content_id_changed_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "current-state content id changed since snapshot",
+            helpers::assert_current_file_state_content_id_changed_since_snapshot_for_path(
+                world, &repo_name, &path,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_current_file_state_content_id_unchanged_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "current-state content id is unchanged since snapshot",
+            helpers::assert_current_file_state_content_id_unchanged_since_snapshot_for_path(
+                world, &repo_name, &path,
+            ),
         );
     })
 }

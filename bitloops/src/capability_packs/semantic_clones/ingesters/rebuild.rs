@@ -37,16 +37,26 @@ impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
                 options,
             )
             .await
-            .context("rebuilding symbol clone edges")?;
+            .context("rebuilding historical symbol clone edges")?;
+            let current_build =
+                crate::capability_packs::semantic_clones::pipeline::rebuild_current_symbol_clone_edges_with_options(
+                    relational,
+                    &repo_id,
+                    options,
+                )
+                .await
+                .context("rebuilding current symbol clone edges")?;
             Ok(IngestResult::new(
                 json!({
                     "symbol_clone_edges_upserted": build.edges.len(),
                     "symbol_clone_sources_scored": build.sources_considered,
+                    "current_symbol_clone_edges_upserted": current_build.edges.len(),
+                    "current_symbol_clone_sources_scored": current_build.sources_considered,
                 }),
                 format!(
-                    "rebuilt {} clone edges ({} sources scored)",
+                    "rebuilt {} historical and {} current clone edges",
                     build.edges.len(),
-                    build.sources_considered
+                    current_build.edges.len()
                 ),
             ))
         })

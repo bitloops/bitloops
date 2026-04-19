@@ -150,7 +150,7 @@ impl SyncCoordinator {
         }
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             self.worker_started.store(false, Ordering::SeqCst);
-            log::warn!("sync worker activation requested without an active tokio runtime");
+            log::error!("sync worker activation requested without an active tokio runtime");
             return;
         };
         let coordinator = Arc::clone(self);
@@ -328,18 +328,20 @@ impl SyncCoordinator {
             }
         };
 
-        match crate::host::devql::run_sync_with_summary_and_observer_and_diffs(
+        match crate::host::devql::run_sync_with_summary_and_stats_and_observer_and_diffs(
             &cfg,
             effective_mode,
             Some(&observer),
+            None,
         )
         .await
         {
-            Ok((summary, file_diff, artefact_diff)) => {
+            Ok((summary, mut stats, file_diff, artefact_diff)) => {
                 if let Some(host) = host.as_ref() {
                     let capability_event_coordinator =
                         crate::daemon::shared_capability_event_coordinator();
                     capability_event_coordinator.activate_worker();
+                    let enqueue_started = Instant::now();
                     if let Err(err) = enqueue_sync_completed_runs(
                         capability_event_coordinator.as_ref(),
                         host,
@@ -353,7 +355,9 @@ impl SyncCoordinator {
                             task.task_id
                         );
                     }
+                    stats.capability_event_enqueue_total = enqueue_started.elapsed();
                 }
+                stats.log(&cfg.repo.repo_id, &summary.mode);
                 self.finish_task_completed(&task.task_id, summary)?
             }
             Err(err) => self.finish_task_failed(&task.task_id, err)?,

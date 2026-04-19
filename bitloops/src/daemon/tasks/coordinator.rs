@@ -92,9 +92,21 @@ impl DevqlTaskCoordinator {
         source: DevqlTaskSource,
         spec: DevqlTaskSpec,
     ) -> Result<DevqlTaskEnqueueResult> {
+        self.enqueue_with_init_session(cfg, source, spec, None)
+    }
+
+    pub(crate) fn enqueue_with_init_session(
+        &self,
+        cfg: &DevqlConfig,
+        source: DevqlTaskSource,
+        spec: DevqlTaskSpec,
+        init_session_id: Option<String>,
+    ) -> Result<DevqlTaskEnqueueResult> {
         let kind = helpers::task_kind_from_spec(&spec);
         self.mutate_state(|state| {
-            if let Some(task) = merge_existing_task(state, cfg, source, kind, &spec) {
+            if let Some(task) =
+                merge_existing_task(state, cfg, source, kind, &spec, init_session_id.as_deref())
+            {
                 return Ok(DevqlTaskEnqueueResult { task, merged: true });
             }
 
@@ -108,6 +120,7 @@ impl DevqlTaskCoordinator {
                 repo_identity: cfg.repo.identity.clone(),
                 daemon_config_root: cfg.daemon_config_root.clone(),
                 repo_root: cfg.repo_root.clone(),
+                init_session_id: init_session_id.clone(),
                 kind,
                 source,
                 spec: spec.clone(),

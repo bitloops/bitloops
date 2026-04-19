@@ -17,28 +17,28 @@ Feature: Semantic Clones enrichment and query coverage
 
   @devql @semantic-clones
   Scenario: Historical ingest preserves core history without backfilling semantic-clone history
-    When I run DevQL ingest in bitloops
+    When I enqueue DevQL ingest task with status in bitloops
     Then semantic clone ingest does not populate historical semantic tables in bitloops
 
   @devql @semantic-clones
   Scenario: Current projection populates semantic-clone current tables
-    When I run DevQL sync --status in bitloops
+    When I enqueue DevQL sync task with status in bitloops
     Then semantic clone current projection tables are populated in bitloops
 
   @devql @semantic-clones
   Scenario: Current embeddings expose separate code and summary channels
-    When I run DevQL sync --status in bitloops
+    When I enqueue DevQL sync task with status in bitloops
     Then semantic clone current embeddings expose code and summary channels in bitloops
 
   @devql @semantic-clones
   Scenario: Sync drives embeddings before clone-edge rebuild fully drains
-    When I run DevQL sync without status in bitloops
+    When I enqueue DevQL sync task without status in bitloops
     Then semantic clone enrichments show embeddings before clone-edge rebuild work fully drains in bitloops
 
   @devql @semantic-clones
   Scenario: Commit snapshots current semantic-clone data into historical tables
     Given I committed today in bitloops
-    And I run DevQL sync --status in bitloops
+    And I enqueue DevQL sync task with status in bitloops
     And I modify a semantic clone fixture source file in bitloops
     And I committed today in bitloops
     Then semantic clone historical tables are populated in bitloops
@@ -46,7 +46,7 @@ Feature: Semantic Clones enrichment and query coverage
 
   @devql @semantic-clones
   Scenario: Handler clones rank the cross-file execute peer above the weaker same-file helper
-    When I run DevQL sync --status in bitloops
+    When I enqueue DevQL sync task with status in bitloops
     Then DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" returns at least 2 results in bitloops
     And DevQL clones results include score and relation_kind fields in bitloops
     And DevQL clones query for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" has highest-scored result with score above 0.60 in bitloops
@@ -56,10 +56,10 @@ Feature: Semantic Clones enrichment and query coverage
 
   @devql @semantic-clones
   Scenario: DevQL clone summary returns grouped counts for the handler fixture
-    When I run DevQL sync --status in bitloops
+    When I enqueue DevQL sync task with status in bitloops
     Then DevQL clone summary for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" with min_score 0.60 returns grouped counts in bitloops
 
   @devql @semantic-clones
   Scenario: GraphQL clone summary returns grouped counts for the handler fixture
-    When I run DevQL sync --status in bitloops
+    When I enqueue DevQL sync task with status in bitloops
     Then GraphQL clone summary for "src/handlers/create-component-snapshots.handler.ts::CreateComponentSnapshotsCommandHandler::execute" with min_score 0.60 returns grouped counts in bitloops

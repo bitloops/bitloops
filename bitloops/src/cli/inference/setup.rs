@@ -19,6 +19,6 @@ pub(crate) use prompt::prompt_summary_setup_selection;
 #[cfg(test)]
 pub(crate) use types::OllamaAvailability;
 pub(crate) use types::{
-    PreparedSummarySetupPlan, SummarySetupExecutionResult, SummarySetupOutcome, SummarySetupPhase,
-    SummarySetupProgress, SummarySetupSelection,
+    PreparedSummarySetupAction, PreparedSummarySetupPlan, SummarySetupExecutionResult,
+    SummarySetupOutcome, SummarySetupPhase, SummarySetupProgress, SummarySetupSelection,
 };

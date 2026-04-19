@@ -10,7 +10,8 @@ use std::future::Future;
 
 use super::documents::{
     CANCEL_TASK_MUTATION, ENQUEUE_TASK_MUTATION, INIT_SCHEMA_MUTATION, PAUSE_TASK_QUEUE_MUTATION,
-    RESUME_TASK_QUEUE_MUTATION, TASK_QUERY, TASK_QUEUE_QUERY, TASKS_QUERY,
+    RESUME_TASK_QUEUE_MUTATION, RUNTIME_SNAPSHOT_QUERY, START_INIT_MUTATION, TASK_QUERY,
+    TASK_QUEUE_QUERY, TASKS_QUERY,
 };
 use super::progress::{
     TASK_PROGRESS_POLL_INTERVAL, TASK_RENDER_TICK_INTERVAL, TaskProgressRenderer,
@@ -18,12 +19,19 @@ use super::progress::{
 use super::subscription::watch_task_via_subscription;
 use super::types::{
     CancelTaskMutationData, EnqueueTaskMutationData, InitSchemaMutationData,
-    PauseTaskQueueMutationData, ResumeTaskQueueMutationData, TaskGraphqlRecord, TaskQueryData,
-    TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord, TaskQueueQueryData, TasksQueryData,
+    PauseTaskQueueMutationData, ResumeTaskQueueMutationData,
+    RuntimeEmbeddingsBootstrapRequestInput, RuntimeSnapshotGraphqlRecord, RuntimeSnapshotQueryData,
+    RuntimeStartInitInput, RuntimeSummaryBootstrapRequestInput, StartInitMutationData,
+    StartInitResultGraphqlRecord, TaskGraphqlRecord, TaskQueryData, TaskQueueControlGraphqlRecord,
+    TaskQueueGraphqlRecord, TaskQueueQueryData, TasksQueryData,
 };
 use crate::devql_transport::SlimCliRepoScope;
 use crate::host::devql::format_init_schema_summary;
 use crate::{api::DashboardServerConfig, daemon};
+
+const SYNC_FOLLOW_UP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+const SYNC_FOLLOW_UP_PENDING_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+const SYNC_FOLLOW_UP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum DaemonStartPolicy {
@@ -88,6 +96,21 @@ pub(crate) async fn execute_devql_graphql<T: DeserializeOwned>(
     crate::daemon::execute_slim_graphql(scope.repo_root.as_path(), scope, query, variables).await
 }
 
+pub(crate) async fn execute_runtime_graphql<T: DeserializeOwned>(
+    scope: &SlimCliRepoScope,
+    query: &str,
+    variables: serde_json::Value,
+) -> Result<T> {
+    #[cfg(test)]
+    if let Some(data) =
+        maybe_execute_devql_graphql_via_hook(scope.repo_root.as_path(), query, &variables)
+    {
+        return Ok(serde_json::from_value(data?)?);
+    }
+
+    crate::daemon::execute_runtime_graphql(scope.repo_root.as_path(), query, variables).await
+}
+
 pub(crate) async fn run_init_via_graphql(scope: &SlimCliRepoScope) -> Result<()> {
     let response: InitSchemaMutationData =
         execute_devql_graphql(scope, INIT_SCHEMA_MUTATION, json!({})).await?;
@@ -101,6 +124,50 @@ pub(crate) async fn fetch_slim_schema_sdl_via_daemon(scope: &SlimCliRepoScope) -
 
 pub(crate) async fn fetch_global_schema_sdl_via_daemon() -> Result<String> {
     fetch_schema_sdl_via_daemon("/devql/global/sdl", None).await
+}
+
+pub(crate) async fn start_init_via_runtime_graphql(
+    scope: &SlimCliRepoScope,
+    input: &RuntimeStartInitInput,
+) -> Result<StartInitResultGraphqlRecord> {
+    #[cfg(test)]
+    let should_require_daemon = !graphql_executor_hook_installed();
+    #[cfg(not(test))]
+    let should_require_daemon = true;
+
+    if should_require_daemon {
+        ensure_daemon_available_for_tasks(
+            scope.repo_root.as_path(),
+            DaemonStartPolicy::RequireRunning,
+        )
+        .await?;
+    }
+
+    let response: StartInitMutationData = execute_runtime_graphql(
+        scope,
+        START_INIT_MUTATION,
+        json!({
+            "repoId": input.repo_id,
+            "input": runtime_start_input_json(input),
+        }),
+    )
+    .await?;
+    Ok(response.start_init)
+}
+
+pub(crate) async fn runtime_snapshot_via_graphql(
+    scope: &SlimCliRepoScope,
+    repo_id: &str,
+) -> Result<RuntimeSnapshotGraphqlRecord> {
+    let response: RuntimeSnapshotQueryData = execute_runtime_graphql(
+        scope,
+        RUNTIME_SNAPSHOT_QUERY,
+        json!({
+            "repoId": repo_id,
+        }),
+    )
+    .await?;
+    Ok(response.runtime_snapshot)
 }
 
 pub(crate) async fn enqueue_sync_task_via_graphql(
@@ -260,6 +327,7 @@ pub(crate) async fn watch_task_via_graphql(
     renderer.render(&initial_task)?;
 
     if initial_task.is_terminal() {
+        wait_for_sync_follow_up_work_if_needed(&initial_task).await?;
         renderer.finish()?;
         return handle_terminal_task(task_id.as_str(), initial_task).map(Some);
     }
@@ -291,6 +359,7 @@ pub(crate) async fn watch_task_via_graphql(
                 renderer.render(&latest_task)?;
                 match latest_task.status.to_ascii_lowercase().as_str() {
                     "completed" => {
+                        wait_for_sync_follow_up_work_if_needed(&latest_task).await?;
                         renderer.finish()?;
                         return Ok(Some(latest_task));
                     }
@@ -302,6 +371,66 @@ pub(crate) async fn watch_task_via_graphql(
                 }
             }
         }
+    }
+}
+
+async fn wait_for_sync_follow_up_work_if_needed(task: &TaskGraphqlRecord) -> Result<()> {
+    if !task.is_sync() || !task.status.eq_ignore_ascii_case("completed") {
+        return Ok(());
+    }
+
+    let started = std::time::Instant::now();
+    let mut poll_interval = tokio::time::interval(SYNC_FOLLOW_UP_POLL_INTERVAL);
+    let mut current_state_idle_since: Option<std::time::Instant> = None;
+    let mut observed_enrichment_activity = false;
+    loop {
+        let current_state = daemon::current_state_consumer_status(Some(task.repo_id.as_str()))?;
+        let enrichment = daemon::enrichment_status()?;
+        let current_state_idle = current_state.current_repo_run.is_none();
+        let enrichment_running = enrichment.state.running_embedding_jobs > 0
+            || enrichment.state.running_clone_edges_rebuild_jobs > 0;
+        let enrichment_pending = enrichment.state.pending_embedding_jobs > 0
+            || enrichment.state.pending_clone_edges_rebuild_jobs > 0;
+        let enrichment_idle = !enrichment_pending && !enrichment_running;
+
+        if enrichment_running {
+            observed_enrichment_activity = true;
+        }
+
+        if current_state.state.failed_runs > 0 {
+            bail!(
+                "sync task completed but current-state follow-up work failed for repo `{}`",
+                task.repo_id
+            );
+        }
+        if enrichment.state.failed_jobs > 0 {
+            bail!(
+                "sync task completed but enrichment follow-up work failed after sync for repo `{}`",
+                task.repo_id
+            );
+        }
+        if current_state_idle {
+            let idle_since = current_state_idle_since.get_or_insert_with(std::time::Instant::now);
+            if enrichment_idle {
+                return Ok(());
+            }
+            if !observed_enrichment_activity
+                && !enrichment_running
+                && idle_since.elapsed() >= SYNC_FOLLOW_UP_PENDING_GRACE
+            {
+                return Ok(());
+            }
+        } else {
+            current_state_idle_since = None;
+        }
+        if started.elapsed() >= SYNC_FOLLOW_UP_TIMEOUT {
+            bail!(
+                "timed out waiting for sync follow-up work to finish for repo `{}`",
+                task.repo_id
+            );
+        }
+
+        poll_interval.tick().await;
     }
 }
 
@@ -414,6 +543,47 @@ fn daemon_start_policy(require_daemon: bool) -> DaemonStartPolicy {
 
 fn graphql_enum_name(raw: &str) -> String {
     raw.trim().to_ascii_uppercase().replace('-', "_")
+}
+
+fn runtime_start_input_json(input: &RuntimeStartInitInput) -> serde_json::Value {
+    let embeddings_bootstrap = input
+        .embeddings_bootstrap
+        .as_ref()
+        .map(runtime_embeddings_bootstrap_input_json);
+    let summaries_bootstrap = input
+        .summaries_bootstrap
+        .as_ref()
+        .map(runtime_summary_bootstrap_input_json);
+    json!({
+        "runSync": input.run_sync,
+        "runIngest": input.run_ingest,
+        "ingestBackfill": input.ingest_backfill,
+        "embeddingsBootstrap": embeddings_bootstrap,
+        "summariesBootstrap": summaries_bootstrap,
+    })
+}
+
+fn runtime_embeddings_bootstrap_input_json(
+    input: &RuntimeEmbeddingsBootstrapRequestInput,
+) -> serde_json::Value {
+    json!({
+        "configPath": input.config_path,
+        "profileName": input.profile_name,
+        "mode": graphql_enum_name(input.mode.as_str()),
+        "gatewayUrlOverride": input.gateway_url_override,
+        "apiKeyEnv": input.api_key_env,
+    })
+}
+
+fn runtime_summary_bootstrap_input_json(
+    input: &RuntimeSummaryBootstrapRequestInput,
+) -> serde_json::Value {
+    json!({
+        "action": graphql_enum_name(input.action.as_str()),
+        "message": input.message,
+        "modelName": input.model_name,
+        "gatewayUrlOverride": input.gateway_url_override,
+    })
 }
 
 async fn ensure_daemon_available_for_tasks(
@@ -616,6 +786,15 @@ fn maybe_execute_devql_graphql_via_hook(
             hook.borrow()
                 .as_ref()
                 .map(|hook| hook(repo_root, query, variables))
+        },
+    )
+}
+
+#[cfg(test)]
+fn graphql_executor_hook_installed() -> bool {
+    GRAPHQL_EXECUTOR_HOOK.with(
+        |hook: &std::cell::RefCell<Option<std::rc::Rc<GraphqlExecutorHook>>>| {
+            hook.borrow().is_some()
         },
     )
 }

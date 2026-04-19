@@ -110,10 +110,8 @@ pub(crate) fn collect_python_suites(
     for child in root.named_children(&mut cursor) {
         let node = unwrap_python_definition(child);
         match node.kind() {
-            "function_definition" => {
-                if is_python_test_function(node, source) {
-                    module_scenarios.push(build_python_scenario(node, source));
-                }
+            "function_definition" if is_python_test_function(node, source) => {
+                module_scenarios.push(build_python_scenario(node, source));
             }
             "class_definition" => {
                 let scenarios = collect_python_class_scenarios(node, source);

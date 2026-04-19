@@ -463,9 +463,10 @@ impl AgentAdapterRegistry {
         value: &str,
         local_dev: bool,
         force: bool,
+        options: super::registration::AgentHookInstallOptions,
     ) -> Result<(&'static str, usize)> {
         let registration = self.resolve(value)?;
-        let count = registration.install_hooks(repo_root, local_dev, force)?;
+        let count = registration.install_hooks(repo_root, local_dev, force, options)?;
         Ok((registration.descriptor().display_name, count))
     }
 

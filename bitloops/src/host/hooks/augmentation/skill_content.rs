@@ -19,4 +19,11 @@ mod tests {
         assert!(!body.starts_with("---"));
         assert!(body.contains("bitloops devql query"));
     }
+
+    #[test]
+    fn using_devql_skill_mentions_running_bitloops_devql_outside_sandbox() {
+        let body = using_devql_skill_body();
+        assert!(body.contains("outside the sandbox"));
+        assert!(body.contains("bitloops devql"));
+    }
 }

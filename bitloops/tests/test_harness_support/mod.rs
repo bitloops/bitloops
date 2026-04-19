@@ -172,7 +172,13 @@ pub fn bootstrap_agent_workspace(workspace: &Workspace, agent: &str) {
         bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo_root, false)
             .expect("install git hooks");
         bitloops::adapters::agents::AgentAdapterRegistry::builtin()
-            .install_agent_hooks(repo_root, agent, false, false)
+            .install_agent_hooks(
+                repo_root,
+                agent,
+                false,
+                false,
+                bitloops::adapters::agents::AgentHookInstallOptions::default(),
+            )
             .unwrap_or_else(|err| panic!("install {agent} hooks: {err:#}"));
     });
 }

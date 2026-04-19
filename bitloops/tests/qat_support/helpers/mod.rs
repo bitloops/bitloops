@@ -14,6 +14,9 @@ use bitloops::host::checkpoints::session::create_session_backend_or_local;
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed,
 };
+use bitloops::host::interactions::store::InteractionSpool;
+use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
+use bitloops::host::runtime_store::RepoSqliteRuntimeStore;
 use serde::Serialize;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -146,8 +149,6 @@ include!("daemon_harness.rs");
 include!("capability_runtime.rs");
 include!("deps_and_testlens.rs");
 include!("semantic_clones.rs");
+include!("knowledge_stub.rs");
 include!("knowledge.rs");
 include!("internals.rs");
-
-#[cfg(test)]
-mod tests;

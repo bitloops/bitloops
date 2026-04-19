@@ -1,3 +1,4 @@
+use super::storage::parse_symbol_embedding_index_state_rows;
 use super::*;
 use crate::host::devql::esc_pg;
 use crate::host::devql::{sqlite_exec_path_allow_create, sqlite_query_rows_path};

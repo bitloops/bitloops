@@ -41,11 +41,7 @@ fn is_missing_table_or_column_error(err: &rusqlite::Error) -> bool {
     message.contains("no such table") || message.contains("no such column")
 }
 
-fn count_rows_for_repo(
-    conn: &rusqlite::Connection,
-    table: &str,
-    repo_id: &str,
-) -> Result<usize> {
+fn count_rows_for_repo(conn: &rusqlite::Connection, table: &str, repo_id: &str) -> Result<usize> {
     let sql = format!("SELECT COUNT(*) FROM {table} WHERE repo_id = ?1");
     match conn.query_row(&sql, rusqlite::params![repo_id], |row| row.get::<_, i64>(0)) {
         Ok(count) => usize::try_from(count)
@@ -75,7 +71,9 @@ fn load_representation_kind_counts_for_repo(
     let mut stmt = match conn.prepare(&sql) {
         Ok(stmt) => stmt,
         Err(err) if is_missing_table_or_column_error(&err) => return Ok(counts),
-        Err(err) => return Err(err).with_context(|| format!("preparing `{table}` representation query")),
+        Err(err) => {
+            return Err(err).with_context(|| format!("preparing `{table}` representation query"));
+        }
     };
     let rows = stmt
         .query_map(rusqlite::params![repo_id], |row| {
@@ -554,29 +552,20 @@ export function buildSnapshotAuditDigest(snapshot: string, workspaceId: string):
 
 pub fn run_devql_semantic_clones_rebuild(world: &mut QatWorld, repo_name: &str) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let output = run_command_capture(
-        world,
-        "bitloops devql tasks enqueue --kind ingest --status",
-        build_bitloops_command(
-            world,
-            &["devql", "tasks", "enqueue", "--kind", "ingest", "--status"],
-        )?,
-    )?;
-    ensure_success(&output, "bitloops devql tasks enqueue --kind ingest --status")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    enqueue_devql_ingest_task_with_status_for_repo(world, repo_name)?;
+    let stdout = world.last_command_stdout.as_deref().unwrap_or("");
     let semantic_rows = extract_ingest_metric(&stdout, "semantic_feature_rows_upserted=")
         .ok_or_else(|| {
             anyhow!(
-                "bitloops devql tasks enqueue --kind ingest --status completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
+                "DevQL ingest task enqueue with status completed but did not report semantic_feature_rows_upserted=... in stdout; semantic clones rebuild requires ingest metrics to verify clone setup"
             )
         })?;
     let clone_edges = extract_ingest_metric(&stdout, "symbol_clone_edges_upserted=");
-    run_devql_sync_for_repo(world, repo_name)?;
+    enqueue_devql_sync_task_with_status_for_repo(world, repo_name)?;
     wait_for_semantic_clone_enrichments_to_drain(world, repo_name)?;
     let store_snapshot = wait_for_semantic_clone_store_snapshot(world).with_context(|| {
         format!(
-            "bitloops devql tasks enqueue --kind ingest --status reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
+            "DevQL ingest task enqueue with status reported semantic_feature_rows_upserted={semantic_rows}, symbol_clone_edges_upserted={clone_edges:?}"
         )
     })?;
     let table_snapshot = load_semantic_clone_table_snapshot(world)?;
@@ -636,12 +625,14 @@ fn parse_status_bool_line(line: &str, prefix: &str) -> Option<bool> {
 
 fn parse_enrichment_status_snapshot(stdout: &str) -> Result<EnrichmentStatusSnapshot> {
     let mut snapshot = EnrichmentStatusSnapshot::default();
-    for line in stdout.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         if let Some(value) = parse_status_text_line(line, "Enrichment mode: ") {
             snapshot.mode = value;
-        } else if let Some(value) =
-            parse_status_u64_line(line, "Enrichment pending jobs: ")
-        {
+        } else if let Some(value) = parse_status_u64_line(line, "Enrichment pending jobs: ") {
             snapshot.pending_jobs = value;
         } else if let Some(value) =
             parse_status_u64_line(line, "Enrichment pending semantic jobs: ")
@@ -651,14 +642,11 @@ fn parse_enrichment_status_snapshot(stdout: &str) -> Result<EnrichmentStatusSnap
             parse_status_u64_line(line, "Enrichment pending embedding jobs: ")
         {
             snapshot.pending_embedding_jobs = value;
-        } else if let Some(value) = parse_status_u64_line(
-            line,
-            "Enrichment pending clone-edge rebuild jobs: ",
-        ) {
-            snapshot.pending_clone_edges_rebuild_jobs = value;
         } else if let Some(value) =
-            parse_status_u64_line(line, "Enrichment running jobs: ")
+            parse_status_u64_line(line, "Enrichment pending clone-edge rebuild jobs: ")
         {
+            snapshot.pending_clone_edges_rebuild_jobs = value;
+        } else if let Some(value) = parse_status_u64_line(line, "Enrichment running jobs: ") {
             snapshot.running_jobs = value;
         } else if let Some(value) =
             parse_status_u64_line(line, "Enrichment running semantic jobs: ")
@@ -668,44 +656,31 @@ fn parse_enrichment_status_snapshot(stdout: &str) -> Result<EnrichmentStatusSnap
             parse_status_u64_line(line, "Enrichment running embedding jobs: ")
         {
             snapshot.running_embedding_jobs = value;
-        } else if let Some(value) = parse_status_u64_line(
-            line,
-            "Enrichment running clone-edge rebuild jobs: ",
-        ) {
-            snapshot.running_clone_edges_rebuild_jobs = value;
         } else if let Some(value) =
-            parse_status_u64_line(line, "Enrichment failed jobs: ")
+            parse_status_u64_line(line, "Enrichment running clone-edge rebuild jobs: ")
         {
+            snapshot.running_clone_edges_rebuild_jobs = value;
+        } else if let Some(value) = parse_status_u64_line(line, "Enrichment failed jobs: ") {
             snapshot.failed_jobs = value;
-        } else if let Some(value) =
-            parse_status_u64_line(line, "Enrichment failed semantic jobs: ")
+        } else if let Some(value) = parse_status_u64_line(line, "Enrichment failed semantic jobs: ")
         {
             snapshot.failed_semantic_jobs = value;
         } else if let Some(value) =
             parse_status_u64_line(line, "Enrichment failed embedding jobs: ")
         {
             snapshot.failed_embedding_jobs = value;
-        } else if let Some(value) = parse_status_u64_line(
-            line,
-            "Enrichment failed clone-edge rebuild jobs: ",
-        ) {
+        } else if let Some(value) =
+            parse_status_u64_line(line, "Enrichment failed clone-edge rebuild jobs: ")
+        {
             snapshot.failed_clone_edges_rebuild_jobs = value;
-        } else if let Some(value) = parse_status_u64_line(
-            line,
-            "Enrichment retried failed jobs: ",
-        ) {
+        } else if let Some(value) = parse_status_u64_line(line, "Enrichment retried failed jobs: ")
+        {
             snapshot.retried_failed_jobs = value;
-        } else if let Some(value) =
-            parse_status_text_line(line, "Enrichment last action: ")
-        {
+        } else if let Some(value) = parse_status_text_line(line, "Enrichment last action: ") {
             snapshot.last_action = Some(value);
-        } else if let Some(value) =
-            parse_status_text_line(line, "Enrichment pause reason: ")
-        {
+        } else if let Some(value) = parse_status_text_line(line, "Enrichment pause reason: ") {
             snapshot.paused_reason = Some(value);
-        } else if let Some(value) =
-            parse_status_bool_line(line, "Enrichment persisted: ")
-        {
+        } else if let Some(value) = parse_status_bool_line(line, "Enrichment persisted: ") {
             snapshot.persisted = value;
         }
     }
@@ -803,16 +778,17 @@ pub fn observe_semantic_clone_enrichment_progress(
     let mut observation = SemanticCloneProgressObservation::default();
     let mut previous_snapshot: Option<SemanticCloneTableSnapshot> = None;
     let mut last_status: EnrichmentStatusSnapshot;
+    let mut previous_pending_embedding_jobs: Option<u64> = None;
     let mut semantics_activity_observed = false;
     let mut table_progress_observed = false;
-    let mut semantics_progress_observed_after_embeddings = false;
     let mut clone_edges_progress_observed_after_embeddings = false;
-    let mut max_semantics_count = 0_usize;
+    let mut clone_rebuild_work_observed_after_embeddings = false;
+    let mut summary_embedding_work_observed_before_clone_rebuild_drain = false;
     let mut max_clone_edges_count = 0_usize;
-    let mut code_embedding_semantics_count_at_first_observation = 0_usize;
     let mut code_embedding_clone_edges_count_at_first_observation = 0_usize;
-    let mut summary_embedding_semantics_count_at_first_observation = 0_usize;
     let mut summary_embedding_clone_edges_count_at_first_observation = 0_usize;
+    let mut code_embedding_clone_rebuild_active_at_first_observation = false;
+    let mut summary_embedding_clone_rebuild_active_at_first_observation = false;
 
     loop {
         let status = run_daemon_enrichments_status(world, repo_name)?;
@@ -821,7 +797,21 @@ pub fn observe_semantic_clone_enrichment_progress(
             "expected daemon enrichments to stay failure-free during semantic-clone progress observation, got {}",
             describe_enrichment_status(&status)
         );
+        let clone_rebuild_work_active = status.pending_clone_edges_rebuild_jobs > 0
+            || status.running_clone_edges_rebuild_jobs > 0;
+        let embedding_work_active =
+            status.pending_embedding_jobs > 0 || status.running_embedding_jobs > 0;
         observation.status_samples += 1;
+        observation.max_pending_embedding_jobs = observation
+            .max_pending_embedding_jobs
+            .max(status.pending_embedding_jobs);
+        observation.max_pending_clone_edges_rebuild_jobs = observation
+            .max_pending_clone_edges_rebuild_jobs
+            .max(status.pending_clone_edges_rebuild_jobs);
+        if let Some(previous) = previous_pending_embedding_jobs {
+            observation.embedding_pending_decreased |= status.pending_embedding_jobs < previous;
+        }
+        previous_pending_embedding_jobs = Some(status.pending_embedding_jobs);
         if let Ok(snapshot) = load_semantic_clone_table_snapshot(world) {
             let semantics_count = snapshot.current.symbol_semantics_current;
             let embeddings_count = snapshot.current.symbol_embeddings_current;
@@ -829,7 +819,6 @@ pub fn observe_semantic_clone_enrichment_progress(
             semantics_activity_observed |= semantics_count > 0;
             observation.embedding_activity_observed |= embeddings_count > 0;
             observation.clone_edges_rebuild_observed |= clone_edges_count > 0;
-            max_semantics_count = max_semantics_count.max(semantics_count);
             max_clone_edges_count = max_clone_edges_count.max(clone_edges_count);
 
             if snapshot.current_representation_counts.code > 0
@@ -837,26 +826,34 @@ pub fn observe_semantic_clone_enrichment_progress(
             {
                 observation.first_code_embedding_count =
                     snapshot.current_representation_counts.code;
-                code_embedding_semantics_count_at_first_observation = semantics_count;
                 code_embedding_clone_edges_count_at_first_observation = clone_edges_count;
+                code_embedding_clone_rebuild_active_at_first_observation =
+                    clone_rebuild_work_active;
             }
             if snapshot.current_representation_counts.summary > 0
                 && observation.first_summary_embedding_count == 0
             {
                 observation.first_summary_embedding_count =
                     snapshot.current_representation_counts.summary;
-                summary_embedding_semantics_count_at_first_observation = semantics_count;
                 summary_embedding_clone_edges_count_at_first_observation = clone_edges_count;
+                summary_embedding_clone_rebuild_active_at_first_observation =
+                    clone_rebuild_work_active;
+            }
+            if observation.embedding_activity_observed && clone_rebuild_work_active {
+                clone_rebuild_work_observed_after_embeddings = true;
+            }
+            if observation.first_code_embedding_count > 0
+                && observation.first_summary_embedding_count == 0
+                && embedding_work_active
+                && clone_rebuild_work_active
+            {
+                summary_embedding_work_observed_before_clone_rebuild_drain = true;
             }
             if let Some(previous) = &previous_snapshot {
-                table_progress_observed |= semantics_count > previous.current.symbol_semantics_current
+                table_progress_observed |= semantics_count
+                    > previous.current.symbol_semantics_current
                     || embeddings_count > previous.current.symbol_embeddings_current
                     || clone_edges_count > previous.current.symbol_clone_edges_current;
-                if embeddings_count > 0
-                    && semantics_count > previous.current.symbol_semantics_current
-                {
-                    semantics_progress_observed_after_embeddings = true;
-                }
                 if embeddings_count > 0
                     && clone_edges_count > previous.current.symbol_clone_edges_current
                 {
@@ -870,10 +867,11 @@ pub fn observe_semantic_clone_enrichment_progress(
         last_status = status.clone();
 
         if started.elapsed() >= timeout
-            || (observation.embedding_activity_observed
+            || (observation.first_code_embedding_count > 0
+                && observation.first_summary_embedding_count > 0
                 && observation.clone_edges_rebuild_observed
-                && semantics_progress_observed_after_embeddings
-                && clone_edges_progress_observed_after_embeddings)
+                && (clone_edges_progress_observed_after_embeddings
+                    || clone_rebuild_work_observed_after_embeddings))
         {
             break;
         }
@@ -911,20 +909,21 @@ pub fn observe_semantic_clone_enrichment_progress(
         "expected current semantic-clone tables to change over the observation window, got {:?}",
         world.semantic_clone_table_snapshot
     );
-    observation.parallel_progress_observed = semantics_progress_observed_after_embeddings
-        && clone_edges_progress_observed_after_embeddings;
-    observation.code_embeddings_appeared_before_drain =
-        code_embedding_semantics_count_at_first_observation > 0
-            && code_embedding_semantics_count_at_first_observation < max_semantics_count
-            && code_embedding_clone_edges_count_at_first_observation < max_clone_edges_count;
-    observation.summary_embeddings_appeared_before_drain =
-        summary_embedding_semantics_count_at_first_observation > 0
-            && summary_embedding_semantics_count_at_first_observation < max_semantics_count
-            && summary_embedding_clone_edges_count_at_first_observation < max_clone_edges_count;
+    observation.parallel_progress_observed = clone_edges_progress_observed_after_embeddings
+        || clone_rebuild_work_observed_after_embeddings;
+    observation.code_embeddings_appeared_before_drain = observation.first_code_embedding_count > 0
+        && (code_embedding_clone_rebuild_active_at_first_observation
+            || code_embedding_clone_edges_count_at_first_observation < max_clone_edges_count);
+    observation.summary_embeddings_appeared_before_drain = observation
+        .first_summary_embedding_count
+        > 0
+        && (summary_embedding_clone_rebuild_active_at_first_observation
+            || summary_embedding_work_observed_before_clone_rebuild_drain
+            || summary_embedding_clone_edges_count_at_first_observation < max_clone_edges_count);
     world.semantic_clone_progress_observation = Some(observation.clone());
     ensure!(
         observation.parallel_progress_observed,
-        "expected semantics and clone-edge current tables to keep growing after embeddings appeared, got {:?}",
+        "expected clone-edge rebuild work to remain active or clone-edge current tables to keep growing after embeddings appeared, got {:?}",
         world.semantic_clone_progress_observation
     );
     ensure!(
@@ -934,7 +933,7 @@ pub fn observe_semantic_clone_enrichment_progress(
     );
     ensure!(
         observation.code_embeddings_appeared_before_drain,
-        "expected current `code` embeddings to appear before semantic and clone-edge tables reached their observed maxima, got {:?}",
+        "expected current `code` embeddings to appear before clone-edge rebuild work fully drained, got {:?}",
         world.semantic_clone_progress_observation
     );
     ensure!(
@@ -944,7 +943,7 @@ pub fn observe_semantic_clone_enrichment_progress(
     );
     ensure!(
         observation.summary_embeddings_appeared_before_drain,
-        "expected current `summary` embeddings to appear before semantic and clone-edge tables reached their observed maxima, got {:?}",
+        "expected current `summary` embeddings to appear before clone-edge rebuild work fully drained, got {:?}",
         world.semantic_clone_progress_observation
     );
     Ok(())
@@ -1189,7 +1188,10 @@ fn clone_target_symbol_fqn(row: &serde_json::Value) -> Option<&str> {
         .and_then(|artefact| artefact.get("symbolFqn"))
         .and_then(serde_json::Value::as_str)
         .or_else(|| row.get("to").and_then(serde_json::Value::as_str))
-        .or_else(|| row.get("target_symbol_fqn").and_then(serde_json::Value::as_str))
+        .or_else(|| {
+            row.get("target_symbol_fqn")
+                .and_then(serde_json::Value::as_str)
+        })
 }
 
 fn run_devql_clones_query(
@@ -1449,9 +1451,7 @@ pub fn assert_devql_clones_rank_target_above(
         symbol_alias,
         None,
         false,
-        &format!(
-            "`{higher_rank_target}` to rank above `{lower_rank_target}` for `{symbol_alias}`"
-        ),
+        &format!("`{higher_rank_target}` to rank above `{lower_rank_target}` for `{symbol_alias}`"),
         |rows| {
             let higher = rows
                 .iter()

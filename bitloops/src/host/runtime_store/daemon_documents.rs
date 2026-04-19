@@ -7,8 +7,8 @@ use serde::de::DeserializeOwned;
 
 use crate::daemon::{
     DaemonRuntimeState, DaemonServiceMetadata, PersistedEmbeddingsBootstrapState,
-    PersistedEnrichmentQueueState, PersistedWorkosAuthSessionState, SupervisorRuntimeState,
-    SupervisorServiceMetadata,
+    PersistedEnrichmentQueueState, PersistedInitSessionState, PersistedSummaryBootstrapState,
+    PersistedWorkosAuthSessionState, SupervisorRuntimeState, SupervisorServiceMetadata,
 };
 use crate::daemon::{runtime_state_path, service_metadata_path};
 use crate::storage::SqliteConnectionPool;
@@ -114,6 +114,8 @@ fn initialise_runtime_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
     sqlite
         .execute_batch(super::repo_workplane::REPO_WORKPLANE_SCHEMA)
         .context("initialising capability workplane schema in daemon runtime db")?;
+    super::repo_workplane::ensure_repo_workplane_schema_upgrades(sqlite)
+        .context("upgrading capability workplane schema in daemon runtime db")?;
     Ok(())
 }
 
@@ -167,6 +169,14 @@ impl DaemonSqliteRuntimeStore {
 
     pub fn embeddings_bootstrap_state_exists(&self) -> Result<bool> {
         self.document_exists(document_key_embeddings_bootstrap_state())
+    }
+
+    pub fn init_session_state_exists(&self) -> Result<bool> {
+        self.document_exists(document_key_init_session_state())
+    }
+
+    pub fn summary_bootstrap_state_exists(&self) -> Result<bool> {
+        self.document_exists(document_key_summary_bootstrap_state())
     }
 
     pub fn capability_event_state_exists(&self) -> Result<bool> {
@@ -349,6 +359,49 @@ impl DaemonSqliteRuntimeStore {
             document_key_embeddings_bootstrap_state(),
             None,
             PersistedEmbeddingsBootstrapState::default,
+            mutate,
+        )
+    }
+
+    pub fn load_init_session_state(&self) -> Result<Option<PersistedInitSessionState>> {
+        self.load_document(document_key_init_session_state(), None)
+    }
+
+    pub fn save_init_session_state(&self, state: &PersistedInitSessionState) -> Result<()> {
+        self.save_document(document_key_init_session_state(), state)
+    }
+
+    pub fn mutate_init_session_state<T>(
+        &self,
+        mutate: impl FnOnce(&mut PersistedInitSessionState) -> Result<T>,
+    ) -> Result<T> {
+        self.mutate_document(
+            document_key_init_session_state(),
+            None,
+            PersistedInitSessionState::default,
+            mutate,
+        )
+    }
+
+    pub fn load_summary_bootstrap_state(&self) -> Result<Option<PersistedSummaryBootstrapState>> {
+        self.load_document(document_key_summary_bootstrap_state(), None)
+    }
+
+    pub fn save_summary_bootstrap_state(
+        &self,
+        state: &PersistedSummaryBootstrapState,
+    ) -> Result<()> {
+        self.save_document(document_key_summary_bootstrap_state(), state)
+    }
+
+    pub fn mutate_summary_bootstrap_state<T>(
+        &self,
+        mutate: impl FnOnce(&mut PersistedSummaryBootstrapState) -> Result<T>,
+    ) -> Result<T> {
+        self.mutate_document(
+            document_key_summary_bootstrap_state(),
+            None,
+            PersistedSummaryBootstrapState::default,
             mutate,
         )
     }
@@ -546,6 +599,14 @@ fn document_key_embeddings_bootstrap_state() -> &'static str {
     "embeddings_bootstrap_state"
 }
 
+fn document_key_init_session_state() -> &'static str {
+    "init_session_state"
+}
+
+fn document_key_summary_bootstrap_state() -> &'static str {
+    "summary_bootstrap_state"
+}
+
 fn document_key_capability_event_state() -> &'static str {
     "capability_event_queue_state"
 }
@@ -581,6 +642,7 @@ fn migrate_legacy_sync_queue_state(
                 repo_identity: task.repo_identity,
                 daemon_config_root: task.daemon_config_root,
                 repo_root: task.repo_root,
+                init_session_id: None,
                 kind: crate::daemon::DevqlTaskKind::Sync,
                 source: task.source,
                 spec: crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {

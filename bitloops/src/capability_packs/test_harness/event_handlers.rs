@@ -943,6 +943,7 @@ mod tests {
                 host_services: Arc::new(DefaultHostServicesGateway::new("repo-1"))
                     as Arc<dyn HostServicesGateway>,
                 workplane: Arc::new(NoopWorkplaneGateway),
+                init_session_id: None,
             })
         }
     }

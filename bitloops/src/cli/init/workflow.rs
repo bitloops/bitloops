@@ -4,15 +4,19 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::adapters::agents::AgentAdapterRegistry;
-use crate::capability_packs::semantic_clones::workplane::activate_deferred_pipeline_mailboxes;
+use crate::capability_packs::semantic_clones::workplane::{
+    activate_deferred_pipeline_mailboxes, activate_embedding_pipeline_mailboxes,
+    activate_summary_refresh_mailbox,
+};
 use crate::cli::embeddings::{
-    EmbeddingsRuntime, enqueue_embeddings_bootstrap_task, install_or_bootstrap_embeddings,
-    install_or_configure_platform_embeddings,
+    install_or_bootstrap_embeddings, install_or_configure_platform_embeddings,
+    platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
-    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
-    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
-    prepare_local_summary_generation_plan,
+    PreparedSummarySetupAction, SummarySetupSelection, configure_cloud_summary_generation,
+    configure_local_summary_generation, platform_summary_gateway_url_override,
+    prepare_cloud_summary_generation_plan, prepare_local_summary_generation_plan,
+    summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -21,14 +25,19 @@ use crate::config::settings::{
 };
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists};
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
+use crate::utils::platform_dirs::bitloops_home_dir;
 
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
-    AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitArgs, QueuedEmbeddingsBootstrapTask,
-    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_local_policy_excluded,
-    maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
-    should_install_embeddings_during_init, should_run_initial_ingest, should_run_initial_sync,
+    AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitAgentSelection, InitArgs,
+    InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions, choose_final_setup_options,
+    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
+    maybe_enable_default_daemon_service, maybe_install_default_daemon, normalize_cli_exclusions,
+    normalize_exclude_from_paths, should_install_embeddings_during_init,
 };
+
+const SUCCESS_GREEN_HEX: &str = "#22c55e";
+const INTEGRATION_SPINNER_FRAME: &str = "⠋";
 
 fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
     let registry = AgentAdapterRegistry::builtin();
@@ -45,7 +54,177 @@ fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
     Ok(resolved)
 }
 
-pub(super) async fn run_for_project_root(
+fn shell_escape_display_path(path: &Path) -> String {
+    let preferred = display_path_with_home(path);
+    preferred
+        .chars()
+        .flat_map(|ch| match ch {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '/' | '.' | '_' | '-' | '~' => [None, Some(ch)],
+            _ => [Some('\\'), Some(ch)],
+        })
+        .flatten()
+        .collect()
+}
+
+fn display_path_with_home(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let Ok(home) = bitloops_home_dir() else {
+        return canonical.display().to_string();
+    };
+    if canonical == home {
+        return "~".to_string();
+    }
+    if let Ok(relative) = canonical.strip_prefix(&home) {
+        let relative = relative.to_string_lossy();
+        if relative.is_empty() {
+            "~".to_string()
+        } else {
+            format!("~/{}", relative)
+        }
+    } else {
+        canonical.display().to_string()
+    }
+}
+
+fn write_default_daemon_bootstrap(
+    out: &mut dyn Write,
+    config_path: &Path,
+    port: u16,
+) -> Result<()> {
+    writeln!(out, "Starting Bitloops daemon…")?;
+    writeln!(out, "  config: {}", shell_escape_display_path(config_path))?;
+    writeln!(out, "  port:   {port}")?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
+}
+
+fn write_integrations_installing(
+    out: &mut dyn Write,
+    integrations: &[crate::cli::agent_surfaces::AgentIntegrationReport],
+) -> Result<Option<usize>> {
+    let spinner = color_hex_if_enabled(INTEGRATION_SPINNER_FRAME, BITLOOPS_PURPLE_HEX);
+    let label_width = integrations
+        .iter()
+        .map(|integration| integration.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 3;
+    let mut lines = Vec::new();
+    lines.push("Installing integrations…".to_string());
+    lines.push(String::new());
+    for integration in integrations {
+        lines.push(format!(
+            "  {} {:<label_width$}({} hooks)",
+            spinner,
+            integration.label,
+            integration.hook_count,
+            label_width = label_width
+        ));
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        write!(out, "{line}")?;
+        if index + 1 < lines.len() {
+            writeln!(out)?;
+        }
+    }
+    out.flush()?;
+
+    #[cfg(test)]
+    {
+        Ok(None)
+    }
+
+    #[cfg(not(test))]
+    {
+        if super::agent_selection::can_prompt_interactively() {
+            Ok(Some(lines.len()))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn write_integrations_installed(
+    out: &mut dyn Write,
+    integrations: &[crate::cli::agent_surfaces::AgentIntegrationReport],
+    previous_lines: Option<usize>,
+) -> Result<()> {
+    let tick = color_hex_if_enabled("✓", SUCCESS_GREEN_HEX);
+    let label_width = integrations
+        .iter()
+        .map(|integration| integration.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 3;
+    let mut lines = Vec::new();
+    lines.push("Integrations installed:".to_string());
+    lines.push(String::new());
+    for integration in integrations {
+        let detail = if integration.state
+            == crate::cli::agent_surfaces::AgentIntegrationState::AlreadyInstalled
+        {
+            format!("{} hooks were already installed", integration.hook_count)
+        } else {
+            format!("{} hooks", integration.hook_count)
+        };
+        lines.push(format!(
+            "  {} {:<label_width$}({detail})",
+            tick,
+            integration.label,
+            label_width = label_width
+        ));
+    }
+
+    if let Some(previous_lines) = previous_lines {
+        if previous_lines > 0 {
+            write!(out, "\x1b[{}F", previous_lines - 1)?;
+        } else {
+            write!(out, "\r")?;
+        }
+    }
+
+    for (index, line) in lines.iter().enumerate() {
+        write!(out, "\r\x1b[2K{line}")?;
+        if index + 1 < lines.len() {
+            writeln!(out)?;
+        }
+    }
+    writeln!(out)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
+}
+
+fn planned_integrations(
+    selected_agents: &[String],
+) -> Vec<crate::cli::agent_surfaces::AgentIntegrationReport> {
+    selected_agents
+        .iter()
+        .map(|agent| crate::cli::agent_surfaces::AgentIntegrationReport {
+            agent: agent.clone(),
+            label: super::agent_hooks::agent_display(agent),
+            hook_count: planned_hook_count(agent),
+            newly_installed_hook_count: 0,
+            state: crate::cli::agent_surfaces::AgentIntegrationState::Installed,
+        })
+        .collect()
+}
+
+fn planned_hook_count(agent: &str) -> usize {
+    match agent {
+        crate::adapters::agents::AGENT_NAME_CLAUDE_CODE => 7,
+        crate::adapters::agents::AGENT_NAME_COPILOT => 8,
+        crate::adapters::agents::AGENT_NAME_CODEX => 5,
+        crate::adapters::agents::AGENT_NAME_CURSOR => 9,
+        crate::adapters::agents::AGENT_NAME_GEMINI => 12,
+        crate::adapters::agents::AGENT_NAME_OPEN_CODE => 5,
+        _ => 0,
+    }
+}
+
+pub(crate) async fn run_for_project_root(
     args: InitArgs,
     project_root: &Path,
     out: &mut dyn Write,
@@ -81,32 +260,76 @@ pub(super) async fn run_for_project_root(
         bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
     }
 
-    maybe_install_default_daemon(args.install_default_daemon).await?;
-    telemetry_consent::ensure_default_daemon_running().await?;
-    let daemon_config_path = bound_running_daemon_config_path().await?;
-    if daemon_config_existed_at_entry {
-        telemetry_consent::ensure_existing_config_telemetry_consent(
-            project_root,
-            telemetry_choice,
-            out,
-            input,
+    maybe_install_default_daemon(args.install_default_daemon, telemetry_choice).await?;
+    let daemon_status = crate::daemon::status().await?;
+    let daemon_config_path = if let Some(runtime) = daemon_status.runtime.as_ref() {
+        Some(
+            runtime
+                .config_path
+                .canonicalize()
+                .unwrap_or_else(|_| runtime.config_path.clone()),
         )
-        .await?;
-    } else if let Some(choice) = telemetry_choice {
-        let persisted =
-            telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, Some(choice))
-                .await?;
-        if persisted.needs_prompt {
-            bail!("failed to persist telemetry consent");
-        }
-    }
-    ensure_repo_local_policy_excluded(&git_root, project_root)?;
-
-    let selected_agents = if !args.agent.is_empty() {
-        resolve_cli_agents(&args.agent)?
+    } else if args.install_default_daemon {
+        Some(bound_running_daemon_config_path().await?)
     } else {
-        detect_or_select_agent(project_root, out, select_fn)?
+        None
     };
+    if args.install_default_daemon {
+        let port = daemon_status
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.port)
+            .unwrap_or(crate::api::DEFAULT_DASHBOARD_PORT);
+        write_default_daemon_bootstrap(
+            out,
+            daemon_config_path
+                .as_deref()
+                .expect("install default daemon should resolve a daemon config path"),
+            port,
+        )?;
+    }
+    let should_manage_telemetry_via_daemon =
+        args.install_default_daemon || daemon_config_existed_at_entry;
+    let should_prompt_for_telemetry = if should_manage_telemetry_via_daemon {
+        telemetry_consent::ensure_default_daemon_running().await?;
+        if let Some(choice) = telemetry_choice {
+            let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
+                project_root,
+                Some(choice),
+            )
+            .await?;
+            if persisted.needs_prompt {
+                bail!("failed to persist telemetry consent");
+            }
+            false
+        } else {
+            let state =
+                telemetry_consent::update_cli_telemetry_consent_via_daemon(project_root, None)
+                    .await?;
+            if state.needs_prompt && !telemetry_consent::can_prompt_interactively() {
+                bail!(telemetry_consent::NON_INTERACTIVE_TELEMETRY_ERROR);
+            }
+            state.needs_prompt
+        }
+    } else {
+        false
+    };
+    let daemon_already_always_on = args.install_default_daemon
+        && (daemon_status
+            .runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Service)
+            || daemon_status.service.is_some());
+    let selection = if !args.agent.is_empty() {
+        InitAgentSelection {
+            agents: resolve_cli_agents(&args.agent)?,
+            enable_bitloops_skill: !args.disable_bitloops_skill,
+        }
+    } else {
+        detect_or_select_agent(project_root, out, !args.disable_bitloops_skill, select_fn)?
+    };
+    let selected_agents = selection.agents;
+    ensure_repo_init_files_excluded(&git_root, project_root, &selected_agents)?;
     let strategy = load_settings(project_root)
         .map(|settings| settings.strategy)
         .unwrap_or_else(|_| DEFAULT_STRATEGY.to_string());
@@ -117,61 +340,77 @@ pub(super) async fn run_for_project_root(
         &local_policy_path,
         &strategy,
         &selected_agents,
-        Some(&daemon_config_path),
+        daemon_config_path.as_deref(),
     )?;
     if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
         set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
     }
 
     let settings = load_settings(project_root).unwrap_or_default();
-    let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
+    let _git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
         &git_root,
         settings.local_dev,
     )?;
-    if git_count > 0 {
-        writeln!(out, "Installed {git_count} git hook(s).")?;
-    }
+    writeln!(out)?;
 
-    crate::cli::agent_surfaces::reconcile_project_agent_surfaces(
-        project_root,
-        &selected_agents,
-        settings.local_dev,
-        args.force,
-        out,
-    )?;
-    if args.install_default_daemon {
-        activate_deferred_pipeline_mailboxes(&git_root, "init")
-            .context("activating semantic clones deferred mailboxes for init")?;
+    let planned_integrations = planned_integrations(&selected_agents);
+    let installing_lines = write_integrations_installing(out, &planned_integrations)?;
+    let mut surface_updates = Vec::new();
+    let integration_report =
+        crate::cli::agent_surfaces::reconcile_project_agent_surfaces_with_options(
+            project_root,
+            &selected_agents,
+            settings.local_dev,
+            args.force,
+            crate::cli::agent_surfaces::ReconcileProjectAgentSurfacesOptions {
+                install_bitloops_skill: selection.enable_bitloops_skill,
+            },
+            &mut surface_updates,
+        )?;
+    write_integrations_installed(out, &integration_report.integrations, installing_lines)?;
+    if !surface_updates.is_empty() {
+        out.write_all(&surface_updates)?;
+        out.flush()?;
     }
-
-    let mut queued_embeddings_bootstrap = None;
+    let mut embeddings_bootstrap = None;
     let mut prepared_summary_setup = None;
-    let should_install_embeddings = should_install_embeddings_during_init(
-        project_root,
-        args.install_default_daemon,
-        out,
-        input,
-    )?;
-    if should_install_embeddings {
-        if args.embeddings_runtime == EmbeddingsRuntime::Platform {
-            let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "`bitloops init --embeddings-runtime platform` requires `--embeddings-gateway-url`"
-                )
-            })?;
-            for line in install_or_configure_platform_embeddings(
-                project_root,
-                gateway_url,
-                &args.embeddings_api_key_env,
-            )? {
-                writeln!(out, "{line}")?;
+    let embeddings_selection =
+        should_install_embeddings_during_init(project_root, &args, out, input)?;
+    match embeddings_selection {
+        InitEmbeddingsSetupSelection::Existing => {}
+        InitEmbeddingsSetupSelection::Cloud => {
+            let gateway_url =
+                platform_embeddings_gateway_url_override(args.embeddings_gateway_url.as_deref());
+            if args.install_default_daemon {
+                embeddings_bootstrap = Some(resolve_embeddings_bootstrap_request(
+                    project_root,
+                    InitEmbeddingsSetupSelection::Cloud,
+                    gateway_url.as_deref(),
+                    Some(args.embeddings_api_key_env.as_str()),
+                )?);
+            } else {
+                for line in install_or_configure_platform_embeddings(
+                    project_root,
+                    gateway_url.as_deref(),
+                    &args.embeddings_api_key_env,
+                )? {
+                    writeln!(out, "{line}")?;
+                }
             }
-        } else if args.install_default_daemon {
-            queued_embeddings_bootstrap =
-                Some(enqueue_embeddings_bootstrap_during_init(project_root, out).await?);
-        } else {
-            install_embeddings_during_init(project_root, out)?;
         }
+        InitEmbeddingsSetupSelection::Local => {
+            if args.install_default_daemon {
+                embeddings_bootstrap = Some(resolve_embeddings_bootstrap_request(
+                    project_root,
+                    InitEmbeddingsSetupSelection::Local,
+                    None,
+                    None,
+                )?);
+            } else {
+                install_embeddings_during_init(project_root, out)?;
+            }
+        }
+        InitEmbeddingsSetupSelection::Skip => {}
     }
     match choose_summary_setup_during_init(project_root, args.install_default_daemon, out, input)
         .await?
@@ -226,107 +465,86 @@ pub(super) async fn run_for_project_root(
         }
         SummarySetupSelection::Skip => {}
     }
-    let should_sync = should_run_initial_sync(args.sync, out, input)?;
-    let should_ingest = should_run_initial_ingest(effective_ingest, out, input)?;
+    if args.install_default_daemon {
+        activate_selected_init_mailboxes(
+            &git_root,
+            matches!(
+                embeddings_selection,
+                InitEmbeddingsSetupSelection::Existing
+                    | InitEmbeddingsSetupSelection::Cloud
+                    | InitEmbeddingsSetupSelection::Local
+            ),
+            prepared_summary_setup.is_some() || summary_generation_configured(project_root),
+        )?;
+    }
+    let final_setup_selection = choose_final_setup_options(
+        args.sync,
+        out,
+        input,
+        effective_ingest,
+        InitFinalSetupPromptOptions {
+            show_telemetry: should_prompt_for_telemetry,
+            show_auto_start_daemon: args.install_default_daemon && !daemon_already_always_on,
+        },
+    )?;
+    if args.install_default_daemon {
+        maybe_enable_default_daemon_service(
+            final_setup_selection.auto_start_daemon,
+            daemon_config_path
+                .as_deref()
+                .expect("install default daemon should resolve a daemon config path"),
+            should_prompt_for_telemetry
+                .then_some(final_setup_selection.telemetry)
+                .or(telemetry_choice),
+        )
+        .await?;
+    }
+    if should_prompt_for_telemetry {
+        let persisted = telemetry_consent::update_cli_telemetry_consent_via_daemon(
+            project_root,
+            Some(final_setup_selection.telemetry),
+        )
+        .await?;
+        if persisted.needs_prompt {
+            bail!("failed to persist telemetry consent");
+        }
+    }
+    let should_sync = final_setup_selection.sync;
+    let should_ingest = final_setup_selection.ingest;
     if args.install_default_daemon {
         write_init_setup_handoff(out).await?;
     }
-    let run_concurrent_init_progress = args.install_default_daemon
-        && (prepared_summary_setup.is_some()
-            || (queued_embeddings_bootstrap.is_some() && (should_sync || should_ingest)));
-    if should_sync || should_ingest || prepared_summary_setup.is_some() {
+    if should_sync
+        || should_ingest
+        || embeddings_bootstrap.is_some()
+        || prepared_summary_setup.is_some()
+    {
         let scope = crate::devql_transport::discover_slim_cli_repo_scope(Some(project_root))?;
-        if run_concurrent_init_progress {
-            let initial_top_task = if should_sync {
-                let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
-                    &scope, false, None, false, false, "init", false,
-                )
-                .await?;
-                Some(task)
-            } else if should_ingest {
-                let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
-                    &scope,
-                    Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
-                    false,
-                )
-                .await?;
-                Some(task)
-            } else {
-                None
-            };
-            run_dual_init_progress(
-                out,
-                &scope,
-                initial_top_task,
-                InitProgressOptions {
-                    show_sync: should_sync,
-                    show_ingest: should_ingest,
-                    enqueue_ingest_after_sync: should_sync && should_ingest,
-                    ingest_backfill: args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL),
-                    queued_embeddings_bootstrap,
-                    prepared_summary_setup,
+        let ingest_backfill =
+            should_ingest.then_some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL));
+        let summaries_bootstrap = prepared_summary_setup
+            .as_ref()
+            .map(runtime_summary_bootstrap_request_from_plan);
+        run_dual_init_progress(
+            out,
+            &scope,
+            InitProgressOptions {
+                start_input: crate::cli::devql::graphql::RuntimeStartInitInput {
+                    repo_id: scope.repo.repo_id.clone(),
+                    run_sync: should_sync,
+                    run_ingest: should_ingest,
+                    ingest_backfill,
+                    embeddings_bootstrap,
+                    summaries_bootstrap,
                 },
-            )
-            .await?;
-        } else if should_sync {
-            writeln!(out, "Starting initial DevQL sync...")?;
-            out.flush()?;
-            let (task, _merged) = crate::cli::devql::graphql::enqueue_sync_task_via_graphql(
-                &scope, false, None, false, false, "init", false,
-            )
-            .await?;
-            if let Some(task) =
-                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task.clone()).await?
-            {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
-            }
-            if should_ingest {
-                writeln!(out, "Starting initial DevQL ingest after sync...")?;
-                out.flush()?;
-                let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
-                    &scope,
-                    Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
-                    false,
-                )
-                .await?;
-                if let Some(task) =
-                    crate::cli::devql::graphql::watch_task_via_graphql(&scope, task).await?
-                {
-                    writeln!(
-                        out,
-                        "{}",
-                        crate::cli::devql::format_task_completion_summary(&task)
-                    )?;
-                }
-            }
-        } else if should_ingest {
-            if should_sync {
-                writeln!(out, "Starting initial DevQL ingest after sync...")?;
-            } else {
-                writeln!(out, "Starting initial DevQL ingest...")?;
-            }
-            out.flush()?;
-            let (task, _merged) = crate::cli::devql::graphql::enqueue_ingest_task_via_graphql(
-                &scope,
-                Some(args.backfill.unwrap_or(DEFAULT_INIT_INGEST_BACKFILL)),
-                false,
-            )
-            .await?;
-            if let Some(task) =
-                crate::cli::devql::graphql::watch_task_via_graphql(&scope, task).await?
-            {
-                writeln!(
-                    out,
-                    "{}",
-                    crate::cli::devql::format_task_completion_summary(&task)
-                )?;
-            }
-        }
+            },
+        )
+        .await?;
     }
+
+    crate::cli::watcher_bootstrap::reconcile_repo_watcher(project_root).map_err(|err| {
+        anyhow::anyhow!("Bitloops init completed, but DevQL watcher reconcile failed: {err:#}")
+    })?;
     Ok(())
 }
 
@@ -363,18 +581,56 @@ async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
         .unwrap_or(runtime.config_path))
 }
 
-async fn enqueue_embeddings_bootstrap_during_init(
-    project_root: &Path,
-    out: &mut dyn Write,
-) -> Result<QueuedEmbeddingsBootstrapTask> {
-    let (scope, queued) =
-        enqueue_embeddings_bootstrap_task(project_root, None, crate::daemon::DevqlTaskSource::Init)
-            .await?;
-    out.flush()?;
-    Ok(QueuedEmbeddingsBootstrapTask {
-        scope,
-        task_id: queued.task.task_id,
-    })
+fn resolve_embeddings_bootstrap_request(
+    repo_root: &Path,
+    selection: InitEmbeddingsSetupSelection,
+    gateway_url_override: Option<&str>,
+    api_key_env: Option<&str>,
+) -> Result<crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput> {
+    let config_path = crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))
+        .unwrap_or_else(|_| repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH));
+    match selection {
+        InitEmbeddingsSetupSelection::Cloud => {
+            let profile_name = crate::config::prepare_daemon_platform_embeddings_install(
+                &config_path,
+                gateway_url_override,
+                api_key_env.unwrap_or("BITLOOPS_PLATFORM_GATEWAY_TOKEN"),
+            )?
+            .profile_name;
+            Ok(
+                crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput {
+                    config_path: config_path.display().to_string(),
+                    profile_name,
+                    mode: "platform".to_string(),
+                    gateway_url_override: gateway_url_override.map(str::to_string),
+                    api_key_env: api_key_env.map(str::to_string),
+                },
+            )
+        }
+        InitEmbeddingsSetupSelection::Local
+        | InitEmbeddingsSetupSelection::Existing
+        | InitEmbeddingsSetupSelection::Skip => {
+            let profile_name =
+                crate::cli::embeddings::embedding_capability_for_config_path(&config_path)
+                    .ok()
+                    .and_then(|capability| {
+                        crate::cli::embeddings::selected_inference_profile_name(&capability)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| "local_code".to_string());
+
+            Ok(
+                crate::cli::devql::graphql::RuntimeEmbeddingsBootstrapRequestInput {
+                    config_path: config_path.display().to_string(),
+                    profile_name,
+                    mode: "local".to_string(),
+                    gateway_url_override: None,
+                    api_key_env: None,
+                },
+            )
+        }
+    }
 }
 
 fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> Result<()> {
@@ -397,7 +653,67 @@ fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> R
     }
 }
 
+fn activate_selected_init_mailboxes(
+    repo_root: &Path,
+    embeddings_enabled: bool,
+    summaries_enabled: bool,
+) -> Result<()> {
+    match (embeddings_enabled, summaries_enabled) {
+        (true, true) => activate_deferred_pipeline_mailboxes(repo_root, "init")
+            .context("activating semantic clones deferred mailboxes for init"),
+        (true, false) => activate_embedding_pipeline_mailboxes(repo_root, "init")
+            .context("activating semantic clones embedding mailboxes for init"),
+        (false, true) => activate_summary_refresh_mailbox(repo_root, "init")
+            .context("activating semantic clones summary mailboxes for init"),
+        (false, false) => Ok(()),
+    }
+}
+
+fn runtime_summary_bootstrap_request_from_plan(
+    plan: &crate::cli::inference::PreparedSummarySetupPlan,
+) -> crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+    match plan.action() {
+        PreparedSummarySetupAction::InstallRuntimeOnly { message } => {
+            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+                action: "install_runtime_only".to_string(),
+                message: Some(message.clone()),
+                model_name: None,
+                gateway_url_override: None,
+            }
+        }
+        PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
+            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+                action: "install_runtime_only_pending_probe".to_string(),
+                message: Some(message.clone()),
+                model_name: None,
+                gateway_url_override: None,
+            }
+        }
+        PreparedSummarySetupAction::ConfigureLocal { model_name } => {
+            crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+                action: "configure_local".to_string(),
+                message: None,
+                model_name: Some(model_name.clone()),
+                gateway_url_override: None,
+            }
+        }
+        PreparedSummarySetupAction::ConfigureCloud {
+            gateway_url_override,
+        } => crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
+            action: "configure_cloud".to_string(),
+            message: None,
+            model_name: None,
+            gateway_url_override: gateway_url_override.clone(),
+        },
+    }
+}
+
 async fn write_init_setup_handoff(out: &mut dyn Write) -> Result<()> {
+    let tick = color_hex_if_enabled("✓", SUCCESS_GREEN_HEX);
+    let dashboard_url = current_dashboard_url()
+        .await?
+        .unwrap_or_else(default_dashboard_url_for_init_handoff);
+
     writeln!(out)?;
     writeln!(
         out,
@@ -405,16 +721,68 @@ async fn write_init_setup_handoff(out: &mut dyn Write) -> Result<()> {
         color_hex_if_enabled(&bitloops_wordmark(), BITLOOPS_PURPLE_HEX)
     )?;
     writeln!(out)?;
+    writeln!(out, "{tick} Setup complete")?;
+    writeln!(out)?;
     writeln!(
         out,
-        "The setup is complete! You can continue on with your work and Bitloops will continue enriching your codebase's Intelligence Layer in the background. You can continue viewing the progress here or you can close this terminal if you prefer and you can always run `bitloops status` or visit the dashboard for more information."
+        "Bitloops is now building your project's Intelligence Layer in the background."
     )?;
     writeln!(out)?;
-    if let Some(url) = current_dashboard_url().await? {
-        writeln!(out, "Dashboard URL: {url}")?;
+    writeln!(out, "What’s happening:")?;
+    writeln!(out, "  • Syncing your codebase and commit history")?;
+    writeln!(out, "  • Indexing code for semantic search")?;
+    writeln!(out, "  • Generating file and module summaries")?;
+    writeln!(out)?;
+    writeln!(out, "You can:")?;
+    writeln!(out, "  • View progress: {dashboard_url}")?;
+    writeln!(out, "  • Check status anytime: bitloops status")?;
+    writeln!(
+        out,
+        "  • Close this terminal — setup will continue in the background"
+    )?;
+    writeln!(out)?;
+    if should_render_local_http_mkcert_notice(&dashboard_url) {
+        write_local_http_mkcert_notice(out)?;
     }
+    writeln!(out, "────────────────────────────────────────")?;
+    writeln!(out, " Live progress")?;
+    writeln!(out, "────────────────────────────────────────")?;
     writeln!(out)?;
     out.flush()?;
+    Ok(())
+}
+
+fn default_dashboard_url_for_init_handoff() -> String {
+    let scheme = if crate::api::tls::mkcert_on_path() {
+        "https"
+    } else {
+        "http"
+    };
+    format!(
+        "{scheme}://127.0.0.1:{}",
+        crate::api::DEFAULT_DASHBOARD_PORT
+    )
+}
+
+fn should_render_local_http_mkcert_notice(dashboard_url: &str) -> bool {
+    dashboard_url.starts_with("http://") && !crate::api::tls::mkcert_on_path()
+}
+
+fn write_local_http_mkcert_notice(out: &mut dyn Write) -> Result<()> {
+    writeln!(
+        out,
+        "Notice: local dashboard HTTPS is unavailable because `mkcert` is not on your PATH."
+    )?;
+    writeln!(
+        out,
+        "Install `mkcert`, run `mkcert -install`, then run `bitloops daemon start --recheck-local-dashboard-net`."
+    )?;
+    writeln!(
+        out,
+        "Guide: {}",
+        crate::api::tls::LOCAL_HTTPS_SETUP_DOCS_URL
+    )?;
+    writeln!(out)?;
     Ok(())
 }
 

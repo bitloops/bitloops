@@ -14,6 +14,7 @@ use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipe
 use crate::cli::embeddings::{
     EmbeddingsInstallState, EmbeddingsRuntime, enqueue_embeddings_bootstrap_task,
     inspect_embeddings_install_state, install_or_configure_platform_embeddings,
+    platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
     SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
@@ -32,7 +33,6 @@ use crate::config::settings::{self, SETTINGS_DIR, load_settings, set_capture_ena
 #[cfg(test)]
 use crate::config::settings::{settings_local_path, settings_path};
 use crate::host::checkpoints::session::create_session_backend_or_local;
-use crate::host::devql::watch;
 
 #[derive(Args, Debug, Clone)]
 pub struct EnableArgs {
@@ -127,12 +127,8 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
     Ok(())
 }
 
-fn restart_watcher_if_running(repo_root: &Path) {
-    let Ok(daemon_config_root) = crate::config::resolve_daemon_config_root_for_repo(repo_root)
-    else {
-        return;
-    };
-    if let Err(err) = watch::restart_watcher(repo_root, &daemon_config_root) {
+fn reconcile_repo_watcher(repo_root: &Path) {
+    if let Err(err) = crate::cli::watcher_bootstrap::reconcile_repo_watcher(repo_root) {
         log::debug!("skipping watcher restart after policy change: {err:#}");
     }
 }
@@ -235,7 +231,7 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
         out,
     )?;
     set_capture_enabled(&target_path, true)?;
-    restart_watcher_if_running(&git_root);
+    reconcile_repo_watcher(&git_root);
 
     writeln!(out, "Bitloops enabled in this project! :)")?;
     writeln!(out, "Strategy: {}.", settings.strategy)?;
@@ -275,14 +271,12 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
                 }
             }
             EmbeddingsRuntime::Platform => {
-                let gateway_url = args.embeddings_gateway_url.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "`bitloops enable --install-embeddings --embeddings-runtime platform` requires `--embeddings-gateway-url`"
-                    )
-                })?;
+                let gateway_url = platform_embeddings_gateway_url_override(
+                    args.embeddings_gateway_url.as_deref(),
+                );
                 for line in install_or_configure_platform_embeddings(
                     &cwd,
-                    gateway_url,
+                    gateway_url.as_deref(),
                     &args.embeddings_api_key_env,
                 )? {
                     writeln!(out, "{line}")?;
@@ -409,7 +403,7 @@ pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool
         out,
     )?;
     let repo_root = find_repo_root(start)?;
-    restart_watcher_if_running(&repo_root);
+    reconcile_repo_watcher(&repo_root);
     writeln!(
         out,
         "Bitloops capture is now disabled for this project ({})",

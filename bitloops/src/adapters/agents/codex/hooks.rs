@@ -280,8 +280,21 @@ fn normalize_entries_for_install(
 }
 
 pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
+    install_hooks_at_with_bitloops_skill(repo_root, local_dev, force, true)
+}
+
+pub fn install_hooks_at_with_bitloops_skill(
+    repo_root: &Path,
+    local_dev: bool,
+    force: bool,
+    install_bitloops_skill: bool,
+) -> Result<usize> {
     ensure_codex_hooks_feature_enabled_at(repo_root)?;
-    crate::adapters::agents::codex::skills::install_repo_skill(repo_root)?;
+    if install_bitloops_skill {
+        crate::adapters::agents::codex::skills::install_repo_skill(repo_root)?;
+    } else {
+        crate::adapters::agents::codex::skills::uninstall_repo_skill(repo_root)?;
+    }
     let path = hooks_file_path_for(repo_root);
     let existing_data = fs::read(&path).ok();
 

@@ -18,6 +18,8 @@ use crate::host::devql::{DevqlConfig, resolve_repo_identity};
 use super::managed::install_or_configure_platform_embeddings;
 use super::profiles::{clear_cache_for_profile, doctor_profile};
 
+const PLATFORM_GATEWAY_URL_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_URL";
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 pub enum EmbeddingsRuntime {
     #[default]
@@ -79,6 +81,20 @@ pub fn run(args: EmbeddingsArgs) -> Result<()> {
     runtime.block_on(run_async(args))
 }
 
+pub(crate) fn platform_embeddings_gateway_url_override(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            env::var(PLATFORM_GATEWAY_URL_ENV)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .map(|base_url| format!("{}/v1/embeddings", base_url.trim_end_matches('/')))
+        })
+}
+
 pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
     let Some(command) = args.command else {
         bail!(
@@ -113,14 +129,11 @@ pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
                 Ok(())
             }
             EmbeddingsRuntime::Platform => {
-                let gateway_url = args.gateway_url.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "`bitloops embeddings install --runtime platform` requires `--gateway-url`"
-                    )
-                })?;
+                let gateway_url =
+                    platform_embeddings_gateway_url_override(args.gateway_url.as_deref());
                 let lines = install_or_configure_platform_embeddings(
                     &repo_root,
-                    gateway_url,
+                    gateway_url.as_deref(),
                     &args.api_key_env,
                 )?;
                 for line in lines {

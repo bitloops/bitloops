@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS checkpoint_events_repo_commit_idx
 ON checkpoint_events (repo_id, commit_sha);
 "#;
 
-pub(super) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
+pub(crate) fn initialise_store_backends(repo_root: &Path) -> Result<()> {
     let cfg = resolve_store_backend_config_for_repo(repo_root)
         .context("resolving backend config for store initialisation")?;
 

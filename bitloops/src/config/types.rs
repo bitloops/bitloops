@@ -85,6 +85,10 @@ impl fmt::Display for SemanticCloneEmbeddingMode {
 }
 
 pub const DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS: usize = 1;
+pub const DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS: usize = 1;
+pub const DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS: usize =
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS;
+pub const DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS: usize = 1;
 pub const DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 5;
 pub const MIN_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 1;
 pub const MAX_SEMANTIC_CLONES_ANN_NEIGHBORS: usize = 50;
@@ -104,6 +108,13 @@ pub struct SemanticClonesConfig {
     pub summary_mode: SemanticSummaryMode,
     pub embedding_mode: SemanticCloneEmbeddingMode,
     pub ann_neighbors: usize,
+    #[serde(default)]
+    pub summary_workers: usize,
+    #[serde(default)]
+    pub embedding_workers: usize,
+    #[serde(default)]
+    pub clone_rebuild_workers: usize,
+    #[serde(default)]
     pub enrichment_workers: usize,
     #[serde(default)]
     pub inference: SemanticClonesInferenceBindings,
@@ -115,6 +126,9 @@ impl Default for SemanticClonesConfig {
             summary_mode: SemanticSummaryMode::default(),
             embedding_mode: SemanticCloneEmbeddingMode::default(),
             ann_neighbors: DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
+            summary_workers: DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS,
+            embedding_workers: DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS,
+            clone_rebuild_workers: DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS,
             enrichment_workers: DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
             inference: SemanticClonesInferenceBindings::default(),
         }

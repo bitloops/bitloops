@@ -36,7 +36,7 @@ pub(super) async fn resolve_dashboard_repo_selector(
         })
 }
 
-pub(super) async fn resolve_dashboard_repo_root(
+pub(in crate::api) async fn resolve_dashboard_repo_root(
     state: &DashboardState,
     repo_id: Option<&str>,
 ) -> std::result::Result<PathBuf, ApiError> {

@@ -6,6 +6,7 @@ mod profiles;
 mod tests;
 
 pub(crate) use args::enqueue_embeddings_bootstrap_task;
+pub(crate) use args::platform_embeddings_gateway_url_override;
 pub(crate) use args::run_async;
 pub use args::{
     EmbeddingsArgs, EmbeddingsClearCacheArgs, EmbeddingsCommand, EmbeddingsDoctorArgs,
@@ -13,9 +14,11 @@ pub use args::{
 };
 #[allow(unused_imports)]
 pub(crate) use managed::{
-    ensure_managed_embeddings_runtime_with_progress, install_or_bootstrap_embeddings,
+    ensure_managed_embeddings_runtime_with_progress,
+    install_managed_platform_embeddings_binary_with_progress, install_or_bootstrap_embeddings,
     install_or_configure_platform_embeddings, managed_embeddings_binary_dir,
     managed_embeddings_binary_path, managed_embeddings_metadata_path,
+    managed_platform_runtime_command_is_eligible, managed_platform_runtime_version_for_command,
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
 pub(crate) use profiles::{
@@ -26,7 +29,8 @@ pub(crate) use profiles::{
 
 #[cfg(test)]
 pub(crate) use managed::{
-    ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+    ManagedEmbeddingsBinaryInstallOutcome, ManagedPlatformEmbeddingsBinaryInstallOutcome,
+    with_managed_embeddings_install_hook, with_managed_platform_embeddings_install_hook,
 };
 
 #[cfg(test)]

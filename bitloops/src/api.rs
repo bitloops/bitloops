@@ -12,6 +12,7 @@ mod db;
 mod error;
 mod handlers;
 mod router;
+mod runtime_schema;
 pub mod tls;
 
 use crate::graphql;
@@ -29,6 +30,7 @@ use std::time::Duration;
 pub use self::dashboard_schema::dashboard_schema_sdl;
 pub(crate) use self::db::{BackendHealth, BackendHealthKind, DashboardDbPools};
 pub(crate) use self::error::ApiError;
+pub use self::runtime_schema::runtime_schema_sdl;
 
 pub const DEFAULT_DASHBOARD_PORT: u16 = 5667;
 
@@ -195,6 +197,7 @@ pub(crate) struct DashboardState {
     pub(super) bundle_source_overrides: DashboardBundleSourceOverrides,
     pub(super) subscription_hub: Arc<SubscriptionHub>,
     pub(super) dashboard_graphql_schema: dashboard_schema::DashboardGraphqlSchema,
+    pub(super) runtime_graphql_schema: runtime_schema::RuntimeGraphqlSchema,
     pub(super) devql_schema: graphql::DevqlSchema,
     pub(super) devql_slim_schema: graphql::SlimDevqlSchema,
 }
@@ -202,6 +205,10 @@ pub(crate) struct DashboardState {
 impl DashboardState {
     pub(crate) fn dashboard_graphql_schema(&self) -> &dashboard_schema::DashboardGraphqlSchema {
         &self.dashboard_graphql_schema
+    }
+
+    pub(crate) fn runtime_graphql_schema(&self) -> &runtime_schema::RuntimeGraphqlSchema {
+        &self.runtime_graphql_schema
     }
 
     pub(crate) fn devql_schema(&self) -> &graphql::DevqlSchema {

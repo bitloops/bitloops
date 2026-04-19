@@ -21,6 +21,8 @@ mod capture;
 
 const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
 pub const DISABLE_WATCHER_AUTOSTART_ENV: &str = "BITLOOPS_DISABLE_WATCHER_AUTOSTART";
+const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const WATCHER_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -72,33 +74,92 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
         .unwrap_or_else(|_| daemon_config_root.to_path_buf());
     let runtime_store = RepoSqliteRuntimeStore::open_for_roots(&daemon_config_root, &repo_root)?;
 
-    if let Some(entry) = runtime_store.load_watcher_registration()? {
-        if process_is_running(entry.pid) {
-            if entry.restart_token == restart_token {
-                return Ok(());
+    loop {
+        if let Some(entry) = runtime_store.load_watcher_registration()? {
+            match handle_existing_watcher_registration(
+                &runtime_store,
+                entry,
+                &restart_token,
+                WATCHER_READY_TIMEOUT,
+                WATCHER_READY_POLL_INTERVAL,
+            )? {
+                ExistingWatcherRegistrationHandle::Handled => return Ok(()),
+                ExistingWatcherRegistrationHandle::RetrySpawn => continue,
             }
-            // Restart token mismatch means a different binary is now serving watcher work.
-            // Kill the stale watcher so the new process can re-run startup schema init.
-            kill_process(entry.pid);
         }
-        runtime_store.clear_watcher_registration()?;
+
+        let mut command = build_watcher_spawn_command(&repo_root, &daemon_config_root)?;
+        command
+            // Avoid pinning the repository directory as the watcher cwd. Temp test
+            // repos can be deleted while the detached watcher is still alive.
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("spawning DevQL watcher for {}", repo_root.display()))?;
+
+        if let Some(entry) = runtime_store.claim_pending_watcher_registration(
+            child.id(),
+            &restart_token,
+            &repo_root,
+        )? {
+            kill_process(child.id());
+            match handle_existing_watcher_registration(
+                &runtime_store,
+                entry,
+                &restart_token,
+                WATCHER_READY_TIMEOUT,
+                WATCHER_READY_POLL_INTERVAL,
+            )? {
+                ExistingWatcherRegistrationHandle::Handled => return Ok(()),
+                ExistingWatcherRegistrationHandle::RetrySpawn => continue,
+            }
+        }
+
+        let wait_result = wait_for_watcher_registration_ready(
+            child.id(),
+            &restart_token,
+            WATCHER_READY_TIMEOUT,
+            WATCHER_READY_POLL_INTERVAL,
+            || runtime_store.load_watcher_registration(),
+            || Ok(child.try_wait()?.is_none()),
+        );
+        let wait_error = match wait_result {
+            Ok(()) => return Ok(()),
+            Err(wait_error) => wait_error,
+        };
+        match wait_error.downcast_ref::<WatcherRegistrationReadyError>() {
+            Some(WatcherRegistrationReadyError::TimedOut { .. }) => {
+                match recover_timed_out_pending_registration(
+                    &runtime_store,
+                    child.id(),
+                    &restart_token,
+                )? {
+                    Some(TimedOutPendingRecovery::ReadyRegistrationPresent) => return Ok(()),
+                    Some(TimedOutPendingRecovery::PendingReleased) => {
+                        kill_process(child.id());
+                        let _ = runtime_store
+                            .delete_watcher_registration_if_matches(child.id(), &restart_token);
+                    }
+                    None => {}
+                }
+            }
+            Some(WatcherRegistrationReadyError::ExitedBeforeReady { .. }) => {
+                let _ = runtime_store
+                    .delete_pending_watcher_registration_if_matches(child.id(), &restart_token);
+            }
+            None => {}
+        }
+        Err::<(), _>(wait_error).with_context(|| {
+            format!(
+                "waiting for DevQL watcher readiness for {}",
+                repo_root.display()
+            )
+        })?;
     }
-
-    let mut command = build_watcher_spawn_command(&repo_root, &daemon_config_root)?;
-    command
-        // Avoid pinning the repository directory as the watcher cwd. Temp test
-        // repos can be deleted while the detached watcher is still alive.
-        .current_dir(std::env::temp_dir())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    let child = command
-        .spawn()
-        .with_context(|| format!("spawning DevQL watcher for {}", repo_root.display()))?;
-    runtime_store.save_watcher_registration(child.id(), &restart_token, &repo_root)?;
-
-    Ok(())
 }
 
 pub fn restart_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
@@ -116,40 +177,51 @@ pub fn restart_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()
 }
 
 pub async fn run_process_command(args: WatcherProcessArgs) -> Result<()> {
-    let repo_root = resolve_repo_root(args.repo_root)?;
-    let daemon_config_root = resolve_daemon_config_root(args.daemon_config_root, &repo_root)?;
-    let repo = crate::host::devql::resolve_repo_identity(&repo_root)?;
-    let cfg = crate::host::devql::DevqlConfig::from_roots(
-        daemon_config_root.clone(),
-        repo_root.clone(),
-        repo,
-    )?;
-    let _ = crate::host::devql::load_repo_exclusion_matcher(&repo_root)
-        .context("loading repo policy exclusions for DevQL watcher start")?;
-    let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
-    let opts = DevqlWatchOptions::from(watch_cfg);
+    let result = async {
+        let repo_root = resolve_repo_root(args.repo_root)?;
+        let daemon_config_root = resolve_daemon_config_root(args.daemon_config_root, &repo_root)?;
+        let repo = crate::host::devql::resolve_repo_identity(&repo_root)?;
+        let cfg = crate::host::devql::DevqlConfig::from_roots(
+            daemon_config_root.clone(),
+            repo_root.clone(),
+            repo,
+        )?;
+        let _ = crate::host::devql::load_repo_exclusion_matcher(&repo_root)
+            .context("loading repo policy exclusions for DevQL watcher start")?;
+        let watch_cfg = crate::config::resolve_watch_runtime_config_for_repo(&repo_root);
+        let opts = DevqlWatchOptions::from(watch_cfg);
 
-    initialise_local_watch_schema(&repo_root, &daemon_config_root)?;
-    let runtime_store = RepoSqliteRuntimeStore::open_for_roots(&daemon_config_root, &repo_root)?;
-    let _registration_guard = WatcherRegistrationGuard::acquire(runtime_store, &repo_root)?;
+        initialise_local_watch_schema(&repo_root, &daemon_config_root)?;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_cfg = cfg.clone();
+        let worker_shutdown = shutdown.clone();
+        let runtime_handle = tokio::runtime::Handle::current();
+        let mut worker = tokio::task::spawn_blocking(move || {
+            run_notify_loop(&worker_cfg, opts, worker_shutdown, runtime_handle)
+        });
+        let shutdown_signal = wait_for_shutdown_signal();
+        tokio::pin!(shutdown_signal);
 
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let worker_cfg = cfg.clone();
-    let worker_shutdown = shutdown.clone();
-    let runtime_handle = tokio::runtime::Handle::current();
-    let mut worker = tokio::task::spawn_blocking(move || {
-        run_notify_loop(&worker_cfg, opts, worker_shutdown, runtime_handle)
-    });
-    let shutdown_signal = wait_for_shutdown_signal();
-    tokio::pin!(shutdown_signal);
-
-    tokio::select! {
-        worker_result = &mut worker => worker_result.context("joining watcher loop task")?,
-        _ = &mut shutdown_signal => {
-            shutdown.store(true, Ordering::SeqCst);
-            worker.await.context("joining watcher loop task after shutdown")?
+        tokio::select! {
+            worker_result = &mut worker => {
+                worker_result.context("joining watcher loop task")??;
+            }
+            _ = &mut shutdown_signal => {
+                shutdown.store(true, Ordering::SeqCst);
+                worker
+                    .await
+                    .context("joining watcher loop task after shutdown")??;
+            }
         }
+        Ok(())
     }
+    .await;
+
+    if let Err(err) = &result {
+        log::error!("devql watcher failed: {err:#}");
+    }
+
+    result
 }
 
 pub fn run_process_from_cli() -> Result<()> {
@@ -199,6 +271,14 @@ fn run_notify_loop(
     watcher
         .watch(&cfg.repo_root, RecursiveMode::Recursive)
         .with_context(|| format!("watching repo {}", cfg.repo_root.display()))?;
+    let runtime_store =
+        RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
+    let _registration_guard = WatcherRegistrationGuard::acquire(runtime_store, &cfg.repo_root)?;
+    log::info!(
+        "devql watcher started: repo_root={} daemon_config_root={}",
+        cfg.repo_root.display(),
+        cfg.daemon_config_root.display()
+    );
 
     let debounce = Duration::from_millis(opts.debounce_ms.max(50));
     let mut batch: BTreeSet<PathBuf> = BTreeSet::new();
@@ -372,7 +452,7 @@ impl WatcherRegistrationGuard {
     fn acquire(runtime_store: RepoSqliteRuntimeStore, repo_root: &Path) -> Result<Self> {
         let pid = std::process::id();
         let restart_token = current_watcher_restart_token()?;
-        runtime_store.save_watcher_registration(pid, &restart_token, repo_root)?;
+        runtime_store.promote_watcher_registration_to_ready(pid, &restart_token, repo_root)?;
         Ok(Self {
             runtime_store,
             pid,
@@ -397,13 +477,223 @@ fn current_watcher_restart_token() -> Result<String> {
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingWatcherRegistrationDisposition {
+    Ready,
+    WaitForReady,
+    Replace { kill_running_process: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingWatcherRegistrationHandle {
+    Handled,
+    RetrySpawn,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatcherRegistrationReadyError {
+    ExitedBeforeReady { pid: u32 },
+    TimedOut { pid: u32 },
+}
+
+impl std::fmt::Display for WatcherRegistrationReadyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExitedBeforeReady { pid } => {
+                write!(
+                    f,
+                    "spawned DevQL watcher process {pid} exited before becoming ready"
+                )
+            }
+            Self::TimedOut { pid } => {
+                write!(
+                    f,
+                    "timed out waiting for DevQL watcher process {pid} to become ready"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for WatcherRegistrationReadyError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimedOutPendingRecovery {
+    PendingReleased,
+    ReadyRegistrationPresent,
+}
+
+fn classify_existing_watcher_registration(
+    entry: &crate::host::runtime_store::RepoWatcherRegistration,
+    expected_restart_token: &str,
+    watcher_running: bool,
+) -> ExistingWatcherRegistrationDisposition {
+    if watcher_running && entry.restart_token == expected_restart_token {
+        return match entry.state {
+            crate::host::runtime_store::RepoWatcherRegistrationState::Ready => {
+                ExistingWatcherRegistrationDisposition::Ready
+            }
+            crate::host::runtime_store::RepoWatcherRegistrationState::Pending => {
+                ExistingWatcherRegistrationDisposition::WaitForReady
+            }
+        };
+    }
+
+    ExistingWatcherRegistrationDisposition::Replace {
+        kill_running_process: watcher_running && entry.restart_token != expected_restart_token,
+    }
+}
+
+fn handle_existing_watcher_registration(
+    runtime_store: &RepoSqliteRuntimeStore,
+    entry: crate::host::runtime_store::RepoWatcherRegistration,
+    expected_restart_token: &str,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<ExistingWatcherRegistrationHandle> {
+    match classify_existing_watcher_registration(
+        &entry,
+        expected_restart_token,
+        process_is_running(entry.pid),
+    ) {
+        ExistingWatcherRegistrationDisposition::Ready => {
+            Ok(ExistingWatcherRegistrationHandle::Handled)
+        }
+        ExistingWatcherRegistrationDisposition::WaitForReady => {
+            match wait_for_watcher_registration_ready(
+                entry.pid,
+                expected_restart_token,
+                timeout,
+                poll_interval,
+                || runtime_store.load_watcher_registration(),
+                || Ok(process_is_running(entry.pid)),
+            ) {
+                Ok(()) => Ok(ExistingWatcherRegistrationHandle::Handled),
+                Err(wait_error)
+                    if matches!(
+                        wait_error.downcast_ref::<WatcherRegistrationReadyError>(),
+                        Some(WatcherRegistrationReadyError::ExitedBeforeReady { .. })
+                    ) =>
+                {
+                    runtime_store.delete_pending_watcher_registration_if_matches(
+                        entry.pid,
+                        &entry.restart_token,
+                    )?;
+                    Ok(ExistingWatcherRegistrationHandle::RetrySpawn)
+                }
+                Err(wait_error)
+                    if matches!(
+                        wait_error.downcast_ref::<WatcherRegistrationReadyError>(),
+                        Some(WatcherRegistrationReadyError::TimedOut { .. })
+                    ) =>
+                {
+                    match recover_timed_out_pending_registration(
+                        runtime_store,
+                        entry.pid,
+                        &entry.restart_token,
+                    )? {
+                        Some(TimedOutPendingRecovery::ReadyRegistrationPresent) => {
+                            Ok(ExistingWatcherRegistrationHandle::Handled)
+                        }
+                        Some(TimedOutPendingRecovery::PendingReleased) => {
+                            Ok(ExistingWatcherRegistrationHandle::RetrySpawn)
+                        }
+                        None => Err(wait_error),
+                    }
+                }
+                Err(wait_error) => Err(wait_error),
+            }
+        }
+        ExistingWatcherRegistrationDisposition::Replace {
+            kill_running_process,
+        } => {
+            if kill_running_process {
+                // Restart token mismatch means a different binary is now serving watcher work.
+                // Kill the stale watcher so the new process can re-run startup schema init.
+                kill_process(entry.pid);
+            }
+            runtime_store
+                .delete_watcher_registration_if_matches(entry.pid, &entry.restart_token)?;
+            Ok(ExistingWatcherRegistrationHandle::RetrySpawn)
+        }
+    }
+}
+
+fn recover_timed_out_pending_registration(
+    runtime_store: &RepoSqliteRuntimeStore,
+    pid: u32,
+    expected_restart_token: &str,
+) -> Result<Option<TimedOutPendingRecovery>> {
+    if runtime_store.delete_pending_watcher_registration_if_matches(pid, expected_restart_token)? {
+        return Ok(Some(TimedOutPendingRecovery::PendingReleased));
+    }
+
+    match runtime_store.load_watcher_registration()? {
+        Some(entry)
+            if entry.restart_token == expected_restart_token
+                && entry.state
+                    == crate::host::runtime_store::RepoWatcherRegistrationState::Ready
+                && process_is_running(entry.pid) =>
+        {
+            Ok(Some(TimedOutPendingRecovery::ReadyRegistrationPresent))
+        }
+        None => Ok(Some(TimedOutPendingRecovery::PendingReleased)),
+        Some(_) => Ok(None),
+    }
+}
+
+fn wait_for_watcher_registration_ready<FLoad, FWatcherRunning>(
+    expected_pid: u32,
+    expected_restart_token: &str,
+    timeout: Duration,
+    poll_interval: Duration,
+    mut load_registration: FLoad,
+    mut watcher_running: FWatcherRunning,
+) -> Result<()>
+where
+    FLoad: FnMut() -> Result<Option<crate::host::runtime_store::RepoWatcherRegistration>>,
+    FWatcherRunning: FnMut() -> Result<bool>,
+{
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(entry) = load_registration()?
+            && entry.pid == expected_pid
+            && entry.restart_token == expected_restart_token
+            && entry.state == crate::host::runtime_store::RepoWatcherRegistrationState::Ready
+        {
+            return Ok(());
+        }
+
+        if !watcher_running()? {
+            return Err(anyhow::Error::new(
+                WatcherRegistrationReadyError::ExitedBeforeReady { pid: expected_pid },
+            ));
+        }
+
+        if Instant::now() >= deadline {
+            return Err(anyhow::Error::new(
+                WatcherRegistrationReadyError::TimedOut { pid: expected_pid },
+            ));
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+}
+
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
         let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => Some(signal),
+                Err(err) => {
+                    log::warn!("failed to install SIGTERM handler for devql watcher: {err:#}");
+                    None
+                }
+            };
         let ctrl_c = async {
-            if tokio::signal::ctrl_c().await.is_err() {
+            if let Err(err) = tokio::signal::ctrl_c().await {
+                log::warn!("failed to install Ctrl-C handler for devql watcher: {err:#}");
                 std::future::pending::<()>().await;
             }
         };
@@ -421,112 +711,13 @@ async fn wait_for_shutdown_signal() {
 
     #[cfg(not(unix))]
     {
-        if tokio::signal::ctrl_c().await.is_err() {
+        if let Err(err) = tokio::signal::ctrl_c().await {
+            log::warn!("failed to install Ctrl-C handler for devql watcher: {err:#}");
             std::future::pending::<()>().await;
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::test_support::git_fixtures::init_test_repo;
-    use crate::test_support::process_state::with_env_var;
-
-    use tempfile::TempDir;
-
-    use super::*;
-
-    fn seed_runtime_store() -> (TempDir, PathBuf, RepoSqliteRuntimeStore) {
-        let dir = TempDir::new().expect("temp dir");
-        let repo_root = dir.path().join("repo");
-        fs::create_dir_all(&repo_root).expect("create repo root");
-        init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
-        let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
-            .expect("open repo runtime store");
-        (dir, repo_root, store)
-    }
-
-    #[test]
-    fn watcher_registration_round_trips_through_repo_runtime_store() {
-        let (_dir, repo_root, store) = seed_runtime_store();
-
-        store
-            .save_watcher_registration(12345, "token-123", &repo_root)
-            .expect("save watcher registration");
-        let entry = store
-            .load_watcher_registration()
-            .expect("load watcher registration")
-            .expect("watcher registration should exist");
-
-        assert_eq!(entry.pid, 12345);
-        assert_eq!(entry.restart_token, "token-123");
-        assert_eq!(entry.repo_root, repo_root);
-    }
-
-    #[test]
-    fn delete_watcher_registration_if_matches_preserves_mismatched_rows() {
-        let (_dir, repo_root, store) = seed_runtime_store();
-
-        store
-            .save_watcher_registration(7, "token-a", &repo_root)
-            .expect("seed watcher registration");
-        store
-            .delete_watcher_registration_if_matches(8, "token-b")
-            .expect("conditional delete");
-
-        assert!(
-            store
-                .load_watcher_registration()
-                .expect("load watcher registration")
-                .is_some(),
-            "mismatched conditional delete should preserve the row"
-        );
-    }
-
-    #[test]
-    fn registration_guard_writes_and_removes_owned_row() {
-        let (_dir, repo_root, store) = seed_runtime_store();
-
-        {
-            let _guard = WatcherRegistrationGuard::acquire(store.clone(), &repo_root)
-                .expect("acquire watcher registration guard");
-            let entry = store
-                .load_watcher_registration()
-                .expect("load watcher registration")
-                .expect("watcher registration should exist");
-            assert_eq!(entry.pid, std::process::id());
-            assert!(!entry.restart_token.is_empty());
-        }
-
-        assert!(
-            store
-                .load_watcher_registration()
-                .expect("load watcher registration after drop")
-                .is_none(),
-            "owned watcher registration should be removed on drop"
-        );
-    }
-
-    #[test]
-    fn ensure_watcher_running_returns_early_when_autostart_is_disabled() {
-        let (dir, repo_root, store) = seed_runtime_store();
-        with_env_var(DISABLE_WATCHER_AUTOSTART_ENV, Some("1"), || {
-            ensure_watcher_running(&repo_root, dir.path()).expect("autostart disabled");
-        });
-
-        assert!(
-            store
-                .load_watcher_registration()
-                .expect("load watcher registration")
-                .is_none(),
-            "disabled autostart must not register a watcher"
-        );
-    }
-
-    #[test]
-    fn current_watcher_restart_token_hashes_the_current_binary() {
-        let token = current_watcher_restart_token().expect("restart token");
-        assert_eq!(token.len(), 64);
-        assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
-    }
-}
+#[path = "watch_tests.rs"]
+mod tests;

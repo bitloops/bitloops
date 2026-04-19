@@ -376,6 +376,7 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
                         event_kind: "current_state_consumer".to_string(),
                         lane_key: "repo-1:test_harness.current_state".to_string(),
                         event_payload_json: String::new(),
+                        init_session_id: None,
                         status: crate::daemon::CapabilityEventRunStatus::Queued,
                         attempts: 0,
                         submitted_at_unix: 1,
@@ -557,7 +558,12 @@ fn repo_runtime_store_persists_repo_watcher_registration() {
     let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
         .expect("open repo runtime store");
     store
-        .save_watcher_registration(4242, "restart-token", &repo_root)
+        .save_watcher_registration(
+            4242,
+            "restart-token",
+            &repo_root,
+            RepoWatcherRegistrationState::Ready,
+        )
         .expect("save watcher registration");
 
     let registration = store
@@ -567,6 +573,208 @@ fn repo_runtime_store_persists_repo_watcher_registration() {
     assert_eq!(registration.pid, 4242);
     assert_eq!(registration.restart_token, "restart-token");
     assert_eq!(registration.repo_root, repo_root);
+    assert_eq!(registration.state, RepoWatcherRegistrationState::Ready);
+}
+
+#[test]
+fn repo_runtime_store_claim_pending_watcher_registration_preserves_owned_ready_row() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .save_watcher_registration(
+            4242,
+            "restart-token",
+            &repo_root,
+            RepoWatcherRegistrationState::Ready,
+        )
+        .expect("seed ready watcher registration");
+
+    let displaced = store
+        .claim_pending_watcher_registration(4242, "restart-token", &repo_root)
+        .expect("claim pending watcher registration");
+    assert!(
+        displaced.is_none(),
+        "matching ready owner should keep the registration"
+    );
+
+    let registration = store
+        .load_watcher_registration()
+        .expect("load watcher registration")
+        .expect("watcher registration should exist");
+    assert_eq!(registration.pid, 4242);
+    assert_eq!(registration.state, RepoWatcherRegistrationState::Ready);
+}
+
+#[test]
+fn repo_runtime_store_claim_pending_watcher_registration_reports_existing_owner() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .save_watcher_registration(
+            1111,
+            "restart-token",
+            &repo_root,
+            RepoWatcherRegistrationState::Pending,
+        )
+        .expect("seed pending watcher registration");
+
+    let existing = store
+        .claim_pending_watcher_registration(2222, "restart-token", &repo_root)
+        .expect("claim pending watcher registration")
+        .expect("claim should report the existing watcher owner");
+    assert_eq!(existing.pid, 1111);
+    assert_eq!(existing.state, RepoWatcherRegistrationState::Pending);
+
+    let registration = store
+        .load_watcher_registration()
+        .expect("load watcher registration")
+        .expect("watcher registration should exist");
+    assert_eq!(registration.pid, 1111);
+    assert_eq!(registration.state, RepoWatcherRegistrationState::Pending);
+}
+
+#[test]
+fn repo_runtime_store_delete_pending_watcher_registration_if_matches_removes_pending_only() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .save_watcher_registration(
+            4242,
+            "restart-token",
+            &repo_root,
+            RepoWatcherRegistrationState::Pending,
+        )
+        .expect("seed pending watcher registration");
+
+    let deleted = store
+        .delete_pending_watcher_registration_if_matches(4242, "restart-token")
+        .expect("delete pending watcher registration");
+    assert!(deleted, "matching pending row should be deleted");
+    assert!(
+        store
+            .load_watcher_registration()
+            .expect("load watcher registration after delete")
+            .is_none(),
+        "pending row should be removed"
+    );
+
+    store
+        .save_watcher_registration(
+            4242,
+            "restart-token",
+            &repo_root,
+            RepoWatcherRegistrationState::Ready,
+        )
+        .expect("seed ready watcher registration");
+
+    let deleted = store
+        .delete_pending_watcher_registration_if_matches(4242, "restart-token")
+        .expect("delete pending watcher registration");
+    assert!(
+        !deleted,
+        "ready rows must not be deleted by pending-timeout cleanup"
+    );
+    assert_eq!(
+        store
+            .load_watcher_registration()
+            .expect("load watcher registration after ready delete attempt")
+            .expect("ready watcher registration should remain")
+            .state,
+        RepoWatcherRegistrationState::Ready
+    );
+}
+
+#[test]
+fn repo_runtime_store_migrates_legacy_repo_watcher_registration_state() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    let config_path = write_test_daemon_config(dir.path());
+    let config_path_string = config_path.to_string_lossy().to_string();
+    let runtime_db_path = canonical_root(dir.path())
+        .join("stores")
+        .join("runtime")
+        .join("runtime.sqlite");
+    let repo_id = crate::host::devql::resolve_repo_identity(&repo_root)
+        .expect("resolve repo identity")
+        .repo_id;
+
+    let sqlite = crate::storage::SqliteConnectionPool::connect(runtime_db_path.clone())
+        .expect("create runtime sqlite");
+    sqlite
+        .execute_batch(
+            r#"
+CREATE TABLE repo_watcher_registrations (
+    repo_id TEXT PRIMARY KEY,
+    repo_root TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    restart_token TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
+"#,
+        )
+        .expect("create legacy watcher registration table");
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO repo_watcher_registrations (
+                    repo_id, repo_root, pid, restart_token, created_at, updated_at
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, datetime('now'), datetime('now')
+                 )",
+                rusqlite::params![
+                    repo_id.as_str(),
+                    repo_root.to_string_lossy().to_string(),
+                    4242u32,
+                    "legacy-token",
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("seed legacy watcher registration");
+
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let store = RepoSqliteRuntimeStore::open(&repo_root).expect("open runtime store");
+            let registration = store
+                .load_watcher_registration()
+                .expect("load watcher registration")
+                .expect("watcher registration should exist");
+            assert_eq!(registration.state, RepoWatcherRegistrationState::Ready);
+
+            let has_state_column = store
+                .connect_repo_sqlite()
+                .expect("connect runtime sqlite")
+                .with_connection(|conn| {
+                    let mut stmt = conn.prepare("PRAGMA table_info(repo_watcher_registrations)")?;
+                    let column_names = stmt
+                        .query_map([], |row| row.get::<_, String>(1))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(column_names.into_iter().any(|name| name == "state"))
+                })
+                .expect("inspect watcher registration columns");
+            assert!(has_state_column, "migration should add the state column");
+        },
+    );
 }
 
 #[test]

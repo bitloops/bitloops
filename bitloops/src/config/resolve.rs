@@ -32,6 +32,14 @@ use super::unified_config::{
     resolve_watch_from_unified,
 };
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SemanticClonesWorkerSettings {
+    pub summary_workers: Option<usize>,
+    pub embedding_workers: Option<usize>,
+    pub clone_rebuild_workers: Option<usize>,
+    pub legacy_enrichment_workers: Option<usize>,
+}
+
 fn explicit_daemon_settings_override() -> Result<Option<(PathBuf, UnifiedSettings)>> {
     let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) else {
         return Ok(None);
@@ -308,6 +316,15 @@ pub fn resolve_semantic_clones_config_for_repo(repo_root: &Path) -> SemanticClon
     resolve_semantic_clones_from_unified(&settings, |key| env::var(key).ok())
 }
 
+pub(crate) fn resolve_semantic_clones_worker_settings_for_repo(
+    repo_root: &Path,
+) -> SemanticClonesWorkerSettings {
+    let settings = preferred_daemon_settings_for_repo(repo_root)
+        .map(|(_, settings)| settings)
+        .unwrap_or_default();
+    semantic_clones_worker_settings_from_unified(&settings)
+}
+
 pub fn resolve_inference_config_for_repo(repo_root: &Path) -> InferenceConfig {
     let (config_root, settings) = preferred_daemon_settings_for_repo(repo_root).unwrap_or_default();
     resolve_inference_from_unified(&settings, &config_root, |key| env::var(key).ok())
@@ -324,6 +341,26 @@ pub fn resolve_inference_capability_config_for_repo(repo_root: &Path) -> Inferen
 
 pub fn resolve_embedding_capability_config_for_repo(repo_root: &Path) -> EmbeddingCapabilityConfig {
     resolve_inference_capability_config_for_repo(repo_root)
+}
+
+fn semantic_clones_worker_settings_from_unified(
+    settings: &UnifiedSettings,
+) -> SemanticClonesWorkerSettings {
+    let root = settings.semantic_clones.as_ref().and_then(Value::as_object);
+    SemanticClonesWorkerSettings {
+        summary_workers: root
+            .and_then(|map| read_any_u64(map, &["summary_workers"]))
+            .and_then(|value| usize::try_from(value).ok()),
+        embedding_workers: root
+            .and_then(|map| read_any_u64(map, &["embedding_workers"]))
+            .and_then(|value| usize::try_from(value).ok()),
+        clone_rebuild_workers: root
+            .and_then(|map| read_any_u64(map, &["clone_rebuild_workers"]))
+            .and_then(|value| usize::try_from(value).ok()),
+        legacy_enrichment_workers: root
+            .and_then(|map| read_any_u64(map, &["enrichment_workers"]))
+            .and_then(|value| usize::try_from(value).ok()),
+    }
 }
 
 pub fn resolve_sqlite_db_path(raw_path: Option<&str>) -> Result<PathBuf> {
@@ -496,20 +533,55 @@ where
                 .map(clamp_semantic_clones_ann_neighbors)
         })
         .unwrap_or(DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS);
-    let enrichment_workers = root
+    let legacy_enrichment_workers = root
         .and_then(|map| read_any_u64(map, &["enrichment_workers"]))
         .or_else(|| {
             read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_ENRICHMENT_WORKERS")
                 .and_then(|value| value.trim().parse::<u64>().ok())
         })
         .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0);
+    let summary_workers = root
+        .and_then(|map| read_any_u64(map, &["summary_workers"]))
+        .or_else(|| {
+            read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_SUMMARY_WORKERS")
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        })
+        .and_then(|value| usize::try_from(value).ok())
         .filter(|value| *value > 0)
+        .unwrap_or_else(|| SemanticClonesConfig::default().summary_workers);
+    let embedding_workers = root
+        .and_then(|map| read_any_u64(map, &["embedding_workers"]))
+        .or_else(|| {
+            read_non_empty_env(&env_lookup, "BITLOOPS_SEMANTIC_CLONES_EMBEDDING_WORKERS")
+                .and_then(|value| value.trim().parse::<u64>().ok())
+        })
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .or(legacy_enrichment_workers)
+        .unwrap_or_else(|| SemanticClonesConfig::default().embedding_workers);
+    let clone_rebuild_workers = root
+        .and_then(|map| read_any_u64(map, &["clone_rebuild_workers"]))
+        .or_else(|| {
+            read_non_empty_env(
+                &env_lookup,
+                "BITLOOPS_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS",
+            )
+            .and_then(|value| value.trim().parse::<u64>().ok())
+        })
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| SemanticClonesConfig::default().clone_rebuild_workers);
+    let enrichment_workers = legacy_enrichment_workers
         .unwrap_or_else(|| SemanticClonesConfig::default().enrichment_workers);
 
     SemanticClonesConfig {
         summary_mode,
         embedding_mode,
         ann_neighbors,
+        summary_workers,
+        embedding_workers,
+        clone_rebuild_workers,
         enrichment_workers,
         inference: crate::config::SemanticClonesInferenceBindings {
             summary_generation: inference_root

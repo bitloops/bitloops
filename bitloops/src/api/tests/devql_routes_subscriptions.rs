@@ -84,6 +84,21 @@ fn slim_scope_headers(repo_root: &Path) -> Vec<(String, String)> {
     ]
 }
 
+fn runtime_binding_headers(repo_root: &Path) -> Vec<(String, String)> {
+    vec![
+        (
+            crate::devql_transport::HEADER_SCOPE_REPO_ROOT.to_string(),
+            crate::devql_transport::encode_scope_header_value(&repo_root.to_string_lossy()),
+        ),
+        (
+            crate::devql_transport::HEADER_DAEMON_BINDING.to_string(),
+            crate::devql_transport::daemon_binding_identifier_for_config_path(
+                &repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+            ),
+        ),
+    ]
+}
+
 async fn request_slim_query(
     app: axum::Router,
     repo_root: &Path,
@@ -221,6 +236,11 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("telemetry(eventType: String, agent: String"));
     assert!(body.contains("knowledge(provider: KnowledgeProvider"));
     assert!(body.contains("clones(filter:"));
+    assert!(body.contains("interactionSessions("));
+    assert!(body.contains("interactionTurns("));
+    assert!(body.contains("interactionEvents("));
+    assert!(body.contains("searchInteractionSessions(input: InteractionSearchInputObject!)"));
+    assert!(body.contains("searchInteractionTurns(input: InteractionSearchInputObject!)"));
     assert!(body.contains("chatHistory"));
     assert!(body.contains("selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
@@ -249,7 +269,207 @@ async fn devql_global_routes_serve_full_schema_and_playground() {
     assert!(sdl_body.contains("repo(name: String!): Repository!"));
     assert!(sdl_body.contains("branch(name: String!): Repository!"));
     assert!(sdl_body.contains("project(path: String!): Project!"));
+    assert!(sdl_body.contains("interactionSessions("));
+    assert!(sdl_body.contains("interactionTurns("));
+    assert!(sdl_body.contains("interactionEvents("));
+    assert!(sdl_body.contains("searchInteractionSessions(input: InteractionSearchInputObject!)"));
+    assert!(sdl_body.contains("searchInteractionTurns(input: InteractionSearchInputObject!)"));
     assert!(!sdl_body.contains("selectArtefacts(by: ArtefactSelectorInput!)"));
+}
+
+#[tokio::test]
+async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (playground_status, playground_body) =
+        request_text(app.clone(), "/devql/runtime/playground").await;
+    assert_eq!(playground_status, StatusCode::OK);
+    assert!(playground_body.contains("DevQL Runtime Explorer"));
+    assert!(playground_body.contains("/devql/runtime"));
+
+    let (sdl_status, sdl_body) = request_text(app, "/devql/runtime/sdl").await;
+    assert_eq!(sdl_status, StatusCode::OK);
+    assert_eq!(sdl_body, crate::api::runtime_schema_sdl());
+    assert!(sdl_body.contains("type RuntimeQueryRoot"));
+    assert!(sdl_body.contains("runtimeSnapshot(repoId: String!): RuntimeSnapshotObject!"));
+    assert!(
+        sdl_body.contains("startInit(repoId: String!, input: StartInitInput!): StartInitResult!")
+    );
+    assert!(
+        sdl_body.contains("runtimeEvents(repoId: String!, initSessionId: ID): RuntimeEventObject!")
+    );
+
+    let slim_sdl = crate::graphql::slim_schema_sdl();
+    assert!(!slim_sdl.contains("runtimeSnapshot("));
+    assert!(!slim_sdl.contains("startInit("));
+    assert!(!slim_sdl.contains("runtimeEvents("));
+
+    let global_sdl = crate::graphql::schema_sdl();
+    assert!(!global_sdl.contains("runtimeSnapshot("));
+    assert!(!global_sdl.contains("startInit("));
+    assert!(!global_sdl.contains("runtimeEvents("));
+}
+
+#[tokio::test]
+async fn devql_runtime_route_executes_start_init_mutations() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation StartInit($repoId: String!, $input: StartInitInput!) { startInit(repoId: $repoId, input: $input) { initSessionId } }",
+                "variables": {
+                    "repoId": repo_id,
+                    "input": {
+                        "runSync": false,
+                        "runIngest": false,
+                        "ingestBackfill": serde_json::Value::Null,
+                        "embeddingsBootstrap": serde_json::Value::Null,
+                        "summariesBootstrap": serde_json::Value::Null,
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let init_session_id = payload["data"]["startInit"]["initSessionId"]
+        .as_str()
+        .expect("init session id");
+    assert!(init_session_id.starts_with("init-session-"));
+}
+
+#[test]
+fn devql_runtime_route_accepts_the_runtime_snapshot_query_used_by_init() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let config_path = repo
+        .path()
+        .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let config_path_string = config_path.to_string_lossy().to_string();
+
+    crate::test_support::process_state::with_env_var(
+        crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+            runtime.block_on(async {
+                let app = build_dashboard_router(test_state(
+                    repo.path().to_path_buf(),
+                    ServeMode::HelloWorld,
+                    repo.path().to_path_buf(),
+                ));
+
+                let (status, payload) = request_json_with_method_and_content_type(
+                    app,
+                    Method::POST,
+                    "/devql/runtime",
+                    "application/json",
+                    Body::from(
+                        json!({
+                            "query": crate::cli::devql::graphql::documents::RUNTIME_SNAPSHOT_QUERY,
+                            "variables": {
+                                "repoId": repo_id,
+                            }
+                        })
+                        .to_string(),
+                    ),
+                )
+                .await;
+
+                assert_eq!(status, StatusCode::OK);
+                assert!(
+                    payload.get("errors").is_none(),
+                    "runtime graphql errors: {:?}",
+                    payload.get("errors")
+                );
+                assert_eq!(payload["data"]["runtimeSnapshot"]["repoId"], repo_id);
+            });
+        },
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_route_executes_start_init_for_bound_repo_without_catalog_entry() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+    let headers = runtime_binding_headers(repo.path());
+    let headers_ref = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    let (status, payload) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        &headers_ref,
+        Body::from(
+            json!({
+                "query": "mutation StartInit($repoId: String!, $input: StartInitInput!) { startInit(repoId: $repoId, input: $input) { initSessionId } }",
+                "variables": {
+                    "repoId": repo_id,
+                    "input": {
+                        "runSync": false,
+                        "runIngest": false,
+                        "ingestBackfill": serde_json::Value::Null,
+                        "embeddingsBootstrap": serde_json::Value::Null,
+                        "summariesBootstrap": serde_json::Value::Null,
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let init_session_id = payload["data"]["startInit"]["initSessionId"]
+        .as_str()
+        .expect("init session id");
+    assert!(init_session_id.starts_with("init-session-"));
 }
 
 #[test]
@@ -525,6 +745,189 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
     );
     assert_eq!(payload["data"]["deps"]["totalCount"], 0);
     assert_eq!(payload["data"]["deps"]["edges"], json!([]));
+}
+
+#[tokio::test]
+async fn devql_interaction_queries_work_in_slim_and_global_scopes() {
+    let repo = seed_dashboard_repo();
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (slim_status, slim_payload) = request_slim_query(
+        app.clone(),
+        repo.path(),
+        r#"
+        {
+          interactionSessions(
+            first: 10
+            filter: {
+              actorEmail: "alice@example.com"
+              since: "2026-02-27T12:00:00Z"
+              until: "2026-02-27T12:05:00Z"
+            }
+          ) {
+            totalCount
+            edges {
+              node {
+                id
+                branch
+                actor {
+                  email
+                }
+                checkpointCount
+                turnCount
+                toolUses {
+                  toolKind
+                  taskDescription
+                }
+                latestCommitAuthor {
+                  checkpointId
+                  email
+                }
+              }
+            }
+          }
+          searchInteractionTurns(
+            input: {
+              query: "dashboard"
+              filter: { path: "app.rs" }
+            }
+          ) {
+            score
+            matchedFields
+            turn {
+              id
+              sessionId
+              summary
+            }
+            session {
+              id
+              actor {
+                email
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(slim_status, StatusCode::OK);
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["totalCount"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["id"],
+        "session-1"
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["branch"],
+        "main"
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["actor"]["email"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["checkpointCount"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["turnCount"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        slim_payload["data"]["interactionSessions"]["edges"][0]["node"]["toolUses"][0]["toolKind"],
+        "edit"
+    );
+    assert_eq!(
+        slim_payload["data"]["searchInteractionTurns"][0]["turn"]["id"],
+        "turn-1"
+    );
+    assert_eq!(
+        slim_payload["data"]["searchInteractionTurns"][0]["session"]["id"],
+        "session-1"
+    );
+    assert!(
+        slim_payload["data"]["searchInteractionTurns"][0]["matchedFields"]
+            .as_array()
+            .is_some_and(|fields| !fields.is_empty())
+    );
+
+    let (global_status, global_payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/global",
+        "application/json",
+        Body::from(
+            json!({
+                "query": r#"
+                {
+                  repo(name: "demo") {
+                    interactionEvents(first: 10, filter: { toolKind: "edit" }) {
+                      totalCount
+                      edges {
+                        node {
+                          eventType
+                          toolKind
+                          toolUseId
+                          taskDescription
+                          subagentId
+                          actor {
+                            email
+                          }
+                        }
+                      }
+                    }
+                    searchInteractionSessions(
+                      input: {
+                        query: "dashboard"
+                        filter: { branch: "main" }
+                      }
+                    ) {
+                      score
+                      matchedFields
+                      session {
+                        id
+                        turnCount
+                        checkpointCount
+                      }
+                    }
+                  }
+                }
+                "#
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(global_status, StatusCode::OK);
+    assert_eq!(
+        global_payload["data"]["repo"]["interactionEvents"]["totalCount"].as_u64(),
+        Some(2)
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["interactionEvents"]["edges"][0]["node"]["toolKind"],
+        "edit"
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["interactionEvents"]["edges"][0]["node"]["actor"]["email"],
+        "alice@example.com"
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["searchInteractionSessions"][0]["session"]["id"],
+        "session-1"
+    );
+    assert_eq!(
+        global_payload["data"]["repo"]["searchInteractionSessions"][0]["session"]["checkpointCount"]
+            .as_u64(),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -1118,6 +1521,20 @@ async fn devql_ws_route_is_registered() {
 }
 
 #[tokio::test]
+async fn devql_runtime_ws_route_is_registered() {
+    let temp = TempDir::new().expect("temp dir");
+    let app = build_dashboard_router(test_state(
+        temp.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        temp.path().to_path_buf(),
+    ));
+
+    let (status, _) = request_text_with_method(app, Method::GET, "/devql/runtime/ws").await;
+
+    assert_ne!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn devql_graphql_checkpoint_ingested_subscription_receives_published_checkpoint_events() {
     let repo = seed_dashboard_repo();
     let context = crate::graphql::DevqlGraphqlContext::new(
@@ -1248,6 +1665,7 @@ async fn devql_graphql_task_progress_subscription_receives_published_task_events
         spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
             backfill: Some(1),
         }),
+        init_session_id: None,
         status,
         submitted_at_unix: 1,
         started_at_unix: Some(2),
@@ -1368,6 +1786,7 @@ async fn devql_task_and_checkpoint_events_publish_to_subscription_hub() {
             kind: crate::daemon::DevqlTaskKind::Ingest,
             source: crate::daemon::DevqlTaskSource::ManualCli,
             spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec::default()),
+            init_session_id: None,
             status: crate::daemon::DevqlTaskStatus::Completed,
             submitted_at_unix: 1,
             started_at_unix: Some(2),

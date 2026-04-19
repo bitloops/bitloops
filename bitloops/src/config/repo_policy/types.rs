@@ -62,7 +62,6 @@ pub(super) struct RepoPolicyLocation {
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 pub(super) struct RepoPolicyTomlFile {
     #[serde(default)]
     pub(super) capture: Option<Value>,

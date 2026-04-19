@@ -274,6 +274,10 @@ async fn execute_dashboard_graphql<T: for<'de> Deserialize<'de>>(
         .await;
 
     if let Some(error) = response.errors.first() {
+        let code = dashboard_graphql_error_code(error);
+        if !matches!(code, Some("BAD_USER_INPUT" | "BAD_CURSOR")) {
+            log::error!("dashboard GraphQL request failed: {}", error.message);
+        }
         return Err(map_dashboard_graphql_error(error));
     }
 
@@ -289,14 +293,7 @@ async fn execute_dashboard_graphql<T: for<'de> Deserialize<'de>>(
 }
 
 fn map_dashboard_graphql_error(error: &async_graphql::ServerError) -> ApiError {
-    let code = error
-        .extensions
-        .as_ref()
-        .and_then(|extensions| extensions.get("code"))
-        .and_then(|value| match value {
-            async_graphql::Value::String(value) => Some(value.as_str()),
-            _ => None,
-        });
+    let code = dashboard_graphql_error_code(error);
     match code {
         Some("BAD_USER_INPUT") | Some("BAD_CURSOR") => ApiError::bad_request(error.message.clone()),
         _ => ApiError::internal(format!(
@@ -304,6 +301,17 @@ fn map_dashboard_graphql_error(error: &async_graphql::ServerError) -> ApiError {
             error.message
         )),
     }
+}
+
+fn dashboard_graphql_error_code(error: &async_graphql::ServerError) -> Option<&str> {
+    error
+        .extensions
+        .as_ref()
+        .and_then(|extensions| extensions.get("code"))
+        .and_then(|value| match value {
+            async_graphql::Value::String(value) => Some(value.as_str()),
+            _ => None,
+        })
 }
 
 fn optional_rfc3339_from_unix_seconds(value: Option<i64>) -> Option<String> {

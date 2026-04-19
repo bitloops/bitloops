@@ -11,8 +11,11 @@ use super::types::{
     ArtefactSelectorInput, AsOfInput, Branch, CheckpointConnection, CheckpointEdge,
     CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
     ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, FileContext, HealthStatus, KnowledgeItemConnection, KnowledgeItemEdge,
-    KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
+    DepsFilterInput, FileContext, HealthStatus, InteractionEventConnection, InteractionEventEdge,
+    InteractionFilterInput, InteractionSearchInputObject, InteractionSessionConnection,
+    InteractionSessionEdge, InteractionSessionSearchHitObject, InteractionTurnConnection,
+    InteractionTurnEdge, InteractionTurnSearchHitObject, KnowledgeItemConnection,
+    KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
     TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
     TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
@@ -227,6 +230,156 @@ impl SlimQueryRoot {
             page.page_info,
             page.total_count,
         ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[graphql(name = "interactionSessions")]
+    async fn interaction_sessions(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<InteractionFilterInput>,
+        first: Option<i32>,
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<InteractionSessionConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        let sessions = context
+            .list_interaction_sessions(&scope, filter.as_ref())
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to query interaction sessions: {err:#}"))
+            })?;
+        let page = paginate_items(&sessions, &pagination, |session| session.cursor())?;
+        Ok(InteractionSessionConnection::new(
+            page.items
+                .into_iter()
+                .map(InteractionSessionEdge::new)
+                .collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[graphql(name = "interactionTurns")]
+    async fn interaction_turns(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<InteractionFilterInput>,
+        first: Option<i32>,
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<InteractionTurnConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        let turns = context
+            .list_interaction_turns(&scope, filter.as_ref())
+            .await
+            .map_err(|err| backend_error(format!("failed to query interaction turns: {err:#}")))?;
+        let page = paginate_items(&turns, &pagination, |turn| turn.cursor())?;
+        Ok(InteractionTurnConnection::new(
+            page.items
+                .into_iter()
+                .map(InteractionTurnEdge::new)
+                .collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[graphql(name = "interactionEvents")]
+    async fn interaction_events(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<InteractionFilterInput>,
+        first: Option<i32>,
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<InteractionEventConnection> {
+        let pagination = ConnectionPagination::from_graphql(
+            50,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        let events = context
+            .list_interaction_events(&scope, filter.as_ref())
+            .await
+            .map_err(|err| backend_error(format!("failed to query interaction events: {err:#}")))?;
+        let page = paginate_items(&events, &pagination, |event| event.cursor())?;
+        Ok(InteractionEventConnection::new(
+            page.items
+                .into_iter()
+                .map(InteractionEventEdge::new)
+                .collect(),
+            page.page_info,
+            page.total_count,
+        ))
+    }
+
+    #[graphql(name = "searchInteractionSessions")]
+    async fn search_interaction_sessions(
+        &self,
+        ctx: &Context<'_>,
+        input: InteractionSearchInputObject,
+    ) -> Result<Vec<InteractionSessionSearchHitObject>> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        context
+            .search_interaction_sessions(&scope, &input)
+            .await
+            .map_err(|err| backend_error(format!("failed to search interaction sessions: {err:#}")))
+    }
+
+    #[graphql(name = "searchInteractionTurns")]
+    async fn search_interaction_turns(
+        &self,
+        ctx: &Context<'_>,
+        input: InteractionSearchInputObject,
+    ) -> Result<Vec<InteractionTurnSearchHitObject>> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        context
+            .search_interaction_turns(&scope, &input)
+            .await
+            .map_err(|err| backend_error(format!("failed to search interaction turns: {err:#}")))
     }
 
     async fn users(&self, ctx: &Context<'_>) -> Result<Vec<String>> {
