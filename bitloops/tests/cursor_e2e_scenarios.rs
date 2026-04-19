@@ -148,7 +148,13 @@ fn init_cursor(repo: &Path) {
         bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo, false)
             .expect("install git hooks");
         bitloops::adapters::agents::AgentAdapterRegistry::builtin()
-            .install_agent_hooks(repo, "cursor", false, false)
+            .install_agent_hooks(
+                repo,
+                "cursor",
+                false,
+                false,
+                bitloops::adapters::agents::AgentHookInstallOptions::default(),
+            )
             .expect("install Cursor hooks");
     });
 }

@@ -110,7 +110,7 @@ WHERE artefact_id IN ({})",
     )
 }
 
-pub(super) fn build_active_embedding_setup_persist_sql(
+pub(crate) fn build_active_embedding_setup_persist_sql(
     repo_id: &str,
     active_state: &embeddings::ActiveEmbeddingRepresentationState,
 ) -> String {
@@ -150,7 +150,7 @@ ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET 
     ))
 }
 
-pub(super) fn build_sqlite_symbol_embedding_persist_sql(
+pub(crate) fn build_sqlite_symbol_embedding_persist_sql(
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<String> {
     let embedding_json = sql_json_string(&row.embedding)?;
@@ -171,7 +171,7 @@ ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET 
     ))
 }
 
-pub(super) fn build_current_symbol_embedding_persist_sql(
+pub(crate) fn build_current_symbol_embedding_persist_sql(
     input: &semantic::SemanticFeatureInput,
     path: &str,
     content_id: &str,
@@ -202,7 +202,7 @@ ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET 
     ))
 }
 
-pub(super) fn build_embedding_setup_persist_sql(setup: &embeddings::EmbeddingSetup) -> String {
+pub(crate) fn build_embedding_setup_persist_sql(setup: &embeddings::EmbeddingSetup) -> String {
     format!(
         "INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension) \
 VALUES ('{setup_fingerprint}', '{provider}', '{model}', {dimension}) \

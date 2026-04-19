@@ -38,6 +38,77 @@ fn dashboard_kpis_query() -> &'static str {
     "#
 }
 
+fn record_dashboard_interaction(
+    repo_root: &Path,
+    session_id: &str,
+    turn_id: &str,
+    turn_number: u32,
+) {
+    use crate::host::checkpoints::lifecycle::interaction::resolve_interaction_spool;
+    use crate::host::interactions::store::InteractionSpool;
+    use crate::host::interactions::types::{InteractionSession, InteractionTurn};
+
+    let spool = resolve_interaction_spool(repo_root).expect("resolve interaction spool");
+    let transcript_path = repo_root.join(format!("{session_id}-transcript.jsonl"));
+    fs::write(
+        &transcript_path,
+        format!(
+            "{{\"type\":\"user\",\"content\":\"Session {session_id}\"}}\n{{\"type\":\"assistant\",\"content\":\"Turn {turn_id}\"}}\n"
+        ),
+    )
+    .expect("write interaction transcript");
+
+    let timestamp = format!("2026-04-01T10:{:02}:00Z", turn_number.min(59));
+    spool
+        .record_session(&InteractionSession {
+            session_id: session_id.to_string(),
+            repo_id: spool.repo_id().to_string(),
+            branch: "main".to_string(),
+            actor_id: "actor-2".to_string(),
+            actor_name: "Bob".to_string(),
+            actor_email: "bob@example.com".to_string(),
+            actor_source: "bitloops-session".to_string(),
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            first_prompt: format!("Start {session_id}"),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+            worktree_path: repo_root.to_string_lossy().to_string(),
+            worktree_id: "worktree-2".to_string(),
+            started_at: timestamp.clone(),
+            ended_at: None,
+            last_event_at: timestamp.clone(),
+            updated_at: timestamp.clone(),
+        })
+        .expect("record interaction session");
+    spool
+        .record_turn(&InteractionTurn {
+            turn_id: turn_id.to_string(),
+            session_id: session_id.to_string(),
+            repo_id: spool.repo_id().to_string(),
+            branch: "main".to_string(),
+            actor_id: "actor-2".to_string(),
+            actor_name: "Bob".to_string(),
+            actor_email: "bob@example.com".to_string(),
+            actor_source: "bitloops-session".to_string(),
+            turn_number,
+            prompt: format!("Prompt {turn_id}"),
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            started_at: timestamp.clone(),
+            ended_at: None,
+            token_usage: None,
+            summary: format!("Summary {turn_id}"),
+            prompt_count: 1,
+            transcript_offset_start: Some(0),
+            transcript_offset_end: Some(64),
+            transcript_fragment: format!("Fragment {turn_id}"),
+            files_modified: vec!["app.rs".to_string()],
+            checkpoint_id: None,
+            updated_at: timestamp,
+        })
+        .expect("record interaction turn");
+}
+
 #[tokio::test]
 async fn dashboard_post_route_executes_graphql_requests() {
     let repo = seed_dashboard_repo();
@@ -86,10 +157,12 @@ async fn dashboard_playground_route_serves_explorer() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("DevQL Dashboard Explorer"));
     assert!(body.contains("/devql/dashboard"));
+    assert!(body.contains("/devql/dashboard/ws"));
 
     let (status, body) = request_text(app, "/devql/dashboard/playground").await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("DevQL Dashboard Explorer"));
+    assert!(body.contains("/devql/dashboard/ws"));
 }
 
 #[tokio::test]
@@ -107,6 +180,7 @@ async fn dashboard_sdl_route_returns_schema_text() {
     assert_eq!(body, crate::api::dashboard_schema::dashboard_schema_sdl());
     assert!(body.contains("type DashboardQueryRoot"));
     assert!(body.contains("type DashboardMutationRoot"));
+    assert!(body.contains("type DashboardSubscriptionRoot"));
     assert!(body.contains("health: HealthStatus!"));
     assert!(body.contains("repositories: [DashboardRepository!]!"));
     assert!(body.contains("kpis("));
@@ -118,9 +192,154 @@ async fn dashboard_sdl_route_returns_schema_text() {
     assert!(body.contains("interactionAgents("));
     assert!(body.contains("searchInteractionSessions("));
     assert!(body.contains("searchInteractionTurns("));
+    assert!(body.contains("interactionUpdates("));
     assert!(body.contains("fetchBundle: DashboardFetchBundleResult!"));
     assert!(!body.contains("postgres:"));
     assert!(!body.contains("clickhouse:"));
+}
+
+#[tokio::test]
+async fn dashboard_ws_route_is_registered() {
+    let repo = seed_dashboard_repo();
+    let app = dashboard_app(
+        repo.path(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+
+    let (status, _) = request_text_with_method(app, Method::GET, "/devql/dashboard/ws").await;
+
+    assert_ne!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dashboard_ws_protocol_defaults_when_subprotocol_header_is_missing() {
+    let request = Request::builder()
+        .uri("/devql/dashboard/ws")
+        .body(())
+        .expect("request");
+    let (mut parts, _) = request.into_parts();
+
+    let extracted = <crate::api::dashboard_schema::DashboardWsProtocol as axum::extract::FromRequestParts<
+        (),
+    >>::from_request_parts(&mut parts, &())
+    .await;
+
+    assert!(extracted.is_ok(), "expected fallback protocol extraction");
+    assert!(!parts.headers.contains_key("sec-websocket-protocol"));
+}
+
+#[tokio::test]
+async fn dashboard_ws_protocol_preserves_explicit_subprotocol_header() {
+    let request = Request::builder()
+        .uri("/devql/dashboard/ws")
+        .header("sec-websocket-protocol", "graphql-ws")
+        .body(())
+        .expect("request");
+    let (mut parts, _) = request.into_parts();
+
+    let extracted = <crate::api::dashboard_schema::DashboardWsProtocol as axum::extract::FromRequestParts<
+        (),
+    >>::from_request_parts(&mut parts, &())
+    .await;
+
+    assert!(extracted.is_ok(), "expected explicit protocol extraction");
+    assert!(parts.headers.contains_key("sec-websocket-protocol"));
+}
+
+#[tokio::test]
+async fn dashboard_interaction_updates_subscription_emits_when_interactions_change() {
+    let repo = seed_dashboard_repo();
+    let state = test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+    let schema = crate::api::dashboard_schema::build_dashboard_schema(state);
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let stream = schema.execute_stream(async_graphql::Request::new(
+        r#"
+        subscription {
+          interactionUpdates {
+            repoId
+            sessionCount
+            turnCount
+            latestSessionId
+            latestTurnId
+          }
+        }
+        "#,
+    ));
+    let _collector = tokio::spawn(async move {
+        let mut stream = stream;
+        while let Some(event) = stream.next().await {
+            if event_tx.send(event).is_err() {
+                break;
+            }
+        }
+    });
+
+    let initial = tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv())
+        .await
+        .expect("initial interaction update should arrive")
+        .expect("initial interaction update payload");
+    assert!(
+        initial.errors.is_empty(),
+        "subscription errors: {:?}",
+        initial.errors
+    );
+    let initial_json = initial
+        .data
+        .into_json()
+        .expect("initial interaction update json");
+    assert_eq!(
+        initial_json["interactionUpdates"]["sessionCount"],
+        Value::from(1)
+    );
+    assert_eq!(
+        initial_json["interactionUpdates"]["turnCount"],
+        Value::from(1)
+    );
+    assert_eq!(
+        initial_json["interactionUpdates"]["latestSessionId"],
+        Value::from("session-1")
+    );
+    assert_eq!(
+        initial_json["interactionUpdates"]["latestTurnId"],
+        Value::from("turn-1")
+    );
+
+    record_dashboard_interaction(repo.path(), "session-2", "turn-2", 2);
+
+    let updated = tokio::time::timeout(std::time::Duration::from_secs(5), event_rx.recv())
+        .await
+        .expect("updated interaction snapshot should arrive")
+        .expect("updated interaction payload");
+    assert!(
+        updated.errors.is_empty(),
+        "subscription errors: {:?}",
+        updated.errors
+    );
+    let updated_json = updated
+        .data
+        .into_json()
+        .expect("updated interaction update json");
+    assert_eq!(
+        updated_json["interactionUpdates"]["sessionCount"],
+        Value::from(2)
+    );
+    assert_eq!(
+        updated_json["interactionUpdates"]["turnCount"],
+        Value::from(2)
+    );
+    assert_eq!(
+        updated_json["interactionUpdates"]["latestSessionId"],
+        Value::from("session-2")
+    );
+    assert_eq!(
+        updated_json["interactionUpdates"]["latestTurnId"],
+        Value::from("turn-2")
+    );
 }
 
 #[test]
@@ -882,6 +1101,45 @@ async fn dashboard_query_logs_repo_checkout_unknown_failure() {
             && entry.message.contains("repo checkout unknown")),
         "expected dashboard repo checkout failure to be logged, got logs: {logs:?}"
     );
+}
+
+#[tokio::test]
+async fn dashboard_query_resolves_repo_checkout_from_repo_sync_state() {
+    let repo = seed_dashboard_repo();
+    let unrelated_root = TempDir::new().expect("temp dir");
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    let repo_root = repo.path().to_string_lossy().to_string();
+    conn.execute(
+        "INSERT OR REPLACE INTO repo_sync_state (
+            repo_id, repo_root, parser_version, extractor_version, last_sync_status
+         ) VALUES (?1, ?2, 'parser-test', 'extractor-test', 'completed')",
+        rusqlite::params![repo_id.as_str(), repo_root],
+    )
+    .expect("seed repo sync state row");
+
+    let mut state = test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+    state.repo_root = unrelated_root.path().to_path_buf();
+    let app = build_dashboard_router(state);
+
+    let (status, payload) = request_dashboard_graphql(
+        app,
+        &format!(r#"{{ branches(repoId: "{repo_id}") {{ branch checkpointCommits }} }}"#),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "unexpected errors: {payload}"
+    );
+    assert_eq!(payload["data"]["branches"][0]["branch"], "main");
+    assert_eq!(payload["data"]["branches"][0]["checkpointCommits"], 1);
 }
 
 #[tokio::test]

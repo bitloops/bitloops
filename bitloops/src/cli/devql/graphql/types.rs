@@ -92,12 +92,15 @@ pub(crate) struct TaskGraphqlRecord {
     pub sync_spec: Option<SyncTaskSpecGraphqlRecord>,
     pub ingest_spec: Option<IngestTaskSpecGraphqlRecord>,
     pub embeddings_bootstrap_spec: Option<EmbeddingsBootstrapTaskSpecGraphqlRecord>,
+    pub summary_bootstrap_spec: Option<SummaryBootstrapTaskSpecGraphqlRecord>,
     pub sync_progress: Option<SyncTaskProgressGraphqlRecord>,
     pub ingest_progress: Option<IngestTaskProgressGraphqlRecord>,
     pub embeddings_bootstrap_progress: Option<EmbeddingsBootstrapProgressGraphqlRecord>,
+    pub summary_bootstrap_progress: Option<SummaryBootstrapProgressGraphqlRecord>,
     pub sync_result: Option<SyncMutationResult>,
     pub ingest_result: Option<IngestionCounters>,
     pub embeddings_bootstrap_result: Option<EmbeddingsBootstrapResultGraphqlRecord>,
+    pub summary_bootstrap_result: Option<SummaryBootstrapResultGraphqlRecord>,
 }
 
 impl TaskGraphqlRecord {
@@ -111,6 +114,10 @@ impl TaskGraphqlRecord {
 
     pub(crate) fn is_embeddings_bootstrap(&self) -> bool {
         self.kind.eq_ignore_ascii_case("embeddings_bootstrap")
+    }
+
+    pub(crate) fn is_summary_bootstrap(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("summary_bootstrap")
     }
 
     pub(crate) fn is_terminal(&self) -> bool {
@@ -143,6 +150,15 @@ pub(crate) struct IngestTaskSpecGraphqlRecord {
 pub(crate) struct EmbeddingsBootstrapTaskSpecGraphqlRecord {
     pub config_path: String,
     pub profile_name: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SummaryBootstrapTaskSpecGraphqlRecord {
+    pub action: String,
+    pub message: Option<String>,
+    pub model_name: Option<String>,
+    pub gateway_url_override: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -188,6 +204,17 @@ pub(crate) struct EmbeddingsBootstrapProgressGraphqlRecord {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct SummaryBootstrapProgressGraphqlRecord {
+    pub phase: String,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: i64,
+    pub bytes_total: Option<i64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct EmbeddingsBootstrapResultGraphqlRecord {
     pub version: Option<String>,
     pub binary_path: Option<String>,
@@ -195,6 +222,14 @@ pub(crate) struct EmbeddingsBootstrapResultGraphqlRecord {
     pub runtime_name: Option<String>,
     pub model_name: Option<String>,
     pub freshly_installed: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SummaryBootstrapResultGraphqlRecord {
+    pub outcome_kind: String,
+    pub model_name: Option<String>,
     pub message: String,
 }
 
@@ -232,6 +267,297 @@ pub(crate) struct TaskQueueControlGraphqlRecord {
     pub paused: bool,
     pub paused_reason: Option<String>,
     pub updated_at_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeStartInitInput {
+    pub repo_id: String,
+    pub run_sync: bool,
+    pub run_ingest: bool,
+    pub ingest_backfill: Option<usize>,
+    pub embeddings_bootstrap: Option<RuntimeEmbeddingsBootstrapRequestInput>,
+    pub summaries_bootstrap: Option<RuntimeSummaryBootstrapRequestInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeEmbeddingsBootstrapRequestInput {
+    pub config_path: String,
+    pub profile_name: String,
+    pub mode: String,
+    pub gateway_url_override: Option<String>,
+    pub api_key_env: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeSummaryBootstrapRequestInput {
+    pub action: String,
+    pub message: Option<String>,
+    pub model_name: Option<String>,
+    pub gateway_url_override: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct StartInitMutationData {
+    pub(super) start_init: StartInitResultGraphqlRecord,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StartInitResultGraphqlRecord {
+    pub init_session_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RuntimeSnapshotQueryData {
+    pub(super) runtime_snapshot: RuntimeSnapshotGraphqlRecord,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RuntimeEventsSubscriptionData {
+    pub(super) runtime_events: RuntimeEventGraphqlRecord,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeSnapshotGraphqlRecord {
+    pub repo_id: String,
+    pub task_queue: TaskQueueGraphqlRecord,
+    pub current_state_consumer: RuntimeCurrentStateConsumerGraphqlRecord,
+    pub workplane: RuntimeWorkplaneGraphqlRecord,
+    pub blocked_mailboxes: Vec<RuntimeBlockedMailboxGraphqlRecord>,
+    pub embeddings_readiness_gate: Option<RuntimeEmbeddingsReadinessGateGraphqlRecord>,
+    pub summaries_bootstrap: Option<RuntimeSummaryBootstrapRunGraphqlRecord>,
+    pub current_init_session: Option<RuntimeInitSessionGraphqlRecord>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeCurrentStateConsumerGraphqlRecord {
+    pub persisted: bool,
+    pub pending_runs: i32,
+    pub running_runs: i32,
+    pub failed_runs: i32,
+    pub completed_recent_runs: i32,
+    pub last_action: Option<String>,
+    pub last_updated_unix: i64,
+    pub current_repo_run: Option<RuntimeCurrentStateRunGraphqlRecord>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeCurrentStateRunGraphqlRecord {
+    pub run_id: String,
+    pub repo_id: String,
+    pub capability_id: String,
+    pub init_session_id: Option<String>,
+    pub consumer_id: String,
+    pub handler_id: String,
+    pub from_generation_seq: i64,
+    pub to_generation_seq: i64,
+    pub reconcile_mode: String,
+    pub status: String,
+    pub attempts: i32,
+    pub submitted_at_unix: i64,
+    pub started_at_unix: Option<i64>,
+    pub updated_at_unix: i64,
+    pub completed_at_unix: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeWorkplaneGraphqlRecord {
+    pub pending_jobs: i32,
+    pub running_jobs: i32,
+    pub failed_jobs: i32,
+    pub completed_recent_jobs: i32,
+    #[serde(default)]
+    pub pools: Vec<RuntimeWorkplanePoolGraphqlRecord>,
+    pub mailboxes: Vec<RuntimeWorkplaneMailboxGraphqlRecord>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeWorkplanePoolGraphqlRecord {
+    pub pool_name: String,
+    pub display_name: String,
+    pub worker_budget: i32,
+    pub active_workers: i32,
+    pub pending_jobs: i32,
+    pub running_jobs: i32,
+    pub failed_jobs: i32,
+    pub completed_recent_jobs: i32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeWorkplaneMailboxGraphqlRecord {
+    pub mailbox_name: String,
+    pub display_name: String,
+    pub pending_jobs: i32,
+    pub running_jobs: i32,
+    pub failed_jobs: i32,
+    pub completed_recent_jobs: i32,
+    pub pending_cursor_runs: i32,
+    pub running_cursor_runs: i32,
+    pub failed_cursor_runs: i32,
+    pub completed_recent_cursor_runs: i32,
+    pub intent_active: bool,
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeBlockedMailboxGraphqlRecord {
+    pub mailbox_name: String,
+    pub display_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeEmbeddingsReadinessGateGraphqlRecord {
+    pub blocked: bool,
+    pub readiness: Option<String>,
+    pub reason: Option<String>,
+    pub active_task_id: Option<String>,
+    pub profile_name: Option<String>,
+    pub config_path: Option<String>,
+    pub last_error: Option<String>,
+    pub last_updated_unix: i64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeSummaryBootstrapRunGraphqlRecord {
+    pub run_id: String,
+    pub repo_id: String,
+    pub init_session_id: String,
+    pub status: String,
+    pub request: RuntimeSummaryBootstrapRequestGraphqlRecord,
+    pub progress: RuntimeSummaryBootstrapProgressGraphqlRecord,
+    pub result: Option<RuntimeSummaryBootstrapResultGraphqlRecord>,
+    pub error: Option<String>,
+    pub submitted_at_unix: i64,
+    pub started_at_unix: Option<i64>,
+    pub updated_at_unix: i64,
+    pub completed_at_unix: Option<i64>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeSummaryBootstrapRequestGraphqlRecord {
+    pub action: String,
+    pub message: Option<String>,
+    pub model_name: Option<String>,
+    pub gateway_url_override: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeSummaryBootstrapProgressGraphqlRecord {
+    pub phase: String,
+    pub asset_name: Option<String>,
+    pub bytes_downloaded: i64,
+    pub bytes_total: Option<i64>,
+    pub version: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeSummaryBootstrapResultGraphqlRecord {
+    pub outcome_kind: String,
+    pub model_name: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeInitSessionGraphqlRecord {
+    pub init_session_id: String,
+    pub status: String,
+    pub waiting_reason: Option<String>,
+    pub warning_summary: Option<String>,
+    pub follow_up_sync_required: bool,
+    pub run_sync: bool,
+    pub run_ingest: bool,
+    pub embeddings_selected: bool,
+    pub summaries_selected: bool,
+    pub initial_sync_task_id: Option<String>,
+    pub ingest_task_id: Option<String>,
+    pub follow_up_sync_task_id: Option<String>,
+    pub embeddings_bootstrap_task_id: Option<String>,
+    pub summary_bootstrap_task_id: Option<String>,
+    pub terminal_error: Option<String>,
+    pub top_pipeline_lane: RuntimeInitLaneGraphqlRecord,
+    pub embeddings_lane: RuntimeInitLaneGraphqlRecord,
+    pub summaries_lane: RuntimeInitLaneGraphqlRecord,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeInitLaneGraphqlRecord {
+    pub status: String,
+    pub waiting_reason: Option<String>,
+    pub detail: Option<String>,
+    pub activity_label: Option<String>,
+    pub task_id: Option<String>,
+    pub run_id: Option<String>,
+    pub progress: Option<RuntimeInitLaneProgressGraphqlRecord>,
+    #[serde(default)]
+    pub queue: RuntimeInitLaneQueueGraphqlRecord,
+    #[serde(default)]
+    pub warnings: Vec<RuntimeInitLaneWarningGraphqlRecord>,
+    #[serde(default)]
+    pub pending_count: i32,
+    #[serde(default)]
+    pub running_count: i32,
+    #[serde(default)]
+    pub failed_count: i32,
+    #[serde(default)]
+    pub completed_count: i32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeInitLaneProgressGraphqlRecord {
+    pub completed: i32,
+    #[serde(default)]
+    pub in_memory_completed: i32,
+    pub total: i32,
+    pub remaining: i32,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeInitLaneQueueGraphqlRecord {
+    pub queued: i32,
+    pub running: i32,
+    pub failed: i32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeInitLaneWarningGraphqlRecord {
+    pub component_label: String,
+    pub message: String,
+    pub retry_command: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeEventGraphqlRecord {
+    pub domain: String,
+    pub repo_id: String,
+    pub init_session_id: Option<String>,
+    pub updated_at_unix: i64,
+    pub task_id: Option<String>,
+    pub run_id: Option<String>,
+    pub mailbox_name: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

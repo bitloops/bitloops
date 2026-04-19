@@ -220,12 +220,21 @@ impl DevqlCapabilityHost {
         Ok(Arc::new(self.runtime.workplane_gateway_for_capability(
             capability_id,
             &self.declared_mailboxes_for_capability(capability_id),
+            None,
         )?))
     }
 
     pub fn build_current_state_consumer_context(
         &self,
         capability_id: &str,
+    ) -> Result<CurrentStateConsumerContext> {
+        self.build_current_state_consumer_context_with_session(capability_id, None)
+    }
+
+    pub fn build_current_state_consumer_context_with_session(
+        &self,
+        capability_id: &str,
+        init_session_id: Option<String>,
     ) -> Result<CurrentStateConsumerContext> {
         let relational_store = DefaultRelationalStore::open_local_for_backend_config(
             self.repo_root(),
@@ -244,6 +253,7 @@ impl DevqlCapabilityHost {
         let workplane = Arc::new(self.runtime.workplane_gateway_for_capability(
             capability_id,
             &self.declared_mailboxes_for_capability(capability_id),
+            init_session_id.clone(),
         )?);
 
         Ok(CurrentStateConsumerContext {
@@ -253,6 +263,7 @@ impl DevqlCapabilityHost {
             language_services,
             host_services,
             workplane,
+            init_session_id,
         })
     }
 

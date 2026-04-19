@@ -348,11 +348,20 @@ pub(super) fn parse_semantic_dependency_rows(
     Ok(dependencies)
 }
 
-pub(super) fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
+pub(crate) fn build_semantic_get_index_state_sql(artefact_id: &str) -> String {
     format!(
         "SELECT \
             (SELECT semantic_features_input_hash FROM symbol_semantics WHERE artefact_id = '{artefact_id}') AS semantics_hash, \
-            (SELECT semantic_features_input_hash FROM symbol_features WHERE artefact_id = '{artefact_id}') AS features_hash",
+            (SELECT semantic_features_input_hash FROM symbol_features WHERE artefact_id = '{artefact_id}') AS features_hash, \
+            CASE \
+                WHEN EXISTS ( \
+                    SELECT 1 \
+                    FROM symbol_semantics \
+                    WHERE artefact_id = '{artefact_id}' \
+                      AND (TRIM(COALESCE(llm_summary, '')) <> '' OR TRIM(COALESCE(source_model, '')) <> '') \
+                ) THEN 1 \
+                ELSE 0 \
+            END AS semantics_llm_enriched",
         artefact_id = esc_pg(artefact_id),
     )
 }
@@ -402,7 +411,7 @@ pub(super) fn build_delete_current_symbol_features_sql(repo_id: &str, path: &str
     )
 }
 
-pub(super) fn parse_semantic_index_state_rows(
+pub(crate) fn parse_semantic_index_state_rows(
     rows: &[Value],
 ) -> semantic::SemanticFeatureIndexState {
     let Some(row) = rows.first() else {
@@ -418,7 +427,27 @@ pub(super) fn parse_semantic_index_state_rows(
             .get("features_hash")
             .and_then(Value::as_str)
             .map(str::to_string),
+        semantics_llm_enriched: row
+            .get("semantics_llm_enriched")
+            .map(value_as_boolish)
+            .unwrap_or(false),
     }
+}
+
+fn value_as_boolish(value: &Value) -> bool {
+    value.as_bool().unwrap_or_else(|| {
+        value
+            .as_i64()
+            .map(|value| value != 0)
+            .or_else(|| {
+                value.as_str().map(|value| {
+                    value.eq_ignore_ascii_case("true")
+                        || value.eq_ignore_ascii_case("t")
+                        || value == "1"
+                })
+            })
+            .unwrap_or(false)
+    })
 }
 
 fn semantic_generated_at_now_sql(dialect: RelationalDialect) -> &'static str {
@@ -428,7 +457,7 @@ fn semantic_generated_at_now_sql(dialect: RelationalDialect) -> &'static str {
     }
 }
 
-pub(super) fn build_semantic_persist_rows_sql(
+pub(crate) fn build_semantic_persist_rows_sql(
     rows: &semantic::SemanticFeatureRows,
     dialect: RelationalDialect,
 ) -> Result<String> {
@@ -517,7 +546,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
     ))
 }
 
-pub(super) fn build_conditional_current_semantic_persist_rows_sql(
+pub(crate) fn build_conditional_current_semantic_persist_rows_sql(
     rows: &semantic::SemanticFeatureRows,
     input: &semantic::SemanticFeatureInput,
     dialect: RelationalDialect,
@@ -840,10 +869,12 @@ mod tests {
         let rows = vec![json!({
             "semantics_hash": "hash-a",
             "features_hash": "hash-b",
+            "semantics_llm_enriched": 1,
         })];
         let parsed = parse_semantic_index_state_rows(&rows);
         assert_eq!(parsed.semantics_hash.as_deref(), Some("hash-a"));
         assert_eq!(parsed.features_hash.as_deref(), Some("hash-b"));
+        assert!(parsed.semantics_llm_enriched);
     }
 
     #[test]

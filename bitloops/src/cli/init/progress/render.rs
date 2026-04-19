@@ -7,8 +7,8 @@ mod task;
 #[path = "render/terminal.rs"]
 mod terminal;
 
-pub(super) use frame::InitProgressRenderer;
-pub(super) use terminal::fit_init_plain_line;
+pub(crate) use frame::InitProgressRenderer;
+pub(crate) use terminal::fit_init_plain_line;
 
 #[cfg(test)]
 #[path = "render/tests.rs"]

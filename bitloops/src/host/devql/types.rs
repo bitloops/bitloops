@@ -162,6 +162,18 @@ impl RelationalStorage {
         sqlite_exec_batch_transactional_path(self.sqlite_path(), statements).await
     }
 
+    pub async fn exec_serialized(&self, sql: &str) -> Result<()> {
+        super::sqlite_write_actor::sqlite_exec_serialized_path(self.sqlite_path(), sql).await
+    }
+
+    pub async fn exec_serialized_batch_transactional(&self, statements: &[String]) -> Result<()> {
+        super::sqlite_write_actor::sqlite_exec_serialized_batch_transactional_path(
+            self.sqlite_path(),
+            statements,
+        )
+        .await
+    }
+
     pub async fn exec_remote_batch_transactional(&self, statements: &[String]) -> Result<()> {
         if let Some(remote_client) = self.remote_client() {
             return postgres_exec_batch_transactional(remote_client, statements).await;

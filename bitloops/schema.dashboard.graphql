@@ -251,6 +251,16 @@ type DashboardInteractionTurnSearchHit {
 	matchedFields: [String!]!
 }
 
+type DashboardInteractionUpdate {
+	repoId: String!
+	sessionCount: Int!
+	turnCount: Int!
+	latestSessionId: String
+	latestSessionUpdatedAt: String
+	latestTurnId: String
+	latestTurnUpdatedAt: String
+}
+
 type DashboardKpis {
 	totalCommits: Int!
 	totalCheckpoints: Int!
@@ -299,6 +309,10 @@ type DashboardRepository {
 	defaultBranch: String
 }
 
+type DashboardSubscriptionRoot {
+	interactionUpdates(repoId: String): DashboardInteractionUpdate!
+}
+
 type DashboardTokenUsage {
 	inputTokens: Int!
 	outputTokens: Int!
@@ -342,4 +356,5 @@ directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 schema {
 	query: DashboardQueryRoot
 	mutation: DashboardMutationRoot
+	subscription: DashboardSubscriptionRoot
 }

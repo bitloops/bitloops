@@ -80,11 +80,14 @@ FROM repo_sync_state WHERE repo_id = '{}'",
     crate::host::devql::sync::state::write_sync_completed(
         &relational,
         &cfg.repo.repo_id,
-        Some("head-123"),
-        Some("tree-456"),
-        Some("main"),
-        "parser-v1",
-        "extractor-v1",
+        crate::host::devql::sync::state::SyncCompletionState {
+            head_commit_sha: Some("head-123"),
+            head_tree_sha: Some("tree-456"),
+            active_branch: Some("main"),
+            parser_version: "parser-v1",
+            extractor_version: "extractor-v1",
+            scope_exclusions_fingerprint: "fingerprint-123",
+        },
     )
     .await
     .expect("write completed state");
@@ -195,11 +198,14 @@ async fn repo_sync_state_write_completed_errors_without_started_row() {
     let err = crate::host::devql::sync::state::write_sync_completed(
         &relational,
         &cfg.repo.repo_id,
-        Some("head-123"),
-        Some("tree-456"),
-        Some("main"),
-        "parser-v1",
-        "extractor-v1",
+        crate::host::devql::sync::state::SyncCompletionState {
+            head_commit_sha: Some("head-123"),
+            head_tree_sha: Some("tree-456"),
+            active_branch: Some("main"),
+            parser_version: "parser-v1",
+            extractor_version: "extractor-v1",
+            scope_exclusions_fingerprint: "fingerprint-123",
+        },
     )
     .await
     .expect_err("missing repo_sync_state row should error");
@@ -302,11 +308,14 @@ async fn scope_exclusion_reconcile_needed_skips_repos_without_sync_state() {
     crate::host::devql::sync::state::write_sync_completed(
         &relational,
         &cfg.repo.repo_id,
-        Some("head-sha"),
-        Some("tree-sha"),
-        Some("main"),
-        "parser-v1",
-        "extractor-v1",
+        crate::host::devql::sync::state::SyncCompletionState {
+            head_commit_sha: Some("head-sha"),
+            head_tree_sha: Some("tree-sha"),
+            active_branch: Some("main"),
+            parser_version: "parser-v1",
+            extractor_version: "extractor-v1",
+            scope_exclusions_fingerprint: "fingerprint-123",
+        },
     )
     .await
     .expect("write completed state");

@@ -3,12 +3,21 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
+use crate::capability_packs::semantic_clones::types::{
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+};
+use crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload;
 use crate::host::capability_host::CapabilityMailboxRegistration;
 use crate::host::capability_host::gateways::{
     CanonicalGraphGateway, CapabilityMailboxStatus, CapabilityWorkplaneEnqueueResult,
     CapabilityWorkplaneGateway, CapabilityWorkplaneJob, ProvenanceBuilder, StoreHealthGateway,
 };
-use crate::host::runtime_store::RepoSqliteRuntimeStore;
+use crate::host::runtime_store::{
+    RepoSqliteRuntimeStore, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
+    SemanticSummaryMailboxItemInsert,
+};
 
 pub struct LocalCanonicalGraphGateway;
 
@@ -47,6 +56,7 @@ pub struct LocalCapabilityWorkplaneGateway {
     capability_id: String,
     runtime_store: RepoSqliteRuntimeStore,
     declared_mailboxes: BTreeSet<String>,
+    init_session_id: Option<String>,
 }
 
 impl LocalCapabilityWorkplaneGateway {
@@ -54,6 +64,7 @@ impl LocalCapabilityWorkplaneGateway {
         repo_root: &Path,
         capability_id: &str,
         declared_mailboxes: &[CapabilityMailboxRegistration],
+        init_session_id: Option<String>,
     ) -> Result<Self> {
         Ok(Self {
             capability_id: capability_id.to_string(),
@@ -62,6 +73,7 @@ impl LocalCapabilityWorkplaneGateway {
                 .iter()
                 .map(|registration| registration.mailbox_name.to_string())
                 .collect(),
+            init_session_id,
         })
     }
 
@@ -83,23 +95,77 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
         for job in &jobs {
             self.ensure_mailbox_declared(&job.mailbox_name)?;
         }
-        self.runtime_store
-            .enqueue_capability_workplane_jobs(
-                &self.capability_id,
-                jobs.into_iter()
-                    .map(|job| {
-                        crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
-                            job.mailbox_name,
-                            job.dedupe_key,
-                            job.payload,
-                        )
-                    })
-                    .collect(),
-            )
-            .map(|result| CapabilityWorkplaneEnqueueResult {
-                inserted_jobs: result.inserted_jobs,
-                updated_jobs: result.updated_jobs,
-            })
+        let mut workplane_jobs = Vec::new();
+        let mut summary_items = Vec::new();
+        let mut embedding_items = Vec::new();
+
+        for job in jobs {
+            if self.capability_id == SEMANTIC_CLONES_CAPABILITY_ID {
+                match job.mailbox_name.as_str() {
+                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => {
+                        summary_items.push(summary_mailbox_item_from_job(
+                            self.init_session_id.clone(),
+                            job,
+                        )?);
+                        continue;
+                    }
+                    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => {
+                        embedding_items.push(embedding_mailbox_item_from_job(
+                            self.init_session_id.clone(),
+                            EmbeddingRepresentationKind::Code,
+                            job,
+                        )?);
+                        continue;
+                    }
+                    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
+                        embedding_items.push(embedding_mailbox_item_from_job(
+                            self.init_session_id.clone(),
+                            EmbeddingRepresentationKind::Summary,
+                            job,
+                        )?);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+
+            workplane_jobs.push(
+                crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+                    job.mailbox_name,
+                    self.init_session_id.clone(),
+                    job.dedupe_key,
+                    job.payload,
+                ),
+            );
+        }
+
+        let mut totals = CapabilityWorkplaneEnqueueResult::default();
+        if !workplane_jobs.is_empty() {
+            let result = self
+                .runtime_store
+                .enqueue_capability_workplane_jobs(&self.capability_id, workplane_jobs)?;
+            totals.inserted_jobs += result.inserted_jobs;
+            totals.updated_jobs += result.updated_jobs;
+        }
+        if !summary_items.is_empty() {
+            let result = self
+                .runtime_store
+                .enqueue_semantic_summary_mailbox_items(summary_items)?;
+            totals.inserted_jobs += result.inserted_jobs;
+            totals.updated_jobs += result.updated_jobs;
+        }
+        if !embedding_items.is_empty() {
+            let result = self
+                .runtime_store
+                .enqueue_semantic_embedding_mailbox_items(embedding_items)?;
+            totals.inserted_jobs += result.inserted_jobs;
+            totals.updated_jobs += result.updated_jobs;
+        }
+
+        Ok(CapabilityWorkplaneEnqueueResult {
+            inserted_jobs: totals.inserted_jobs,
+            updated_jobs: totals.updated_jobs,
+        })
     }
 
     fn mailbox_status(&self) -> Result<BTreeMap<String, CapabilityMailboxStatus>> {
@@ -131,4 +197,51 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
                     .collect()
             })
     }
+}
+
+fn summary_mailbox_item_from_job(
+    init_session_id: Option<String>,
+    job: CapabilityWorkplaneJob,
+) -> Result<SemanticSummaryMailboxItemInsert> {
+    let (item_kind, artefact_id, payload_json) = semantic_mailbox_payload_parts(&job.payload)?;
+    Ok(SemanticSummaryMailboxItemInsert::new(
+        init_session_id,
+        item_kind,
+        artefact_id,
+        payload_json,
+        job.dedupe_key,
+    ))
+}
+
+fn embedding_mailbox_item_from_job(
+    init_session_id: Option<String>,
+    representation_kind: EmbeddingRepresentationKind,
+    job: CapabilityWorkplaneJob,
+) -> Result<SemanticEmbeddingMailboxItemInsert> {
+    let (item_kind, artefact_id, payload_json) = semantic_mailbox_payload_parts(&job.payload)?;
+    Ok(SemanticEmbeddingMailboxItemInsert::new(
+        init_session_id,
+        representation_kind.to_string(),
+        item_kind,
+        artefact_id,
+        payload_json,
+        job.dedupe_key,
+    ))
+}
+
+fn semantic_mailbox_payload_parts(
+    payload: &Value,
+) -> Result<(SemanticMailboxItemKind, Option<String>, Option<Value>)> {
+    let payload = serde_json::from_value::<SemanticClonesMailboxPayload>(payload.clone())?;
+    let parts = match payload {
+        SemanticClonesMailboxPayload::Artefact { artefact_id } => {
+            (SemanticMailboxItemKind::Artefact, Some(artefact_id), None)
+        }
+        SemanticClonesMailboxPayload::RepoBackfill { artefact_ids, .. } => (
+            SemanticMailboxItemKind::RepoBackfill,
+            None,
+            artefact_ids.map(serde_json::to_value).transpose()?,
+        ),
+    };
+    Ok(parts)
 }

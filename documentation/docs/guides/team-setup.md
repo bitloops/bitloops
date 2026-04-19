@@ -70,7 +70,7 @@ The fastest default path is `bitloops init --install-default-daemon --sync=true`
 
 This creates `.bitloops.local.toml`, adds it to `.git/info/exclude`, and installs or reconciles hooks.
 
-When you use `bitloops init --install-default-daemon` and embeddings are not already configured, Bitloops also adds the default local embeddings profile and warms it before any init-triggered sync runs.
+When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Bitloops cloud is the recommended default, and the managed local runtime still downloads and warms asynchronously when that local option is selected.
 
 In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
 

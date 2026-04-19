@@ -12,8 +12,9 @@ use crate::config::{
 use super::embeddings::BitloopsEmbeddingsIpcService;
 use super::text_generation::BitloopsInferenceTextGenerationService;
 use super::{
-    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER, EmbeddingService,
-    InferenceGateway, ResolvedInferenceSlot, TextGenerationService,
+    BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER,
+    BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, EmbeddingService, InferenceGateway,
+    ResolvedInferenceSlot, TextGenerationService,
 };
 
 pub struct EmptyInferenceGateway;
@@ -144,6 +145,7 @@ impl LocalInferenceGateway {
                     runtime,
                     model,
                     profile.cache_dir.as_deref(),
+                    runtime_name == BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID,
                 )
                 .with_context(|| {
                     format!(

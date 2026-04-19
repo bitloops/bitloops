@@ -1,7 +1,9 @@
+use super::helpers::{PROGRESS_PERSIST_INTERVAL, should_persist_embeddings_bootstrap_progress};
 use super::*;
 use crate::test_support::log_capture::capture_logs;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 use tokio::sync::Notify;
@@ -45,6 +47,62 @@ async fn receive_embeddings_bootstrap_outcome_waits_for_result_after_progress_ch
 
     assert_eq!(seen_phases, vec![EmbeddingsBootstrapPhase::WarmingProfile]);
     assert_eq!(outcome.message, "ok");
+}
+
+#[test]
+fn embeddings_bootstrap_progress_persists_phase_changes_immediately() {
+    let previous = EmbeddingsBootstrapProgress {
+        phase: EmbeddingsBootstrapPhase::DownloadingRuntime,
+        asset_name: Some("asset.tar.xz".to_string()),
+        bytes_downloaded: 8,
+        bytes_total: Some(16),
+        version: Some("v0.1.2".to_string()),
+        message: Some("Downloading".to_string()),
+    };
+    let update = EmbeddingsBootstrapProgress {
+        phase: EmbeddingsBootstrapPhase::ExtractingRuntime,
+        bytes_downloaded: 16,
+        message: Some("Extracting".to_string()),
+        ..previous.clone()
+    };
+    let persisted_at = Instant::now();
+
+    assert!(should_persist_embeddings_bootstrap_progress(
+        Some(&previous),
+        &update,
+        Some(persisted_at),
+        persisted_at + Duration::from_millis(100),
+    ));
+}
+
+#[test]
+fn embeddings_bootstrap_progress_throttles_byte_only_updates() {
+    let previous = EmbeddingsBootstrapProgress {
+        phase: EmbeddingsBootstrapPhase::DownloadingRuntime,
+        asset_name: Some("asset.tar.xz".to_string()),
+        bytes_downloaded: 8,
+        bytes_total: Some(16),
+        version: Some("v0.1.2".to_string()),
+        message: Some("Downloading".to_string()),
+    };
+    let update = EmbeddingsBootstrapProgress {
+        bytes_downloaded: 12,
+        ..previous.clone()
+    };
+    let persisted_at = Instant::now();
+
+    assert!(!should_persist_embeddings_bootstrap_progress(
+        Some(&previous),
+        &update,
+        Some(persisted_at),
+        persisted_at + Duration::from_millis(100),
+    ));
+    assert!(should_persist_embeddings_bootstrap_progress(
+        Some(&previous),
+        &update,
+        Some(persisted_at),
+        persisted_at + PROGRESS_PERSIST_INTERVAL,
+    ));
 }
 
 #[tokio::test]

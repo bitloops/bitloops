@@ -1,9 +1,9 @@
 # Daemon Logging MVP — Design Specification
 
-**Feature name:** Daemon Logging MVP  
-**Module(s):** Daemon Logger, Daemon CLI, Supervisor, Background Workflows  
-**Status:** Draft  
-**Priority:** P1  
+**Feature name:** Daemon Logging MVP
+**Module(s):** Daemon Logger, Daemon CLI, Supervisor, Background Workflows
+**Status:** Draft
+**Priority:** P1
 **Target release:** MVP
 
 ---

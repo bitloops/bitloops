@@ -376,6 +376,7 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
                         event_kind: "current_state_consumer".to_string(),
                         lane_key: "repo-1:test_harness.current_state".to_string(),
                         event_payload_json: String::new(),
+                        init_session_id: None,
                         status: crate::daemon::CapabilityEventRunStatus::Queued,
                         attempts: 0,
                         submitted_at_unix: 1,

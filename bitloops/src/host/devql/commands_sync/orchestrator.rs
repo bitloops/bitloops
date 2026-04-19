@@ -4,16 +4,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use tokio::task::JoinSet;
 
-use crate::host::capability_host::DevqlCapabilityHost;
-use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
-
-#[path = "orchestrator/semantic_projection.rs"]
-mod semantic_projection;
-
-use self::semantic_projection::{
-    build_current_projection_context, finalize_semantic_clone_projection_after_sync,
-    project_materialized_items,
-};
 use super::diff_collector::SyncDiffCollector;
 use super::progress::{SyncObserver, SyncProgressPhase, emit_progress};
 use super::shared::{
@@ -28,6 +18,7 @@ use super::stats::SyncExecutionStats;
 use super::summary::SyncSummary;
 use super::validation::execute_sync_validation;
 use super::*;
+use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
 
 pub async fn run_sync(cfg: &DevqlConfig, mode: sync::types::SyncMode) -> Result<()> {
     run_sync_with_summary(cfg, mode).await.map(|_| ())
@@ -45,8 +36,9 @@ pub async fn run_sync_with_summary_and_observer(
     mode: sync::types::SyncMode,
     observer: Option<&dyn SyncObserver>,
 ) -> Result<SyncSummary> {
-    let (summary, _file_diff, _artefact_diff) =
-        run_sync_with_summary_and_observer_and_diffs(cfg, mode, observer).await?;
+    let (summary, stats, _file_diff, _artefact_diff) =
+        run_sync_with_summary_and_stats_and_observer_and_diffs(cfg, mode, observer, None).await?;
+    stats.log(&cfg.repo.repo_id, &summary.mode);
     Ok(summary)
 }
 
@@ -55,12 +47,33 @@ pub async fn run_sync_with_summary_and_observer_and_diffs(
     mode: sync::types::SyncMode,
     observer: Option<&dyn SyncObserver>,
 ) -> Result<(SyncSummary, SyncFileDiff, SyncArtefactDiff)> {
+    let (summary, _stats, file_diff, artefact_diff) =
+        run_sync_with_summary_and_stats_and_observer_and_diffs(cfg, mode, observer, None).await?;
+    Ok((summary, file_diff, artefact_diff))
+}
+
+pub(crate) async fn run_sync_with_summary_and_stats_and_observer_and_diffs(
+    cfg: &DevqlConfig,
+    mode: sync::types::SyncMode,
+    observer: Option<&dyn SyncObserver>,
+    scope_exclusions_fingerprint_override: Option<&str>,
+) -> Result<(
+    SyncSummary,
+    SyncExecutionStats,
+    SyncFileDiff,
+    SyncArtefactDiff,
+)> {
     let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .context("resolving DevQL backend config for `devql sync`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql sync").await?;
     if matches!(mode, sync::types::SyncMode::Validate) {
         return match execute_sync_validation(cfg, &relational).await {
-            Ok(summary) => Ok((summary, SyncFileDiff::default(), SyncArtefactDiff::default())),
+            Ok(summary) => Ok((
+                summary,
+                SyncExecutionStats::default(),
+                SyncFileDiff::default(),
+                SyncArtefactDiff::default(),
+            )),
             Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
                 "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql tasks enqueue --kind sync --validate --status`.",
             ),
@@ -68,11 +81,16 @@ pub async fn run_sync_with_summary_and_observer_and_diffs(
         };
     }
 
-    match execute_sync_with_observer_and_stats_and_diffs(cfg, &relational, mode, observer).await {
-        Ok((summary, stats, file_diff, artefact_diff)) => {
-            stats.log(&cfg.repo.repo_id, &summary.mode);
-            Ok((summary, file_diff, artefact_diff))
-        }
+    match execute_sync_with_observer_and_stats_and_diffs(
+        cfg,
+        &relational,
+        mode,
+        observer,
+        scope_exclusions_fingerprint_override,
+    )
+    .await
+    {
+        Ok((summary, stats, file_diff, artefact_diff)) => Ok((summary, stats, file_diff, artefact_diff)),
         Err(err) if is_missing_sync_schema_error(&err) => Err(err).context(
             "DevQL sync schema is not initialised. Run `bitloops devql init` before `bitloops devql tasks enqueue --kind sync --status`.",
         ),
@@ -116,7 +134,8 @@ async fn execute_sync_with_observer_and_stats(
     observer: Option<&dyn SyncObserver>,
 ) -> Result<(SyncSummary, SyncExecutionStats)> {
     let (summary, stats, _file_diff, _artefact_diff) =
-        execute_sync_with_observer_and_stats_and_diffs(cfg, relational, mode, observer).await?;
+        execute_sync_with_observer_and_stats_and_diffs(cfg, relational, mode, observer, None)
+            .await?;
     Ok((summary, stats))
 }
 
@@ -125,6 +144,7 @@ pub(crate) async fn execute_sync_with_observer_and_stats_and_diffs(
     relational: &RelationalStorage,
     mode: sync::types::SyncMode,
     observer: Option<&dyn SyncObserver>,
+    scope_exclusions_fingerprint_override: Option<&str>,
 ) -> Result<(
     SyncSummary,
     SyncExecutionStats,
@@ -158,14 +178,26 @@ pub(crate) async fn execute_sync_with_observer_and_stats_and_diffs(
     .await
     {
         Ok((summary, stats, file_diff, artefact_diff)) => {
+            let scope_exclusions_fingerprint = scope_exclusions_fingerprint_override
+                .map(str::to_string)
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    crate::host::devql::current_scope_exclusions_fingerprint(&cfg.repo_root)
+                        .context(
+                            "loading current scope exclusions fingerprint for completed DevQL sync",
+                        )
+                })?;
             sync::state::write_sync_completed(
                 relational,
                 &cfg.repo.repo_id,
-                summary.head_commit_sha.as_deref(),
-                summary.head_tree_sha.as_deref(),
-                summary.active_branch.as_deref(),
-                &summary.parser_version,
-                &summary.extractor_version,
+                sync::state::SyncCompletionState {
+                    head_commit_sha: summary.head_commit_sha.as_deref(),
+                    head_tree_sha: summary.head_tree_sha.as_deref(),
+                    active_branch: summary.active_branch.as_deref(),
+                    parser_version: &summary.parser_version,
+                    extractor_version: &summary.extractor_version,
+                    scope_exclusions_fingerprint: &scope_exclusions_fingerprint,
+                },
             )
             .await?;
             Ok((summary, stats, file_diff, artefact_diff))
@@ -360,8 +392,6 @@ async fn execute_sync_inner(
     let mut writer = SqliteSyncWriter::open(relational.sqlite_path())
         .await
         .context("opening persistent SQLite sync writer")?;
-    let current_projection = build_current_projection_context(cfg)?;
-    let mut current_projection_changed = false;
     let mut touched_paths = HashSet::<String>::new();
     let removals = classified
         .iter()
@@ -384,16 +414,6 @@ async fn execute_sync_inner(
             .remove_paths(&cfg.repo.repo_id, &removals)
             .await
             .context("removing stale paths in SQLite sync writer")?;
-        for path in &outcome.removed_paths {
-            sync::semantic_projector::remove_path(cfg, relational, path)
-                .await
-                .with_context(|| {
-                    format!("removing current semantic clone projection for `{path}`")
-                })?;
-        }
-        if !outcome.removed_paths.is_empty() {
-            current_projection_changed = true;
-        }
         for path in &outcome.removed_paths {
             touched_paths.insert(path.clone());
         }
@@ -496,9 +516,6 @@ async fn execute_sync_inner(
                         }
                         if writer.should_flush() {
                             flush_pending_materialisations(
-                                cfg.as_ref(),
-                                relational,
-                                &current_projection,
                                 &mut writer,
                                 &cfg.repo.repo_id,
                                 parser_version.as_str(),
@@ -514,7 +531,6 @@ async fn execute_sync_inner(
                                 extracted_completed,
                                 &mut materialized_completed,
                                 &mut paths_completed,
-                                &mut current_projection_changed,
                                 &mut touched_paths,
                             )
                             .await?;
@@ -522,9 +538,6 @@ async fn execute_sync_inner(
                     }
                     _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)), if writer.has_pending_items() => {
                         flush_pending_materialisations(
-                            cfg.as_ref(),
-                            relational,
-                            &current_projection,
                             &mut writer,
                             &cfg.repo.repo_id,
                             parser_version.as_str(),
@@ -540,7 +553,6 @@ async fn execute_sync_inner(
                             extracted_completed,
                             &mut materialized_completed,
                             &mut paths_completed,
-                            &mut current_projection_changed,
                             &mut touched_paths,
                         )
                         .await?;
@@ -577,9 +589,6 @@ async fn execute_sync_inner(
                 }
                 if writer.should_flush() {
                     flush_pending_materialisations(
-                        cfg.as_ref(),
-                        relational,
-                        &current_projection,
                         &mut writer,
                         &cfg.repo.repo_id,
                         parser_version.as_str(),
@@ -595,7 +604,6 @@ async fn execute_sync_inner(
                         extracted_completed,
                         &mut materialized_completed,
                         &mut paths_completed,
-                        &mut current_projection_changed,
                         &mut touched_paths,
                     )
                     .await?;
@@ -605,9 +613,6 @@ async fn execute_sync_inner(
     }
 
     flush_pending_materialisations(
-        cfg,
-        relational,
-        &current_projection,
         &mut writer,
         &cfg.repo.repo_id,
         parser_version,
@@ -623,7 +628,6 @@ async fn execute_sync_inner(
         extracted_completed,
         &mut materialized_completed,
         &mut paths_completed,
-        &mut current_projection_changed,
         &mut touched_paths,
     )
     .await?;
@@ -640,6 +644,7 @@ async fn execute_sync_inner(
     );
 
     let touched_paths = touched_paths.into_iter().collect::<Vec<_>>();
+    let reconcile_started = Instant::now();
     sync::materializer::reconcile_current_local_edges_for_paths(
         relational,
         &cfg.repo.repo_id,
@@ -647,14 +652,7 @@ async fn execute_sync_inner(
     )
     .await
     .context("reconciling current local dependency edges after sync")?;
-
-    finalize_semantic_clone_projection_after_sync(
-        cfg,
-        relational,
-        &current_projection,
-        current_projection_changed,
-    )
-    .await?;
+    stats.current_edge_reconcile_total = reconcile_started.elapsed();
 
     emit_progress(
         observer,
@@ -843,9 +841,6 @@ fn handle_prepared_outcome(
 
 #[allow(clippy::too_many_arguments)]
 async fn flush_pending_materialisations(
-    cfg: &DevqlConfig,
-    relational: &RelationalStorage,
-    current_projection: &DevqlCapabilityHost,
     writer: &mut SqliteSyncWriter,
     repo_id: &str,
     parser_version: &str,
@@ -861,7 +856,6 @@ async fn flush_pending_materialisations(
     extracted_completed: usize,
     materialized_completed: &mut usize,
     paths_completed: &mut usize,
-    current_projection_changed: &mut bool,
     touched_paths: &mut HashSet<String>,
 ) -> Result<()> {
     if !writer.has_pending_items() {
@@ -873,17 +867,6 @@ async fn flush_pending_materialisations(
         .flush(repo_id, parser_version, extractor_version)
         .await
         .context("flushing pending SQLite sync materialisations")?;
-    if !outcome.materialized_items.is_empty() {
-        project_materialized_items(
-            cfg,
-            relational,
-            current_projection,
-            &outcome.materialized_items,
-        )
-        .await
-        .context("projecting current semantic clone rows for synced paths")?;
-        *current_projection_changed = true;
-    }
     for artefact in outcome.pre_artefacts.clone() {
         diff_collector.record_pre_artefacts(artefact.path.clone(), vec![artefact]);
     }

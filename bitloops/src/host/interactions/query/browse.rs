@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
+use rusqlite::OptionalExtension;
 
 use super::filters::{
     event_matches_filter, session_matches_filter, session_sort_key, turn_matches_filter,
@@ -11,9 +12,10 @@ use super::filters::{
 use super::state::load_state;
 use super::types::{
     InteractionActorBucket, InteractionAgentBucket, InteractionBrowseFilter,
-    InteractionCommitAuthorBucket, InteractionKpis, InteractionSessionDetail,
-    InteractionSessionSummary, InteractionTurnSummary,
+    InteractionChangeSnapshot, InteractionCommitAuthorBucket, InteractionKpis,
+    InteractionSessionDetail, InteractionSessionSummary, InteractionTurnSummary,
 };
+use crate::host::checkpoints::lifecycle::interaction::resolve_interaction_spool;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::interactions::types::InteractionEvent;
 
@@ -156,6 +158,90 @@ pub(crate) fn compute_kpis(
         cache_creation_tokens: totals.cache_creation_tokens,
         cache_read_tokens: totals.cache_read_tokens,
         api_call_count: totals.api_call_count,
+    })
+}
+
+pub(crate) fn interaction_change_snapshot(repo_root: &Path) -> Result<InteractionChangeSnapshot> {
+    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
+        .map(|identity| identity.repo_id)
+        .unwrap_or_default();
+    let Some(spool) = resolve_interaction_spool(repo_root) else {
+        return Ok(InteractionChangeSnapshot {
+            repo_id,
+            ..Default::default()
+        });
+    };
+
+    spool.with_connection(|conn| {
+        let session_count = conn.query_row(
+            "SELECT COUNT(*)
+             FROM interaction_sessions
+             WHERE repo_id = ?1",
+            rusqlite::params![spool.repo_id()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let latest_session = conn
+            .query_row(
+                "SELECT session_id, changed_at
+                 FROM (
+                    SELECT session_id,
+                           COALESCE(
+                               NULLIF(updated_at, ''),
+                               NULLIF(last_event_at, ''),
+                               NULLIF(started_at, ''),
+                               ''
+                           ) AS changed_at
+                    FROM interaction_sessions
+                    WHERE repo_id = ?1
+                 )
+                 ORDER BY changed_at DESC, session_id DESC
+                 LIMIT 1",
+                rusqlite::params![spool.repo_id()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        let turn_count = conn.query_row(
+            "SELECT COUNT(*)
+             FROM interaction_turns
+             WHERE repo_id = ?1",
+            rusqlite::params![spool.repo_id()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let latest_turn = conn
+            .query_row(
+                "SELECT turn_id, changed_at
+                 FROM (
+                    SELECT turn_id,
+                           COALESCE(
+                               NULLIF(updated_at, ''),
+                               NULLIF(ended_at, ''),
+                               NULLIF(started_at, ''),
+                               ''
+                           ) AS changed_at
+                    FROM interaction_turns
+                    WHERE repo_id = ?1
+                 )
+                 ORDER BY changed_at DESC, turn_id DESC
+                 LIMIT 1",
+                rusqlite::params![spool.repo_id()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        Ok(InteractionChangeSnapshot {
+            repo_id: spool.repo_id().to_string(),
+            session_count: usize::try_from(session_count.max(0)).unwrap_or_default(),
+            turn_count: usize::try_from(turn_count.max(0)).unwrap_or_default(),
+            latest_session_id: latest_session
+                .as_ref()
+                .map(|(session_id, _)| session_id.clone()),
+            latest_session_updated_at: latest_session
+                .and_then(|(_, updated_at)| (!updated_at.is_empty()).then_some(updated_at)),
+            latest_turn_id: latest_turn.as_ref().map(|(turn_id, _)| turn_id.clone()),
+            latest_turn_updated_at: latest_turn
+                .and_then(|(_, updated_at)| (!updated_at.is_empty()).then_some(updated_at)),
+        })
     })
 }
 

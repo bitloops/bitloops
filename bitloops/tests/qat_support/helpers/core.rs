@@ -2148,7 +2148,7 @@ fn load_latest_test_harness_current_state_run(
 
     store.with_connection(|conn| {
         conn.query_row(
-            "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
+            "SELECT run_id, repo_id, repo_root, mailbox_name, capability_id, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error \
              FROM capability_workplane_cursor_runs \
              WHERE capability_id = ?1 AND mailbox_name = ?2 AND repo_id = ?3 \
              ORDER BY to_generation_seq DESC, from_generation_seq DESC, updated_at_unix DESC, completed_at_unix DESC, submitted_at_unix DESC, rowid DESC \
@@ -2171,21 +2171,22 @@ fn load_latest_test_harness_current_state_run(
                     run_id: row.get(0)?,
                     repo_id: repo_id.clone(),
                     capability_id: row.get(4)?,
+                    init_session_id: row.get(5)?,
                     consumer_id: consumer_id.clone(),
                     handler_id: consumer_id.clone(),
-                    from_generation_seq: as_u64(5)?,
-                    to_generation_seq: as_u64(6)?,
-                    reconcile_mode: row.get(7)?,
+                    from_generation_seq: as_u64(6)?,
+                    to_generation_seq: as_u64(7)?,
+                    reconcile_mode: row.get(8)?,
                     event_kind: "current_state_consumer".to_string(),
                     lane_key: format!("{repo_id}:{consumer_id}"),
                     event_payload_json: String::new(),
-                    status: parse_capability_event_run_status(&row.get::<_, String>(8)?)?,
-                    attempts: row.get(9)?,
-                    submitted_at_unix: as_u64(10)?,
-                    started_at_unix: opt_u64(11)?,
-                    updated_at_unix: as_u64(12)?,
-                    completed_at_unix: opt_u64(13)?,
-                    error: row.get(14)?,
+                    status: parse_capability_event_run_status(&row.get::<_, String>(9)?)?,
+                    attempts: row.get(10)?,
+                    submitted_at_unix: as_u64(11)?,
+                    started_at_unix: opt_u64(12)?,
+                    updated_at_unix: as_u64(13)?,
+                    completed_at_unix: opt_u64(14)?,
+                    error: row.get(15)?,
                 })
             },
         )
@@ -2225,6 +2226,7 @@ fn load_latest_test_harness_pack_reconcile_run(
                     run_id: row.get(0)?,
                     repo_id: repo_id.clone(),
                     capability_id: row.get(2)?,
+                    init_session_id: None,
                     consumer_id: consumer_id.clone(),
                     handler_id: consumer_id.clone(),
                     from_generation_seq: as_u64(4)?,

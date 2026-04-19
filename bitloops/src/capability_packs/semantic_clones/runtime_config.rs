@@ -253,6 +253,9 @@ mod tests {
             summary_mode: SemanticSummaryMode::Auto,
             embedding_mode: SemanticCloneEmbeddingMode::Off,
             ann_neighbors: 5,
+            summary_workers: 1,
+            embedding_workers: 1,
+            clone_rebuild_workers: 1,
             enrichment_workers: 1,
             inference: crate::config::SemanticClonesInferenceBindings {
                 summary_generation: Some("summary_llm".to_string()),

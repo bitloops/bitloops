@@ -63,6 +63,7 @@ pub(crate) fn can_use_terminal_picker() -> bool {
 pub(crate) fn prompt_single_select(
     out: &mut dyn Write,
     title: &str,
+    intro: &[String],
     options: &[SingleSelectOption],
     default_index: usize,
     footer: &[String],
@@ -75,7 +76,7 @@ pub(crate) fn prompt_single_select(
 
     #[cfg(test)]
     if let Some(hook) = SINGLE_SELECT_HOOK.with(|cell| cell.borrow().clone()) {
-        render_single_select(out, title, options, cursor, None, footer)?;
+        render_single_select(out, title, intro, options, cursor, None, footer)?;
         let selected = hook(options, cursor)?;
         if selected >= options.len() {
             bail!("single-select hook returned out-of-bounds index {selected}");
@@ -87,7 +88,8 @@ pub(crate) fn prompt_single_select(
 
     let mut tty_in = fs::OpenOptions::new().read(true).open("/dev/tty")?;
     let _raw_mode = SttyRawMode::enter()?;
-    let mut rendered_lines = render_single_select(out, title, options, cursor, None, footer)?;
+    let mut rendered_lines =
+        render_single_select(out, title, intro, options, cursor, None, footer)?;
 
     loop {
         match read_key(&mut tty_in)? {
@@ -103,8 +105,15 @@ pub(crate) fn prompt_single_select(
             Key::Submit => break,
             Key::Unknown => {}
         }
-        rendered_lines =
-            render_single_select(out, title, options, cursor, Some(rendered_lines), footer)?;
+        rendered_lines = render_single_select(
+            out,
+            title,
+            intro,
+            options,
+            cursor,
+            Some(rendered_lines),
+            footer,
+        )?;
     }
 
     writeln!(out)?;
@@ -134,6 +143,7 @@ pub(crate) fn with_single_select_hook<T>(
 fn render_single_select(
     out: &mut dyn Write,
     title: &str,
+    intro: &[String],
     options: &[SingleSelectOption],
     cursor: usize,
     previous_lines: Option<usize>,
@@ -141,8 +151,11 @@ fn render_single_select(
 ) -> Result<usize> {
     let mut lines = Vec::new();
     lines.push(title.to_string());
-    lines.push("Use ↑/↓ to move and enter to confirm.".to_string());
     lines.push(String::new());
+    if !intro.is_empty() {
+        lines.extend(intro.iter().cloned());
+        lines.push(String::new());
+    }
 
     for (index, option) in options.iter().enumerate() {
         let pointer = if index == cursor {
@@ -167,9 +180,6 @@ fn render_single_select(
         lines.extend(footer.iter().cloned());
     }
 
-    lines.push(String::new());
-    lines.push("ctrl+c cancel • ↑/↓ move • enter submit".to_string());
-
     if let Some(previous_lines) = previous_lines {
         if previous_lines > 1 {
             write!(out, "\x1b[{}F", previous_lines - 1)?;
@@ -190,7 +200,7 @@ fn render_single_select(
 
 fn style_single_select_detail(detail: &str) -> String {
     if should_use_color_output() {
-        format!("\x1b[2;3m{detail}\x1b[0m")
+        format!("\x1b[2m{detail}\x1b[0m")
     } else {
         detail.to_string()
     }

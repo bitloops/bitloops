@@ -8,6 +8,7 @@ fn sample_run(status: CapabilityEventRunStatus) -> CapabilityEventRunRecord {
         run_id: "run-1".to_string(),
         repo_id: "repo-1".to_string(),
         capability_id: "test_harness".to_string(),
+        init_session_id: None,
         consumer_id: "test_harness.current_state".to_string(),
         handler_id: "test_harness.current_state".to_string(),
         from_generation_seq: 2,

@@ -42,7 +42,21 @@ impl OpenCodeAgent {
         local_dev: bool,
         force: bool,
     ) -> Result<usize> {
-        install_repo_skill(repo_root)?;
+        self.install_hooks_at_with_bitloops_skill(repo_root, local_dev, force, true)
+    }
+
+    pub(crate) fn install_hooks_at_with_bitloops_skill(
+        &self,
+        repo_root: &std::path::Path,
+        local_dev: bool,
+        force: bool,
+        install_bitloops_skill: bool,
+    ) -> Result<usize> {
+        if install_bitloops_skill {
+            install_repo_skill(repo_root)?;
+        } else {
+            uninstall_repo_skill(repo_root)?;
+        }
         let plugin_path = self.plugin_path_at(repo_root);
 
         if !force
@@ -80,7 +94,8 @@ impl OpenCodeAgent {
         let Ok(content) = fs::read_to_string(plugin_path) else {
             return false;
         };
-        Self::ensure_plugin_marker(&content).is_ok() && repo_skill_path(repo_root).exists()
+        let _ = repo_skill_path(repo_root);
+        Self::ensure_plugin_marker(&content).is_ok()
     }
 
     pub(crate) fn plugin_path_at(&self, repo_root: &std::path::Path) -> PathBuf {

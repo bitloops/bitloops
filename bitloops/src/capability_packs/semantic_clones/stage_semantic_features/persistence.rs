@@ -24,7 +24,11 @@ pub(crate) async fn upsert_semantic_feature_rows(
         let next_input_hash =
             semantic::build_semantic_feature_input_hash(input, summary_provider.as_ref());
         let state = load_semantic_index_state(relational, &input.artefact_id).await?;
-        if !semantic::semantic_features_require_reindex(&state, &next_input_hash) {
+        if !semantic::semantic_features_require_reindex(
+            &state,
+            &next_input_hash,
+            summary_provider.requires_model_output(),
+        ) {
             stats.skipped += 1;
             continue;
         }
@@ -94,7 +98,7 @@ pub(crate) async fn clear_current_semantic_feature_rows_for_path(
 ) -> Result<()> {
     ensure_semantic_features_schema(relational).await?;
     relational
-        .exec_batch_transactional(&[
+        .exec_serialized_batch_transactional(&[
             build_delete_current_symbol_features_sql(repo_id, path),
             build_delete_current_symbol_semantics_sql(repo_id, path),
         ])
@@ -116,7 +120,7 @@ async fn persist_semantic_feature_rows(
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
     relational
-        .exec(&build_semantic_persist_rows_sql(
+        .exec_serialized(&build_semantic_persist_rows_sql(
             rows,
             relational.dialect(),
         )?)
@@ -129,7 +133,7 @@ pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
     match relational
-        .exec(&build_conditional_current_semantic_persist_rows_sql(
+        .exec_serialized(&build_conditional_current_semantic_persist_rows_sql(
             rows,
             input,
             relational.dialect(),
@@ -158,7 +162,7 @@ async fn persist_current_semantic_feature_rows(
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
     relational
-        .exec(&build_current_semantic_persist_rows_sql(
+        .exec_serialized(&build_current_semantic_persist_rows_sql(
             rows,
             symbol_id,
             path,

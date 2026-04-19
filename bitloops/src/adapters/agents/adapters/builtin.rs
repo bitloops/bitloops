@@ -140,7 +140,13 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             || Box::new(ClaudeCodeAgent),
             |repo_root| repo_root.join(".claude").is_dir(),
             claude_hooks::are_hooks_installed,
-            |repo_root, _local_dev, force| claude_hooks::install_hooks(repo_root, force),
+            |repo_root, _local_dev, force, options| {
+                claude_hooks::install_hooks_with_bitloops_skill(
+                    repo_root,
+                    force,
+                    options.install_bitloops_skill,
+                )
+            },
             claude_hooks::uninstall_hooks,
             |_session_id| "claude".to_string(),
             Some(claude_hook_output::render_hook_output),
@@ -176,7 +182,14 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             || Box::new(CopilotCliAgent),
             copilot_hooks::are_hooks_installed_at,
             copilot_hooks::are_hooks_installed_at,
-            copilot_hooks::install_hooks_at,
+            |repo_root, local_dev, force, options| {
+                copilot_hooks::install_hooks_at_with_bitloops_skill(
+                    repo_root,
+                    local_dev,
+                    force,
+                    options.install_bitloops_skill,
+                )
+            },
             copilot_hooks::uninstall_hooks_at,
             |session_id| {
                 if session_id.trim().is_empty() {
@@ -214,7 +227,14 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             || Box::new(CodexAgent),
             |repo_root| repo_root.join(".codex").is_dir(),
             codex_hooks::are_hooks_installed_at,
-            codex_hooks::install_hooks_at,
+            |repo_root, local_dev, force, options| {
+                codex_hooks::install_hooks_at_with_bitloops_skill(
+                    repo_root,
+                    local_dev,
+                    force,
+                    options.install_bitloops_skill,
+                )
+            },
             codex_hooks::uninstall_hooks_at,
             |session_id| {
                 if session_id.trim().is_empty() {
@@ -255,7 +275,14 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             || Box::new(CursorAgent),
             |repo_root| repo_root.join(".cursor").is_dir(),
             cursor_hooks::are_hooks_installed_at,
-            cursor_hooks::install_hooks_at,
+            |repo_root, local_dev, force, options| {
+                cursor_hooks::install_hooks_at_with_bitloops_skill(
+                    repo_root,
+                    local_dev,
+                    force,
+                    options.install_bitloops_skill,
+                )
+            },
             cursor_hooks::uninstall_hooks_at,
             |_session_id| "Open this project in Cursor to continue the session.".to_string(),
             Some(cursor_hook_output::render_hook_output),
@@ -287,8 +314,13 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             || Box::new(GeminiCliAgent),
             |repo_root| repo_root.join(".gemini").is_dir(),
             |repo_root| GeminiCliAgent.are_hooks_installed_at(repo_root),
-            |repo_root, local_dev, force| {
-                GeminiCliAgent.install_hooks_at(repo_root, local_dev, force)
+            |repo_root, local_dev, force, options| {
+                GeminiCliAgent.install_hooks_at_with_bitloops_skill(
+                    repo_root,
+                    local_dev,
+                    force,
+                    options.install_bitloops_skill,
+                )
             },
             |repo_root| GeminiCliAgent.uninstall_hooks_at(repo_root),
             |_session_id| "gemini".to_string(),
@@ -321,8 +353,13 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             || Box::new(OpenCodeAgent),
             |repo_root| repo_root.join(".opencode").is_dir(),
             |repo_root| OpenCodeAgent.are_hooks_installed_at(repo_root),
-            |repo_root, local_dev, force| {
-                OpenCodeAgent.install_hooks_at(repo_root, local_dev, force)
+            |repo_root, local_dev, force, options| {
+                OpenCodeAgent.install_hooks_at_with_bitloops_skill(
+                    repo_root,
+                    local_dev,
+                    force,
+                    options.install_bitloops_skill,
+                )
             },
             |repo_root| OpenCodeAgent.uninstall_hooks_at(repo_root),
             |session_id| {

@@ -334,7 +334,13 @@ fn init(repo: &Path, home: &Path) {
     bitloops::adapters::agents::claude_code::git_hooks::install_git_hooks(repo, false)
         .expect("install git hooks");
     bitloops::adapters::agents::AgentAdapterRegistry::builtin()
-        .install_agent_hooks(repo, "copilot", false, false)
+        .install_agent_hooks(
+            repo,
+            "copilot",
+            false,
+            false,
+            bitloops::adapters::agents::AgentHookInstallOptions::default(),
+        )
         .expect("install Copilot hooks");
 }
 

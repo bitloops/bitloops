@@ -205,19 +205,42 @@ fn marshal_hook_entries(raw_hooks: &mut Map<String, Value>, hook_type: &str, ent
 
 pub fn install_hooks(local_dev: bool, force: bool) -> Result<usize> {
     let path = hooks_file_path()?;
-    install_hooks_at_path(&path, local_dev, force)
+    install_hooks_at_path(&path, local_dev, force, true)
 }
 
 pub fn install_hooks_at(repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
-    install_hooks_at_path(&hooks_file_path_at(repo_root), local_dev, force)
+    install_hooks_at_with_bitloops_skill(repo_root, local_dev, force, true)
 }
 
-fn install_hooks_at_path(path: &Path, local_dev: bool, force: bool) -> Result<usize> {
+pub fn install_hooks_at_with_bitloops_skill(
+    repo_root: &Path,
+    local_dev: bool,
+    force: bool,
+    install_bitloops_skill: bool,
+) -> Result<usize> {
+    install_hooks_at_path(
+        &hooks_file_path_at(repo_root),
+        local_dev,
+        force,
+        install_bitloops_skill,
+    )
+}
+
+fn install_hooks_at_path(
+    path: &Path,
+    local_dev: bool,
+    force: bool,
+    install_bitloops_skill: bool,
+) -> Result<usize> {
     let repo_root = path
         .parent()
         .and_then(|parent| parent.parent())
         .unwrap_or_else(|| Path::new("."));
-    crate::adapters::agents::cursor::rules::install_repo_rule(repo_root)?;
+    if install_bitloops_skill {
+        crate::adapters::agents::cursor::rules::install_repo_rule(repo_root)?;
+    } else {
+        crate::adapters::agents::cursor::rules::uninstall_repo_rule(repo_root)?;
+    }
 
     let existing_data = fs::read(path).ok();
 

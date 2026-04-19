@@ -210,7 +210,7 @@ local_dev = false
 
     let plan = prepare_daemon_platform_embeddings_install(
         config.path(),
-        "https://gateway.example/v1/embeddings",
+        Some("https://gateway.example/v1/embeddings"),
         "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
     )
     .expect("prepare platform embeddings install");
@@ -286,7 +286,7 @@ fn apply_with_managed_runtime_path_preserves_platform_runtime_args() {
 
     let plan = prepare_daemon_platform_embeddings_install(
         config.path(),
-        "https://gateway.example/v1/embeddings",
+        Some("https://gateway.example/v1/embeddings"),
         "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
     )
     .expect("prepare platform embeddings install");
@@ -303,5 +303,29 @@ fn apply_with_managed_runtime_path_preserves_platform_runtime_args() {
             "args = [\"--gateway-url\", \"https://gateway.example/v1/embeddings\", \"--api-key-env\", \"BITLOOPS_PLATFORM_GATEWAY_TOKEN\"]"
         ),
         "expected platform runtime args to be preserved:\n{rendered}"
+    );
+}
+
+#[test]
+fn prepare_daemon_platform_embeddings_install_allows_default_gateway_resolution() {
+    let config = NamedTempFile::new().expect("create temp config");
+
+    let plan = prepare_daemon_platform_embeddings_install(
+        config.path(),
+        None,
+        "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+    )
+    .expect("prepare platform embeddings install");
+    plan.apply()
+        .expect("apply staged platform embeddings config");
+
+    let rendered = fs::read_to_string(config.path()).expect("read updated config");
+    assert!(
+        rendered.contains("args = [\"--api-key-env\", \"BITLOOPS_PLATFORM_GATEWAY_TOKEN\"]"),
+        "expected platform runtime args without a gateway override:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("--gateway-url"),
+        "did not expect an explicit gateway override:\n{rendered}"
     );
 }

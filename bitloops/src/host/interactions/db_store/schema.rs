@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 
-pub(super) const SCHEMA: &str = r#"
+const CORE_TABLES_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_sessions (
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
@@ -23,9 +23,6 @@ CREATE TABLE IF NOT EXISTS interaction_sessions (
     updated_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (repo_id, session_id)
 );
-
-CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
-ON interaction_sessions (repo_id, last_event_at, started_at);
 
 CREATE TABLE IF NOT EXISTS interaction_turns (
     turn_id TEXT NOT NULL,
@@ -59,12 +56,6 @@ CREATE TABLE IF NOT EXISTS interaction_turns (
     PRIMARY KEY (repo_id, turn_id)
 );
 
-CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
-ON interaction_turns (repo_id, session_id, turn_number, started_at);
-
-CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx
-ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number);
-
 CREATE TABLE IF NOT EXISTS interaction_events (
     event_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -86,16 +77,9 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     payload TEXT NOT NULL DEFAULT '{}',
     PRIMARY KEY (repo_id, event_id)
 );
+"#;
 
-CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx
-ON interaction_events (repo_id, event_time, event_id);
-
-CREATE INDEX IF NOT EXISTS interaction_events_session_idx
-ON interaction_events (repo_id, session_id, event_time, event_id);
-
-CREATE INDEX IF NOT EXISTS interaction_events_tool_use_idx
-ON interaction_events (repo_id, tool_use_id, event_time, event_id);
-
+const AUXILIARY_TABLES_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS interaction_tool_uses (
     tool_use_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
@@ -111,9 +95,6 @@ CREATE TABLE IF NOT EXISTS interaction_tool_uses (
     PRIMARY KEY (repo_id, tool_use_id)
 );
 
-CREATE INDEX IF NOT EXISTS interaction_tool_uses_session_idx
-ON interaction_tool_uses (repo_id, session_id, turn_id, updated_at);
-
 CREATE TABLE IF NOT EXISTS interaction_session_search_documents (
     session_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
@@ -127,9 +108,6 @@ CREATE TABLE IF NOT EXISTS interaction_session_search_documents (
     combined_text TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (repo_id, session_id)
 );
-
-CREATE INDEX IF NOT EXISTS interaction_session_search_documents_time_idx
-ON interaction_session_search_documents (repo_id, started_at, updated_at);
 
 CREATE TABLE IF NOT EXISTS interaction_turn_search_documents (
     turn_id TEXT NOT NULL,
@@ -146,9 +124,6 @@ CREATE TABLE IF NOT EXISTS interaction_turn_search_documents (
     PRIMARY KEY (repo_id, turn_id)
 );
 
-CREATE INDEX IF NOT EXISTS interaction_turn_search_documents_session_idx
-ON interaction_turn_search_documents (repo_id, session_id, started_at, updated_at);
-
 CREATE TABLE IF NOT EXISTS interaction_session_search_terms (
     repo_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -158,9 +133,6 @@ CREATE TABLE IF NOT EXISTS interaction_session_search_terms (
     PRIMARY KEY (repo_id, session_id, term, field)
 );
 
-CREATE INDEX IF NOT EXISTS interaction_session_search_terms_lookup_idx
-ON interaction_session_search_terms (repo_id, term, field, session_id);
-
 CREATE TABLE IF NOT EXISTS interaction_turn_search_terms (
     repo_id TEXT NOT NULL,
     turn_id TEXT NOT NULL,
@@ -169,9 +141,6 @@ CREATE TABLE IF NOT EXISTS interaction_turn_search_terms (
     occurrences INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (repo_id, turn_id, term, field)
 );
-
-CREATE INDEX IF NOT EXISTS interaction_turn_search_terms_lookup_idx
-ON interaction_turn_search_terms (repo_id, term, field, turn_id);
 
 CREATE TABLE IF NOT EXISTS interaction_spool_queue (
     mutation_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,10 +152,56 @@ CREATE TABLE IF NOT EXISTS interaction_spool_queue (
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
+"#;
+
+const INDEXES_SCHEMA: &str = r#"
+CREATE INDEX IF NOT EXISTS interaction_sessions_repo_idx
+ON interaction_sessions (repo_id, last_event_at, started_at);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_session_idx
+ON interaction_turns (repo_id, session_id, turn_number, started_at);
+
+CREATE INDEX IF NOT EXISTS interaction_turns_pending_idx
+ON interaction_turns (repo_id, checkpoint_id, session_id, turn_number);
+
+CREATE INDEX IF NOT EXISTS interaction_events_repo_time_idx
+ON interaction_events (repo_id, event_time, event_id);
+
+CREATE INDEX IF NOT EXISTS interaction_events_session_idx
+ON interaction_events (repo_id, session_id, event_time, event_id);
+
+CREATE INDEX IF NOT EXISTS interaction_events_tool_use_idx
+ON interaction_events (repo_id, tool_use_id, event_time, event_id);
+
+CREATE INDEX IF NOT EXISTS interaction_tool_uses_session_idx
+ON interaction_tool_uses (repo_id, session_id, turn_id, updated_at);
+
+CREATE INDEX IF NOT EXISTS interaction_session_search_documents_time_idx
+ON interaction_session_search_documents (repo_id, started_at, updated_at);
+
+CREATE INDEX IF NOT EXISTS interaction_turn_search_documents_session_idx
+ON interaction_turn_search_documents (repo_id, session_id, started_at, updated_at);
+
+CREATE INDEX IF NOT EXISTS interaction_session_search_terms_lookup_idx
+ON interaction_session_search_terms (repo_id, term, field, session_id);
+
+CREATE INDEX IF NOT EXISTS interaction_turn_search_terms_lookup_idx
+ON interaction_turn_search_terms (repo_id, term, field, turn_id);
 
 CREATE INDEX IF NOT EXISTS interaction_spool_queue_repo_idx
 ON interaction_spool_queue (repo_id, mutation_id);
 "#;
+
+pub(super) fn initialise_schema(conn: &rusqlite::Connection) -> Result<()> {
+    conn.execute_batch(CORE_TABLES_SCHEMA)
+        .context("creating core interaction spool tables")?;
+    ensure_additive_columns(conn)?;
+    conn.execute_batch(AUXILIARY_TABLES_SCHEMA)
+        .context("creating auxiliary interaction spool tables")?;
+    conn.execute_batch(INDEXES_SCHEMA)
+        .context("creating interaction spool indexes")?;
+    Ok(())
+}
 
 pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()> {
     ensure_table_columns(
@@ -447,80 +462,7 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
             ),
         ],
     )?;
-    conn.execute_batch(
-        r#"
-CREATE INDEX IF NOT EXISTS interaction_events_tool_use_idx
-ON interaction_events (repo_id, tool_use_id, event_time, event_id);
-CREATE TABLE IF NOT EXISTS interaction_tool_uses (
-    tool_use_id TEXT NOT NULL,
-    repo_id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '',
-    turn_id TEXT NOT NULL DEFAULT '',
-    tool_kind TEXT NOT NULL DEFAULT '',
-    task_description TEXT NOT NULL DEFAULT '',
-    subagent_id TEXT NOT NULL DEFAULT '',
-    transcript_path TEXT NOT NULL DEFAULT '',
-    started_at TEXT,
-    ended_at TEXT,
-    updated_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (repo_id, tool_use_id)
-);
-CREATE INDEX IF NOT EXISTS interaction_tool_uses_session_idx
-ON interaction_tool_uses (repo_id, session_id, turn_id, updated_at);
-CREATE TABLE IF NOT EXISTS interaction_session_search_documents (
-    session_id TEXT NOT NULL,
-    repo_id TEXT NOT NULL,
-    started_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT '',
-    prompt_text TEXT NOT NULL DEFAULT '',
-    summary_text TEXT NOT NULL DEFAULT '',
-    transcript_text TEXT NOT NULL DEFAULT '',
-    tool_text TEXT NOT NULL DEFAULT '',
-    paths_text TEXT NOT NULL DEFAULT '',
-    combined_text TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (repo_id, session_id)
-);
-CREATE INDEX IF NOT EXISTS interaction_session_search_documents_time_idx
-ON interaction_session_search_documents (repo_id, started_at, updated_at);
-CREATE TABLE IF NOT EXISTS interaction_turn_search_documents (
-    turn_id TEXT NOT NULL,
-    repo_id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '',
-    started_at TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL DEFAULT '',
-    prompt_text TEXT NOT NULL DEFAULT '',
-    summary_text TEXT NOT NULL DEFAULT '',
-    transcript_text TEXT NOT NULL DEFAULT '',
-    tool_text TEXT NOT NULL DEFAULT '',
-    paths_text TEXT NOT NULL DEFAULT '',
-    combined_text TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (repo_id, turn_id)
-);
-CREATE INDEX IF NOT EXISTS interaction_turn_search_documents_session_idx
-ON interaction_turn_search_documents (repo_id, session_id, started_at, updated_at);
-CREATE TABLE IF NOT EXISTS interaction_session_search_terms (
-    repo_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    term TEXT NOT NULL,
-    field TEXT NOT NULL,
-    occurrences INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (repo_id, session_id, term, field)
-);
-CREATE INDEX IF NOT EXISTS interaction_session_search_terms_lookup_idx
-ON interaction_session_search_terms (repo_id, term, field, session_id);
-CREATE TABLE IF NOT EXISTS interaction_turn_search_terms (
-    repo_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL,
-    term TEXT NOT NULL,
-    field TEXT NOT NULL,
-    occurrences INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (repo_id, turn_id, term, field)
-);
-CREATE INDEX IF NOT EXISTS interaction_turn_search_terms_lookup_idx
-ON interaction_turn_search_terms (repo_id, term, field, turn_id);
-"#,
-    )
-    .context("creating interaction search projection tables")
+    Ok(())
 }
 
 fn ensure_table_columns(

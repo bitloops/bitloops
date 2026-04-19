@@ -22,23 +22,29 @@ mod stage_semantic_features;
 
 #[allow(unused_imports)]
 pub(crate) use stage_embeddings::{
-    RepoEmbeddingSyncAction, clear_current_symbol_embedding_rows_for_path,
+    RepoEmbeddingSyncAction, build_active_embedding_setup_persist_sql,
+    build_current_symbol_embedding_persist_sql, build_embedding_setup_persist_sql,
+    build_sqlite_symbol_embedding_persist_sql, clear_current_symbol_embedding_rows_for_path,
     clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
     clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
     determine_repo_embedding_sync_action, ensure_semantic_embeddings_schema,
     init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,
     load_active_embedding_setup, load_current_repo_embedding_states,
-    persist_active_embedding_setup, refresh_current_repo_symbol_embeddings_and_clone_edges,
-    upsert_current_symbol_embedding_rows, upsert_symbol_embedding_rows,
+    load_current_semantic_summary_map, load_current_symbol_embedding_index_state,
+    load_semantic_summary_map, load_symbol_embedding_index_state, persist_active_embedding_setup,
+    refresh_current_repo_symbol_embeddings_and_clone_edges, upsert_current_symbol_embedding_rows,
+    upsert_symbol_embedding_rows,
 };
 #[allow(unused_imports)]
 pub(crate) use stage_semantic_features::{
-    clear_current_semantic_feature_rows_for_path, ensure_semantic_features_schema,
+    build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
+    build_semantic_persist_rows_sql, clear_current_semantic_feature_rows_for_path,
+    ensure_required_llm_summary_output, ensure_semantic_features_schema,
     init_postgres_semantic_features_schema, init_sqlite_semantic_features_schema,
     load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
     load_semantic_feature_inputs_for_artefacts, load_semantic_feature_inputs_for_current_repo,
-    load_semantic_summary_snapshot, upsert_current_semantic_feature_rows,
-    upsert_semantic_feature_rows,
+    load_semantic_summary_snapshot, parse_semantic_index_state_rows,
+    upsert_current_semantic_feature_rows, upsert_semantic_feature_rows,
 };
 
 pub use pack::SemanticClonesPack;

@@ -517,6 +517,9 @@ pub(crate) fn format_task_queue_submission(
     {
         line.push_str(&format!(" backfill={backfill}"));
     }
+    if let Some(summary_spec) = task.summary_bootstrap_spec.as_ref() {
+        line.push_str(&format!(" action={}", summary_spec.action));
+    }
     if merged {
         line.push_str(" (merged into existing task)");
     }
@@ -532,6 +535,9 @@ pub(crate) fn format_task_completion_summary(task: &graphql::TaskGraphqlRecord) 
     }
     if let Some(result) = task.embeddings_bootstrap_result.as_ref() {
         return format_embeddings_bootstrap_completion_summary(result);
+    }
+    if let Some(result) = task.summary_bootstrap_result.as_ref() {
+        return format_summary_bootstrap_completion_summary(result);
     }
     format!(
         "task complete: {} {}",
@@ -570,6 +576,17 @@ fn format_embeddings_bootstrap_completion_summary(
         lines.push(format!("Runtime: {runtime_name} {model_name}"));
     }
 
+    lines.join("\n")
+}
+
+fn format_summary_bootstrap_completion_summary(
+    result: &graphql::SummaryBootstrapResultGraphqlRecord,
+) -> String {
+    let mut lines = vec![result.message.clone()];
+    if let Some(model_name) = result.model_name.as_deref() {
+        lines.push(format!("Model: {model_name}"));
+    }
+    lines.push(format!("Outcome: {}", result.outcome_kind));
     lines.join("\n")
 }
 

@@ -100,6 +100,17 @@ pub struct InteractionKpis {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InteractionChangeSnapshot {
+    pub repo_id: String,
+    pub session_count: usize,
+    pub turn_count: usize,
+    pub latest_session_id: Option<String>,
+    pub latest_session_updated_at: Option<String>,
+    pub latest_turn_id: Option<String>,
+    pub latest_turn_updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InteractionActorBucket {
     pub actor_id: String,
     pub actor_name: String,

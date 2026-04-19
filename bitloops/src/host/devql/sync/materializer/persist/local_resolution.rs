@@ -201,7 +201,7 @@ async fn load_current_targets_for_resolution(
         .collect())
 }
 
-fn load_current_targets_for_resolution_with_connection(
+pub(super) fn load_current_targets_for_resolution_with_connection(
     connection: &Connection,
     repo_id: &str,
     current_path: &str,

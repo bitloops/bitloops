@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
+use super::local_resolution::load_current_targets_for_resolution_with_connection;
 use super::reconcile::{
     apply_current_edge_replacements_tx, canonical_local_symbol_fqn_path, recompute_current_edge_id,
 };
@@ -37,24 +38,43 @@ pub(super) fn reconcile_current_local_edges_for_paths_with_connection(
     touched_paths: &[String],
 ) -> Result<usize> {
     let touched_paths = touched_paths.iter().cloned().collect::<HashSet<_>>();
-    let current_targets =
-        load_all_current_targets_for_local_resolution_with_connection(connection, repo_id)?;
-    let target_by_symbol_fqn = current_targets
-        .iter()
-        .cloned()
-        .map(|target| (target.symbol_fqn.clone(), target))
-        .collect::<HashMap<_, _>>();
-    let source_facts_by_path = load_current_source_facts_with_connection(connection, repo_id)?;
     let current_edges = load_current_edges_for_local_reconciliation_with_connection(
         connection,
         repo_id,
         &touched_paths,
     )?;
+    if current_edges.is_empty() {
+        return Ok(0);
+    }
+    let source_paths = current_edges
+        .iter()
+        .map(|edge| edge.path.clone())
+        .collect::<HashSet<_>>();
+    let current_targets = load_current_targets_for_paths_for_local_resolution_with_connection(
+        connection,
+        repo_id,
+        &touched_paths,
+    )?;
+    let repo_wide_targets_by_source_path =
+        load_repo_wide_targets_for_touched_unresolved_source_paths_with_connection(
+            connection,
+            repo_id,
+            &touched_paths,
+            &current_edges,
+        )?;
+    let target_by_symbol_fqn = current_targets
+        .iter()
+        .cloned()
+        .map(|target| (target.symbol_fqn.clone(), target))
+        .collect::<HashMap<_, _>>();
+    let source_facts_by_path =
+        load_current_source_facts_for_paths_with_connection(connection, repo_id, &source_paths)?;
     let replacements = build_current_edge_replacements_for_local_resolution(
         repo_id,
         &touched_paths,
         &source_facts_by_path,
         &current_targets,
+        &repo_wide_targets_by_source_path,
         &target_by_symbol_fqn,
         &current_edges,
     );
@@ -88,17 +108,58 @@ fn is_supported_local_resolution_language(language: &str) -> bool {
         .any(|supported| *supported == normalized)
 }
 
-fn load_all_current_targets_for_local_resolution_with_connection(
+fn refresh_selected_paths_temp_table(
+    connection: &Connection,
+    selected_paths: &HashSet<String>,
+) -> Result<()> {
+    let tx = connection
+        .unchecked_transaction()
+        .context("starting selected-path reconciliation temp table transaction")?;
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS temp_selected_current_paths;
+         CREATE TEMP TABLE temp_selected_current_paths (
+             path TEXT PRIMARY KEY
+         ) WITHOUT ROWID;",
+    )
+    .context("resetting selected-path reconciliation temp table")?;
+
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT OR IGNORE INTO temp_selected_current_paths (path)
+                 VALUES (?1)",
+            )
+            .context("preparing selected-path reconciliation temp table insert")?;
+        for path in selected_paths {
+            stmt.execute([path.as_str()])
+                .context("inserting selected-path reconciliation temp path")?;
+        }
+    }
+
+    tx.commit()
+        .context("committing selected-path reconciliation temp table transaction")?;
+
+    Ok(())
+}
+
+pub(crate) fn load_current_targets_for_paths_for_local_resolution_with_connection(
     connection: &Connection,
     repo_id: &str,
+    touched_paths: &HashSet<String>,
 ) -> Result<Vec<crate::host::language_adapter::LocalTargetInfo>> {
+    if touched_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    refresh_selected_paths_temp_table(connection, touched_paths)?;
+
     let mut stmt = connection
         .prepare(
-            "SELECT symbol_fqn, symbol_id, artefact_id, language_kind, language \
-             FROM artefacts_current \
-             WHERE repo_id = ?1",
+            "SELECT a.symbol_fqn, a.symbol_id, a.artefact_id, a.language_kind, a.language \
+             FROM artefacts_current a \
+             INNER JOIN temp_selected_current_paths selected ON a.path = selected.path \
+             WHERE a.repo_id = ?1",
         )
-        .context("preparing full current local target lookup query")?;
+        .context("preparing scoped current local target lookup query")?;
     let rows = stmt
         .query_map([repo_id], |row| {
             Ok((
@@ -111,9 +172,9 @@ fn load_all_current_targets_for_local_resolution_with_connection(
                 row.get::<_, String>(4)?,
             ))
         })
-        .context("querying full current local target lookup rows")?
+        .context("querying scoped current local target lookup rows")?
         .collect::<Result<Vec<_>, _>>()
-        .context("collecting full current local target lookup rows")?;
+        .context("collecting scoped current local target lookup rows")?;
 
     Ok(rows
         .into_iter()
@@ -123,28 +184,35 @@ fn load_all_current_targets_for_local_resolution_with_connection(
         .collect())
 }
 
-fn load_current_source_facts_with_connection(
+pub(crate) fn load_current_source_facts_for_paths_with_connection(
     connection: &Connection,
     repo_id: &str,
+    source_paths: &HashSet<String>,
 ) -> Result<HashMap<String, crate::host::language_adapter::LocalSourceFacts>> {
+    if source_paths.is_empty() {
+        return Ok(HashMap::new());
+    }
+    refresh_selected_paths_temp_table(connection, source_paths)?;
+
     let mut facts_by_path =
         HashMap::<String, crate::host::language_adapter::LocalSourceFacts>::new();
 
     {
         let mut stmt = connection
             .prepare(
-                "SELECT path, to_symbol_ref \
-                 FROM artefact_edges_current \
-                 WHERE repo_id = ?1 AND edge_kind = 'imports' AND to_symbol_ref IS NOT NULL",
+                "SELECT e.path, e.to_symbol_ref \
+                 FROM artefact_edges_current e \
+                 INNER JOIN temp_selected_current_paths selected ON e.path = selected.path \
+                 WHERE e.repo_id = ?1 AND e.edge_kind = 'imports' AND e.to_symbol_ref IS NOT NULL",
             )
-            .context("preparing current import refs lookup query")?;
+            .context("preparing scoped current import refs lookup query")?;
         let import_rows = stmt
             .query_map([repo_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
-            .context("querying current import refs rows")?
+            .context("querying scoped current import refs rows")?
             .collect::<Result<Vec<_>, _>>()
-            .context("collecting current import refs rows")?;
+            .context("collecting scoped current import refs rows")?;
         for (path, symbol_ref) in import_rows {
             facts_by_path
                 .entry(path)
@@ -157,22 +225,25 @@ fn load_current_source_facts_with_connection(
     {
         let mut stmt = connection
             .prepare(
-                "SELECT symbol_fqn \
-                 FROM artefacts_current \
-                 WHERE repo_id = ?1 AND language_kind = 'package_declaration'",
+                "SELECT a.path, a.symbol_fqn \
+                 FROM artefacts_current a \
+                 INNER JOIN temp_selected_current_paths selected ON a.path = selected.path \
+                 WHERE a.repo_id = ?1 AND a.language_kind = 'package_declaration'",
             )
-            .context("preparing current package refs lookup query")?;
+            .context("preparing scoped current package refs lookup query")?;
         let package_rows = stmt
-            .query_map([repo_id], |row| row.get::<_, String>(0))
-            .context("querying current package refs rows")?
+            .query_map([repo_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("querying scoped current package refs rows")?
             .collect::<Result<Vec<_>, _>>()
-            .context("collecting current package refs rows")?;
-        for symbol_fqn in package_rows {
-            let Some((path, package_ref)) = symbol_fqn.split_once("::") else {
+            .context("collecting scoped current package refs rows")?;
+        for (path, symbol_fqn) in package_rows {
+            let Some((_, package_ref)) = symbol_fqn.split_once("::") else {
                 continue;
             };
             facts_by_path
-                .entry(path.to_string())
+                .entry(path)
                 .or_default()
                 .package_refs
                 .push(package_ref.to_string());
@@ -182,22 +253,26 @@ fn load_current_source_facts_with_connection(
     {
         let mut stmt = connection
             .prepare(
-                "SELECT symbol_fqn \
-                 FROM artefacts_current \
-                 WHERE repo_id = ?1 AND language_kind IN ('namespace_declaration', 'file_scoped_namespace_declaration')",
+                "SELECT a.path, a.symbol_fqn \
+                 FROM artefacts_current a \
+                 INNER JOIN temp_selected_current_paths selected ON a.path = selected.path \
+                 WHERE a.repo_id = ?1 \
+                   AND a.language_kind IN ('namespace_declaration', 'file_scoped_namespace_declaration')",
             )
-            .context("preparing current namespace refs lookup query")?;
+            .context("preparing scoped current namespace refs lookup query")?;
         let namespace_rows = stmt
-            .query_map([repo_id], |row| row.get::<_, String>(0))
-            .context("querying current namespace refs rows")?
+            .query_map([repo_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .context("querying scoped current namespace refs rows")?
             .collect::<Result<Vec<_>, _>>()
-            .context("collecting current namespace refs rows")?;
-        for symbol_fqn in namespace_rows {
-            let Some((path, namespace_ref)) = symbol_fqn.split_once("::ns::") else {
+            .context("collecting scoped current namespace refs rows")?;
+        for (path, symbol_fqn) in namespace_rows {
+            let Some((_, namespace_ref)) = symbol_fqn.split_once("::ns::") else {
                 continue;
             };
             facts_by_path
-                .entry(path.to_string())
+                .entry(path)
                 .or_default()
                 .namespace_refs
                 .push(namespace_ref.to_string());
@@ -225,40 +300,6 @@ fn map_current_edge_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<CurrentE
     })
 }
 
-fn refresh_touched_current_edge_paths_temp_table(
-    connection: &Connection,
-    touched_paths: &HashSet<String>,
-) -> Result<()> {
-    let tx = connection
-        .unchecked_transaction()
-        .context("starting touched current edge reconciliation temp table transaction")?;
-    tx.execute_batch(
-        "DROP TABLE IF EXISTS temp_touched_current_edge_paths;
-         CREATE TEMP TABLE temp_touched_current_edge_paths (
-             path TEXT PRIMARY KEY
-         ) WITHOUT ROWID;",
-    )
-    .context("resetting touched current edge reconciliation temp table")?;
-
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT OR IGNORE INTO temp_touched_current_edge_paths (path)
-                 VALUES (?1)",
-            )
-            .context("preparing touched current edge reconciliation temp table insert")?;
-        for path in touched_paths {
-            stmt.execute([path.as_str()])
-                .context("inserting touched current edge reconciliation temp path")?;
-        }
-    }
-
-    tx.commit()
-        .context("committing touched current edge reconciliation temp table transaction")?;
-
-    Ok(())
-}
-
 pub(crate) fn load_current_edges_for_local_reconciliation_with_connection(
     connection: &Connection,
     repo_id: &str,
@@ -279,20 +320,20 @@ pub(crate) fn load_current_edges_for_local_reconciliation_with_connection(
     };
 
     if !touched_paths.is_empty() {
-        refresh_touched_current_edge_paths_temp_table(connection, touched_paths)?;
+        refresh_selected_paths_temp_table(connection, touched_paths)?;
 
         let mut stmt = connection
             .prepare(
                 "SELECT e.edge_id, e.path, e.content_id, e.from_symbol_id, e.from_artefact_id, e.to_symbol_id, e.to_artefact_id, e.to_symbol_ref, e.edge_kind, e.language, e.start_line, e.end_line, e.metadata \
                  FROM artefact_edges_current e \
-                 INNER JOIN temp_touched_current_edge_paths touched \
+                 INNER JOIN temp_selected_current_paths selected \
                     ON (
                         CASE
                             WHEN instr(e.to_symbol_ref, '::') > 0
                                 THEN substr(e.to_symbol_ref, 1, instr(e.to_symbol_ref, '::') - 1)
                             ELSE e.to_symbol_ref
                         END
-                    ) = touched.path \
+                    ) = selected.path \
                  WHERE e.repo_id = ?1 AND e.to_symbol_ref IS NOT NULL AND e.to_symbol_id IS NOT NULL",
             )
             .context("preparing touched current edge reconciliation query")?;
@@ -315,6 +356,10 @@ fn build_current_edge_replacements_for_local_resolution(
     touched_paths: &HashSet<String>,
     source_facts_by_path: &HashMap<String, crate::host::language_adapter::LocalSourceFacts>,
     current_targets: &[crate::host::language_adapter::LocalTargetInfo],
+    repo_wide_targets_by_source_path: &HashMap<
+        String,
+        Vec<crate::host::language_adapter::LocalTargetInfo>,
+    >,
     target_by_symbol_fqn: &HashMap<String, crate::host::language_adapter::LocalTargetInfo>,
     current_edges: &[CurrentEdgeRecord],
 ) -> Vec<CurrentEdgeReplacement> {
@@ -326,11 +371,15 @@ fn build_current_edge_replacements_for_local_resolution(
                 .get(&edge.path)
                 .cloned()
                 .unwrap_or_default();
+            let resolution_targets = repo_wide_targets_by_source_path
+                .get(&edge.path)
+                .map(Vec::as_slice)
+                .unwrap_or(current_targets);
             let expanded_edges = expand_current_edge_for_local_resolution(
                 repo_id,
                 edge,
                 &source_facts,
-                current_targets,
+                resolution_targets,
             );
             if expanded_edges.len() != 1 || expanded_edges.first() != Some(edge) {
                 replacements.push(CurrentEdgeReplacement {
@@ -387,6 +436,34 @@ fn build_current_edge_replacements_for_local_resolution(
     }
 
     replacements
+}
+
+fn load_repo_wide_targets_for_touched_unresolved_source_paths_with_connection(
+    connection: &Connection,
+    repo_id: &str,
+    touched_paths: &HashSet<String>,
+    current_edges: &[CurrentEdgeRecord],
+) -> Result<HashMap<String, Vec<crate::host::language_adapter::LocalTargetInfo>>> {
+    let mut targets_by_path = HashMap::new();
+
+    for edge in current_edges {
+        if edge.to_symbol_id.is_some() || !touched_paths.contains(&edge.path) {
+            continue;
+        }
+        if targets_by_path.contains_key(&edge.path) {
+            continue;
+        }
+
+        let targets = load_current_targets_for_resolution_with_connection(
+            connection,
+            repo_id,
+            &edge.path,
+            &edge.language,
+        )?;
+        targets_by_path.insert(edge.path.clone(), targets);
+    }
+
+    Ok(targets_by_path)
 }
 
 fn expand_current_edge_for_local_resolution(

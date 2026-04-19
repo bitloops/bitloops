@@ -59,11 +59,13 @@ bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { dep
 # Discover the exact row fields for the chosen stage
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { schema } } }'
 
+# use sparingly to see the whole schema
 bitloops devql schema
 ```
 
-## Do Not Use DevQL For
+## Do Not Use DevQL
 
+- when you don't have a specific artefact or file in mind
 - editing files
 - running tests, builds, or git commands
 - literal string search when you already know the exact text

@@ -39,17 +39,21 @@ impl DaemonEmbeddingsInstallPlan {
     }
 
     pub fn apply_with_managed_runtime_path(&self, binary_path: &Path) -> Result<()> {
-        if !self.config_modified {
-            return Ok(());
-        }
-
-        let staged_contents = self.prepared_contents.as_deref().unwrap_or_default();
-        let mut staged_doc = staged_contents.parse::<DocumentMut>().with_context(|| {
-            format!(
-                "parsing staged Bitloops daemon config {}",
-                self.config_path.display()
-            )
-        })?;
+        let staged_contents = self
+            .prepared_contents
+            .as_deref()
+            .or(self.original_contents.as_deref())
+            .unwrap_or_default();
+        let mut staged_doc = if staged_contents.trim().is_empty() {
+            DocumentMut::new()
+        } else {
+            staged_contents.parse::<DocumentMut>().with_context(|| {
+                format!(
+                    "parsing staged Bitloops daemon config {}",
+                    self.config_path.display()
+                )
+            })?
+        };
         let inference = ensure_table(&mut staged_doc, "inference");
         let runtimes = ensure_child_table(inference, "runtimes");
         let runtime = ensure_child_table(runtimes, &self.runtime_name);
@@ -131,7 +135,17 @@ impl DaemonEmbeddingsInstallPlan {
             inference["summary_embeddings"] = desired_summary_embeddings;
         }
 
-        self.write_prepared_contents(Some(&current_doc.to_string()))
+        let updated_contents = current_doc.to_string();
+        if current_contents == updated_contents {
+            return Ok(());
+        }
+
+        fs::write(&self.config_path, updated_contents).with_context(|| {
+            format!(
+                "writing Bitloops daemon config {}",
+                self.config_path.display()
+            )
+        })
     }
 
     pub fn rollback(&self) -> Result<()> {

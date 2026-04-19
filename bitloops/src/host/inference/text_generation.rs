@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -18,7 +18,10 @@ use sha2::{Digest, Sha256};
 
 use crate::config::InferenceRuntimeConfig;
 
-use super::{BITLOOPS_PLATFORM_CHAT_DRIVER, TextGenerationService};
+use super::{
+    BITLOOPS_PLATFORM_CHAT_DRIVER, DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY,
+    OPENAI_CHAT_COMPLETIONS_DRIVER, TextGenerationService,
+};
 
 const SHARED_TEXT_GENERATION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const SHARED_TEXT_GENERATION_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
@@ -27,7 +30,7 @@ pub(super) struct BitloopsInferenceTextGenerationService {
     profile_name: String,
     descriptor: String,
     cache_key: String,
-    shared_session: Arc<SharedBitloopsInferenceSession>,
+    shared_session_pool: Arc<SharedBitloopsInferenceSessionPool>,
 }
 
 impl BitloopsInferenceTextGenerationService {
@@ -51,9 +54,9 @@ impl BitloopsInferenceTextGenerationService {
             ),
             process_environment_fingerprint: process_environment_fingerprint(),
         };
-        let shared_session =
+        let shared_session_pool =
             shared_bitloops_inference_session_registry().get_or_create(&session_config)?;
-        let describe = shared_session.describe().with_context(|| {
+        let describe = shared_session_pool.describe().with_context(|| {
             format!(
                 "requesting standalone `bitloops-inference` runtime for profile `{profile_name}`"
             )
@@ -68,7 +71,7 @@ impl BitloopsInferenceTextGenerationService {
             profile_name: profile_name.to_string(),
             descriptor,
             cache_key,
-            shared_session,
+            shared_session_pool,
         })
     }
 }
@@ -84,7 +87,7 @@ impl TextGenerationService for BitloopsInferenceTextGenerationService {
 
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Result<String> {
         let response = self
-            .shared_session
+            .shared_session_pool
             .infer(system_prompt, user_prompt)
             .with_context(|| {
                 format!(
@@ -143,7 +146,13 @@ enum BitloopsInferenceSessionOutput {
 }
 
 struct SharedBitloopsInferenceSessionRegistry {
-    sessions: Mutex<HashMap<BitloopsInferenceSessionConfig, Arc<SharedBitloopsInferenceSession>>>,
+    session_pools:
+        Mutex<HashMap<BitloopsInferenceSessionConfig, Arc<SharedBitloopsInferenceSessionPool>>>,
+}
+
+struct SharedBitloopsInferenceSessionPool {
+    sessions: Vec<Arc<SharedBitloopsInferenceSession>>,
+    next_session_index: AtomicUsize,
 }
 
 struct SharedBitloopsInferenceSession {
@@ -161,25 +170,62 @@ impl SharedBitloopsInferenceSessionRegistry {
     fn get_or_create(
         &self,
         config: &BitloopsInferenceSessionConfig,
-    ) -> Result<Arc<SharedBitloopsInferenceSession>> {
-        let mut sessions = self
-            .sessions
+    ) -> Result<Arc<SharedBitloopsInferenceSessionPool>> {
+        let mut session_pools = self
+            .session_pools
             .lock()
             .map_err(|_| anyhow!("shared text-generation session registry mutex was poisoned"))?;
-        Ok(sessions
+        let pool_size = text_generation_session_pool_size(&config.driver);
+        Ok(session_pools
             .entry(config.clone())
-            .or_insert_with(|| Arc::new(SharedBitloopsInferenceSession::new(config.clone())))
+            .or_insert_with(|| {
+                Arc::new(SharedBitloopsInferenceSessionPool::new(
+                    config.clone(),
+                    pool_size,
+                ))
+            })
             .clone())
     }
 
     fn shutdown_idle_sessions(&self, idle_timeout: Duration) {
-        let sessions = match self.sessions.lock() {
-            Ok(sessions) => sessions.values().cloned().collect::<Vec<_>>(),
+        let session_pools = match self.session_pools.lock() {
+            Ok(session_pools) => session_pools.values().cloned().collect::<Vec<_>>(),
             Err(_) => return,
         };
-        for session in sessions {
+        for session_pool in session_pools {
+            session_pool.shutdown_idle_sessions(idle_timeout);
+        }
+    }
+}
+
+impl SharedBitloopsInferenceSessionPool {
+    fn new(config: BitloopsInferenceSessionConfig, pool_size: usize) -> Self {
+        let pool_size = pool_size.max(1);
+        Self {
+            sessions: (0..pool_size)
+                .map(|_| Arc::new(SharedBitloopsInferenceSession::new(config.clone())))
+                .collect(),
+            next_session_index: AtomicUsize::new(0),
+        }
+    }
+
+    fn describe(&self) -> Result<DescribeResponse> {
+        self.next_session().describe()
+    }
+
+    fn infer(&self, system_prompt: &str, user_prompt: &str) -> Result<InferResponse> {
+        self.next_session().infer(system_prompt, user_prompt)
+    }
+
+    fn shutdown_idle_sessions(&self, idle_timeout: Duration) {
+        for session in &self.sessions {
             session.shutdown_if_idle(idle_timeout);
         }
+    }
+
+    fn next_session(&self) -> &Arc<SharedBitloopsInferenceSession> {
+        let index = self.next_session_index.fetch_add(1, Ordering::Relaxed) % self.sessions.len();
+        &self.sessions[index]
     }
 }
 
@@ -329,7 +375,7 @@ fn shared_bitloops_inference_session_registry()
     static REGISTRY: OnceLock<Arc<SharedBitloopsInferenceSessionRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         let registry = Arc::new(SharedBitloopsInferenceSessionRegistry {
-            sessions: Mutex::new(HashMap::new()),
+            session_pools: Mutex::new(HashMap::new()),
         });
         let sweeper_registry = Arc::clone(&registry);
         let _ = thread::Builder::new()
@@ -342,6 +388,15 @@ fn shared_bitloops_inference_session_registry()
             });
         registry
     })
+}
+
+fn text_generation_session_pool_size(driver: &str) -> usize {
+    match driver.trim() {
+        BITLOOPS_PLATFORM_CHAT_DRIVER | OPENAI_CHAT_COMPLETIONS_DRIVER => {
+            DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY
+        }
+        _ => 1,
+    }
 }
 
 #[cfg(test)]
@@ -425,6 +480,12 @@ fn platform_runtime_auth_environment() -> Vec<(String, String)> {
         });
     }
 
+    if let Ok(token) = std::env::var(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV)
+        && !token.trim().is_empty()
+    {
+        return vec![(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV.to_string(), token)];
+    }
+
     match crate::daemon::platform_gateway_bearer_token() {
         Ok(Some(token)) => vec![(crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV.to_string(), token)],
         Ok(None) => Vec::new(),
@@ -447,8 +508,9 @@ fn ensure_runtime_auth_environment_available(
     }
 
     bail!(
-        "platform-backed text-generation profile `{}` requires an authenticated Bitloops session; run `bitloops login`",
-        config.profile_name
+        "platform-backed text-generation profile `{}` requires an authenticated Bitloops session or `{}` to be set",
+        config.profile_name,
+        crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV
     );
 }
 

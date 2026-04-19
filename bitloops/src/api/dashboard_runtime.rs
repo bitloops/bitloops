@@ -96,11 +96,11 @@ pub(super) async fn run(
         }
         DashboardStartupMode::SlowProbe => {
             if !tls::mkcert_on_path() {
-                startup_warnings.push(
+                startup_warnings.push(format!(
                     "Warning: `mkcert` is not on PATH. Falling back to local HTTP.\n\
-                     See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
-                        .to_string(),
-                );
+                     See {} for local TLS setup instructions.",
+                    tls::LOCAL_HTTPS_SETUP_DOCS_URL
+                ));
                 (DashboardTransport::Http, None)
             } else {
                 match tls::ensure_dashboard_tls_material(&browser_host) {
@@ -120,7 +120,8 @@ pub(super) async fn run(
                         startup_warnings.push(format!(
                             "Warning: Dashboard HTTPS setup failed ({err:#}).\n\
                              Falling back to local HTTP.\n\
-                             See https://bitloops.com/docs/guides/dashboard-local-https-setup for local TLS setup instructions."
+                             See {} for local TLS setup instructions.",
+                            tls::LOCAL_HTTPS_SETUP_DOCS_URL
                         ));
                         (DashboardTransport::Http, None)
                     }
@@ -165,6 +166,7 @@ pub(super) async fn run(
 
     let url = format_dashboard_url(transport, &browser_host, local_addr.port());
     let dashboard_graphql_schema = super::dashboard_schema::build_dashboard_schema_template();
+    let runtime_graphql_schema = super::runtime_schema::build_runtime_schema_template();
     let devql_schema = graphql::build_global_schema_template();
     let devql_slim_schema = graphql::build_slim_schema_template();
 
@@ -235,6 +237,7 @@ pub(super) async fn run(
         bundle_source_overrides: super::DashboardBundleSourceOverrides::default(),
         subscription_hub: graphql::SubscriptionHub::new_arc(),
         dashboard_graphql_schema,
+        runtime_graphql_schema,
         devql_schema,
         devql_slim_schema,
     };

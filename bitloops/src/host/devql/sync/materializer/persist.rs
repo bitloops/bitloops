@@ -19,6 +19,12 @@ use super::sql::{
 };
 
 pub(crate) use self::current_edges::reconcile_current_local_edges_for_paths;
+#[cfg(test)]
+pub(crate) use self::current_edges::{
+    load_current_edges_for_local_reconciliation_with_connection,
+    load_current_source_facts_for_paths_with_connection,
+    load_current_targets_for_paths_for_local_resolution_with_connection,
+};
 pub(crate) use self::current_state::{persist_prepared_materialisation_tx, remove_paths_tx};
 pub(crate) use self::local_resolution::resolve_prepared_local_edges_with_connection;
 
@@ -33,7 +39,7 @@ const SUPPORTED_LOCAL_RESOLUTION_LANGUAGES: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CurrentEdgeRecord {
+pub(crate) struct CurrentEdgeRecord {
     edge_id: String,
     path: String,
     content_id: String,

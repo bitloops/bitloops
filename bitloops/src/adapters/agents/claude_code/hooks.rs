@@ -141,7 +141,19 @@ fn write_settings_file(path: &Path, settings: &Map<String, Value>) -> Result<()>
 /// Idempotent: safe to call multiple times.
 ///
 pub fn install_hooks(repo_root: &Path, force: bool) -> Result<usize> {
-    crate::adapters::agents::claude_code::skills::install_repo_skill(repo_root)?;
+    install_hooks_with_bitloops_skill(repo_root, force, true)
+}
+
+pub fn install_hooks_with_bitloops_skill(
+    repo_root: &Path,
+    force: bool,
+    install_bitloops_skill: bool,
+) -> Result<usize> {
+    if install_bitloops_skill {
+        crate::adapters::agents::claude_code::skills::install_repo_skill(repo_root)?;
+    } else {
+        crate::adapters::agents::claude_code::skills::uninstall_repo_skill(repo_root)?;
+    }
 
     let settings_path = claude_settings_path(repo_root);
     let cmd_session_start = crate::adapters::agents::managed_hook_command(CMD_SESSION_START);

@@ -33,7 +33,7 @@ No Python interpreter is required for the embeddings runtime binary.
 
 ## Fastest Setup Paths
 
-Bitloops can now set up the default local embeddings profile for you without manual `config.toml` edits.
+Bitloops can now set up embeddings for you without manual `config.toml` edits.
 
 If you are bootstrapping a repo and want `init` to install the default daemon first:
 
@@ -44,8 +44,9 @@ bitloops init --install-default-daemon --sync=true
 When embeddings are not already configured, `bitloops init --install-default-daemon`:
 
 - bootstraps the default daemon config if needed
-- adds the default local embeddings profile to the effective daemon config
-- runs the existing runtime warm/bootstrap path before any init-triggered sync
+- in interactive terminals, asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now
+- recommends Bitloops cloud in that prompt
+- configures the selected embeddings runtime before init-triggered sync, except for the local managed runtime bootstrap which still downloads and warms asynchronously
 
 If the repo is already initialised and you just want to add embeddings:
 
@@ -62,7 +63,7 @@ If you want the hosted gateway runtime instead of the default local runtime:
 bitloops embeddings install --runtime platform --gateway-url https://gateway.example/v1/embeddings
 ```
 
-`bitloops init` and `bitloops enable` accept the same hosted mode through `--embeddings-runtime platform --embeddings-gateway-url https://gateway.example/v1/embeddings`. The managed platform runtime reads its bearer token from `BITLOOPS_PLATFORM_GATEWAY_TOKEN` by default; override that with `--embeddings-api-key-env`.
+`bitloops init` and `bitloops enable` accept the same hosted mode through `--embeddings-runtime platform`. Add `--embeddings-gateway-url https://gateway.example/v1/embeddings` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. The managed platform runtime reads its bearer token from `BITLOOPS_PLATFORM_GATEWAY_TOKEN` by default; override that with `--embeddings-api-key-env`.
 
 ## Config Location And Targeting
 

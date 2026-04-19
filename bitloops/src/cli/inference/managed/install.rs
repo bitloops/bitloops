@@ -4,7 +4,7 @@ use reqwest::header::{ACCEPT, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use std::sync::{Arc, Mutex, OnceLock};
@@ -389,6 +389,7 @@ where
         message: Some(format!("Extracting `{}`", asset.name)),
     })?;
 
+    let extract_started = Instant::now();
     let bundle_entries = extract_managed_embeddings_bundle_entries_from_file(
         download.path(),
         asset_spec.archive_kind,
@@ -400,6 +401,13 @@ where
             asset.name
         )
     })?;
+    log::info!(
+        "managed runtime extraction complete: runtime=bitloops-inference version={} asset_name={} archive_bytes={} extract_ms={}",
+        release.tag_name,
+        asset.name,
+        download.bytes_downloaded,
+        extract_started.elapsed().as_millis()
+    );
     install_managed_inference_bundle_entries(&release.tag_name, bundle_entries)
 }
 
@@ -494,7 +502,8 @@ fn fetch_managed_inference_release(
         ManagedInferenceReleaseRequest::Tag(version) => format!("tags/{version}"),
     };
     let url = format!("{MANAGED_INFERENCE_RELEASES_API_BASE}/releases/{release_path}");
-    managed_inference_http_client()?
+    let started = Instant::now();
+    let release = managed_inference_http_client()?
         .get(url)
         .header(ACCEPT, "application/vnd.github+json")
         .header(USER_AGENT, MANAGED_INFERENCE_USER_AGENT)
@@ -503,7 +512,15 @@ fn fetch_managed_inference_release(
         .error_for_status()
         .context("fetching managed bitloops-inference release metadata")?
         .json::<GitHubReleasePayload>()
-        .context("parsing managed bitloops-inference release metadata")
+        .context("parsing managed bitloops-inference release metadata")?;
+    log::info!(
+        "managed runtime release resolved: runtime=bitloops-inference requested_release={} resolved_version={} asset_count={} resolve_ms={}",
+        release_path,
+        release.tag_name,
+        release.assets.len(),
+        started.elapsed().as_millis()
+    );
+    Ok(release)
 }
 
 fn managed_inference_http_client() -> Result<Client> {

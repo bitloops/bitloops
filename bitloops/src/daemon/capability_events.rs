@@ -8,6 +8,7 @@ mod queue;
 #[path = "capability_events/tests.rs"]
 mod tests;
 
+pub(crate) use self::coordinator::SyncGenerationInput;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use self::coordinator::test_shared_instance_at;

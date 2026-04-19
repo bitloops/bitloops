@@ -166,6 +166,7 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
     summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
     representation_kind: embeddings::EmbeddingRepresentationKind,
     embedding_provider: Arc<dyn EmbeddingService>,
+    perform_clone_rebuild_inline: bool,
 ) -> Result<CurrentRepoEmbeddingRefreshResult> {
     ensure_semantic_embeddings_schema(relational).await?;
     let setup = embeddings::resolve_embedding_setup(embedding_provider.as_ref())?;
@@ -209,7 +210,9 @@ pub(crate) async fn refresh_current_repo_symbol_embeddings_and_clone_edges(
         &embeddings::ActiveEmbeddingRepresentationState::new(representation_kind, setup),
     )
     .await?;
-    let clone_build = if representation_updates_clone_scoring(representation_kind) {
+    let clone_build = if perform_clone_rebuild_inline
+        && representation_updates_clone_scoring(representation_kind)
+    {
         crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges(
             relational, repo_id,
         )

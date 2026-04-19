@@ -16,5 +16,7 @@ pub(crate) fn initialise_repo_runtime_schema(sqlite: &SqliteConnectionPool) -> R
     sqlite
         .execute_batch(super::repo_workplane::REPO_WORKPLANE_SCHEMA)
         .context("initialising capability workplane schema in runtime db")?;
+    super::repo_workplane::ensure_repo_workplane_schema_upgrades(sqlite)
+        .context("upgrading capability workplane schema in runtime db")?;
     Ok(())
 }

@@ -29,7 +29,6 @@ pub use repo_policy::{
     discover_repo_policy, discover_repo_policy_optional, parse_exclusion_patterns,
     resolve_repo_policy_scope_exclusions,
 };
-pub(crate) use resolve::resolve_preferred_daemon_config_path_for_repo;
 pub use resolve::{
     resolve_blob_local_path, resolve_blob_local_path_for_repo,
     resolve_bound_daemon_config_path_for_repo, resolve_bound_daemon_config_root_for_repo,
@@ -44,14 +43,19 @@ pub use resolve::{
     resolve_sqlite_db_path_for_repo, resolve_store_backend_config,
     resolve_store_backend_config_for_repo, resolve_watch_runtime_config_for_repo,
 };
+pub(crate) use resolve::{
+    resolve_preferred_daemon_config_path_for_repo, resolve_semantic_clones_worker_settings_for_repo,
+};
 pub use types::{
-    AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
-    DashboardFileConfig, DashboardLocalDashboardConfig, EmbeddingCapabilityConfig,
-    EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
-    GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig, InferenceProfileConfig,
-    InferenceRuntimeConfig, InferenceTask, ProviderConfig, RelationalBackendConfig,
-    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticClonesInferenceBindings,
-    SemanticSummaryMode, StoreBackendConfig, StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
+    AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS,
+    DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
+    DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS, DashboardFileConfig, DashboardLocalDashboardConfig,
+    EmbeddingCapabilityConfig, EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig,
+    EventsBackendConfig, GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig,
+    InferenceProfileConfig, InferenceRuntimeConfig, InferenceTask, ProviderConfig,
+    RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig,
+    SemanticClonesInferenceBindings, SemanticSummaryMode, StoreBackendConfig, StoreFileConfig,
+    WatchFileConfig, WatchRuntimeConfig,
 };
 
 #[cfg(test)]

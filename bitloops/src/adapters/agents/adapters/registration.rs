@@ -7,13 +7,26 @@ use crate::host::hooks::augmentation::builder::HookAugmentation;
 
 pub type PromptAugmentationRenderer = fn(&str, &HookAugmentation) -> Option<String>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentHookInstallOptions {
+    pub install_bitloops_skill: bool,
+}
+
+impl Default for AgentHookInstallOptions {
+    fn default() -> Self {
+        Self {
+            install_bitloops_skill: true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AgentAdapterRegistration {
     descriptor: AgentAdapterDescriptor,
     create_agent: fn() -> Box<dyn Agent + Send + Sync>,
     detect_project_presence: fn(&Path) -> bool,
     hooks_installed: fn(&Path) -> bool,
-    install_hooks: fn(&Path, bool, bool) -> Result<usize>,
+    install_hooks: fn(&Path, bool, bool, AgentHookInstallOptions) -> Result<usize>,
     uninstall_hooks: fn(&Path) -> Result<()>,
     format_resume_command: fn(&str) -> String,
     render_prompt_augmentation: Option<PromptAugmentationRenderer>,
@@ -26,7 +39,7 @@ impl AgentAdapterRegistration {
         create_agent: fn() -> Box<dyn Agent + Send + Sync>,
         detect_project_presence: fn(&Path) -> bool,
         hooks_installed: fn(&Path) -> bool,
-        install_hooks: fn(&Path, bool, bool) -> Result<usize>,
+        install_hooks: fn(&Path, bool, bool, AgentHookInstallOptions) -> Result<usize>,
         uninstall_hooks: fn(&Path) -> Result<()>,
         format_resume_command: fn(&str) -> String,
         render_prompt_augmentation: Option<PromptAugmentationRenderer>,
@@ -59,8 +72,14 @@ impl AgentAdapterRegistration {
         (self.hooks_installed)(repo_root)
     }
 
-    pub fn install_hooks(&self, repo_root: &Path, local_dev: bool, force: bool) -> Result<usize> {
-        (self.install_hooks)(repo_root, local_dev, force)
+    pub fn install_hooks(
+        &self,
+        repo_root: &Path,
+        local_dev: bool,
+        force: bool,
+        options: AgentHookInstallOptions,
+    ) -> Result<usize> {
+        (self.install_hooks)(repo_root, local_dev, force, options)
     }
 
     pub fn uninstall_hooks(&self, repo_root: &Path) -> Result<()> {

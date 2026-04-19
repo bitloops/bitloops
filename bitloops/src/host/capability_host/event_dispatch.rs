@@ -179,6 +179,7 @@ mod tests {
             language_services: Arc::new(EmptyLanguageServicesGateway),
             host_services: Arc::new(DefaultHostServicesGateway::new("repo-1")),
             workplane: Arc::new(NoopCapabilityWorkplaneGateway),
+            init_session_id: None,
         })
     }
 

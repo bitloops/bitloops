@@ -39,11 +39,8 @@ pub struct SqliteInteractionSpool {
 impl SqliteInteractionSpool {
     pub fn new(sqlite: SqliteConnectionPool, repo_id: String) -> Result<Self> {
         sqlite
-            .execute_batch(schema::SCHEMA)
+            .with_connection(schema::initialise_schema)
             .context("initialising interaction spool schema")?;
-        sqlite
-            .with_connection(schema::ensure_additive_columns)
-            .context("ensuring additive interaction spool columns")?;
         sqlite
             .with_connection(|conn| projections::rebuild_all_projections(conn, &repo_id))
             .context("rebuilding interaction search projections")?;

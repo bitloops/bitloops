@@ -37,6 +37,7 @@ fn sync_task(
         },
         "ingestSpec": null,
         "embeddingsBootstrapSpec": null,
+        "summaryBootstrapSpec": null,
         "syncProgress": {
             "phase": "extracting_paths",
             "currentPath": "src/lib.rs",
@@ -53,9 +54,11 @@ fn sync_task(
         },
         "ingestProgress": null,
         "embeddingsBootstrapProgress": null,
+        "summaryBootstrapProgress": null,
         "syncResult": null,
         "ingestResult": null,
-        "embeddingsBootstrapResult": null
+        "embeddingsBootstrapResult": null,
+        "summaryBootstrapResult": null
     }))
     .expect("build sync task")
 }
@@ -84,6 +87,7 @@ fn ingest_task(
             "backfill": 50
         },
         "embeddingsBootstrapSpec": null,
+        "summaryBootstrapSpec": null,
         "syncProgress": null,
         "ingestProgress": {
             "phase": "extracting",
@@ -96,9 +100,11 @@ fn ingest_task(
             "artefactsUpserted": 0
         },
         "embeddingsBootstrapProgress": null,
+        "summaryBootstrapProgress": null,
         "syncResult": null,
         "ingestResult": null,
-        "embeddingsBootstrapResult": null
+        "embeddingsBootstrapResult": null,
+        "summaryBootstrapResult": null
     }))
     .expect("build ingest task")
 }
@@ -187,4 +193,55 @@ fn render_completed_sync_lane_while_ingest_continues() {
     assert!(frame.contains("100% complete"));
     assert!(frame.contains("Ingesting demo"));
     assert!(!frame.contains("Waiting for sync to finish before starting ingest"));
+}
+
+#[test]
+fn render_completed_embedding_lane_without_queued_work_avoids_zero_of_zero_counts() {
+    let renderer = non_interactive_renderer();
+    let frame = renderer.render_frame(
+        InitChecklistState {
+            show_sync: false,
+            show_ingest: false,
+            show_embeddings: true,
+            show_summaries: false,
+            sync_complete: false,
+            ingest_complete: false,
+        },
+        None,
+        &BottomProgressState::QueueComplete {
+            failed_jobs: 0,
+            baseline_total: 0,
+            completion_source: super::super::EmbeddingCompletionSource::NoneRequired,
+        },
+        &SummaryProgressState::Hidden,
+    );
+
+    assert!(frame.contains("100% complete"));
+    assert!(frame.contains("No queued embedding artefacts were needed"));
+    assert!(!frame.contains("0/0 artefacts"));
+}
+
+#[test]
+fn render_completed_embedding_lane_from_inline_sync_reports_processed_artefacts() {
+    let renderer = non_interactive_renderer();
+    let frame = renderer.render_frame(
+        InitChecklistState {
+            show_sync: false,
+            show_ingest: false,
+            show_embeddings: true,
+            show_summaries: false,
+            sync_complete: false,
+            ingest_complete: false,
+        },
+        None,
+        &BottomProgressState::QueueComplete {
+            failed_jobs: 0,
+            baseline_total: 12,
+            completion_source: super::super::EmbeddingCompletionSource::InlineSync,
+        },
+        &SummaryProgressState::Hidden,
+    );
+
+    assert!(frame.contains("12/12 artefacts"));
+    assert!(frame.contains("Embeddings generated during sync"));
 }

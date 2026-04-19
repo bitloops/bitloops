@@ -5,7 +5,7 @@ use super::storage::build_semantic_get_summary_sql;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::devql::RelationalStorage;
 
-pub(super) fn ensure_required_llm_summary_output(
+pub(crate) fn ensure_required_llm_summary_output(
     rows: &semantic::SemanticFeatureRows,
     summary_provider: &dyn semantic::SemanticSummaryProvider,
 ) -> Result<()> {
