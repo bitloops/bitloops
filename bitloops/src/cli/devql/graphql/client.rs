@@ -387,8 +387,10 @@ async fn wait_for_sync_follow_up_work_if_needed(task: &TaskGraphqlRecord) -> Res
         let current_state = daemon::current_state_consumer_status(Some(task.repo_id.as_str()))?;
         let enrichment = daemon::enrichment_status()?;
         let current_state_idle = current_state.current_repo_run.is_none();
-        let enrichment_running = enrichment.state.running_jobs > 0;
-        let enrichment_pending = enrichment.state.pending_jobs > 0;
+        let enrichment_running = enrichment.state.running_embedding_jobs > 0
+            || enrichment.state.running_clone_edges_rebuild_jobs > 0;
+        let enrichment_pending = enrichment.state.pending_embedding_jobs > 0
+            || enrichment.state.pending_clone_edges_rebuild_jobs > 0;
         let enrichment_idle = !enrichment_pending && !enrichment_running;
 
         if enrichment_running {

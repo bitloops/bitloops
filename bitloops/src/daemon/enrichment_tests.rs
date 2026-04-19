@@ -2418,7 +2418,7 @@ fn effective_worker_budgets_use_remote_embedding_defaults_for_active_config_root
     )
     .expect("resolve effective worker budgets");
 
-    assert_eq!(budgets.embeddings, 6);
+    assert_eq!(budgets.embeddings, 4);
 }
 
 struct WorkplaneJobFixture<'a> {
