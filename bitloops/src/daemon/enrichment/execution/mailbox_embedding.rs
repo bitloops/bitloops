@@ -33,6 +33,7 @@ use super::super::workplane::{
 };
 use super::helpers::{
     dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
+    select_current_semantic_input_scope,
 };
 
 pub(crate) struct PreparedEmbeddingMailboxBatch {
@@ -67,38 +68,12 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     };
     let setup = resolve_embedding_setup(provider.as_ref())?;
 
-    let mut explicit_current_artefact_ids = Vec::new();
-    let mut requires_full_current_inputs = false;
-    for item in &batch.items {
-        match item.item_kind {
-            SemanticMailboxItemKind::Artefact => {
-                if let Some(artefact_id) = item.artefact_id.as_ref() {
-                    explicit_current_artefact_ids.push(artefact_id.clone());
-                }
-            }
-            SemanticMailboxItemKind::RepoBackfill => {
-                let requested_ids = item
-                    .payload_json
-                    .as_ref()
-                    .map(payload_artefact_ids_from_value)
-                    .unwrap_or_default();
-                if requested_ids.is_empty() {
-                    requires_full_current_inputs = true;
-                } else {
-                    explicit_current_artefact_ids.extend(requested_ids);
-                }
-            }
-        }
-    }
+    let current_input_selection = select_current_semantic_input_scope(&batch.items);
     let current_inputs = load_current_semantic_inputs(
         &relational,
         &batch.repo_root,
         &batch.repo_id,
-        if requires_full_current_inputs {
-            None
-        } else {
-            Some(explicit_current_artefact_ids.as_slice())
-        },
+        current_input_selection.requested_artefact_ids(),
     )
     .await?;
     let current_by_artefact = current_inputs

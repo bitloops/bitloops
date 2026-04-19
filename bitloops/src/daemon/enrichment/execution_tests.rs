@@ -12,7 +12,7 @@ use crate::host::devql::{
 };
 use crate::host::runtime_store::{
     SemanticEmbeddingMailboxItemRecord, SemanticMailboxItemKind, SemanticMailboxItemStatus,
-    WorkplaneJobRecord, WorkplaneJobStatus,
+    SemanticSummaryMailboxItemRecord, WorkplaneJobRecord, WorkplaneJobStatus,
 };
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use std::fs;
@@ -1481,6 +1481,82 @@ WHERE repo_id = '{}' AND path = '{}'",
     assert!(
         !prepared.commit.embedding_statements.is_empty(),
         "requested artefact should still produce embedding work"
+    );
+}
+
+#[tokio::test]
+async fn prepare_summary_mailbox_batch_with_explicit_repo_backfill_ids_skips_unrelated_current_paths()
+ {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let requested = inputs.first().expect("at least one current semantic input");
+    let unrelated = inputs
+        .iter()
+        .find(|input| input.path != requested.path)
+        .expect("fixture should include a second path");
+
+    relational
+        .exec(&format!(
+            "UPDATE current_file_state \
+SET head_content_id = 'missing-explicit-backfill-blob' \
+WHERE repo_id = '{}' AND path = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::esc_pg(&unrelated.path),
+        ))
+        .await
+        .expect("break unrelated current projection path");
+
+    super::helpers::load_current_semantic_inputs(&relational, repo.path(), &cfg.repo.repo_id, None)
+        .await
+        .expect_err("full current hydration should still fail on the broken unrelated path");
+
+    let batch = super::super::workplane::ClaimedSummaryMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        lease_token: "explicit-repo-backfill-summary-lease".to_string(),
+        items: vec![SemanticSummaryMailboxItemRecord {
+            item_id: "explicit-repo-backfill-summary-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::json!([requested.artefact_id.clone()])),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("explicit-repo-backfill-summary-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_summary_mailbox_batch(&batch, |_, _| {})
+        .await
+        .expect("explicit repo backfill batch should only hydrate the requested current artefact");
+
+    assert_eq!(prepared.expanded_count, 1);
+    assert!(prepared.commit.replacement_backfill_item.is_none());
+    assert_eq!(
+        prepared.commit.acked_item_ids,
+        vec!["explicit-repo-backfill-summary-item".to_string()]
     );
 }
 
