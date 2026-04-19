@@ -745,7 +745,7 @@ async fn write_init_setup_handoff(out: &mut dyn Write) -> Result<()> {
         write_local_http_mkcert_notice(out)?;
     }
     writeln!(out, "────────────────────────────────────────")?;
-    writeln!(out, "Live progress")?;
+    writeln!(out, " Live progress")?;
     writeln!(out, "────────────────────────────────────────")?;
     writeln!(out)?;
     out.flush()?;

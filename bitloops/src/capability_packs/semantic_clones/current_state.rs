@@ -16,7 +16,8 @@ use super::types::{
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use super::workplane::{
-    SemanticClonesMailboxPayload, repo_backfill_dedupe_key, resolve_effective_mailbox_intent,
+    REPO_BACKFILL_MAILBOX_CHUNK_SIZE, SemanticClonesMailboxPayload, repo_backfill_chunk_dedupe_key,
+    repo_backfill_dedupe_key, resolve_effective_mailbox_intent,
 };
 
 pub struct SemanticClonesCurrentStateConsumer;
@@ -78,22 +79,19 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
             let has_removals =
                 !request.file_removals.is_empty() || !request.artefact_removals.is_empty();
             let is_full_reconcile = matches!(request.reconcile_mode, ReconcileMode::FullReconcile);
-            let full_reconcile_work_item_count = if is_full_reconcile
+            let full_reconcile_artefact_ids = if is_full_reconcile
                 && (intent.summary_refresh_active
                     || intent.code_embeddings_active
                     || intent.summary_embeddings_active)
             {
                 Some(
-                    current_repo_work_item_count(
-                        context.storage.as_ref(),
-                        &request.repo_root,
-                        &request.repo_id,
-                    )
-                    .await?,
+                    current_repo_backfill_artefact_ids(context.storage.as_ref(), &request.repo_id)
+                        .await?,
                 )
             } else {
                 None
             };
+            let full_reconcile_artefact_ids = full_reconcile_artefact_ids.as_deref().unwrap_or(&[]);
 
             let mut jobs = Vec::new();
             let mut summary_job_count = 0_u64;
@@ -103,11 +101,12 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
 
             if intent.summary_refresh_active {
                 if is_full_reconcile {
-                    jobs.push(repo_backfill_job(
+                    let repo_backfill_jobs = repo_backfill_jobs(
                         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-                        full_reconcile_work_item_count,
-                    )?);
-                    summary_job_count += 1;
+                        full_reconcile_artefact_ids,
+                    )?;
+                    summary_job_count += repo_backfill_jobs.len() as u64;
+                    jobs.extend(repo_backfill_jobs);
                 } else {
                     for artefact_id in &artefact_ids {
                         jobs.push(artefact_job(
@@ -121,11 +120,12 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
 
             if intent.code_embeddings_active {
                 if is_full_reconcile {
-                    jobs.push(repo_backfill_job(
+                    let repo_backfill_jobs = repo_backfill_jobs(
                         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-                        full_reconcile_work_item_count,
-                    )?);
-                    code_embedding_job_count += 1;
+                        full_reconcile_artefact_ids,
+                    )?;
+                    code_embedding_job_count += repo_backfill_jobs.len() as u64;
+                    jobs.extend(repo_backfill_jobs);
                 } else {
                     for artefact_id in &artefact_ids {
                         jobs.push(artefact_job(
@@ -139,11 +139,12 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
 
             if intent.summary_embeddings_active && !intent.summary_refresh_active {
                 if is_full_reconcile {
-                    jobs.push(repo_backfill_job(
+                    let repo_backfill_jobs = repo_backfill_jobs(
                         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-                        full_reconcile_work_item_count,
-                    )?);
-                    summary_embedding_job_count += 1;
+                        full_reconcile_artefact_ids,
+                    )?;
+                    summary_embedding_job_count += repo_backfill_jobs.len() as u64;
+                    jobs.extend(repo_backfill_jobs);
                 } else {
                     for artefact_id in &artefact_ids {
                         jobs.push(artefact_job(
@@ -164,6 +165,8 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                 jobs.push(repo_backfill_job(
                     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
                     Some(1),
+                    None,
+                    repo_backfill_dedupe_key(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX),
                 )?);
                 clone_rebuild_job_count += 1;
             }
@@ -245,30 +248,75 @@ fn artefact_job(mailbox_name: &str, artefact_id: &str) -> anyhow::Result<Capabil
 fn repo_backfill_job(
     mailbox_name: &str,
     work_item_count: Option<u64>,
+    artefact_ids: Option<Vec<String>>,
+    dedupe_key: String,
 ) -> anyhow::Result<CapabilityWorkplaneJob> {
     Ok(CapabilityWorkplaneJob::new(
         mailbox_name,
-        Some(repo_backfill_dedupe_key(mailbox_name)),
+        Some(dedupe_key),
         serde_json::to_value(SemanticClonesMailboxPayload::RepoBackfill {
             work_item_count,
-            artefact_ids: None,
+            artefact_ids,
         })?,
     ))
 }
 
-async fn current_repo_work_item_count(
+fn repo_backfill_jobs(
+    mailbox_name: &str,
+    artefact_ids: &[String],
+) -> anyhow::Result<Vec<CapabilityWorkplaneJob>> {
+    if artefact_ids.is_empty() {
+        return Ok(vec![repo_backfill_job(
+            mailbox_name,
+            Some(0),
+            None,
+            repo_backfill_dedupe_key(mailbox_name),
+        )?]);
+    }
+
+    let mut jobs = Vec::new();
+    let use_chunk_dedupe_keys = artefact_ids.len() > REPO_BACKFILL_MAILBOX_CHUNK_SIZE;
+    for chunk in artefact_ids.chunks(REPO_BACKFILL_MAILBOX_CHUNK_SIZE) {
+        let chunk_ids = chunk.to_vec();
+        let dedupe_key = if use_chunk_dedupe_keys {
+            repo_backfill_chunk_dedupe_key(mailbox_name, &chunk_ids)
+        } else {
+            repo_backfill_dedupe_key(mailbox_name)
+        };
+        jobs.push(repo_backfill_job(
+            mailbox_name,
+            Some(chunk_ids.len() as u64),
+            Some(chunk_ids),
+            dedupe_key,
+        )?);
+    }
+
+    Ok(jobs)
+}
+
+async fn current_repo_backfill_artefact_ids(
     relational: &crate::host::devql::RelationalStorage,
-    repo_root: &std::path::Path,
     repo_id: &str,
-) -> anyhow::Result<u64> {
-    Ok(u64::try_from(
-        crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_current_repo(
-            relational, repo_root, repo_id,
-        )
+) -> anyhow::Result<Vec<String>> {
+    let repo_id_sql = crate::host::devql::esc_pg(repo_id);
+    Ok(relational
+        .query_rows(&format!(
+            "SELECT DISTINCT artefact_id \
+             FROM artefacts_current \
+             WHERE repo_id = '{repo_id_sql}' \
+               AND LOWER(COALESCE(canonical_kind, COALESCE(language_kind, 'symbol'))) <> 'import' \
+             ORDER BY path ASC, COALESCE(symbol_fqn, path) ASC, artefact_id ASC",
+        ))
         .await?
-        .len(),
-    )
-    .unwrap_or(u64::MAX))
+        .into_iter()
+        .filter_map(|row| {
+            row.get("artefact_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|artefact_id| !artefact_id.is_empty())
+                .map(str::to_string)
+        })
+        .collect())
 }
 
 fn reconcile_mode_label(mode: ReconcileMode) -> &'static str {
@@ -612,6 +660,38 @@ mod tests {
         .expect("insert current clone edge");
     }
 
+    async fn seed_current_artefact_ids(sqlite_path: &Path, repo_id: &str, count: usize) {
+        let conn = Connection::open(sqlite_path).expect("open sqlite for current artefacts");
+        conn.execute(
+            "INSERT OR IGNORE INTO repositories (
+                repo_id, provider, organization, name, default_branch
+            ) VALUES (?1, 'test', 'test', 'test', 'main')",
+            rusqlite::params![repo_id],
+        )
+        .expect("insert repository row");
+        for index in 0..count {
+            conn.execute(
+                "INSERT INTO artefacts_current (
+                    repo_id, path, content_id, symbol_id, artefact_id, language,
+                    canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                    start_byte, end_byte, modifiers, updated_at
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, 'typescript',
+                    'function', 'function', ?6, 1, 3, 0, 24, '[]', datetime('now')
+                )",
+                rusqlite::params![
+                    repo_id,
+                    format!("src/file-{index}.ts"),
+                    format!("content-{index}"),
+                    format!("symbol-{index}"),
+                    format!("artefact-{index:03}"),
+                    format!("src/file-{index}.ts::fn_{index}"),
+                ],
+            )
+            .expect("insert current artefact");
+        }
+    }
+
     fn count_rows(sqlite_path: &Path, sql: &str, repo_id: &str, path: Option<&str>) -> i64 {
         let conn = Connection::open(sqlite_path).expect("open sqlite for count");
         match path {
@@ -924,6 +1004,88 @@ mod tests {
         assert_eq!(metrics["enqueued_summary_embedding_jobs"], json!(0));
         assert_eq!(metrics["enqueued_clone_rebuild"], json!(1));
         assert_eq!(metrics["reconcile_mode"], json!("full_reconcile"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reconcile_full_reconcile_chunks_backfill_jobs_for_parallel_mailbox_work() -> Result<()>
+    {
+        let repo = tempdir().expect("temp repo");
+        let repo_id = "repo-full-chunked";
+        let request = request(
+            repo.path(),
+            repo_id,
+            ReconcileMode::FullReconcile,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+        let workplane = CapturingWorkplaneGateway::with_status(BTreeMap::new());
+        let ctx = test_context(
+            config_root(Some("summary"), Some("code"), Some("summary-embed")),
+            workplane,
+            request,
+        )
+        .await?;
+        seed_current_artefact_ids(&ctx.sqlite_path, repo_id, 55).await;
+
+        let result = SemanticClonesCurrentStateConsumer
+            .reconcile(&ctx.request, &ctx.context)
+            .await?;
+        let jobs = ctx.workplane.jobs();
+        let metrics = metrics_map(&result);
+
+        let summary_jobs = jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
+            .collect::<Vec<_>>();
+        let code_jobs = jobs
+            .iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX)
+            .collect::<Vec<_>>();
+
+        assert_eq!(summary_jobs.len(), 2);
+        assert_eq!(code_jobs.len(), 2);
+        assert_eq!(
+            jobs.iter()
+                .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
+                .count(),
+            1
+        );
+        assert_eq!(
+            summary_jobs
+                .iter()
+                .map(|job| {
+                    crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
+                        &job.payload,
+                        job.mailbox_name.as_str(),
+                    )
+                })
+                .sum::<u64>(),
+            55
+        );
+        assert_eq!(
+            code_jobs
+                .iter()
+                .map(|job| {
+                    crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
+                        &job.payload,
+                        job.mailbox_name.as_str(),
+                    )
+                })
+                .sum::<u64>(),
+            55
+        );
+        assert!(summary_jobs.iter().all(|job| {
+            crate::capability_packs::semantic_clones::workplane::payload_repo_backfill_artefact_ids(
+                &job.payload,
+            )
+            .is_some_and(|artefact_ids| artefact_ids.len() <= REPO_BACKFILL_MAILBOX_CHUNK_SIZE)
+        }));
+        assert_eq!(metrics["enqueued_summary_jobs"], json!(2));
+        assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(2));
+        assert_eq!(metrics["enqueued_clone_rebuild"], json!(1));
         Ok(())
     }
 }

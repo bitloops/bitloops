@@ -29,7 +29,7 @@ use crate::host::runtime_store::{
 
 use super::super::semantic_writer::{CommitEmbeddingBatchRequest, SemanticBatchRepoContext};
 use super::super::workplane::{
-    ClaimedEmbeddingMailboxBatch, SEMANTIC_MAILBOX_BATCH_SIZE, fallback_repo_identity,
+    ClaimedEmbeddingMailboxBatch, SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE, fallback_repo_identity,
 };
 use super::helpers::{dedupe_inputs_by_artefact_id, payload_artefact_ids_from_value};
 
@@ -104,9 +104,9 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                         .cloned()
                         .collect::<Vec<_>>()
                 };
-                if selected.len() > SEMANTIC_MAILBOX_BATCH_SIZE {
+                if selected.len() > SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE {
                     let remaining_ids = selected
-                        .split_off(SEMANTIC_MAILBOX_BATCH_SIZE)
+                        .split_off(SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE)
                         .into_iter()
                         .map(|input| input.artefact_id)
                         .collect::<Vec<_>>();

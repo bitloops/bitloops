@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
@@ -31,6 +32,7 @@ pub const SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES: [&str; 4] = [
 ];
 
 const REPO_BACKFILL_DEDUPE_SUFFIX: &str = "repo_backfill";
+pub const REPO_BACKFILL_MAILBOX_CHUNK_SIZE: usize = 50;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -222,6 +224,22 @@ pub fn repo_backfill_dedupe_key(mailbox_name: &str) -> String {
     format!("{mailbox_name}:{REPO_BACKFILL_DEDUPE_SUFFIX}")
 }
 
+pub fn repo_backfill_chunk_dedupe_key(mailbox_name: &str, artefact_ids: &[String]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(mailbox_name.as_bytes());
+    for artefact_id in artefact_ids {
+        digest.update([0]);
+        digest.update(artefact_id.as_bytes());
+    }
+
+    let mut suffix = String::with_capacity(64);
+    for byte in digest.finalize() {
+        suffix.push_str(&format!("{byte:02x}"));
+    }
+
+    format!("{mailbox_name}:{REPO_BACKFILL_DEDUPE_SUFFIX}:chunk:{suffix}")
+}
+
 fn default_work_item_count_for_mailbox(mailbox_name: &str) -> u64 {
     match mailbox_name {
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => 1,
@@ -275,12 +293,29 @@ mod tests {
 
     #[test]
     fn summary_refresh_deactivates_when_summary_mode_is_off() {
-        let mut config = SemanticClonesConfig::default();
-        config.summary_mode = SemanticSummaryMode::Off;
+        let config = SemanticClonesConfig {
+            summary_mode: SemanticSummaryMode::Off,
+            ..SemanticClonesConfig::default()
+        };
 
         let intent =
             resolve_effective_mailbox_intent_from_status(&status_with_active_intents(), &config);
 
         assert!(!intent.summary_refresh_active);
+    }
+
+    #[test]
+    fn repo_backfill_chunk_dedupe_key_changes_with_chunk_contents() {
+        let mailbox_name = SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX;
+        let left = repo_backfill_chunk_dedupe_key(
+            mailbox_name,
+            &["artefact-1".to_string(), "artefact-2".to_string()],
+        );
+        let right = repo_backfill_chunk_dedupe_key(
+            mailbox_name,
+            &["artefact-1".to_string(), "artefact-3".to_string()],
+        );
+
+        assert_ne!(left, right);
     }
 }

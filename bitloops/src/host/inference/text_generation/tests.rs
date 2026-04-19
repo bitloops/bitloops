@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -14,6 +14,7 @@ use crate::config::{
 use crate::host::inference::{
     BITLOOPS_PLATFORM_CHAT_DRIVER, EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway,
 };
+use crate::test_support::process_state::enter_process_state;
 
 use super::*;
 
@@ -97,6 +98,21 @@ fn empty_gateway_rejects_unknown_text_generation_slots() {
         err.to_string().contains("summary_generation"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn remote_drivers_default_text_generation_pool_to_four_workers() {
+    let _guard = test_lock();
+
+    assert_eq!(
+        text_generation_session_pool_size(BITLOOPS_PLATFORM_CHAT_DRIVER),
+        4
+    );
+    assert_eq!(
+        text_generation_session_pool_size(crate::host::inference::OPENAI_CHAT_COMPLETIONS_DRIVER),
+        4
+    );
+    assert_eq!(text_generation_session_pool_size("ollama_chat"), 1);
 }
 
 #[test]
@@ -227,6 +243,102 @@ fn runtime_service_reuses_hot_runtime_across_service_instances() {
         launches.lines().count(),
         1,
         "expected one shared runtime launch, got: {launches}"
+    );
+}
+
+#[test]
+fn platform_runtime_service_processes_parallel_requests() {
+    let _guard = test_lock();
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("parallel_inference_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    let config_path = temp.path().join("bitloops.toml");
+    fs::write(&config_path, "[inference]\n").expect("write fake config");
+    fs::write(
+        &script_path,
+        r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_llm","provider":{"kind":"hosted_chat","provider_name":"bitloops-platform","model_name":"ministral-3-3b-instruct","endpoint":"https://platform.example.test","capabilities":["text","json_object"]}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
+      exit 0
+      ;;
+    *'"type":"infer"'*)
+      sleep 1
+      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"bitloops-platform","model_name":"ministral-3-3b-instruct"}\n' "$request_id"
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write parallel runtime script");
+
+    let runtime = InferenceRuntimeConfig {
+        command: "/bin/sh".to_string(),
+        args: vec![
+            script_path.to_string_lossy().into_owned(),
+            launch_log.to_string_lossy().into_owned(),
+        ],
+        startup_timeout_secs: 1,
+        request_timeout_secs: 3,
+    };
+
+    let _process_state = enter_process_state(
+        None,
+        &[(
+            crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV,
+            Some("test-token"),
+        )],
+    );
+    let service = Arc::new(
+        BitloopsInferenceTextGenerationService::new(
+            "summary_llm",
+            BITLOOPS_PLATFORM_CHAT_DRIVER,
+            &runtime,
+            &config_path,
+        )
+        .expect("build platform runtime service"),
+    );
+    let started = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        let first = {
+            let service = Arc::clone(&service);
+            scope.spawn(move || service.complete("system", "user-one"))
+        };
+        let second = {
+            let service = Arc::clone(&service);
+            scope.spawn(move || service.complete("system", "user-two"))
+        };
+        for completion in [first.join(), second.join()] {
+            let text = completion
+                .expect("parallel completion thread should join")
+                .expect("parallel completion should succeed");
+            assert_eq!(
+                serde_json::from_str::<Value>(&text).expect("parse response json"),
+                serde_json::json!({
+                    "summary": "Summarises the symbol.",
+                    "confidence": 0.91
+                })
+            );
+        }
+    });
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(1_800),
+        "expected parallel platform requests to overlap, took {elapsed:?}"
+    );
+    let launches = fs::read_to_string(&launch_log).expect("read launch log");
+    assert!(
+        launches.lines().count() >= 2,
+        "expected the platform pool to launch multiple runtimes, got: {launches}"
     );
 }
 

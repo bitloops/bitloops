@@ -9,7 +9,8 @@ use crate::config::{
 };
 use crate::host::inference::{
     BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID,
-    BITLOOPS_PLATFORM_CHAT_DRIVER,
+    BITLOOPS_PLATFORM_CHAT_DRIVER, DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY,
+    OPENAI_CHAT_COMPLETIONS_DRIVER,
 };
 
 const SEMANTIC_CLONES_SUMMARY_WORKER_COUNT_ENV: &str = "BITLOOPS_SEMANTIC_CLONES_SUMMARY_WORKERS";
@@ -20,10 +21,9 @@ const SEMANTIC_CLONES_CLONE_REBUILD_WORKER_COUNT_ENV: &str =
 const SEMANTIC_CLONES_ENRICHMENT_WORKER_COUNT_ENV: &str =
     "BITLOOPS_SEMANTIC_CLONES_ENRICHMENT_WORKERS";
 const MAX_ENRICHMENT_WORKER_COUNT: usize = 32;
-const DEFAULT_REMOTE_SUMMARY_WORKERS: usize = 12;
-const DEFAULT_REMOTE_EMBEDDING_WORKERS: usize = 6;
+const DEFAULT_REMOTE_SUMMARY_WORKERS: usize = DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY;
+const DEFAULT_REMOTE_EMBEDDING_WORKERS: usize = 4;
 const OLLAMA_CHAT_DRIVER: &str = "ollama_chat";
-const OPENAI_CHAT_COMPLETIONS_DRIVER: &str = "openai_chat_completions";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EnrichmentWorkerPool {
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_budgets_default_remote_summary_to_twelve_and_embeddings_to_six() {
+    fn worker_budgets_default_remote_summary_to_four_and_embeddings_to_four() {
         assert_eq!(
             resolve_worker_budgets_from_sources(WorkerBudgetSources {
                 summary_remote: true,
@@ -353,8 +353,8 @@ mod tests {
                 ..WorkerBudgetSources::default()
             }),
             EnrichmentWorkerBudgets {
-                summary_refresh: 12,
-                embeddings: 6,
+                summary_refresh: 4,
+                embeddings: 4,
                 clone_rebuild: 1,
             }
         );

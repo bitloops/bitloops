@@ -26,7 +26,7 @@ use crate::host::runtime_store::{
 
 use super::super::semantic_writer::{CommitSummaryBatchRequest, SemanticBatchRepoContext};
 use super::super::workplane::{
-    ClaimedSummaryMailboxBatch, SEMANTIC_MAILBOX_BATCH_SIZE, fallback_repo_identity,
+    ClaimedSummaryMailboxBatch, SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE, fallback_repo_identity,
 };
 use super::helpers::{dedupe_inputs_by_artefact_id, payload_artefact_ids_from_value};
 
@@ -104,9 +104,9 @@ where
                         .cloned()
                         .collect::<Vec<_>>()
                 };
-                if selected.len() > SEMANTIC_MAILBOX_BATCH_SIZE {
+                if selected.len() > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE {
                     let remaining_ids = selected
-                        .split_off(SEMANTIC_MAILBOX_BATCH_SIZE)
+                        .split_off(SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE)
                         .into_iter()
                         .map(|input| input.artefact_id)
                         .collect::<Vec<_>>();
@@ -142,7 +142,11 @@ where
                 .query_rows(&build_semantic_get_index_state_sql(&input.artefact_id))
                 .await?,
         );
-        if !semantic_features_require_reindex(&state, &next_input_hash) {
+        if !semantic_features_require_reindex(
+            &state,
+            &next_input_hash,
+            summary_provider.provider.requires_model_output(),
+        ) {
             continue;
         }
 

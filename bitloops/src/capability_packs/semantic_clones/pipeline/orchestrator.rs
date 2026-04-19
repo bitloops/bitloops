@@ -43,11 +43,24 @@ pub(crate) async fn rebuild_current_symbol_clone_edges(
     relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<scoring::SymbolCloneBuildResult> {
+    rebuild_current_symbol_clone_edges_with_options(
+        relational,
+        repo_id,
+        scoring::CloneScoringOptions::default(),
+    )
+    .await
+}
+
+pub(crate) async fn rebuild_current_symbol_clone_edges_with_options(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    options: scoring::CloneScoringOptions,
+) -> Result<scoring::SymbolCloneBuildResult> {
     rebuild_symbol_clone_edges_for_projection(
         relational,
         repo_id,
         CloneProjection::Current,
-        scoring::CloneScoringOptions::default(),
+        options,
     )
     .await
 }

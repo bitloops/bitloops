@@ -189,30 +189,6 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn summary_refresh_mode_uses_deterministic_fallback_without_summary_slot() {
-        assert_eq!(
-            summary_refresh_mode(&crate::config::SemanticClonesConfig::default()),
-            SemanticSummaryRefreshMode::DeterministicOnly
-        );
-    }
-
-    #[test]
-    fn summary_refresh_mode_is_strict_with_configured_summary_slot() {
-        let mut config = crate::config::SemanticClonesConfig::default();
-        config.inference.summary_generation = Some("summary_local".to_string());
-
-        assert_eq!(
-            summary_refresh_mode(&config),
-            SemanticSummaryRefreshMode::ConfiguredStrict
-        );
-    }
-}
-
 async fn execute_clone_edges_rebuild_workplane_job(
     capability_host: &crate::host::capability_host::DevqlCapabilityHost,
     relational: &RelationalStorage,
@@ -238,5 +214,34 @@ async fn execute_clone_edges_rebuild_workplane_job(
     {
         Ok(_) => JobExecutionOutcome::ok(),
         Err(err) => JobExecutionOutcome::failed(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_refresh_mode_uses_deterministic_fallback_without_summary_slot() {
+        assert_eq!(
+            summary_refresh_mode(&crate::config::SemanticClonesConfig::default()),
+            SemanticSummaryRefreshMode::DeterministicOnly
+        );
+    }
+
+    #[test]
+    fn summary_refresh_mode_is_strict_with_configured_summary_slot() {
+        let config = crate::config::SemanticClonesConfig {
+            inference: crate::config::SemanticClonesInferenceBindings {
+                summary_generation: Some("summary_local".to_string()),
+                ..crate::config::SemanticClonesInferenceBindings::default()
+            },
+            ..crate::config::SemanticClonesConfig::default()
+        };
+
+        assert_eq!(
+            summary_refresh_mode(&config),
+            SemanticSummaryRefreshMode::ConfiguredStrict
+        );
     }
 }

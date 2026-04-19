@@ -4046,7 +4046,7 @@ fn choose_final_setup_options_renders_final_setup_prompt() {
         );
         let rendered = String::from_utf8(out).expect("utf8 output");
         assert!(rendered.contains("\nFinal setup\n"));
-        assert!(rendered.contains("And we made it to the last setup options!:"));
+        assert!(rendered.contains("And we made it to the last setup options 🎉"));
         assert!(rendered.contains("Use space to select, enter to confirm."));
         assert!(rendered.contains("1. Sync codebase (selected)"));
         assert!(rendered.contains("2. Import commit history (selected)"));

@@ -21,8 +21,9 @@ mod tests;
 
 #[allow(unused_imports)]
 pub(crate) use orchestrator::{
-    rebuild_current_symbol_clone_edges, rebuild_symbol_clone_edges,
-    rebuild_symbol_clone_edges_with_options, score_symbol_clone_edges_for_source_with_options,
+    rebuild_current_symbol_clone_edges, rebuild_current_symbol_clone_edges_with_options,
+    rebuild_symbol_clone_edges, rebuild_symbol_clone_edges_with_options,
+    score_symbol_clone_edges_for_source_with_options,
 };
 #[allow(unused_imports)]
 pub(crate) use persistence::delete_repo_current_symbol_clone_edges;

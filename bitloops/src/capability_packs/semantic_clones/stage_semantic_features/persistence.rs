@@ -24,7 +24,11 @@ pub(crate) async fn upsert_semantic_feature_rows(
         let next_input_hash =
             semantic::build_semantic_feature_input_hash(input, summary_provider.as_ref());
         let state = load_semantic_index_state(relational, &input.artefact_id).await?;
-        if !semantic::semantic_features_require_reindex(&state, &next_input_hash) {
+        if !semantic::semantic_features_require_reindex(
+            &state,
+            &next_input_hash,
+            summary_provider.requires_model_output(),
+        ) {
             stats.skipped += 1;
             continue;
         }

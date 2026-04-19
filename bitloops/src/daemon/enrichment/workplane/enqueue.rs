@@ -7,7 +7,8 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
-    SemanticClonesMailboxPayload, repo_backfill_dedupe_key,
+    REPO_BACKFILL_MAILBOX_CHUNK_SIZE, SemanticClonesMailboxPayload, repo_backfill_chunk_dedupe_key,
+    repo_backfill_dedupe_key,
 };
 use crate::host::runtime_store::{
     RepoSqliteRuntimeStore, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
@@ -111,20 +112,30 @@ pub(crate) fn enqueue_workplane_embedding_repo_backfill_job(
         EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
         EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     };
-    let dedupe_key = repo_backfill_dedupe_key(mailbox_name);
-    let _ = store.enqueue_semantic_embedding_mailbox_items(vec![
-        SemanticEmbeddingMailboxItemInsert::new(
-            target.init_session_id.clone(),
-            representation_kind.to_string(),
-            SemanticMailboxItemKind::RepoBackfill,
-            None,
-            Some(
-                serde_json::to_value(artefact_ids)
-                    .expect("embedding repo backfill payload should serialize"),
-            ),
-            Some(dedupe_key),
-        ),
-    ])?;
+    let use_chunk_dedupe_keys = artefact_ids.len() > REPO_BACKFILL_MAILBOX_CHUNK_SIZE;
+    let items = artefact_ids
+        .chunks(REPO_BACKFILL_MAILBOX_CHUNK_SIZE)
+        .map(|chunk| {
+            let chunk_ids = chunk.to_vec();
+            let dedupe_key = if use_chunk_dedupe_keys {
+                repo_backfill_chunk_dedupe_key(mailbox_name, &chunk_ids)
+            } else {
+                repo_backfill_dedupe_key(mailbox_name)
+            };
+            SemanticEmbeddingMailboxItemInsert::new(
+                target.init_session_id.clone(),
+                representation_kind.to_string(),
+                SemanticMailboxItemKind::RepoBackfill,
+                None,
+                Some(
+                    serde_json::to_value(chunk_ids)
+                        .expect("embedding repo backfill payload should serialize"),
+                ),
+                Some(dedupe_key),
+            )
+        })
+        .collect::<Vec<_>>();
+    let _ = store.enqueue_semantic_embedding_mailbox_items(items)?;
     Ok(())
 }
 

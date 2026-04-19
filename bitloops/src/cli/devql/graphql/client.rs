@@ -29,6 +29,10 @@ use crate::devql_transport::SlimCliRepoScope;
 use crate::host::devql::format_init_schema_summary;
 use crate::{api::DashboardServerConfig, daemon};
 
+const SYNC_FOLLOW_UP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+const SYNC_FOLLOW_UP_PENDING_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+const SYNC_FOLLOW_UP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum DaemonStartPolicy {
     AutoStart,
@@ -323,6 +327,7 @@ pub(crate) async fn watch_task_via_graphql(
     renderer.render(&initial_task)?;
 
     if initial_task.is_terminal() {
+        wait_for_sync_follow_up_work_if_needed(&initial_task).await?;
         renderer.finish()?;
         return handle_terminal_task(task_id.as_str(), initial_task).map(Some);
     }
@@ -354,6 +359,7 @@ pub(crate) async fn watch_task_via_graphql(
                 renderer.render(&latest_task)?;
                 match latest_task.status.to_ascii_lowercase().as_str() {
                     "completed" => {
+                        wait_for_sync_follow_up_work_if_needed(&latest_task).await?;
                         renderer.finish()?;
                         return Ok(Some(latest_task));
                     }
@@ -365,6 +371,64 @@ pub(crate) async fn watch_task_via_graphql(
                 }
             }
         }
+    }
+}
+
+async fn wait_for_sync_follow_up_work_if_needed(task: &TaskGraphqlRecord) -> Result<()> {
+    if !task.is_sync() || !task.status.eq_ignore_ascii_case("completed") {
+        return Ok(());
+    }
+
+    let started = std::time::Instant::now();
+    let mut poll_interval = tokio::time::interval(SYNC_FOLLOW_UP_POLL_INTERVAL);
+    let mut current_state_idle_since: Option<std::time::Instant> = None;
+    let mut observed_enrichment_activity = false;
+    loop {
+        let current_state = daemon::current_state_consumer_status(Some(task.repo_id.as_str()))?;
+        let enrichment = daemon::enrichment_status()?;
+        let current_state_idle = current_state.current_repo_run.is_none();
+        let enrichment_running = enrichment.state.running_jobs > 0;
+        let enrichment_pending = enrichment.state.pending_jobs > 0;
+        let enrichment_idle = !enrichment_pending && !enrichment_running;
+
+        if enrichment_running {
+            observed_enrichment_activity = true;
+        }
+
+        if current_state.state.failed_runs > 0 {
+            bail!(
+                "sync task completed but current-state follow-up work failed for repo `{}`",
+                task.repo_id
+            );
+        }
+        if enrichment.state.failed_jobs > 0 {
+            bail!(
+                "sync task completed but enrichment follow-up work failed after sync for repo `{}`",
+                task.repo_id
+            );
+        }
+        if current_state_idle {
+            let idle_since = current_state_idle_since.get_or_insert_with(std::time::Instant::now);
+            if enrichment_idle {
+                return Ok(());
+            }
+            if !observed_enrichment_activity
+                && !enrichment_running
+                && idle_since.elapsed() >= SYNC_FOLLOW_UP_PENDING_GRACE
+            {
+                return Ok(());
+            }
+        } else {
+            current_state_idle_since = None;
+        }
+        if started.elapsed() >= SYNC_FOLLOW_UP_TIMEOUT {
+            bail!(
+                "timed out waiting for sync follow-up work to finish for repo `{}`",
+                task.repo_id
+            );
+        }
+
+        poll_interval.tick().await;
     }
 }
 

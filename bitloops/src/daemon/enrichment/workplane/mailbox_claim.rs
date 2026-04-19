@@ -24,7 +24,8 @@ use super::mailbox_persistence::{
 use super::readiness::{mailbox_claim_readiness, mailbox_readiness_job};
 use super::sql::{sql_i64, sql_string_list};
 
-pub(crate) const SEMANTIC_MAILBOX_BATCH_SIZE: usize = 50;
+pub(crate) const SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE: usize = 10;
+pub(crate) const SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE: usize = 50;
 const SEMANTIC_MAILBOX_LEASE_SECS: u64 = 300;
 pub(crate) const WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT: usize = 32;
 
@@ -374,7 +375,7 @@ fn load_selected_summary_item_ids(
     let limit = if item_kind == SemanticMailboxItemKind::RepoBackfill {
         1
     } else {
-        SEMANTIC_MAILBOX_BATCH_SIZE
+        SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE
     };
     let mut stmt = conn.prepare(
         "SELECT item_id
@@ -413,7 +414,7 @@ fn load_selected_embedding_item_ids(
     let limit = if item_kind == SemanticMailboxItemKind::RepoBackfill {
         1
     } else {
-        SEMANTIC_MAILBOX_BATCH_SIZE
+        SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE
     };
     let mut stmt = conn.prepare(
         "SELECT item_id

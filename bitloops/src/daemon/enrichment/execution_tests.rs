@@ -1401,6 +1401,101 @@ async fn workplane_embedding_repo_backfill_job_processes_current_repo_inputs() {
 }
 
 #[tokio::test]
+async fn workplane_clone_rebuild_job_populates_current_clone_edges() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "clone-rebuild-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let embedding_job = WorkplaneJobRecord {
+        job_id: "workplane-repo-backfill-job-2".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        init_session_id: None,
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(2),
+                artefact_ids: None,
+            },
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+    let clone_rebuild_job = WorkplaneJobRecord {
+        job_id: "workplane-clone-rebuild-job-1".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        init_session_id: None,
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(1),
+                artefact_ids: None,
+            },
+        )
+        .expect("serialize clone rebuild payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let embedding_outcome = execute_workplane_job(&embedding_job).await;
+    assert!(embedding_outcome.error.is_none());
+    assert_eq!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id),
+        0,
+        "workplane embedding backfill should still defer clone rebuild until the dedicated job runs"
+    );
+
+    let rebuild_outcome = execute_workplane_job(&clone_rebuild_job).await;
+
+    assert!(rebuild_outcome.error.is_none());
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "clone rebuild job should populate current clone edges after deferred embeddings finish"
+    );
+}
+
+#[tokio::test]
 async fn workplane_summary_embedding_mailbox_job_enqueues_clone_rebuild_follow_up() {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(

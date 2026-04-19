@@ -1435,7 +1435,7 @@ fn load_embedding_mailbox_items(
 }
 
 #[test]
-fn summary_mailbox_batch_claim_leases_up_to_fifty_items_without_touching_embedding_rows() {
+fn summary_mailbox_batch_claim_leases_up_to_ten_items_without_touching_embedding_rows() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
     configure_summary_refresh_for_repo(&target);
@@ -1488,7 +1488,7 @@ fn summary_mailbox_batch_claim_leases_up_to_fifty_items_without_touching_embeddi
     .expect("claim summary mailbox batch")
     .expect("summary mailbox batch should be claimable");
 
-    assert_eq!(claimed.items.len(), 50);
+    assert_eq!(claimed.items.len(), 10);
     assert!(claimed.items.iter().all(|item| item.repo_id == repo_id));
     assert!(
         !claimed.lease_token.is_empty(),
@@ -1496,11 +1496,11 @@ fn summary_mailbox_batch_claim_leases_up_to_fifty_items_without_touching_embeddi
     );
     assert_eq!(
         load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Leased).len(),
-        50,
+        10,
     );
     assert_eq!(
         load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending).len(),
-        5,
+        45,
     );
     assert_eq!(
         load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending).len(),
@@ -2772,6 +2772,55 @@ async fn enqueue_semantic_summaries_keeps_larger_semantic_batches() {
         semantic_jobs
             .iter()
             .all(|artefact_id| !artefact_id.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn enqueue_repo_backfill_embedding_jobs_chunks_large_payloads_for_parallel_workers() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, _repo_id) = new_test_coordinator(&temp);
+    let artefact_ids = (0..55)
+        .map(|index| format!("artefact-{index:03}"))
+        .collect::<Vec<_>>();
+
+    coordinator
+        .enqueue_follow_up(FollowUpJob::RepoBackfillEmbeddings {
+            target,
+            artefact_ids,
+            representation_kind: EmbeddingRepresentationKind::Summary,
+        })
+        .await
+        .expect("enqueue chunked repo backfill embedding jobs");
+
+    let pending_items =
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending)
+            .into_iter()
+            .filter(|item| {
+                item.representation_kind == EmbeddingRepresentationKind::Summary.to_string()
+            })
+            .collect::<Vec<_>>();
+
+    assert_eq!(pending_items.len(), 2);
+    assert!(pending_items.iter().all(|item| {
+        item.item_kind == SemanticMailboxItemKind::RepoBackfill
+            && item
+                .payload_json
+                .as_ref()
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|artefact_ids| artefact_ids.len() <= 50)
+    }));
+    assert_eq!(
+        pending_items
+            .iter()
+            .map(|item| {
+                item.payload_json
+                    .as_ref()
+                    .and_then(serde_json::Value::as_array)
+                    .map(|artefact_ids| artefact_ids.len() as u64)
+                    .unwrap_or_default()
+            })
+            .sum::<u64>(),
+        55
     );
 }
 

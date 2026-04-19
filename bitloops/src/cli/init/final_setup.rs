@@ -156,7 +156,7 @@ fn prompt_final_setup_selection_with_text_input(
     writeln!(out)?;
     writeln!(out, "Final setup")?;
     writeln!(out)?;
-    writeln!(out, "And we made it to the last setup options!:")?;
+    writeln!(out, "And we made it to the last setup options 🎉")?;
     writeln!(
         out,
         "{}",
@@ -438,7 +438,7 @@ fn render_follow_up_picker(
     let mut lines = vec![
         "Final setup".to_string(),
         String::new(),
-        "And we made it to the last setup options!:".to_string(),
+        "And we made it to the last setup options 🎉".to_string(),
         style_follow_up_hint("Use space to select, enter to confirm."),
         String::new(),
     ];

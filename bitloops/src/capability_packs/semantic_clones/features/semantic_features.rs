@@ -100,6 +100,7 @@ pub struct SemanticFeatureRows {
 pub struct SemanticFeatureIndexState {
     pub semantics_hash: Option<String>,
     pub features_hash: Option<String>,
+    pub semantics_llm_enriched: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -312,13 +313,15 @@ pub fn build_semantic_feature_input_hash(
 }
 
 // Incremental indexing rule: recompute enrichment when the persisted fingerprint no longer matches
-// the current symbol inputs, summary provider contract, or pipeline version.
+// the current symbol inputs, summary provider contract, pipeline version, or strict LLM contract.
 pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
     next_input_hash: &str,
+    requires_model_output: bool,
 ) -> bool {
     state.semantics_hash.as_deref() != Some(next_input_hash)
         || state.features_hash.as_deref() != Some(next_input_hash)
+        || (requires_model_output && !state.semantics_llm_enriched)
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -511,11 +514,40 @@ mod tests {
         let state = SemanticFeatureIndexState {
             semantics_hash: Some(existing_hash.clone()),
             features_hash: Some(existing_hash),
+            semantics_llm_enriched: false,
         };
 
         assert!(
-            semantic_features_require_reindex(&state, &next_hash),
+            semantic_features_require_reindex(&state, &next_hash, false),
             "changing the summary provider should force semantic rows to be rebuilt"
+        );
+    }
+
+    #[test]
+    fn semantic_features_require_reindex_when_strict_summary_row_lacks_model_output() {
+        let next_hash = "hash-1".to_string();
+        let missing_model_output = SemanticFeatureIndexState {
+            semantics_hash: Some(next_hash.clone()),
+            features_hash: Some(next_hash.clone()),
+            semantics_llm_enriched: false,
+        };
+        let model_backed = SemanticFeatureIndexState {
+            semantics_hash: Some(next_hash.clone()),
+            features_hash: Some(next_hash.clone()),
+            semantics_llm_enriched: true,
+        };
+
+        assert!(
+            semantic_features_require_reindex(&missing_model_output, &next_hash, true),
+            "strict summary mode should retry template-only semantic rows"
+        );
+        assert!(
+            !semantic_features_require_reindex(&missing_model_output, &next_hash, false),
+            "deterministic summary mode should not force a rebuild when hashes still match"
+        );
+        assert!(
+            !semantic_features_require_reindex(&model_backed, &next_hash, true),
+            "strict summary mode should keep model-backed rows when hashes still match"
         );
     }
 

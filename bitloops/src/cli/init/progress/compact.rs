@@ -67,7 +67,7 @@ pub(crate) fn render_compact_lane(
             &status_parts.join(" | "),
             render_context
                 .terminal_width
-                .map(|width| width.saturating_sub(2)),
+                .map(|width| width.saturating_sub(3)),
         )
     ));
     lines
@@ -266,7 +266,9 @@ fn compact_count_column(value: u64, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{compact_lane_detail, compact_queue_status_text};
+    use super::{
+        LaneRenderContext, compact_lane_detail, compact_queue_status_text, render_compact_lane,
+    };
     use crate::cli::devql::graphql::{
         RuntimeInitLaneGraphqlRecord, RuntimeInitLaneProgressGraphqlRecord,
         RuntimeInitLaneQueueGraphqlRecord,
@@ -362,6 +364,57 @@ mod tests {
         assert_eq!(
             compact_lane_detail(INIT_SUMMARIES_SECTION_TITLE, &lane),
             Some(" 25% ·  25 / 100 generated ·  10 persisted".to_string())
+        );
+    }
+
+    #[test]
+    fn compact_lane_status_line_respects_terminal_width_budget() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "running".to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: Some("Generating summaries".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 132,
+                in_memory_completed: 30,
+                total: 285,
+                remaining: 123,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord {
+                queued: 0,
+                running: 918,
+                failed: 0,
+            },
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 918,
+            failed_count: 0,
+            completed_count: 132,
+        };
+        let render_context = LaneRenderContext {
+            spinner: "⠏",
+            tick: "✓",
+            spinner_index: 0,
+            terminal_width: Some(80),
+        };
+
+        let lines = render_compact_lane(
+            INIT_SUMMARIES_SECTION_TITLE,
+            &lane,
+            "Generating summaries",
+            None,
+            None,
+            22,
+            &render_context,
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[1].chars().count() <= 80,
+            "status line exceeded terminal width: `{}`",
+            lines[1]
         );
     }
 }

@@ -41,7 +41,8 @@ pub(crate) use job_completion::{
 #[cfg(test)]
 pub(crate) use jobs::load_workplane_jobs_by_status;
 pub(crate) use mailbox_claim::{
-    ClaimedEmbeddingMailboxBatch, ClaimedSummaryMailboxBatch, SEMANTIC_MAILBOX_BATCH_SIZE,
+    ClaimedEmbeddingMailboxBatch, ClaimedSummaryMailboxBatch,
+    SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE, SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE,
     claim_embedding_mailbox_batch, claim_summary_mailbox_batch,
 };
 pub(crate) use mailbox_persistence::{
