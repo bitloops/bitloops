@@ -14,7 +14,7 @@ use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMB
 use crate::capability_packs::semantic_clones::{
     build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
     build_semantic_persist_rows_sql, ensure_required_llm_summary_output,
-    load_semantic_feature_inputs_for_current_repo, parse_semantic_index_state_rows,
+    parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -28,7 +28,9 @@ use super::super::semantic_writer::{CommitSummaryBatchRequest, SemanticBatchRepo
 use super::super::workplane::{
     ClaimedSummaryMailboxBatch, SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE, fallback_repo_identity,
 };
-use super::helpers::{dedupe_inputs_by_artefact_id, payload_artefact_ids_from_value};
+use super::helpers::{
+    dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
+};
 
 pub(crate) struct PreparedSummaryMailboxBatch {
     pub commit: CommitSummaryBatchRequest,
@@ -58,10 +60,38 @@ where
         SummaryProviderMode::ConfiguredStrict,
     )?;
 
-    let current_inputs = load_semantic_feature_inputs_for_current_repo(
+    let mut explicit_current_artefact_ids = Vec::new();
+    let mut requires_full_current_inputs = false;
+    for item in &batch.items {
+        match item.item_kind {
+            SemanticMailboxItemKind::Artefact => {
+                if let Some(artefact_id) = item.artefact_id.as_ref() {
+                    explicit_current_artefact_ids.push(artefact_id.clone());
+                }
+            }
+            SemanticMailboxItemKind::RepoBackfill => {
+                let requested_ids = item
+                    .payload_json
+                    .as_ref()
+                    .map(payload_artefact_ids_from_value)
+                    .unwrap_or_default();
+                if requested_ids.is_empty() {
+                    requires_full_current_inputs = true;
+                } else {
+                    explicit_current_artefact_ids.extend(requested_ids);
+                }
+            }
+        }
+    }
+    let current_inputs = load_current_semantic_inputs(
         &relational,
         &batch.repo_root,
         &batch.repo_id,
+        if requires_full_current_inputs {
+            None
+        } else {
+            Some(explicit_current_artefact_ids.as_slice())
+        },
     )
     .await?;
     let current_by_artefact = current_inputs
@@ -97,11 +127,9 @@ where
                 let mut selected = if requested_ids.is_empty() {
                     current_inputs.clone()
                 } else {
-                    let requested_ids = requested_ids.into_iter().collect::<BTreeSet<_>>();
-                    current_inputs
+                    requested_ids
                         .iter()
-                        .filter(|input| requested_ids.contains(&input.artefact_id))
-                        .cloned()
+                        .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
                         .collect::<Vec<_>>()
                 };
                 if selected.len() > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE {

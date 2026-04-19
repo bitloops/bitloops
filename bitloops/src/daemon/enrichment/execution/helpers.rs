@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::{
     clear_repo_active_embedding_setup, clear_repo_symbol_embedding_rows,
+    load_semantic_feature_inputs_for_current_artefacts,
+    load_semantic_feature_inputs_for_current_repo,
 };
 use crate::host::devql::RelationalStorage;
 
@@ -34,5 +37,31 @@ pub(crate) fn payload_artefact_ids_from_value(value: &serde_json::Value) -> Vec<
             .map(str::to_string)
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+pub(crate) async fn load_current_semantic_inputs(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+    artefact_ids: Option<&[String]>,
+) -> Result<Vec<SemanticFeatureInput>> {
+    match artefact_ids {
+        Some(artefact_ids) => {
+            let mut seen = BTreeSet::new();
+            let unique_ids = artefact_ids
+                .iter()
+                .filter(|artefact_id| seen.insert((*artefact_id).clone()))
+                .cloned()
+                .collect::<Vec<_>>();
+            load_semantic_feature_inputs_for_current_artefacts(
+                relational,
+                repo_root,
+                repo_id,
+                &unique_ids,
+            )
+            .await
+        }
+        None => load_semantic_feature_inputs_for_current_repo(relational, repo_root, repo_id).await,
     }
 }

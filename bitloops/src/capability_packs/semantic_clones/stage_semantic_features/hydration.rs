@@ -6,9 +6,10 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::storage::{
-    build_current_repo_artefacts_sql, build_semantic_get_artefacts_by_ids_sql,
-    build_semantic_get_artefacts_sql, build_semantic_get_dependencies_sql,
-    parse_semantic_artefact_rows, parse_semantic_dependency_rows,
+    build_current_repo_artefacts_by_ids_sql, build_current_repo_artefacts_sql,
+    build_semantic_get_artefacts_by_ids_sql, build_semantic_get_artefacts_sql,
+    build_semantic_get_dependencies_sql, parse_semantic_artefact_rows,
+    parse_semantic_dependency_rows,
 };
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::checkpoints::strategy::manual_commit::run_git;
@@ -119,40 +120,10 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
     repo_root: &Path,
     repo_id: &str,
 ) -> Result<Vec<semantic::SemanticFeatureInput>> {
-    let current_paths = load_current_projection_path_states(relational, repo_id).await?;
-    let current_cfg = current_projection_cfg(repo_root, repo_id);
-    let mut hydrated_inputs = Vec::new();
-
-    for state in &current_paths {
-        let Some(extraction) = lookup_cached_content(
-            relational,
-            &state.effective_content_id,
-            &state.language,
-            &state.extraction_fingerprint,
-            &state.parser_version,
-            &state.extractor_version,
-        )
-        .await?
-        else {
-            continue;
-        };
-        if extraction.parse_status == PARSE_STATUS_DECODE_ERROR {
-            continue;
-        }
-
-        let content = load_current_projection_content(repo_root, state)?;
-        let desired = desired_file_state_from_current_projection(state);
-        let artefacts = pre_stage_artefacts_for_projection(&current_cfg, &desired, &extraction)?;
-        let dependencies =
-            pre_stage_dependencies_for_projection(&current_cfg, &desired, &extraction)?;
-        hydrated_inputs.extend(
-            semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
-                &artefacts,
-                &dependencies,
-                &content,
-            ),
-        );
-    }
+    let current_paths = load_current_projection_path_states(relational, repo_id, None).await?;
+    let mut hydrated_inputs =
+        hydrate_current_projection_inputs(relational, repo_root, repo_id, &current_paths, None)
+            .await?;
 
     if !hydrated_inputs.is_empty() {
         hydrated_inputs.sort_by(|left, right| {
@@ -167,6 +138,70 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_repo(
 
     load_semantic_feature_inputs_for_current_repo_from_historical(relational, repo_root, repo_id)
         .await
+}
+
+pub(crate) async fn load_semantic_feature_inputs_for_current_artefacts(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+    artefact_ids: &[String],
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
+    if artefact_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let requested_order = artefact_ids
+        .iter()
+        .enumerate()
+        .map(|(index, artefact_id)| (artefact_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let requested_ids = artefact_ids.iter().cloned().collect::<BTreeSet<_>>();
+
+    let target_rows = relational
+        .query_rows(&build_current_repo_artefacts_by_ids_sql(
+            repo_id,
+            artefact_ids,
+        ))
+        .await?;
+    let target_artefacts = parse_semantic_artefact_rows(target_rows)?;
+    if target_artefacts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let current_paths = target_artefacts
+        .iter()
+        .map(|row| row.path.clone())
+        .collect::<BTreeSet<_>>();
+    let projection_states =
+        load_current_projection_path_states(relational, repo_id, Some(&current_paths)).await?;
+    let mut hydrated_inputs = hydrate_current_projection_inputs(
+        relational,
+        repo_root,
+        repo_id,
+        &projection_states,
+        Some(&requested_ids),
+    )
+    .await?;
+
+    if !hydrated_inputs.is_empty() {
+        hydrated_inputs.sort_by_key(|input| {
+            requested_order
+                .get(&input.artefact_id)
+                .copied()
+                .unwrap_or(usize::MAX)
+        });
+        hydrated_inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
+        return Ok(hydrated_inputs);
+    }
+
+    hydrate_semantic_feature_inputs(
+        relational,
+        repo_root,
+        target_artefacts,
+        &requested_ids,
+        &requested_order,
+    )
+    .await
 }
 
 async fn hydrate_semantic_feature_inputs(
@@ -208,6 +243,56 @@ async fn hydrate_semantic_feature_inputs(
             .unwrap_or(usize::MAX)
     });
     hydrated_inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
+    Ok(hydrated_inputs)
+}
+
+async fn hydrate_current_projection_inputs(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+    states: &[CurrentProjectionPathState],
+    requested_ids: Option<&BTreeSet<String>>,
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
+    let current_cfg = current_projection_cfg(repo_root, repo_id);
+    let mut hydrated_inputs = Vec::new();
+
+    for state in states {
+        let Some(extraction) = lookup_cached_content(
+            relational,
+            &state.effective_content_id,
+            &state.language,
+            &state.extraction_fingerprint,
+            &state.parser_version,
+            &state.extractor_version,
+        )
+        .await?
+        else {
+            continue;
+        };
+        if extraction.parse_status == PARSE_STATUS_DECODE_ERROR {
+            continue;
+        }
+
+        let content = load_current_projection_content(repo_root, state)?;
+        let desired = desired_file_state_from_current_projection(state);
+        let artefacts = pre_stage_artefacts_for_projection(&current_cfg, &desired, &extraction)?;
+        let dependencies =
+            pre_stage_dependencies_for_projection(&current_cfg, &desired, &extraction)?;
+        let inputs = semantic::build_semantic_feature_inputs_from_artefacts_with_dependencies(
+            &artefacts,
+            &dependencies,
+            &content,
+        );
+        match requested_ids {
+            Some(requested_ids) => hydrated_inputs.extend(
+                inputs
+                    .into_iter()
+                    .filter(|input| requested_ids.contains(&input.artefact_id)),
+            ),
+            None => hydrated_inputs.extend(inputs),
+        }
+    }
+
     Ok(hydrated_inputs)
 }
 
@@ -282,14 +367,28 @@ async fn load_semantic_feature_inputs_for_current_repo_from_historical(
 async fn load_current_projection_path_states(
     relational: &RelationalStorage,
     repo_id: &str,
+    paths: Option<&BTreeSet<String>>,
 ) -> Result<Vec<CurrentProjectionPathState>> {
+    let path_filter = match paths {
+        Some(paths) if paths.is_empty() => " AND 1 = 0".to_string(),
+        Some(paths) => format!(
+            " AND path IN ({})",
+            paths
+                .iter()
+                .map(|path| format!("'{}'", esc_pg(path)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        None => String::new(),
+    };
     let rows = relational
         .query_rows(&format!(
             "SELECT path, language, extraction_fingerprint, head_content_id, index_content_id, worktree_content_id, effective_content_id, effective_source, parser_version, extractor_version \
 FROM current_file_state \
-WHERE repo_id = '{repo_id}' AND analysis_mode = 'code' \
+WHERE repo_id = '{repo_id}' AND analysis_mode = 'code'{path_filter} \
 ORDER BY path",
             repo_id = esc_pg(repo_id),
+            path_filter = path_filter,
         ))
         .await?;
 

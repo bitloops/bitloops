@@ -295,6 +295,30 @@ ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.s
     )
 }
 
+pub(super) fn build_current_repo_artefacts_by_ids_sql(
+    repo_id: &str,
+    artefact_ids: &[String],
+) -> String {
+    let artefact_ids = artefact_ids
+        .iter()
+        .map(|artefact_id| format!("'{}'", esc_pg(artefact_id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "SELECT current.artefact_id, current.symbol_id, current.repo_id, current.content_id AS blob_sha, current.path, current.language, \
+COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol')) AS canonical_kind, \
+COALESCE(current.language_kind, COALESCE(current.canonical_kind, 'symbol')) AS language_kind, \
+COALESCE(current.symbol_fqn, current.path) AS symbol_fqn, current.parent_artefact_id, current.start_line, current.end_line, current.start_byte, current.end_byte, current.signature, current.modifiers, current.docstring, a.content_hash \
+FROM artefacts_current current \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
+LEFT JOIN artefacts a ON a.repo_id = current.repo_id AND a.artefact_id = current.artefact_id \
+WHERE current.repo_id = '{repo_id}' AND state.analysis_mode = 'code' AND current.artefact_id IN ({artefact_ids}) \
+ORDER BY current.path, current.start_line, current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id",
+        repo_id = esc_pg(repo_id),
+    )
+}
+
 pub(super) fn build_semantic_get_dependencies_sql(
     repo_id: &str,
     blob_sha: &str,
@@ -814,6 +838,18 @@ mod tests {
         assert!(sql.contains("LEFT JOIN artefacts a ON a.repo_id = current.repo_id"));
         assert!(sql.contains("WHERE current.repo_id = 'repo''1'"));
         assert!(!sql.contains("WHERE artefact_id IN"));
+    }
+
+    #[test]
+    fn semantic_feature_persistence_builds_current_repo_artefacts_by_ids_sql_with_escaped_values() {
+        let sql = build_current_repo_artefacts_by_ids_sql(
+            "repo'1",
+            &["artefact'1".to_string(), "artefact-2".to_string()],
+        );
+        assert!(sql.contains("FROM artefacts_current current"));
+        assert!(sql.contains("state.analysis_mode = 'code'"));
+        assert!(sql.contains("current.repo_id = 'repo''1'"));
+        assert!(sql.contains("current.artefact_id IN ('artefact''1', 'artefact-2')"));
     }
 
     #[test]

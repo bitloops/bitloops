@@ -10,7 +10,10 @@ use crate::host::devql::{
     RelationalStorage, build_capability_host, execute_ingest_with_observer, execute_sync,
     resolve_repo_identity,
 };
-use crate::host::runtime_store::{WorkplaneJobRecord, WorkplaneJobStatus};
+use crate::host::runtime_store::{
+    SemanticEmbeddingMailboxItemRecord, SemanticMailboxItemKind, SemanticMailboxItemStatus,
+    WorkplaneJobRecord, WorkplaneJobStatus,
+};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1397,6 +1400,87 @@ async fn workplane_embedding_repo_backfill_job_processes_current_repo_inputs() {
         load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id),
         0,
         "workplane embedding backfill should defer clone rebuild to the follow-up job"
+    );
+}
+
+#[tokio::test]
+async fn prepare_embedding_mailbox_batch_with_explicit_repo_backfill_ids_skips_unrelated_current_paths()
+ {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let requested = inputs.first().expect("at least one current semantic input");
+    let unrelated = inputs
+        .iter()
+        .find(|input| input.path != requested.path)
+        .expect("fixture should include a second path");
+
+    relational
+        .exec(&format!(
+            "UPDATE current_file_state \
+SET head_content_id = 'missing-explicit-backfill-blob' \
+WHERE repo_id = '{}' AND path = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::esc_pg(&unrelated.path),
+        ))
+        .await
+        .expect("break unrelated current projection path");
+
+    super::helpers::load_current_semantic_inputs(&relational, repo.path(), &cfg.repo.repo_id, None)
+        .await
+        .expect_err("full current hydration should still fail on the broken unrelated path");
+
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "explicit-repo-backfill-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "explicit-repo-backfill-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::json!([requested.artefact_id.clone()])),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("explicit-repo-backfill-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("explicit repo backfill batch should only hydrate the requested current artefact");
+
+    assert_eq!(prepared.expanded_count, 1);
+    assert!(prepared.commit.replacement_backfill_item.is_none());
+    assert!(
+        !prepared.commit.embedding_statements.is_empty(),
+        "requested artefact should still produce embedding work"
     );
 }
 
