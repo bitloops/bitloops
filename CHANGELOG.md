@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [0.0.16] - 2026-04-17
 
+### Added
+
+- **Dashboard interaction subscriptions for live refresh**: the dashboard GraphQL surface now exposes `interactionUpdates` over `/devql/dashboard/ws`, including repo-scoped session and turn counts plus the latest session/turn ids and update timestamps. The dashboard subscription stream uses a lightweight interaction-spool change snapshot so clients can automatically refresh when new sessions or turns arrive without falling back to full-page polling.
+
 ### Changed
 
 - **DevQL sync now stops at capability-event enqueue instead of waiting for semantic-clones projection**: sync now completes after current-state writes, touched-path local-edge reconciliation, and capability-event enqueue, and no longer runs semantic-clones projection, embedding refresh, or clone rebuild inline from the sync orchestrator. Semantic-clones current rows may now be briefly empty or stale for affected paths until the deferred pipeline drains, while sync observability now splits `materialisation_total`, `current_edge_reconcile_total`, and `capability_event_enqueue_total` so downstream semantic backlog is no longer reported as sync time.

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use chrono::{DateTime, SecondsFormat, Utc};
 use tokio::task;
 
@@ -6,7 +8,7 @@ use crate::api::dashboard_types::{
     DashboardInteractionCommitAuthorBucket, DashboardInteractionFilterInput,
     DashboardInteractionKpis, DashboardInteractionSearchInput, DashboardInteractionSession,
     DashboardInteractionSessionDetail, DashboardInteractionSessionSearchHit,
-    DashboardInteractionTurnSearchHit,
+    DashboardInteractionTurnSearchHit, DashboardInteractionUpdate,
 };
 use crate::api::{API_DEFAULT_PAGE_LIMIT, ApiError, ApiPage, DashboardState, paginate};
 use crate::host::interactions::query;
@@ -136,6 +138,32 @@ pub(in crate::api) async fn load_dashboard_interaction_kpis(
         .map_err(|err| ApiError::internal(format!("failed to join interaction KPI task: {err:#}")))?
         .map(|kpis| DashboardInteractionKpis::from_domain(&kpis))
         .map_err(|err| ApiError::internal(format!("failed to load interaction KPIs: {err:#}")))
+}
+
+pub(in crate::api) async fn load_dashboard_interaction_update(
+    state: &DashboardState,
+    repo_id: Option<String>,
+) -> std::result::Result<DashboardInteractionUpdate, ApiError> {
+    let repo_root = resolve_dashboard_repo_root(state, repo_id.as_deref()).await?;
+    load_dashboard_interaction_update_for_repo_root(repo_root).await
+}
+
+pub(in crate::api) async fn load_dashboard_interaction_update_for_repo_root(
+    repo_root: PathBuf,
+) -> std::result::Result<DashboardInteractionUpdate, ApiError> {
+    task::spawn_blocking(move || query::interaction_change_snapshot(&repo_root))
+        .await
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed to join interaction update snapshot task: {err:#}"
+            ))
+        })?
+        .map(|snapshot| DashboardInteractionUpdate::from_domain(&snapshot))
+        .map_err(|err| {
+            ApiError::internal(format!(
+                "failed to load interaction update snapshot: {err:#}"
+            ))
+        })
 }
 
 pub(in crate::api) async fn load_dashboard_interaction_sessions(

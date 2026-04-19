@@ -1465,44 +1465,46 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
 
-    with_temp_app_dirs(&app_dirs, false, true, || {
-        let mut out = Vec::new();
-        run_with_writer_for_project_root(
-            InitArgs {
-                install_default_daemon: false,
-                force: true,
-                disable_bitloops_skill: false,
-                agent: vec![AGENT_GEMINI.to_string()],
-                telemetry: None,
-                no_telemetry: false,
-                skip_baseline: true,
-                sync: Some(false),
-                ingest: Some(false),
-                backfill: None,
-                exclude: Vec::new(),
-                exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
-                no_embeddings: false,
-                embeddings_gateway_url: None,
-                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
-            },
-            repo.path(),
-            &mut out,
-            None,
-        )
-        .expect("run init");
+    with_process_state(Some(repo.path()), &[], || {
+        with_temp_app_dirs(&app_dirs, false, true, || {
+            let mut out = Vec::new();
+            run_with_writer_for_project_root(
+                InitArgs {
+                    install_default_daemon: false,
+                    force: true,
+                    disable_bitloops_skill: false,
+                    agent: vec![AGENT_GEMINI.to_string()],
+                    telemetry: None,
+                    no_telemetry: false,
+                    skip_baseline: true,
+                    sync: Some(false),
+                    ingest: Some(false),
+                    backfill: None,
+                    exclude: Vec::new(),
+                    exclude_from: Vec::new(),
+                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                    no_embeddings: false,
+                    embeddings_gateway_url: None,
+                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                },
+                repo.path(),
+                &mut out,
+                None,
+            )
+            .expect("run init");
 
-        let gemini_md =
-            std::fs::read_to_string(repo.path().join("GEMINI.md")).expect("read GEMINI.md");
-        assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
-        assert!(
-            repo.path()
-                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
-                .exists()
-        );
-        let exclude =
-            std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
+            let gemini_md =
+                std::fs::read_to_string(repo.path().join("GEMINI.md")).expect("read GEMINI.md");
+            assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+            assert!(
+                repo.path()
+                    .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                    .exists()
+            );
+            let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
+                .expect("read exclude");
+            assert!(exclude.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
+        });
     });
 }
 

@@ -1,5 +1,6 @@
 use super::dashboard_schema::{
     dashboard_graphql_handler, dashboard_graphql_playground_handler, dashboard_graphql_sdl_handler,
+    dashboard_graphql_ws_handler,
 };
 use super::handlers::handle_dashboard_git_blob;
 use super::runtime_schema::{
@@ -216,6 +217,7 @@ pub(super) fn build_dashboard_router(state: DashboardState) -> Router {
             get(dashboard_graphql_playground_handler),
         )
         .route("/devql/dashboard/sdl", get(dashboard_graphql_sdl_handler))
+        .route("/devql/dashboard/ws", get(dashboard_graphql_ws_handler))
         .route(
             "/devql/dashboard/blobs/{repo_id}/{blob_sha}",
             get(handle_dashboard_git_blob),

@@ -2,9 +2,10 @@ use async_graphql::{InputObject, SimpleObject};
 
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::interactions::query::{
-    InteractionActorBucket, InteractionAgentBucket, InteractionCommitAuthorBucket, InteractionKpis,
-    InteractionLinkedCheckpoint, InteractionSessionDetail, InteractionSessionSearchHit,
-    InteractionSessionSummary, InteractionTurnSearchHit, InteractionTurnSummary,
+    InteractionActorBucket, InteractionAgentBucket, InteractionChangeSnapshot,
+    InteractionCommitAuthorBucket, InteractionKpis, InteractionLinkedCheckpoint,
+    InteractionSessionDetail, InteractionSessionSearchHit, InteractionSessionSummary,
+    InteractionTurnSearchHit, InteractionTurnSummary,
 };
 use crate::host::interactions::types::{InteractionEvent, InteractionToolUse};
 
@@ -244,6 +245,17 @@ pub(crate) struct DashboardInteractionSession {
     pub(crate) tool_uses: Vec<DashboardInteractionToolUse>,
     pub(crate) linked_checkpoints: Vec<DashboardInteractionCommitAuthor>,
     pub(crate) latest_commit_author: Option<DashboardInteractionCommitAuthor>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, SimpleObject)]
+pub(crate) struct DashboardInteractionUpdate {
+    pub(crate) repo_id: String,
+    pub(crate) session_count: usize,
+    pub(crate) turn_count: usize,
+    pub(crate) latest_session_id: Option<String>,
+    pub(crate) latest_session_updated_at: Option<String>,
+    pub(crate) latest_turn_id: Option<String>,
+    pub(crate) latest_turn_updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -540,6 +552,20 @@ impl DashboardInteractionTurnSearchHit {
             session: DashboardInteractionSession::from_summary(&hit.session),
             score: hit.score,
             matched_fields: hit.matched_fields.clone(),
+        }
+    }
+}
+
+impl DashboardInteractionUpdate {
+    pub(crate) fn from_domain(snapshot: &InteractionChangeSnapshot) -> Self {
+        Self {
+            repo_id: snapshot.repo_id.clone(),
+            session_count: snapshot.session_count,
+            turn_count: snapshot.turn_count,
+            latest_session_id: snapshot.latest_session_id.clone(),
+            latest_session_updated_at: snapshot.latest_session_updated_at.clone(),
+            latest_turn_id: snapshot.latest_turn_id.clone(),
+            latest_turn_updated_at: snapshot.latest_turn_updated_at.clone(),
         }
     }
 }
