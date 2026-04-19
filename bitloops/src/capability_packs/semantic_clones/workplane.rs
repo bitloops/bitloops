@@ -10,7 +10,7 @@ use crate::config::{
 use crate::host::capability_host::gateways::CapabilityWorkplaneGateway;
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
-use super::runtime_config::{embedding_slot_for_representation, resolve_selected_summary_slot};
+use super::runtime_config::embedding_slot_for_representation;
 use super::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
@@ -141,8 +141,7 @@ fn resolve_effective_mailbox_intent_from_status(
             .map(|status| status.intent_active)
             .unwrap_or(false)
     };
-    let summary_live = config.summary_mode != SemanticSummaryMode::Off
-        && resolve_selected_summary_slot(config).is_some();
+    let summary_live = config.summary_mode != SemanticSummaryMode::Off;
     let code_live = config.embedding_mode != SemanticCloneEmbeddingMode::Off
         && embedding_slot_for_representation(config, EmbeddingRepresentationKind::Code).is_some();
     let summary_embedding_live = config.embedding_mode != SemanticCloneEmbeddingMode::Off
@@ -150,8 +149,8 @@ fn resolve_effective_mailbox_intent_from_status(
             .is_some();
 
     SemanticClonesMailboxIntentState {
-        // Summary refresh jobs require a live summary-generation slot. Repo intent alone should
-        // not seed work that the daemon cannot ever claim.
+        // Summary refresh can still produce deterministic summaries when no text-generation slot
+        // is configured, so auto mode keeps the mailbox live.
         summary_refresh_active: summary_live,
         code_embeddings_active: repo_intent(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX) || code_live,
         summary_embeddings_active: repo_intent(SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX)
@@ -259,15 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn summary_refresh_requires_a_configured_summary_slot() {
+    fn summary_refresh_uses_deterministic_fallback_when_summary_mode_is_auto() {
         let intent = resolve_effective_mailbox_intent_from_status(
             &status_with_active_intents(),
             &SemanticClonesConfig::default(),
         );
 
         assert!(
-            !intent.summary_refresh_active,
-            "repo intent alone should not activate summary refresh without a live summary slot"
+            intent.summary_refresh_active,
+            "auto summary mode should keep summary refresh active when deterministic fallback is available"
         );
         assert!(intent.code_embeddings_active);
         assert!(intent.summary_embeddings_active);
@@ -275,13 +274,13 @@ mod tests {
     }
 
     #[test]
-    fn summary_refresh_activates_once_summary_generation_is_configured() {
+    fn summary_refresh_deactivates_when_summary_mode_is_off() {
         let mut config = SemanticClonesConfig::default();
-        config.inference.summary_generation = Some("summary_local".to_string());
+        config.summary_mode = SemanticSummaryMode::Off;
 
         let intent =
             resolve_effective_mailbox_intent_from_status(&status_with_active_intents(), &config);
 
-        assert!(intent.summary_refresh_active);
+        assert!(!intent.summary_refresh_active);
     }
 }

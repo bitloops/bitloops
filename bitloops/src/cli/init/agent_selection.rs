@@ -94,7 +94,8 @@ pub fn detect_or_select_agent(
                     "no supported agents configured in the discovered Bitloops repo policy; rerun `bitloops init` interactively or pass `--agent`"
                 );
             }
-            PolicySupportedAgents::Unconfigured | PolicySupportedAgents::PolicyWithoutSupported => {}
+            PolicySupportedAgents::Unconfigured | PolicySupportedAgents::PolicyWithoutSupported => {
+            }
         }
         if !detected.is_empty() {
             return Ok(InitAgentSelection {

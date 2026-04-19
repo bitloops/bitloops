@@ -5,6 +5,9 @@ use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
+use crate::capability_packs::semantic_clones::runtime_config::{
+    resolve_selected_summary_slot, resolve_semantic_clones_config,
+};
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
@@ -251,6 +254,20 @@ fn resolve_mailbox_provider_readiness(
     let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
         .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
+    if text_generation
+        && job.capability_id == SEMANTIC_CLONES_CAPABILITY_ID
+        && job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+        && slot_name == SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT
+    {
+        let semantic_clones = resolve_semantic_clones_config(
+            &capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID),
+        );
+        if semantic_clones.summary_mode != crate::config::SemanticSummaryMode::Off
+            && resolve_selected_summary_slot(&semantic_clones).is_none()
+        {
+            return Ok(WorkplaneMailboxReadiness::default());
+        }
+    }
     let inference = capability_host.inference_for_capability(&job.capability_id);
     let Some(_slot) = inference.describe(slot_name) else {
         return Ok(WorkplaneMailboxReadiness {

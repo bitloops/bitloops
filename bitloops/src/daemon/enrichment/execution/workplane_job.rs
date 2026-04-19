@@ -8,7 +8,7 @@ use crate::capability_packs::semantic_clones::ingesters::{
     SemanticSummaryRefreshMode, SymbolEmbeddingsRefreshPayload,
 };
 use crate::capability_packs::semantic_clones::runtime_config::{
-    embeddings_enabled, resolve_semantic_clones_config,
+    embeddings_enabled, resolve_selected_summary_slot, resolve_semantic_clones_config,
 };
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
@@ -36,6 +36,16 @@ use super::loaders::{load_workplane_embedding_refresh_inputs, load_workplane_job
 use super::workplane_plan::{
     build_embedding_refresh_workplane_plan, build_summary_refresh_workplane_plan,
 };
+
+fn summary_refresh_mode(
+    semantic_clones: &crate::config::SemanticClonesConfig,
+) -> SemanticSummaryRefreshMode {
+    if resolve_selected_summary_slot(semantic_clones).is_some() {
+        SemanticSummaryRefreshMode::ConfiguredStrict
+    } else {
+        SemanticSummaryRefreshMode::DeterministicOnly
+    }
+}
 
 pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecutionOutcome {
     let repo = resolve_repo_identity(&job.repo_root)
@@ -89,7 +99,7 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                 path: None,
                 content_id: None,
                 inputs: plan.inputs,
-                mode: SemanticSummaryRefreshMode::ConfiguredStrict,
+                mode: summary_refresh_mode(&semantic_clones),
             };
             match capability_host
                 .invoke_ingester_with_relational(
@@ -176,6 +186,30 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
             "unsupported workplane mailbox `{mailbox_name}` for capability `{}`",
             job.capability_id
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_refresh_mode_uses_deterministic_fallback_without_summary_slot() {
+        assert_eq!(
+            summary_refresh_mode(&crate::config::SemanticClonesConfig::default()),
+            SemanticSummaryRefreshMode::DeterministicOnly
+        );
+    }
+
+    #[test]
+    fn summary_refresh_mode_is_strict_with_configured_summary_slot() {
+        let mut config = crate::config::SemanticClonesConfig::default();
+        config.inference.summary_generation = Some("summary_local".to_string());
+
+        assert_eq!(
+            summary_refresh_mode(&config),
+            SemanticSummaryRefreshMode::ConfiguredStrict
+        );
     }
 }
 

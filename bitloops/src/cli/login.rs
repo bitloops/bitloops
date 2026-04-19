@@ -52,7 +52,7 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
                     .unwrap_or(&start.verification_url)
             );
             println!();
-            println!("Enter code: {}", start.user_code);
+            println!("Verification Code: {}", start.user_code);
 
             if let Some(url) = start
                 .verification_url_complete
