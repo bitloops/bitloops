@@ -1,16 +1,15 @@
 use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::ingesters::SymbolEmbeddingsRefreshScope;
+use crate::capability_packs::semantic_clones::load_semantic_feature_inputs_for_artefacts;
 use crate::capability_packs::semantic_clones::workplane::{
     payload_artefact_id, payload_is_repo_backfill, payload_repo_backfill_artefact_ids,
-};
-use crate::capability_packs::semantic_clones::{
-    load_semantic_feature_inputs_for_artefacts, load_semantic_feature_inputs_for_current_repo,
 };
 use crate::host::devql::RelationalStorage;
 use crate::host::runtime_store::WorkplaneJobRecord;
 
 use super::SemanticFeatureInput;
+use super::helpers::load_current_semantic_inputs;
 
 #[cfg(test)]
 use super::super::EnrichmentJob;
@@ -57,12 +56,13 @@ pub(crate) async fn load_workplane_embedding_refresh_inputs(
     let Some(artefact_id) = payload_artefact_id(&job.payload) else {
         anyhow::bail!("workplane mailbox job missing artefact id");
     };
-    let current_inputs =
-        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
-            .await?
-            .into_iter()
-            .filter(|input| input.artefact_id == artefact_id)
-            .collect::<Vec<_>>();
+    let current_inputs = load_current_semantic_inputs(
+        relational,
+        &job.repo_root,
+        &job.repo_id,
+        Some(std::slice::from_ref(&artefact_id)),
+    )
+    .await?;
     if let Some(first) = current_inputs.first() {
         let single_path = current_inputs
             .iter()
@@ -89,19 +89,14 @@ pub(crate) async fn load_repo_backfill_inputs(
     relational: &RelationalStorage,
     job: &WorkplaneJobRecord,
 ) -> Result<Vec<SemanticFeatureInput>> {
-    let current_inputs =
-        load_semantic_feature_inputs_for_current_repo(relational, &job.repo_root, &job.repo_id)
-            .await?;
-    let Some(artefact_ids) = payload_repo_backfill_artefact_ids(&job.payload) else {
-        return Ok(current_inputs);
-    };
-    let artefact_ids = artefact_ids
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
-    Ok(current_inputs
-        .into_iter()
-        .filter(|input| artefact_ids.contains(&input.artefact_id))
-        .collect())
+    let artefact_ids = payload_repo_backfill_artefact_ids(&job.payload);
+    load_current_semantic_inputs(
+        relational,
+        &job.repo_root,
+        &job.repo_id,
+        artefact_ids.as_deref(),
+    )
+    .await
 }
 
 #[cfg(test)]

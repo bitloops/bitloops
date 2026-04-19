@@ -11,7 +11,8 @@ mod tests;
 
 pub(crate) use self::hydration::{
     load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
-    load_semantic_feature_inputs_for_artefacts, load_semantic_feature_inputs_for_current_repo,
+    load_semantic_feature_inputs_for_artefacts, load_semantic_feature_inputs_for_current_artefacts,
+    load_semantic_feature_inputs_for_current_repo,
 };
 pub(crate) use self::persistence::{
     clear_current_semantic_feature_rows_for_path, upsert_current_semantic_feature_rows,
