@@ -8,7 +8,6 @@ use std::{env, fs};
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::cli::enable::initialized_agents;
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, color_hex_if_enabled, should_use_color_output};
 
 use super::agent_hooks::{DEFAULT_AGENT, agent_display, available_agents, detect_agents};
@@ -68,19 +67,38 @@ pub fn detect_or_select_agent(
     default_enable_bitloops_skill: bool,
     select_fn: Option<&super::AgentSelector>,
 ) -> Result<InitAgentSelection> {
-    let detected = detect_agents(repo_root);
-    let installed = initialized_agents(repo_root);
+    let policy_agents = policy_supported_agents(repo_root)?;
+    let detected = matches!(
+        policy_agents,
+        PolicySupportedAgents::Unconfigured | PolicySupportedAgents::PolicyWithoutSupported
+    )
+    .then(|| detect_agents(repo_root))
+    .unwrap_or_default();
 
     if !can_prompt_interactively() {
+        match policy_agents {
+            PolicySupportedAgents::Configured(configured) => {
+                if configured.is_empty() {
+                    bail!(
+                        "no supported agents configured in the discovered Bitloops repo policy; rerun `bitloops init` interactively or pass `--agent`"
+                    );
+                }
+
+                return Ok(InitAgentSelection {
+                    agents: configured,
+                    enable_bitloops_skill: default_enable_bitloops_skill,
+                });
+            }
+            PolicySupportedAgents::PolicyWithoutSupported if !detected.is_empty() => {
+                bail!(
+                    "no supported agents configured in the discovered Bitloops repo policy; rerun `bitloops init` interactively or pass `--agent`"
+                );
+            }
+            PolicySupportedAgents::Unconfigured | PolicySupportedAgents::PolicyWithoutSupported => {}
+        }
         if !detected.is_empty() {
             return Ok(InitAgentSelection {
                 agents: detected,
-                enable_bitloops_skill: default_enable_bitloops_skill,
-            });
-        }
-        if !installed.is_empty() {
-            return Ok(InitAgentSelection {
-                agents: installed,
                 enable_bitloops_skill: default_enable_bitloops_skill,
             });
         }
@@ -93,12 +111,16 @@ pub fn detect_or_select_agent(
     }
 
     let available = available_agents();
-    let defaults = if !installed.is_empty() {
-        installed
-    } else if !detected.is_empty() {
-        detected.clone()
-    } else {
-        vec![DEFAULT_AGENT.to_string()]
+    let defaults = match policy_agents {
+        PolicySupportedAgents::Configured(configured) => configured,
+        PolicySupportedAgents::Unconfigured | PolicySupportedAgents::PolicyWithoutSupported
+            if !detected.is_empty() =>
+        {
+            detected.clone()
+        }
+        PolicySupportedAgents::Unconfigured | PolicySupportedAgents::PolicyWithoutSupported => {
+            vec![DEFAULT_AGENT.to_string()]
+        }
     };
 
     let mut selected = match select_fn {
@@ -124,6 +146,12 @@ pub fn detect_or_select_agent(
     Ok(selected)
 }
 
+enum PolicySupportedAgents {
+    Unconfigured,
+    PolicyWithoutSupported,
+    Configured(Vec<String>),
+}
+
 fn prompt_select_agents(
     available: &[String],
     defaults: &[String],
@@ -140,10 +168,6 @@ fn prompt_select_agents(
         .iter()
         .map(|agent| default_set.contains(agent.as_str()))
         .collect();
-
-    if selected.iter().all(|is_selected| !is_selected) && !selected.is_empty() {
-        selected[0] = true;
-    }
 
     let mut cursor = 0usize;
     let mut enable_bitloops_skill = default_enable_bitloops_skill;
@@ -209,6 +233,20 @@ fn prompt_select_agents(
         agents: selected_agents,
         enable_bitloops_skill,
     })
+}
+
+fn policy_supported_agents(repo_root: &Path) -> Result<PolicySupportedAgents> {
+    let policy = crate::config::discover_repo_policy_optional(repo_root)?;
+    if policy.root.is_none() {
+        return Ok(PolicySupportedAgents::Unconfigured);
+    }
+
+    if policy.agents.get("supported").is_none() {
+        return Ok(PolicySupportedAgents::PolicyWithoutSupported);
+    }
+
+    crate::config::settings::supported_agents_from_policy(&policy)
+        .map(PolicySupportedAgents::Configured)
 }
 
 #[derive(Clone, Copy)]

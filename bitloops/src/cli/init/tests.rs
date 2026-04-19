@@ -18,7 +18,10 @@ use crate::cli::telemetry_consent::{
 };
 use crate::cli::terminal_picker::with_single_select_hook;
 use crate::cli::{Cli, Commands};
-use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, ensure_daemon_config_exists};
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
+    ensure_daemon_config_exists,
+};
 use crate::test_support::process_state::{with_env_vars, with_process_state};
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
@@ -35,6 +38,47 @@ fn setup_git_repo(dir: &TempDir) {
         .current_dir(dir.path())
         .status()
         .expect("git init");
+}
+
+fn write_repo_policy(dir: &TempDir, file_name: &str, content: &str) {
+    std::fs::write(dir.path().join(file_name), content).expect("write repo policy");
+}
+
+fn strip_ansi_escape_sequences(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    enum State {
+        Text,
+        Escape,
+        ControlSequence,
+    }
+
+    let mut state = State::Text;
+
+    for ch in text.chars() {
+        match state {
+            State::Text => {
+                if ch == '\u{1b}' {
+                    state = State::Escape;
+                } else {
+                    out.push(ch);
+                }
+            }
+            State::Escape => {
+                state = if ch == '[' {
+                    State::ControlSequence
+                } else {
+                    State::Text
+                };
+            }
+            State::ControlSequence => {
+                if ('@'..='~').contains(&ch) {
+                    state = State::Text;
+                }
+            }
+        }
+    }
+
+    out
 }
 
 fn write_current_daemon_runtime_state(config_root: &std::path::Path) {
@@ -1695,6 +1739,85 @@ fn detect_or_select_agent_no_detection_no_tty_falls_back_to_default() {
 }
 
 #[test]
+fn detect_or_select_agent_prefers_local_supported_agents_over_shared_and_detected_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    write_repo_policy(
+        &dir,
+        REPO_POLICY_FILE_NAME,
+        "[agents]\nsupported = [\"cursor\"]\n",
+    );
+    write_repo_policy(
+        &dir,
+        REPO_POLICY_LOCAL_FILE_NAME,
+        "[agents]\nsupported = [\"codex\", \"gemini\"]\n",
+    );
+    std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    with_process_state(
+        Some(dir.path()),
+        &[("BITLOOPS_TEST_TTY", Some("0"))],
+        || {
+            let mut out = Vec::new();
+            let selected = detect_or_select_agent(dir.path(), &mut out, true, None).unwrap();
+            assert_eq!(
+                selected.agents,
+                vec![AGENT_CODEX.to_string(), AGENT_GEMINI.to_string()]
+            );
+            assert!(selected.enable_bitloops_skill);
+        },
+    );
+}
+
+#[test]
+fn detect_or_select_agent_prefers_shared_supported_agents_over_detected_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    write_repo_policy(
+        &dir,
+        REPO_POLICY_FILE_NAME,
+        "[agents]\nsupported = [\"cursor\", \"gemini\"]\n",
+    );
+    std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    with_process_state(
+        Some(dir.path()),
+        &[("BITLOOPS_TEST_TTY", Some("0"))],
+        || {
+            let mut out = Vec::new();
+            let selected = detect_or_select_agent(dir.path(), &mut out, true, None).unwrap();
+            assert_eq!(
+                selected.agents,
+                vec![AGENT_CURSOR.to_string(), AGENT_GEMINI.to_string()]
+            );
+            assert!(selected.enable_bitloops_skill);
+        },
+    );
+}
+
+#[test]
+fn detect_or_select_agent_repo_policy_without_supported_agents_errors_in_non_interactive_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    write_repo_policy(
+        &dir,
+        REPO_POLICY_LOCAL_FILE_NAME,
+        "[capture]\nenabled = true\n",
+    );
+    std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    with_process_state(
+        Some(dir.path()),
+        &[("BITLOOPS_TEST_TTY", Some("0"))],
+        || {
+            let mut out = Vec::new();
+            let err = detect_or_select_agent(dir.path(), &mut out, true, None).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("no supported agents configured"),
+                "unexpected error: {err:#}"
+            );
+        },
+    );
+}
+
+#[test]
 fn detect_or_select_agent_agent_detected() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -2690,6 +2813,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                     .expect("run init");
 
                                 let rendered = String::from_utf8(out).expect("utf8 output");
+                                let rendered = strip_ansi_escape_sequences(&rendered);
                                 assert!(
                                     !rendered
                                         .contains("Queueing embeddings bootstrap in the daemon...")
@@ -3336,6 +3460,7 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                             .expect("run init");
 
                                         let rendered = String::from_utf8(out).expect("utf8 output");
+                                        let rendered = strip_ansi_escape_sequences(&rendered);
                                         assert!(rendered.contains("✓ Setup complete"));
                                         assert!(rendered.contains(
                                             "Bitloops is now building your project's Intelligence Layer in the background."
