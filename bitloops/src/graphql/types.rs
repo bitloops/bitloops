@@ -21,7 +21,9 @@ pub mod test_harness;
 
 pub use artefact::LineRangeInput;
 pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
-pub use artefact_selection::{ArtefactSelection, ArtefactSelectorInput};
+pub use artefact_selection::{
+    ArtefactSelection, ArtefactSelectorInput, DirectoryEntry, DirectoryEntryKind,
+};
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
