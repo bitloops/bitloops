@@ -602,6 +602,60 @@ fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_fuzzy_name_selector() {
+    let parsed = parse_devql_query(r#"selectArtefacts(fuzzy_name:"payLater()")->checkpoints()"#)
+        .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+    checkpoints {
+      summary
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_rejects_fuzzy_name_mixed_with_lines() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(fuzzy_name:"payLater()",lines:20..25)->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid selector should fail");
+
+    assert!(
+        err.to_string()
+            .contains("allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_rejects_symbol_fqn_mixed_with_lines() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(symbol_fqn:"src/main.rs::main",lines:20..25)->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid selector should fail");
+
+    assert!(
+        err.to_string()
+            .contains("allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_deps_supports_schema_projection() {
     let parsed = parse_devql_query(
         r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->deps()->select(summary,schema)"#,

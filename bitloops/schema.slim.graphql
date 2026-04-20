@@ -92,6 +92,7 @@ type ArtefactSelection {
 
 input ArtefactSelectorInput {
 	symbolFqn: String
+	fuzzyName: String
 	path: String
 	lines: LineRangeInput
 }

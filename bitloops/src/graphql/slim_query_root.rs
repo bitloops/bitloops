@@ -2,6 +2,7 @@ use async_graphql::{Context, Object, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::graphql::fuzzy_artefact_name::select_fuzzy_named_artefacts;
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_user_input_error};
 
@@ -563,6 +564,19 @@ impl SlimQueryRoot {
                             "failed to resolve selected artefacts by symbolFqn: {err:#}"
                         ))
                     })?;
+                ArtefactSelection::new(artefacts, Vec::new(), scope)
+            }
+            ArtefactSelectorMode::FuzzyName(fuzzy_name) => {
+                let artefacts =
+                    context
+                        .list_artefacts(None, None, &scope)
+                        .await
+                        .map_err(|err| {
+                            backend_error(format!(
+                                "failed to resolve selected artefacts by fuzzyName: {err:#}"
+                            ))
+                        })?;
+                let artefacts = select_fuzzy_named_artefacts(&fuzzy_name, artefacts);
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {

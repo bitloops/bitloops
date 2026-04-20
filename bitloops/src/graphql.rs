@@ -1,5 +1,6 @@
 mod context;
 mod error;
+mod fuzzy_artefact_name;
 mod loaders;
 mod mutation_root;
 mod pack_adapter;

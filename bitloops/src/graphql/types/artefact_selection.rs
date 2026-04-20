@@ -14,6 +14,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArtefactSelectorMode {
     SymbolFqn(String),
+    FuzzyName(String),
     Path {
         path: String,
         lines: Option<LineRangeInput>,
@@ -23,6 +24,7 @@ pub(crate) enum ArtefactSelectorMode {
 #[derive(Debug, Clone, InputObject)]
 pub struct ArtefactSelectorInput {
     pub symbol_fqn: Option<String>,
+    pub fuzzy_name: Option<String>,
     pub path: Option<String>,
     pub lines: Option<LineRangeInput>,
 }
@@ -35,6 +37,15 @@ impl ArtefactSelectorInput {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
+        let fuzzy_name = match self.fuzzy_name.as_deref() {
+            Some(value) if value.trim().is_empty() => {
+                return Err(bad_user_input_error(
+                    "`selectArtefacts(by: ...)` requires a non-empty `fuzzyName`",
+                ));
+            }
+            Some(value) => Some(value.trim().to_string()),
+            None => None,
+        };
         let path = self
             .path
             .as_deref()
@@ -42,27 +53,41 @@ impl ArtefactSelectorInput {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
 
-        match (symbol_fqn, path, self.lines.as_ref()) {
-            (Some(symbol_fqn), None, None) => Ok(ArtefactSelectorMode::SymbolFqn(symbol_fqn)),
-            (None, Some(path), lines) => {
-                if let Some(lines) = lines {
-                    lines.validate()?;
-                }
-                Ok(ArtefactSelectorMode::Path {
-                    path,
-                    lines: lines.cloned(),
-                })
-            }
-            (None, None, Some(_)) => Err(bad_user_input_error(
-                "`selectArtefacts(by: ...)` requires `path` when `lines` is provided",
-            )),
-            (Some(_), Some(_), _) | (Some(_), None, Some(_)) => Err(bad_user_input_error(
-                "`selectArtefacts(by: ...)` allows either `symbolFqn` or `path`/`lines`, not both",
-            )),
-            (None, None, None) => Err(bad_user_input_error(
+        let path_selector_requested = path.is_some() || self.lines.is_some();
+        let selector_count = usize::from(symbol_fqn.is_some())
+            + usize::from(fuzzy_name.is_some())
+            + usize::from(path_selector_requested);
+        if selector_count == 0 {
+            return Err(bad_user_input_error(
                 "`selectArtefacts(by: ...)` requires exactly one selector mode",
-            )),
+            ));
         }
+        if selector_count > 1 {
+            return Err(bad_user_input_error(
+                "`selectArtefacts(by: ...)` allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`",
+            ));
+        }
+        if path_selector_requested && path.is_none() {
+            return Err(bad_user_input_error(
+                "`selectArtefacts(by: ...)` requires `path` when `lines` is provided",
+            ));
+        }
+
+        if let Some(symbol_fqn) = symbol_fqn {
+            return Ok(ArtefactSelectorMode::SymbolFqn(symbol_fqn));
+        }
+        if let Some(fuzzy_name) = fuzzy_name {
+            return Ok(ArtefactSelectorMode::FuzzyName(fuzzy_name));
+        }
+
+        let path = path.expect("selector_count ensures path selector exists");
+        if let Some(lines) = self.lines.as_ref() {
+            lines.validate()?;
+        }
+        Ok(ArtefactSelectorMode::Path {
+            path,
+            lines: self.lines.clone(),
+        })
     }
 }
 
@@ -864,6 +889,7 @@ mod tests {
     fn artefact_selector_accepts_symbol_fqn_or_path_modes() {
         let symbol = ArtefactSelectorInput {
             symbol_fqn: Some("src/main.rs::main".to_string()),
+            fuzzy_name: None,
             path: None,
             lines: None,
         };
@@ -874,6 +900,7 @@ mod tests {
 
         let path = ArtefactSelectorInput {
             symbol_fqn: None,
+            fuzzy_name: None,
             path: Some("src/main.rs".to_string()),
             lines: Some(LineRangeInput { start: 20, end: 25 }),
         };
@@ -887,9 +914,25 @@ mod tests {
     }
 
     #[test]
+    fn artefact_selector_accepts_fuzzy_name_mode() {
+        let fuzzy = ArtefactSelectorInput {
+            symbol_fqn: None,
+            fuzzy_name: Some("payLater()".to_string()),
+            path: None,
+            lines: None,
+        };
+
+        assert_eq!(
+            fuzzy.selection_mode().expect("fuzzy selector"),
+            ArtefactSelectorMode::FuzzyName("payLater()".to_string())
+        );
+    }
+
+    #[test]
     fn artefact_selector_rejects_invalid_combinations() {
         let err = ArtefactSelectorInput {
             symbol_fqn: Some("src/main.rs::main".to_string()),
+            fuzzy_name: None,
             path: Some("src/main.rs".to_string()),
             lines: None,
         }
@@ -897,11 +940,12 @@ mod tests {
         .expect_err("mixed selector should fail");
         assert!(
             err.message
-                .contains("allows either `symbolFqn` or `path`/`lines`")
+                .contains("allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`")
         );
 
         let err = ArtefactSelectorInput {
             symbol_fqn: None,
+            fuzzy_name: None,
             path: None,
             lines: Some(LineRangeInput { start: 20, end: 25 }),
         }
@@ -914,6 +958,56 @@ mod tests {
 
         let err = ArtefactSelectorInput {
             symbol_fqn: None,
+            fuzzy_name: Some("  ".to_string()),
+            path: None,
+            lines: None,
+        }
+        .selection_mode()
+        .expect_err("blank fuzzy selector should fail");
+        assert!(err.message.contains("non-empty `fuzzyName`"));
+
+        let err = ArtefactSelectorInput {
+            symbol_fqn: None,
+            fuzzy_name: Some("payLater".to_string()),
+            path: Some("src/main.rs".to_string()),
+            lines: None,
+        }
+        .selection_mode()
+        .expect_err("fuzzy selector mixed with path should fail");
+        assert!(
+            err.message
+                .contains("allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`")
+        );
+
+        let err = ArtefactSelectorInput {
+            symbol_fqn: None,
+            fuzzy_name: Some("payLater".to_string()),
+            path: None,
+            lines: Some(LineRangeInput { start: 20, end: 25 }),
+        }
+        .selection_mode()
+        .expect_err("fuzzy selector mixed with lines should fail");
+        assert!(
+            err.message
+                .contains("allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`")
+        );
+
+        let err = ArtefactSelectorInput {
+            symbol_fqn: Some("src/main.rs::main".to_string()),
+            fuzzy_name: None,
+            path: None,
+            lines: Some(LineRangeInput { start: 20, end: 25 }),
+        }
+        .selection_mode()
+        .expect_err("symbol selector mixed with lines should fail");
+        assert!(
+            err.message
+                .contains("allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`")
+        );
+
+        let err = ArtefactSelectorInput {
+            symbol_fqn: None,
+            fuzzy_name: None,
             path: None,
             lines: None,
         }

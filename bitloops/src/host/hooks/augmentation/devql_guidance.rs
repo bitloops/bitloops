@@ -42,6 +42,7 @@ Use DevQL first for code understanding in this repo.\n\
 Quick-start commands:\n\
 ```bash\n\
 bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\" }) { summary } }'\n\
+bitloops devql query '{ selectArtefacts(by: { fuzzyName: \"<approx-symbol-name>\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { summary } }'\n\
 bitloops devql schema --global\n\
 ```\n\
@@ -68,5 +69,15 @@ mod tests {
         assert!(guidance.contains("start: 1"));
         assert!(guidance.contains("end: 1"));
         assert!(!guidance.contains("<repo-relative-path>"));
+    }
+
+    #[test]
+    fn build_turn_guidance_includes_fuzzy_lookup_in_generic_guidance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let guidance = build_turn_guidance(dir.path(), "Help me find payLatr()");
+
+        assert!(guidance.contains("fuzzyName"));
+        assert!(guidance.contains("<approx-symbol-name>"));
     }
 }
