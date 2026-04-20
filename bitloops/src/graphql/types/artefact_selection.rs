@@ -1,4 +1,4 @@
-use async_graphql::{ComplexObject, Context, InputObject, Result, SimpleObject, types::Json};
+use async_graphql::{ComplexObject, Context, Enum, InputObject, Result, SimpleObject, types::Json};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -66,6 +66,19 @@ impl ArtefactSelectorInput {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum DirectoryEntryKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct DirectoryEntry {
+    pub path: String,
+    pub name: String,
+    pub entry_kind: DirectoryEntryKind,
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct ArtefactSelection {
@@ -73,16 +86,23 @@ pub struct ArtefactSelection {
     #[graphql(skip)]
     pub(crate) artefacts: Vec<Artefact>,
     #[graphql(skip)]
+    pub(crate) directory_entries: Vec<DirectoryEntry>,
+    #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
 
 pub type IntCount = i32;
 
 impl ArtefactSelection {
-    pub(crate) fn new(artefacts: Vec<Artefact>, scope: ResolverScope) -> Self {
+    pub(crate) fn new(
+        artefacts: Vec<Artefact>,
+        directory_entries: Vec<DirectoryEntry>,
+        scope: ResolverScope,
+    ) -> Self {
         Self {
             count: saturating_i32(artefacts.len()),
             artefacts,
+            directory_entries,
             scope,
         }
     }
@@ -225,6 +245,10 @@ impl ArtefactSelection {
 
     async fn artefacts(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<Artefact>> {
         take_stage_items(&self.artefacts, first)
+    }
+
+    async fn entries(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<DirectoryEntry>> {
+        take_stage_items(&self.directory_entries, first)
     }
 
     async fn checkpoints(
