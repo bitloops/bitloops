@@ -26,4 +26,11 @@ mod tests {
         assert!(body.contains("outside the sandbox"));
         assert!(body.contains("bitloops devql"));
     }
+
+    #[test]
+    fn using_devql_skill_mentions_fuzzy_name_lookup() {
+        let body = using_devql_skill_body();
+        assert!(body.contains("fuzzyName"));
+        assert!(body.contains("<approx-symbol-name>"));
+    }
 }

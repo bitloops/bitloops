@@ -602,6 +602,26 @@ fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_fuzzy_name_selector() {
+    let parsed = parse_devql_query(r#"selectArtefacts(fuzzy_name:"payLater()")->checkpoints()"#)
+        .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+    checkpoints {
+      summary
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_deps_supports_schema_projection() {
     let parsed = parse_devql_query(
         r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->deps()->select(summary,schema)"#,

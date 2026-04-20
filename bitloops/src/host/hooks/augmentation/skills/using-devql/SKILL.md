@@ -2,7 +2,8 @@
 name: using-devql
 description: >
   Use when understanding code structure, resolving artefacts by path or line
-  range, finding callers/usages/imports/tests/checkpoints/clones/dependencies,
+  range, resolving approximate symbol names with fuzzy lookup, finding
+  callers/usages/imports/tests/checkpoints/clones/dependencies,
   or answering architecture questions in a repo with DevQL enabled.
 ---
 
@@ -26,13 +27,14 @@ search or file reads.
 
 - understanding what a file, function, module, class, or symbol does
 - resolving the concrete artefacts matched by a path or line range
+- resolving a likely symbol name when the human-entered name may be approximate or misspelled
 - finding callers, usages, imports, tests, checkpoints, clones, or dependencies
 - getting a structured overview of a file or area
 - answering architecture questions
 
 ## Agent Flow
 
-1. Select the target with `symbolFqn`, `path`, or `path + lines`.
+1. Select the target with `symbolFqn`, `fuzzyName`, `path`, or `path + lines`.
 2. Ask for `summary` only if you need orientation or to discover which stage to expand.
 3. Rerun with `artefacts(first: ...)` or the relevant stage `items(first: ...)`.
 4. Return the concrete rows. Summaries are optional follow-up, not substitutes.
@@ -52,6 +54,9 @@ bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>" }) { 
 
 # Concrete artefacts for a known file or line range
 bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", lines: { start: <start>, end: <end> } }) { artefacts(first: 20) { path symbolFqn canonicalKind startLine endLine } } }'
+
+# Fuzzy lookup when the symbol name is approximate or may be misspelled
+bitloops devql query '{ selectArtefacts(by: { fuzzyName: "<approx-symbol-name>" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
 
 # Concrete callers/usages/imports once the symbol is known
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { items(first: 50) { edgeKind startLine endLine fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'

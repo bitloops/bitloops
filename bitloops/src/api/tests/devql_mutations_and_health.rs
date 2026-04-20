@@ -1683,6 +1683,55 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
 }
 
 #[tokio::test]
+async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { fuzzyName: "targte()" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert!(
+        json["selectArtefacts"]["count"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 1
+    );
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert!(
+        artefacts
+            .iter()
+            .all(|artefact| artefact["path"] == "packages/api/src/target.ts"),
+        "unexpected fuzzy artefact paths: {artefacts:?}"
+    );
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+}
+
+#[tokio::test]
 async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_items() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     seed_graphql_clone_data(repo.path());

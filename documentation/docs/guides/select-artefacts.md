@@ -44,6 +44,22 @@ Exactly one selector mode must be used.
 
 This usually resolves to `0..1` logical artefacts, but callers should treat the result as a set.
 
+### By `fuzzyName`
+
+```graphql
+{
+  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+    count
+    artefacts {
+      path
+      symbolFqn
+    }
+  }
+}
+```
+
+This searches current artefacts in scope by normalized symbol name, including typo-tolerant matches such as `payLater()` or `payLatr()`. v1 returns up to 10 best-first matches and does not expose scores in the API.
+
 ### By `path` and `lines`
 
 ```graphql
@@ -80,7 +96,9 @@ This resolves all current artefacts in the file.
 
 ## Validation Rules
 
-- `symbolFqn` cannot be combined with `path` or `lines`
+- `symbolFqn` cannot be combined with `fuzzyName`, `path`, or `lines`
+- `fuzzyName` cannot be combined with `symbolFqn`, `path`, or `lines`
+- `fuzzyName` must be non-empty
 - `lines` requires `path`
 - empty selectors are rejected
 - selector paths are resolved relative to the slim request scope, including project-scoped slim requests
@@ -283,6 +301,7 @@ The DevQL DSL supports `selectArtefacts(...)` with flat selector args:
 
 ```text
 selectArtefacts(symbol_fqn:"rust-app/src/main.rs::main")->checkpoints()
+selectArtefacts(fuzzy_name:"payLater()")->checkpoints()
 selectArtefacts(path:"rust-app/src/main.rs",lines:6..10)->deps()
 selectArtefacts(path:"rust-app/src/main.rs")->tests(min_confidence:0.8)
 ```
