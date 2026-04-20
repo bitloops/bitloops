@@ -212,7 +212,7 @@ pub(crate) fn lane_progress(
 
 pub(crate) fn lane_status_icon<'a>(status: &str, spinner: &'a str, tick: &'a str) -> &'a str {
     match status.to_ascii_lowercase().as_str() {
-        "completed" | "completed_with_warnings" | "warning" | "skipped" => tick,
+        "completed" | "completed_with_warnings" | "skipped" => tick,
         _ => spinner,
     }
 }
@@ -223,7 +223,7 @@ pub(crate) fn is_active_runtime_status(status: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_active_runtime_status, lane_progress};
+    use super::{is_active_runtime_status, lane_progress, lane_status_icon};
     use crate::cli::devql::graphql::{
         RuntimeInitLaneGraphqlRecord, RuntimeInitLaneProgressGraphqlRecord,
         RuntimeInitLaneQueueGraphqlRecord,
@@ -254,6 +254,11 @@ mod tests {
         assert!(is_active_runtime_status("running"));
         assert!(!is_active_runtime_status("completed"));
         assert!(!is_active_runtime_status("failed"));
+    }
+
+    #[test]
+    fn warning_lane_status_icon_uses_spinner() {
+        assert_eq!(lane_status_icon("warning", "spin", "tick"), "spin");
     }
 
     #[test]

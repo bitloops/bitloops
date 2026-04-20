@@ -337,10 +337,7 @@ fn effective_session_summary_mailbox_item_count(
 
     match SemanticMailboxItemKind::parse(item_kind) {
         SemanticMailboxItemKind::RepoBackfill => {
-            let payload = parse_semantic_mailbox_payload_json(payload_json);
-            payload
-                .as_ref()
-                .and_then(payload_repo_backfill_artefact_ids)
+            semantic_mailbox_payload_artefact_ids(payload_json)
                 .map(|artefact_ids| {
                     summary_freshness.outstanding_work_item_count_for_artefacts(&artefact_ids)
                 })
@@ -355,10 +352,7 @@ fn effective_session_summary_mailbox_item_count(
 fn semantic_mailbox_item_work_item_count(item_kind: &str, payload_json: Option<&str>) -> u64 {
     match SemanticMailboxItemKind::parse(item_kind) {
         SemanticMailboxItemKind::RepoBackfill => {
-            let payload = parse_semantic_mailbox_payload_json(payload_json);
-            payload
-                .as_ref()
-                .and_then(payload_repo_backfill_artefact_ids)
+            semantic_mailbox_payload_artefact_ids(payload_json)
                 .map(|artefact_ids| artefact_ids.len() as u64)
                 .unwrap_or(1)
         }
@@ -368,6 +362,18 @@ fn semantic_mailbox_item_work_item_count(item_kind: &str, payload_json: Option<&
 
 fn parse_semantic_mailbox_payload_json(payload_json: Option<&str>) -> Option<serde_json::Value> {
     payload_json.and_then(|payload_json| serde_json::from_str(payload_json).ok())
+}
+
+fn semantic_mailbox_payload_artefact_ids(payload_json: Option<&str>) -> Option<Vec<String>> {
+    let payload = parse_semantic_mailbox_payload_json(payload_json)?;
+    if let Some(artefact_ids) = payload.as_array() {
+        let mut values = Vec::with_capacity(artefact_ids.len());
+        for artefact_id in artefact_ids {
+            values.push(artefact_id.as_str()?.to_string());
+        }
+        return Some(values);
+    }
+    payload_repo_backfill_artefact_ids(&payload)
 }
 
 fn load_summary_freshness_state_for_repo(
