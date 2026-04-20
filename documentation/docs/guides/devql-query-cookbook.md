@@ -65,6 +65,17 @@ For the full selector contract and stage semantics, see [selectArtefacts](/guide
 }
 ```
 
+```graphql
+{
+  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+    artefacts(first: 10) {
+      path
+      symbolFqn
+    }
+  }
+}
+```
+
 The `summary` payload includes one entry per available category, currently:
 
 - `checkpoints`

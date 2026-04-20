@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **Slim `selectArtefacts` now supports typo-tolerant fuzzy artefact lookup by symbol name**: slim GraphQL requests can now select current artefacts with `by: { fuzzyName: "payLater()" }`, and the DevQL DSL now compiles `selectArtefacts(fuzzy_name:"payLater()")` to the same selector. The fuzzy matcher normalizes human-entered names from `symbol_fqn` leaf segments, preserves exact `symbolFqn` behaviour as an explicit selector, ranks matches best-first with exact/prefix/token/edit-distance signals, filters out weak matches below the fixed `0.6` threshold, and caps results at 10. The slim SDL snapshot, DevQL docs, and Bitloops-managed agent guidance/skill content now document the new selector mode.
+
 ## [0.0.17] - 2026-04-19
 
 ### Fixed
