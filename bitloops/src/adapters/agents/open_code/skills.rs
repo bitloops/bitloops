@@ -7,16 +7,10 @@ use crate::adapters::agents::skill_install::{
 };
 use crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL;
 
-pub const OPEN_CODE_SKILL_DIR: &str = ".opencode/skills/bitloops/using-devql";
-pub const OPEN_CODE_SKILL_FILE: &str = "SKILL.md";
+pub const OPEN_CODE_SKILL_RELATIVE_PATH: &str = ".opencode/skills/bitloops/using-devql/SKILL.md";
 
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(".opencode")
-        .join("skills")
-        .join("bitloops")
-        .join("using-devql")
-        .join(OPEN_CODE_SKILL_FILE)
+    repo_root.join(OPEN_CODE_SKILL_RELATIVE_PATH)
 }
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
@@ -39,7 +33,7 @@ mod tests {
         let repo_root = Path::new("/repo");
         assert_eq!(
             repo_skill_path(repo_root),
-            PathBuf::from("/repo/.opencode/skills/bitloops/using-devql/SKILL.md")
+            PathBuf::from("/repo").join(OPEN_CODE_SKILL_RELATIVE_PATH)
         );
     }
 
@@ -53,7 +47,7 @@ mod tests {
         assert!(path.exists(), "skill file should exist after install");
         assert!(
             path.to_string_lossy()
-                .contains(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .contains(OPEN_CODE_SKILL_RELATIVE_PATH)
         );
 
         uninstall_repo_skill(repo_root).expect("uninstall should succeed");

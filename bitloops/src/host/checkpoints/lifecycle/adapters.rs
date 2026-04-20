@@ -469,10 +469,10 @@ fn build_prompt_augmentation_stdout(
 ) -> Option<String> {
     let augmentation = match event.event_type {
         Some(LifecycleEventType::SessionStart) => {
-            build_devql_session_start_augmentation(registration.descriptor().id)
+            build_devql_session_start_augmentation(repo_root, registration.descriptor().id)?
         }
         Some(LifecycleEventType::TurnStart) if !event.prompt.trim().is_empty() => {
-            build_devql_hook_augmentation(repo_root, &event.prompt)
+            build_devql_hook_augmentation(repo_root, registration.descriptor().id, &event.prompt)?
         }
         _ => return None,
     };

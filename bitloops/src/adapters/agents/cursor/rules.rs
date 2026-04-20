@@ -7,11 +7,10 @@ use crate::adapters::agents::skill_install::{
 };
 use crate::host::hooks::augmentation::skill_content::using_devql_skill_body;
 
+pub const CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/bitloops-using-devql.mdc";
+
 pub fn repo_rule_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(".cursor")
-        .join("rules")
-        .join("bitloops-using-devql.mdc")
+    repo_root.join(CURSOR_RULE_RELATIVE_PATH)
 }
 
 fn cursor_rule_content() -> String {
@@ -46,10 +45,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
             repo_rule_path(dir.path()),
-            dir.path()
-                .join(".cursor")
-                .join("rules")
-                .join("bitloops-using-devql.mdc")
+            dir.path().join(CURSOR_RULE_RELATIVE_PATH)
         );
     }
 

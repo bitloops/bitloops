@@ -1681,6 +1681,40 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
                 .join(".opencode/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+
+        let state_dir = repo.path().join(".route-test-state");
+        let state_dir_str = state_dir.to_string_lossy().to_string();
+        let outcome = with_process_state(
+            Some(repo.path()),
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_dir_str.as_str()),
+            )],
+            || {
+                crate::test_support::git_fixtures::ensure_test_store_backends(repo.path());
+                crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle(
+                    repo.path(),
+                    AGENT_CODEX,
+                    crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START,
+                    &json!({
+                        "session_id": "codex-session-start",
+                        "transcript_path": "",
+                        "model": "gpt-4.1"
+                    })
+                    .to_string(),
+                )
+            },
+        )
+        .expect("codex session-start route");
+        assert!(
+            outcome.stdout.is_none(),
+            "disable-bitloops-skill should suppress session-start stdout when the repo-local skill is absent"
+        );
+
+        let plugin = std::fs::read_to_string(repo.path().join(".opencode/plugins/bitloops.ts"))
+            .expect("read OpenCode plugin");
+        assert!(!plugin.contains("name: using-devql"));
+        assert!(!plugin.contains("bitloops devql query"));
     });
 }
 
