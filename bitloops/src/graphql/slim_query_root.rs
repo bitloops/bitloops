@@ -11,13 +11,13 @@ use super::types::{
     ArtefactSelectorInput, AsOfInput, Branch, CheckpointConnection, CheckpointEdge,
     CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
     ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, DirectoryEntryKind, FileContext, HealthStatus, InteractionEventConnection,
-    InteractionEventEdge, InteractionFilterInput, InteractionSearchInputObject,
-    InteractionSessionConnection, InteractionSessionEdge, InteractionSessionSearchHitObject,
-    InteractionTurnConnection, InteractionTurnEdge, InteractionTurnSearchHitObject,
-    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject,
-    TaskQueueStatusObject, TaskStatus, TelemetryEventConnection, TelemetryEventEdge, TemporalScope,
-    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    DepsFilterInput, FileContext, HealthStatus, InteractionEventConnection, InteractionEventEdge,
+    InteractionFilterInput, InteractionSearchInputObject, InteractionSessionConnection,
+    InteractionSessionEdge, InteractionSessionSearchHitObject, InteractionTurnConnection,
+    InteractionTurnEdge, InteractionTurnSearchHitObject, KnowledgeItemConnection,
+    KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
+    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
+    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
@@ -549,7 +549,7 @@ impl SlimQueryRoot {
         let scope = context.slim_root_scope();
         let selector = by.selection_mode()?;
 
-        let (artefacts, directory_entries) = match selector {
+        let selection = match selector {
             ArtefactSelectorMode::SymbolFqn(symbol_fqn) => {
                 let filter = ArtefactFilterInput {
                     symbol_fqn: Some(symbol_fqn),
@@ -563,7 +563,7 @@ impl SlimQueryRoot {
                             "failed to resolve selected artefacts by symbolFqn: {err:#}"
                         ))
                     })?;
-                (artefacts, Vec::new())
+                ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
                 let normalized = context
@@ -592,20 +592,7 @@ impl SlimQueryRoot {
                                 "failed to resolve directory entries for `{normalized}`: {err:#}"
                             ))
                         })?;
-                    let child_file_paths = directory_entries
-                        .iter()
-                        .filter(|entry| entry.entry_kind == DirectoryEntryKind::File)
-                        .map(|entry| entry.path.clone())
-                        .collect::<Vec<_>>();
-                    let artefacts = context
-                        .list_artefacts_for_paths(&child_file_paths, None, &scope)
-                        .await
-                        .map_err(|err| {
-                            backend_error(format!(
-                                "failed to resolve selected artefacts for `{normalized}`: {err:#}"
-                            ))
-                        })?;
-                    (artefacts, directory_entries)
+                    ArtefactSelection::from_directory_entries(directory_entries, scope)
                 } else {
                     let filter = lines.map(|lines| ArtefactFilterInput {
                         lines: Some(lines),
@@ -619,12 +606,12 @@ impl SlimQueryRoot {
                                 "failed to resolve selected artefacts for `{normalized}`: {err:#}"
                             ))
                         })?;
-                    (artefacts, Vec::new())
+                    ArtefactSelection::new(artefacts, Vec::new(), scope)
                 }
             }
         };
 
-        Ok(ArtefactSelection::new(artefacts, directory_entries, scope))
+        Ok(selection)
     }
 
     async fn deps(

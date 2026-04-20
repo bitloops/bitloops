@@ -79,10 +79,18 @@ pub struct DirectoryEntry {
     pub entry_kind: DirectoryEntryKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtefactSelectionMode {
+    Artefacts,
+    DirectoryEntries,
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct ArtefactSelection {
     pub count: IntCount,
+    #[graphql(skip)]
+    mode: ArtefactSelectionMode,
     #[graphql(skip)]
     pub(crate) artefacts: Vec<Artefact>,
     #[graphql(skip)]
@@ -101,7 +109,21 @@ impl ArtefactSelection {
     ) -> Self {
         Self {
             count: saturating_i32(artefacts.len()),
+            mode: ArtefactSelectionMode::Artefacts,
             artefacts,
+            directory_entries,
+            scope,
+        }
+    }
+
+    pub(crate) fn from_directory_entries(
+        directory_entries: Vec<DirectoryEntry>,
+        scope: ResolverScope,
+    ) -> Self {
+        Self {
+            count: saturating_i32(directory_entries.len()),
+            mode: ArtefactSelectionMode::DirectoryEntries,
+            artefacts: Vec::new(),
             directory_entries,
             scope,
         }
@@ -227,6 +249,7 @@ impl From<TestsStageData> for TestsStageResult {
 #[ComplexObject]
 impl ArtefactSelection {
     async fn summary(&self, ctx: &Context<'_>) -> Result<JsonScalar> {
+        self.ensure_artefact_selection("summary")?;
         let checkpoints = self.resolve_checkpoint_stage_data(ctx, None, None).await?;
         let clones = self.resolve_clone_stage_data(ctx, None).await?;
         let deps = self
@@ -244,10 +267,12 @@ impl ArtefactSelection {
     }
 
     async fn artefacts(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<Artefact>> {
+        self.ensure_artefact_selection("artefacts")?;
         take_stage_items(&self.artefacts, first)
     }
 
     async fn entries(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<DirectoryEntry>> {
+        self.ensure_directory_selection("entries")?;
         take_stage_items(&self.directory_entries, first)
     }
 
@@ -257,6 +282,7 @@ impl ArtefactSelection {
         agent: Option<String>,
         since: Option<DateTimeScalar>,
     ) -> Result<CheckpointStageResult> {
+        self.ensure_artefact_selection("checkpoints")?;
         Ok(self
             .resolve_checkpoint_stage_data(ctx, agent.as_deref(), since.as_ref())
             .await?
@@ -269,6 +295,7 @@ impl ArtefactSelection {
         #[graphql(name = "relationKind")] relation_kind: Option<String>,
         #[graphql(name = "minScore")] min_score: Option<f64>,
     ) -> Result<CloneStageResult> {
+        self.ensure_artefact_selection("clones")?;
         let filter = ClonesFilterInput {
             relation_kind,
             min_score,
@@ -287,6 +314,7 @@ impl ArtefactSelection {
         #[graphql(default_with = "DepsDirection::Both")] direction: DepsDirection,
         #[graphql(name = "includeUnresolved", default = true)] include_unresolved: bool,
     ) -> Result<DependencyStageResult> {
+        self.ensure_artefact_selection("deps")?;
         Ok(self
             .resolve_dependency_stage_data(ctx, kind, direction, include_unresolved)
             .await?
@@ -299,6 +327,7 @@ impl ArtefactSelection {
         #[graphql(name = "minConfidence")] min_confidence: Option<f64>,
         #[graphql(name = "linkageSource")] linkage_source: Option<String>,
     ) -> Result<TestsStageResult> {
+        self.ensure_artefact_selection("tests")?;
         Ok(self
             .resolve_tests_stage_data(ctx, min_confidence, linkage_source)
             .await?
@@ -307,6 +336,24 @@ impl ArtefactSelection {
 }
 
 impl ArtefactSelection {
+    fn ensure_artefact_selection(&self, field: &str) -> Result<()> {
+        if self.mode == ArtefactSelectionMode::DirectoryEntries {
+            return Err(bad_user_input_error(format!(
+                "directory paths only support `entries`; `{field}` requires a file path instead"
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_directory_selection(&self, field: &str) -> Result<()> {
+        if self.mode == ArtefactSelectionMode::Artefacts {
+            return Err(bad_user_input_error(format!(
+                "file paths do not support `{field}`; select a directory path instead"
+            )));
+        }
+        Ok(())
+    }
+
     async fn resolve_checkpoint_stage_data(
         &self,
         ctx: &Context<'_>,

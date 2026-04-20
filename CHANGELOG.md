@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- **Slim DevQL `selectArtefacts` now treats file and directory paths as distinct selection modes**: file paths continue to expose `artefacts` from the selected file, while directory paths now behave as immediate-child `ls` listings through `entries` only. Directory selectors now reject artefact-only fields such as `artefacts`, `summary`, `checkpoints`, `clones`, `deps`, and `tests`, and file selectors now reject `entries`.
+
 ## [0.0.17] - 2026-04-19
 
 ### Fixed

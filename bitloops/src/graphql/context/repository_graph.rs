@@ -135,22 +135,6 @@ impl DevqlGraphqlContext {
         Ok(entries)
     }
 
-    pub(crate) async fn list_artefacts_for_paths(
-        &self,
-        paths: &[String],
-        filter: Option<&ArtefactFilterInput>,
-        scope: &ResolverScope,
-    ) -> Result<Vec<Artefact>> {
-        let mut artefacts = Vec::new();
-        for path in paths {
-            artefacts.extend(
-                self.list_artefacts(Some(path.as_str()), filter, scope)
-                    .await?,
-            );
-        }
-        Ok(artefacts)
-    }
-
     pub(crate) async fn list_artefacts(
         &self,
         path: Option<&str>,
