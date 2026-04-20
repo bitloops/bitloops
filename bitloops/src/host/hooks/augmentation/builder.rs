@@ -1,12 +1,6 @@
 use std::path::Path;
 
-use crate::adapters::agents::{
-    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
-    AGENT_NAME_GEMINI, AGENT_NAME_OPEN_CODE,
-};
-
-use super::devql_guidance::build_turn_guidance;
-use super::skill_content::USING_DEVQL_SKILL;
+use super::prompt_surface_presence::installed_prompt_surface_label;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookAugmentation {
@@ -14,63 +8,48 @@ pub struct HookAugmentation {
     pub targeted: bool,
 }
 
-pub fn build_devql_session_start_augmentation(agent_name: &str) -> HookAugmentation {
-    HookAugmentation {
-        additional_context: session_bootstrap_text(agent_name),
+pub fn build_devql_session_start_augmentation(
+    repo_root: &Path,
+    agent_name: &str,
+) -> Option<HookAugmentation> {
+    let surface_label = installed_prompt_surface_label(repo_root, agent_name)?;
+    Some(HookAugmentation {
+        additional_context: session_bootstrap_text(surface_label),
         targeted: false,
-    }
+    })
 }
 
-pub fn build_devql_hook_augmentation(repo_root: &Path, prompt: &str) -> HookAugmentation {
-    HookAugmentation {
-        additional_context: build_turn_guidance(repo_root, prompt),
-        targeted: true,
-    }
+pub fn build_devql_hook_augmentation(
+    _repo_root: &Path,
+    _agent_name: &str,
+    _prompt: &str,
+) -> Option<HookAugmentation> {
+    None
 }
 
-fn session_bootstrap_text(agent_name: &str) -> String {
-    let surface_label = match agent_name {
-        AGENT_NAME_CLAUDE_CODE => {
-            "The repo includes a Bitloops-managed skill at `.claude/skills/bitloops/using-devql/SKILL.md`."
-        }
-        AGENT_NAME_CODEX => {
-            "The repo includes a Bitloops-managed skill at `.agents/skills/bitloops/using-devql/SKILL.md`."
-        }
-        AGENT_NAME_COPILOT => {
-            "The repo includes a Bitloops-managed skill at `.github/skills/bitloops/using-devql/SKILL.md`."
-        }
-        AGENT_NAME_CURSOR => {
-            "The repo includes a Bitloops-managed Cursor rule at `.cursor/rules/bitloops-using-devql.mdc`, and Bitloops also provides Cursor session bootstrap guidance for this repo."
-        }
-        AGENT_NAME_GEMINI => {
-            "The repo includes Bitloops-managed Gemini instructions via `GEMINI.md` and `.gemini/skills/bitloops/using-devql/SKILL.md`."
-        }
-        AGENT_NAME_OPEN_CODE => {
-            "Bitloops provides DevQL guidance through the repo-local OpenCode plugin and `.opencode/skills/bitloops/using-devql/SKILL.md`."
-        }
-        _ => "Bitloops provides DevQL guidance for this repo.",
-    };
-
+fn session_bootstrap_text(surface_label: &str) -> String {
     format!(
         "<EXTREMELY_IMPORTANT>\n\
-You have DevQL in this repo.\n\
-\n\
-{}\n\
-Follow the `using-devql` guidance below for code understanding and exploration.\n\
-\n\
-{}\n\
+Bitloops has installed DevQL guidance for this repo at {}.\n\
+Use that repo-local guidance surface for DevQL-specific instructions.\n\
 </EXTREMELY_IMPORTANT>",
-        surface_label, USING_DEVQL_SKILL
+        surface_label
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
 
     #[test]
-    fn session_start_guidance_for_claude_uses_canonical_skill_content() {
-        let augmentation = build_devql_session_start_augmentation(AGENT_NAME_CLAUDE_CODE);
+    fn session_start_guidance_mentions_skill_path_without_inlining_skill_body() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
+
+        let augmentation = build_devql_session_start_augmentation(dir.path(), AGENT_NAME_CODEX)
+            .expect("augmentation");
 
         assert!(!augmentation.targeted);
         assert!(
@@ -81,23 +60,44 @@ mod tests {
         assert!(
             augmentation
                 .additional_context
-                .contains("You have DevQL in this repo.")
+                .contains(".agents/skills/bitloops/using-devql/SKILL.md")
         );
         assert!(
-            augmentation
+            !augmentation
                 .additional_context
-                .contains(".claude/skills/bitloops/using-devql/SKILL.md")
+                .contains("name: using-devql")
         );
-        assert!(augmentation.additional_context.contains(USING_DEVQL_SKILL));
+        assert!(
+            !augmentation
+                .additional_context
+                .contains("bitloops devql query")
+        );
+        assert!(!augmentation.additional_context.contains("fuzzyName"));
         assert!(!augmentation.additional_context.contains("tracked.txt"));
     }
 
     #[test]
+    fn session_start_guidance_is_absent_when_repo_skill_is_not_installed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        assert_eq!(
+            build_devql_session_start_augmentation(dir.path(), AGENT_NAME_CODEX),
+            None
+        );
+    }
+
+    #[test]
     fn session_start_guidance_is_agent_specific() {
-        let codex = build_devql_session_start_augmentation(AGENT_NAME_CODEX);
-        let gemini = build_devql_session_start_augmentation(AGENT_NAME_GEMINI);
-        let cursor = build_devql_session_start_augmentation(AGENT_NAME_CURSOR);
-        let copilot = build_devql_session_start_augmentation(AGENT_NAME_COPILOT);
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
+        crate::adapters::agents::gemini::skills::install_repo_skill(dir.path())
+            .expect("install gemini repo skill");
+
+        let codex = build_devql_session_start_augmentation(dir.path(), AGENT_NAME_CODEX)
+            .expect("codex augmentation");
+        let gemini = build_devql_session_start_augmentation(dir.path(), AGENT_NAME_GEMINI)
+            .expect("gemini augmentation");
 
         assert!(
             codex
@@ -105,59 +105,25 @@ mod tests {
                 .contains(".agents/skills/bitloops/using-devql/SKILL.md")
         );
         assert!(
-            !codex
+            gemini
                 .additional_context
-                .contains("~/.agents/skills/bitloops/using-devql/SKILL.md")
-        );
-        assert!(
-            gemini.additional_context.contains("GEMINI.md")
-                && gemini
-                    .additional_context
-                    .contains(".gemini/skills/bitloops/using-devql/SKILL.md")
-        );
-        assert!(
-            cursor
-                .additional_context
-                .contains(".cursor/rules/bitloops-using-devql.mdc")
-        );
-        assert!(
-            cursor
-                .additional_context
-                .contains("Cursor session bootstrap")
-        );
-        assert!(
-            copilot
-                .additional_context
-                .contains(".github/skills/bitloops/using-devql/SKILL.md")
+                .contains(".gemini/skills/bitloops/using-devql/SKILL.md")
         );
         assert!(
             !codex
                 .additional_context
-                .contains(".claude/skills/bitloops/using-devql/SKILL.md")
+                .contains(".gemini/skills/bitloops/using-devql/SKILL.md")
         );
     }
 
     #[test]
-    fn turn_guidance_uses_prompt_target_for_line_scoped_command() {
+    fn turn_guidance_is_absent_even_for_targeted_prompt() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("tracked.txt"), "one\n").expect("write tracked file");
 
-        let augmentation = build_devql_hook_augmentation(dir.path(), "Explain tracked.txt:1");
-
-        assert!(augmentation.targeted);
-        assert!(
-            augmentation
-                .additional_context
-                .contains("Use DevQL first for this request.")
+        assert_eq!(
+            build_devql_hook_augmentation(dir.path(), AGENT_NAME_CODEX, "Explain tracked.txt:1"),
+            None
         );
-        assert!(augmentation.additional_context.contains("tracked.txt"));
-        assert!(augmentation.additional_context.contains("start: 1"));
-        assert!(augmentation.additional_context.contains("end: 1"));
-        assert!(
-            !augmentation
-                .additional_context
-                .contains("<repo-relative-path>")
-        );
-        assert!(!augmentation.additional_context.contains("<symbol-fqn>"));
     }
 }

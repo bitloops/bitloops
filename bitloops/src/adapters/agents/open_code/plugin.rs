@@ -1,18 +1,20 @@
+use std::path::Path;
+
+use super::skills::repo_skill_path;
+
 pub const BITLOOPS_CMD_PLACEHOLDER: &str = "__BITLOOPS_CMD__";
 pub const BOOTSTRAP_CONTEXT_PLACEHOLDER: &str = "__BOOTSTRAP_CONTEXT__";
 
-pub(crate) fn session_bootstrap_text() -> String {
-    format!(
-        "<EXTREMELY_IMPORTANT>\n\
-You have DevQL in this repo.\n\
-\n\
-The repo also includes a Bitloops-managed skill at `.opencode/skills/bitloops/using-devql/SKILL.md`.\n\
-Follow the `using-devql` guidance below for code understanding and exploration.\n\
-\n\
-{}\n\
-</EXTREMELY_IMPORTANT>",
-        crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL
-    )
+pub(crate) fn session_bootstrap_text(repo_root: &Path) -> String {
+    if !repo_skill_path(repo_root).is_file() {
+        return String::new();
+    }
+
+    "<EXTREMELY_IMPORTANT>\n\
+Bitloops has installed DevQL guidance for this repo at `.opencode/skills/bitloops/using-devql/SKILL.md`.\n\
+Use that repo-local skill for DevQL-specific instructions.\n\
+</EXTREMELY_IMPORTANT>"
+        .to_string()
 }
 
 pub const PLUGIN_TEMPLATE: &str = r##"// Bitloops CLI plugin for OpenCode
@@ -182,6 +184,9 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
     },
 
     "experimental.chat.messages.transform": async (_input, output) => {
+      if (!BOOTSTRAP_CONTEXT) return
+      const repoSkillPath = path.join(directory, ".opencode", "skills", "bitloops", "using-devql", "SKILL.md")
+      if (!(await Bun.file(repoSkillPath).exists())) return
       if (!output.messages.length) return
       const firstUser = output.messages.find((m: any) => m.info?.role === "user")
       if (!firstUser || !firstUser.parts?.length) return

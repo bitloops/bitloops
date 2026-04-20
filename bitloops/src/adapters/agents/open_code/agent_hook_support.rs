@@ -67,7 +67,7 @@ impl OpenCodeAgent {
             return Ok(0);
         }
 
-        let content = self.render_plugin(local_dev)?;
+        let content = self.render_plugin_at(repo_root, local_dev)?;
         if let Some(parent) = plugin_path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|err| anyhow!("failed to create plugin directory: {err}"))?;
@@ -110,7 +110,14 @@ impl OpenCodeAgent {
     }
 
     pub fn render_plugin(&self, local_dev: bool) -> Result<String> {
-        render_plugin_template(local_dev)
+        let repo_root = crate::utils::paths::repo_root().or_else(|_| {
+            std::env::current_dir().map_err(|err| anyhow!("failed to get current directory: {err}"))
+        })?;
+        self.render_plugin_at(&repo_root, local_dev)
+    }
+
+    fn render_plugin_at(&self, repo_root: &std::path::Path, local_dev: bool) -> Result<String> {
+        render_plugin_template(repo_root, local_dev)
     }
 }
 

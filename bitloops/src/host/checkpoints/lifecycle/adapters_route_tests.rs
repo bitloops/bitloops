@@ -55,13 +55,39 @@ fn with_route_test_state<T>(
     with_process_state(Some(repo_root), &env_vars, f)
 }
 
-fn assert_session_start_context_matches_builder(context: &str, agent_name: &str) {
-    let augmentation =
-        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
-            agent_name,
-        );
-    assert!(!augmentation.targeted);
-    assert_eq!(context, augmentation.additional_context);
+fn install_devql_prompt_surface_for_agent(repo_root: &std::path::Path, agent_name: &str) {
+    match agent_name {
+        crate::adapters::agents::AGENT_NAME_CLAUDE_CODE => {
+            crate::adapters::agents::claude_code::skills::install_repo_skill(repo_root)
+                .expect("install claude repo skill");
+        }
+        AGENT_NAME_CODEX => {
+            crate::adapters::agents::codex::skills::install_repo_skill(repo_root)
+                .expect("install codex repo skill");
+        }
+        AGENT_NAME_COPILOT => {
+            crate::adapters::agents::copilot::skills::install_repo_skill(repo_root)
+                .expect("install copilot repo skill");
+        }
+        AGENT_NAME_CURSOR => {
+            crate::adapters::agents::cursor::rules::install_repo_rule(repo_root)
+                .expect("install cursor repo rule");
+        }
+        AGENT_NAME_GEMINI => {
+            crate::adapters::agents::gemini::skills::install_repo_skill(repo_root)
+                .expect("install gemini repo skill");
+        }
+        other => panic!("unsupported agent for prompt surface install: {other}"),
+    }
+}
+
+fn assert_presence_only_session_start_context(context: &str, surface_path: &str) {
+    assert!(context.contains("<EXTREMELY_IMPORTANT>"));
+    assert!(context.contains(surface_path));
+    assert!(!context.contains("name: using-devql"));
+    assert!(!context.contains("bitloops devql query"));
+    assert!(!context.contains("fuzzyName"));
+    assert!(!context.contains("symbolFqn"));
 }
 
 fn codex_response_item_line(role: &str, kind: &str, text: &str) -> String {
@@ -374,7 +400,7 @@ fn route_codex_stop_without_transcript_path_uses_saved_state_and_persists_checkp
 }
 
 #[test]
-fn route_codex_user_prompt_submit_returns_targeted_additional_context_stdout() -> Result<()> {
+fn route_codex_user_prompt_submit_returns_no_devql_query_suggestion() -> Result<()> {
     let repo = seed_repo();
     let session_id = "codex-session-prompt";
     let transcript_path = repo.path().join("codex-transcript.json");
@@ -386,6 +412,8 @@ fn route_codex_user_prompt_submit_returns_targeted_additional_context_stdout() -
     .expect("write transcript");
 
     with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_CODEX);
+
         let session_payload = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path_str.clone(),
@@ -411,31 +439,13 @@ fn route_codex_user_prompt_submit_returns_targeted_additional_context_stdout() -
             &prompt_payload,
         )?;
 
-        let stdout = outcome.stdout.expect("stdout");
-        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-        let context = json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("additionalContext");
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            serde_json::Value::String("UserPromptSubmit".to_string())
-        );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("Use DevQL first for this request."));
-        assert!(context.contains("Suggested command:"));
-        assert!(context.contains("bitloops devql query"));
-        assert!(context.contains("tracked.txt"));
-        assert!(context.contains("start: 1"));
-        assert!(context.contains("end: 1"));
-        assert!(context.contains("Run this before broad repo search."));
-        assert!(!context.contains("<repo-relative-path>"));
-        assert!(!context.contains("<symbol-fqn>"));
+        assert!(outcome.stdout.is_none());
         Ok(())
     })
 }
 
 #[test]
-fn route_claude_user_prompt_submit_returns_targeted_context_stdout() -> Result<()> {
+fn route_claude_user_prompt_submit_returns_no_devql_query_suggestion() -> Result<()> {
     let repo = seed_repo();
     let session_id = "claude-session-prompt";
     let transcript_path = repo.path().join("claude-transcript.json");
@@ -447,6 +457,11 @@ fn route_claude_user_prompt_submit_returns_targeted_context_stdout() -> Result<(
     .expect("write transcript");
 
     with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(
+            repo.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+        );
+
         let session_payload = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path_str.clone(),
@@ -472,31 +487,13 @@ fn route_claude_user_prompt_submit_returns_targeted_context_stdout() -> Result<(
             &prompt_payload,
         )?;
 
-        let stdout = outcome.stdout.expect("stdout");
-        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-        let context = json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("additionalContext");
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            serde_json::Value::String("UserPromptSubmit".to_string())
-        );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("Use DevQL first for this request."));
-        assert!(context.contains("Suggested command:"));
-        assert!(context.contains("bitloops devql query"));
-        assert!(context.contains("tracked.txt"));
-        assert!(context.contains("start: 1"));
-        assert!(context.contains("end: 1"));
-        assert!(context.contains("Run this before broad repo search."));
-        assert!(!context.contains("<repo-relative-path>"));
-        assert!(!context.contains("<symbol-fqn>"));
+        assert!(outcome.stdout.is_none());
         Ok(())
     })
 }
 
 #[test]
-fn route_claude_session_start_returns_additional_context_stdout() -> Result<()> {
+fn route_claude_session_start_returns_presence_only_context_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_id = "claude-session-start";
     let transcript_path = repo.path().join("claude-transcript.json");
@@ -504,6 +501,11 @@ fn route_claude_session_start_returns_additional_context_stdout() -> Result<()> 
     std::fs::write(&transcript_path, "").expect("write transcript");
 
     with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(
+            repo.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+        );
+
         let session_payload = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path_str,
@@ -525,16 +527,16 @@ fn route_claude_session_start_returns_additional_context_stdout() -> Result<()> 
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert_session_start_context_matches_builder(
+        assert_presence_only_session_start_context(
             context,
-            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            ".claude/skills/bitloops/using-devql/SKILL.md",
         );
         Ok(())
     })
 }
 
 #[test]
-fn route_codex_session_start_returns_additional_context_stdout() -> Result<()> {
+fn route_codex_session_start_returns_presence_only_context_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_id = "codex-session-start";
     let transcript_path = repo.path().join("codex-transcript.json");
@@ -542,6 +544,8 @@ fn route_codex_session_start_returns_additional_context_stdout() -> Result<()> {
     std::fs::write(&transcript_path, "").expect("write transcript");
 
     with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_CODEX);
+
         let session_payload = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path_str,
@@ -563,13 +567,42 @@ fn route_codex_session_start_returns_additional_context_stdout() -> Result<()> {
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert_session_start_context_matches_builder(context, AGENT_NAME_CODEX);
+        assert_presence_only_session_start_context(
+            context,
+            ".agents/skills/bitloops/using-devql/SKILL.md",
+        );
         Ok(())
     })
 }
 
 #[test]
-fn route_gemini_before_agent_returns_generic_additional_context_stdout() -> Result<()> {
+fn route_codex_session_start_returns_no_context_when_skill_is_absent() -> Result<()> {
+    let repo = seed_repo();
+    let session_id = "codex-session-start-absent";
+    let transcript_path = repo.path().join("codex-transcript-absent.json");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(&transcript_path, "").expect("write transcript");
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        let session_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str,
+        })
+        .to_string();
+        let outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_SESSION_START,
+            &session_payload,
+        )?;
+
+        assert!(outcome.stdout.is_none());
+        Ok(())
+    })
+}
+
+#[test]
+fn route_gemini_before_agent_returns_no_devql_query_suggestion() -> Result<()> {
     let repo = seed_repo();
     let session_id = "gemini-session-prompt";
     let transcript_path = repo.path().join("gemini-transcript.json");
@@ -581,6 +614,8 @@ fn route_gemini_before_agent_returns_generic_additional_context_stdout() -> Resu
     .expect("write transcript");
 
     with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_GEMINI);
+
         let session_payload = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path_str.clone(),
@@ -606,31 +641,13 @@ fn route_gemini_before_agent_returns_generic_additional_context_stdout() -> Resu
             &prompt_payload,
         )?;
 
-        let stdout = outcome.stdout.expect("stdout");
-        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-        let context = json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("additionalContext");
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            serde_json::Value::String("BeforeAgent".to_string())
-        );
-        assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-        assert!(context.contains("Use DevQL first for this request."));
-        assert!(context.contains("Suggested command:"));
-        assert!(context.contains("bitloops devql query"));
-        assert!(context.contains("tracked.txt"));
-        assert!(context.contains("start: 1"));
-        assert!(context.contains("end: 1"));
-        assert!(context.contains("Run this before broad repo search."));
-        assert!(!context.contains("<repo-relative-path>"));
-        assert!(!context.contains("<symbol-fqn>"));
+        assert!(outcome.stdout.is_none());
         Ok(())
     })
 }
 
 #[test]
-fn route_gemini_session_start_returns_additional_context_stdout() -> Result<()> {
+fn route_gemini_session_start_returns_presence_only_context_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_id = "gemini-session-start";
     let transcript_path = repo.path().join("gemini-transcript.json");
@@ -638,6 +655,8 @@ fn route_gemini_session_start_returns_additional_context_stdout() -> Result<()> 
     std::fs::write(&transcript_path, "").expect("write transcript");
 
     with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_GEMINI);
+
         let session_payload = serde_json::json!({
             "session_id": session_id,
             "transcript_path": transcript_path_str,
@@ -659,19 +678,24 @@ fn route_gemini_session_start_returns_additional_context_stdout() -> Result<()> 
             json["hookSpecificOutput"]["hookEventName"],
             serde_json::Value::String("SessionStart".to_string())
         );
-        assert_session_start_context_matches_builder(context, AGENT_NAME_GEMINI);
+        assert_presence_only_session_start_context(
+            context,
+            ".gemini/skills/bitloops/using-devql/SKILL.md",
+        );
         Ok(())
     })
 }
 
 #[test]
-fn route_cursor_session_start_returns_additional_context_stdout() -> Result<()> {
+fn route_cursor_session_start_returns_presence_only_context_when_rule_exists() -> Result<()> {
     let repo = seed_repo();
     let transcript_path = repo.path().join("cursor-transcript.json");
     let transcript_path_str = transcript_path.to_string_lossy().to_string();
     std::fs::write(&transcript_path, "").expect("write transcript");
 
     with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_CURSOR);
+
         let session_payload = serde_json::json!({
             "conversation_id": "cursor-session-start",
             "transcript_path": transcript_path_str,
@@ -690,13 +714,16 @@ fn route_cursor_session_start_returns_additional_context_stdout() -> Result<()> 
         let context = json["additional_context"]
             .as_str()
             .expect("additional_context");
-        assert_session_start_context_matches_builder(context, AGENT_NAME_CURSOR);
+        assert_presence_only_session_start_context(
+            context,
+            ".cursor/rules/bitloops-using-devql.mdc",
+        );
         Ok(())
     })
 }
 
 #[test]
-fn route_copilot_session_start_returns_additional_context_stdout() -> Result<()> {
+fn route_copilot_session_start_returns_presence_only_context_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_dir = repo.path().join("copilot-session-state");
     std::fs::create_dir_all(&session_dir).expect("create copilot session dir");
@@ -709,6 +736,8 @@ fn route_copilot_session_start_returns_additional_context_stdout() -> Result<()>
             Some(session_dir_str.as_str()),
         )],
         || -> Result<()> {
+            install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_COPILOT);
+
             let session_payload = serde_json::json!({
                 "sessionId": "copilot-session-start",
                 "source": "new",
@@ -728,7 +757,10 @@ fn route_copilot_session_start_returns_additional_context_stdout() -> Result<()>
             let context = json["additionalContext"]
                 .as_str()
                 .expect("additionalContext");
-            assert_session_start_context_matches_builder(context, AGENT_NAME_COPILOT);
+            assert_presence_only_session_start_context(
+                context,
+                ".github/skills/bitloops/using-devql/SKILL.md",
+            );
             Ok(())
         },
     )

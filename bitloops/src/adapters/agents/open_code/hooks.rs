@@ -19,7 +19,7 @@ pub fn get_plugin_path(repo_root: &Path) -> PathBuf {
         .join(PLUGIN_FILE_NAME)
 }
 
-pub fn render_plugin_template(local_dev: bool) -> Result<String> {
+pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<String> {
     if !PLUGIN_TEMPLATE.contains(BITLOOPS_CMD_PLACEHOLDER) {
         return Err(anyhow!(
             "plugin template missing BITLOOPS command placeholder"
@@ -37,7 +37,7 @@ pub fn render_plugin_template(local_dev: bool) -> Result<String> {
         "bitloops"
     };
 
-    let bootstrap_context = to_string(&session_bootstrap_text())
+    let bootstrap_context = to_string(&session_bootstrap_text(repo_root))
         .map_err(|err| anyhow!("failed to serialize bootstrap context: {err}"))?;
 
     Ok(PLUGIN_TEMPLATE
@@ -48,10 +48,21 @@ pub fn render_plugin_template(local_dev: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
-    fn render_plugin_template_injects_bootstrap_context_and_skill_path() {
-        let rendered = render_plugin_template(false).expect("render should succeed");
+    fn render_plugin_template_injects_presence_only_bootstrap_when_skill_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo_root = dir.path();
+        fs::create_dir_all(repo_root.join(".opencode/skills/bitloops/using-devql"))
+            .expect("create skill directory");
+        fs::write(
+            repo_root.join(".opencode/skills/bitloops/using-devql/SKILL.md"),
+            "skill body",
+        )
+        .expect("write skill");
+
+        let rendered = render_plugin_template(repo_root, false).expect("render should succeed");
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
         assert!(
@@ -59,8 +70,20 @@ mod tests {
             "bootstrap text should reference the repo-local skill path"
         );
         assert!(
-            rendered.contains("name: using-devql"),
-            "bootstrap text should include the canonical skill content"
+            rendered.contains("Bitloops has installed DevQL guidance for this repo"),
+            "bootstrap text should preserve the presence-only guidance"
+        );
+        assert!(
+            !rendered.contains("bitloops devql query"),
+            "bootstrap text should not inline DevQL query suggestions"
+        );
+        assert!(
+            !rendered.contains("name: using-devql"),
+            "bootstrap text should not inline the managed skill body"
+        );
+        assert!(
+            rendered.contains("<EXTREMELY_IMPORTANT>"),
+            "plugin should inject bootstrap context through OpenCode's messages transform"
         );
         assert!(
             rendered.contains("\"experimental.chat.messages.transform\": async"),
@@ -70,11 +93,28 @@ mod tests {
             rendered.contains("config.skills.paths.push(repoSkillsDir)"),
             "plugin should register the repo-local .opencode/skills directory"
         );
+        assert!(
+            rendered.contains("await Bun.file(repoSkillPath).exists()"),
+            "plugin should re-check skill presence before injecting bootstrap text"
+        );
+    }
+
+    #[test]
+    fn render_plugin_template_stays_quiet_when_skill_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
+        assert!(rendered.contains(r#"const BOOTSTRAP_CONTEXT = ""#));
+        assert!(!rendered.contains(".opencode/skills/bitloops/using-devql/SKILL.md"));
+        assert!(!rendered.contains("Bitloops has installed DevQL guidance for this repo"));
+        assert!(!rendered.contains("<EXTREMELY_IMPORTANT>"));
     }
 
     #[test]
     fn render_plugin_template_switches_to_local_dev_command() {
-        let rendered = render_plugin_template(true).expect("render should succeed");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), true).expect("render should succeed");
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "cargo run --""#));
     }
