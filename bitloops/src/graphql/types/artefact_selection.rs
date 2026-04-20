@@ -53,15 +53,10 @@ impl ArtefactSelectorInput {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
 
-        if self.lines.is_some() && path.is_none() {
-            return Err(bad_user_input_error(
-                "`selectArtefacts(by: ...)` requires `path` when `lines` is provided",
-            ));
-        }
-
+        let path_selector_requested = path.is_some() || self.lines.is_some();
         let selector_count = usize::from(symbol_fqn.is_some())
             + usize::from(fuzzy_name.is_some())
-            + usize::from(path.is_some());
+            + usize::from(path_selector_requested);
         if selector_count == 0 {
             return Err(bad_user_input_error(
                 "`selectArtefacts(by: ...)` requires exactly one selector mode",
@@ -70,6 +65,11 @@ impl ArtefactSelectorInput {
         if selector_count > 1 {
             return Err(bad_user_input_error(
                 "`selectArtefacts(by: ...)` allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`",
+            ));
+        }
+        if path_selector_requested && path.is_none() {
+            return Err(bad_user_input_error(
+                "`selectArtefacts(by: ...)` requires `path` when `lines` is provided",
             ));
         }
 
@@ -903,6 +903,32 @@ mod tests {
         }
         .selection_mode()
         .expect_err("fuzzy selector mixed with path should fail");
+        assert!(
+            err.message
+                .contains("allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`")
+        );
+
+        let err = ArtefactSelectorInput {
+            symbol_fqn: None,
+            fuzzy_name: Some("payLater".to_string()),
+            path: None,
+            lines: Some(LineRangeInput { start: 20, end: 25 }),
+        }
+        .selection_mode()
+        .expect_err("fuzzy selector mixed with lines should fail");
+        assert!(
+            err.message
+                .contains("allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`")
+        );
+
+        let err = ArtefactSelectorInput {
+            symbol_fqn: Some("src/main.rs::main".to_string()),
+            fuzzy_name: None,
+            path: None,
+            lines: Some(LineRangeInput { start: 20, end: 25 }),
+        }
+        .selection_mode()
+        .expect_err("symbol selector mixed with lines should fail");
         assert!(
             err.message
                 .contains("allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`")

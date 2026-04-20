@@ -428,13 +428,10 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
         .map(str::trim)
         .filter(|value| !value.is_empty());
 
-    if selector.lines.is_some() && path.is_none() {
-        bail!("selectArtefacts(...) requires path: when lines: is provided");
-    }
-
+    let path_selector_requested = path.is_some() || selector.lines.is_some();
     let selector_count = usize::from(symbol_fqn.is_some())
         + usize::from(fuzzy_name.is_some())
-        + usize::from(path.is_some());
+        + usize::from(path_selector_requested);
     if selector_count == 0 {
         bail!("selectArtefacts(...) requires symbol_fqn:, fuzzy_name:, or path:");
     }
@@ -442,6 +439,9 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
         bail!(
             "selectArtefacts(...) allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"
         );
+    }
+    if path_selector_requested && path.is_none() {
+        bail!("selectArtefacts(...) requires path: when lines: is provided");
     }
 
     Ok(())

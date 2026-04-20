@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 use super::types::Artefact;
 
@@ -107,8 +108,10 @@ fn jaccard_similarity(left: &[&str], right: &[&str]) -> f32 {
         return 0.0;
     }
 
-    let shared = left.iter().filter(|token| right.contains(token)).count();
-    let union = left.len() + right.len() - shared;
+    let left = left.iter().copied().collect::<BTreeSet<_>>();
+    let right = right.iter().copied().collect::<BTreeSet<_>>();
+    let shared = left.intersection(&right).count();
+    let union = left.union(&right).count();
     if union == 0 {
         0.0
     } else {
@@ -320,5 +323,12 @@ mod tests {
         let selected = select_fuzzy_named_artefacts("payLater()", artefacts);
 
         assert_eq!(selected.len(), 10);
+    }
+
+    #[test]
+    fn jaccard_similarity_uses_set_semantics_for_duplicate_tokens() {
+        let score = jaccard_similarity(&["foo", "foo"], &["foo"]);
+
+        assert_eq!(score, 1.0);
     }
 }
