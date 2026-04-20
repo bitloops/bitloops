@@ -48,25 +48,21 @@ pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use crate::adapters::agents::open_code::skills::{
+        OPEN_CODE_SKILL_RELATIVE_PATH, install_repo_skill,
+    };
 
     #[test]
     fn render_plugin_template_injects_presence_only_bootstrap_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo_root = dir.path();
-        fs::create_dir_all(repo_root.join(".opencode/skills/bitloops/using-devql"))
-            .expect("create skill directory");
-        fs::write(
-            repo_root.join(".opencode/skills/bitloops/using-devql/SKILL.md"),
-            "skill body",
-        )
-        .expect("write skill");
+        install_repo_skill(repo_root).expect("install skill");
 
         let rendered = render_plugin_template(repo_root, false).expect("render should succeed");
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
         assert!(
-            rendered.contains(".opencode/skills/bitloops/using-devql/SKILL.md"),
+            rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH),
             "bootstrap text should reference the repo-local skill path"
         );
         assert!(
@@ -106,7 +102,7 @@ mod tests {
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
         assert!(rendered.contains(r#"const BOOTSTRAP_CONTEXT = ""#));
-        assert!(!rendered.contains(".opencode/skills/bitloops/using-devql/SKILL.md"));
+        assert!(!rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH));
         assert!(!rendered.contains("Bitloops has installed DevQL guidance for this repo"));
         assert!(!rendered.contains("<EXTREMELY_IMPORTANT>"));
     }

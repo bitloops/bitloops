@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::prompt_surface_presence::installed_prompt_surface_label;
+use super::prompt_surface_presence::installed_prompt_surface_relative_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookAugmentation {
@@ -12,9 +12,9 @@ pub fn build_devql_session_start_augmentation(
     repo_root: &Path,
     agent_name: &str,
 ) -> Option<HookAugmentation> {
-    let surface_label = installed_prompt_surface_label(repo_root, agent_name)?;
+    let surface_path = installed_prompt_surface_relative_path(repo_root, agent_name)?;
     Some(HookAugmentation {
-        additional_context: session_bootstrap_text(surface_label),
+        additional_context: session_bootstrap_text(surface_path),
         targeted: false,
     })
 }
@@ -27,13 +27,12 @@ pub fn build_devql_hook_augmentation(
     None
 }
 
-fn session_bootstrap_text(surface_label: &str) -> String {
+fn session_bootstrap_text(surface_path: &str) -> String {
     format!(
         "<EXTREMELY_IMPORTANT>\n\
-Bitloops has installed DevQL guidance for this repo at {}.\n\
+Bitloops has installed DevQL guidance for this repo at `{surface_path}`.\n\
 Use that repo-local guidance surface for DevQL-specific instructions.\n\
-</EXTREMELY_IMPORTANT>",
-        surface_label
+</EXTREMELY_IMPORTANT>"
     )
 }
 
@@ -60,7 +59,7 @@ mod tests {
         assert!(
             augmentation
                 .additional_context
-                .contains(".agents/skills/bitloops/using-devql/SKILL.md")
+                .contains(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
         );
         assert!(
             !augmentation
@@ -102,17 +101,17 @@ mod tests {
         assert!(
             codex
                 .additional_context
-                .contains(".agents/skills/bitloops/using-devql/SKILL.md")
+                .contains(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
         );
         assert!(
             gemini
                 .additional_context
-                .contains(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .contains(crate::adapters::agents::gemini::skills::GEMINI_SKILL_RELATIVE_PATH)
         );
         assert!(
             !codex
                 .additional_context
-                .contains(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .contains(crate::adapters::agents::gemini::skills::GEMINI_SKILL_RELATIVE_PATH)
         );
     }
 

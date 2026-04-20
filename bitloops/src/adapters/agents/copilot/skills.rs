@@ -7,13 +7,10 @@ use crate::adapters::agents::skill_install::{
 };
 use crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL;
 
+pub const COPILOT_SKILL_RELATIVE_PATH: &str = ".github/skills/bitloops/using-devql/SKILL.md";
+
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(".github")
-        .join("skills")
-        .join("bitloops")
-        .join("using-devql")
-        .join("SKILL.md")
+    repo_root.join(COPILOT_SKILL_RELATIVE_PATH)
 }
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {

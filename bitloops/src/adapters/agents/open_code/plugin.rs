@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::skills::repo_skill_path;
+use super::skills::{OPEN_CODE_SKILL_RELATIVE_PATH, repo_skill_path};
 
 pub const BITLOOPS_CMD_PLACEHOLDER: &str = "__BITLOOPS_CMD__";
 pub const BOOTSTRAP_CONTEXT_PLACEHOLDER: &str = "__BOOTSTRAP_CONTEXT__";
@@ -10,11 +10,12 @@ pub(crate) fn session_bootstrap_text(repo_root: &Path) -> String {
         return String::new();
     }
 
-    "<EXTREMELY_IMPORTANT>\n\
-Bitloops has installed DevQL guidance for this repo at `.opencode/skills/bitloops/using-devql/SKILL.md`.\n\
+    format!(
+        "<EXTREMELY_IMPORTANT>\n\
+Bitloops has installed DevQL guidance for this repo at `{OPEN_CODE_SKILL_RELATIVE_PATH}`.\n\
 Use that repo-local skill for DevQL-specific instructions.\n\
 </EXTREMELY_IMPORTANT>"
-        .to_string()
+    )
 }
 
 pub const PLUGIN_TEMPLATE: &str = r##"// Bitloops CLI plugin for OpenCode
