@@ -32,7 +32,6 @@ enum MockResponseBodyMode {
 struct MockDownloadServer {
     url: String,
     requests: Arc<Mutex<Vec<String>>>,
-    max_in_flight: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     accept_handle: Option<thread::JoinHandle<()>>,
     worker_handles: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
@@ -108,7 +107,6 @@ impl MockDownloadServer {
         Self {
             url,
             requests,
-            max_in_flight,
             stop,
             accept_handle: Some(accept_handle),
             worker_handles,
