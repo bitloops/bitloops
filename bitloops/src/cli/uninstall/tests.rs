@@ -21,8 +21,8 @@ use crate::cli::embeddings::{
     managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
 };
 use crate::cli::enable::SHELL_COMPLETION_COMMENT;
-use crate::config::{REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME};
 use crate::config::settings::SETTINGS_DIR;
+use crate::config::{REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME};
 use crate::devql_transport::{RepoPathRegistry, RepoPathRegistryEntry, persist_repo_path_registry};
 use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
 use crate::utils::platform_dirs::{

@@ -13,7 +13,10 @@ pub(crate) fn ensure_repo_init_files_excluded(
     project_root: &Path,
     selected_agents: &[String],
 ) -> Result<()> {
-    let selected_agents = selected_agents.iter().map(String::as_str).collect::<Vec<_>>();
+    let selected_agents = selected_agents
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     let exclude_path = git_root.join(".git").join("info").join("exclude");
     if let Some(parent) = exclude_path.parent() {
         std::fs::create_dir_all(parent)
@@ -47,7 +50,8 @@ pub(crate) fn clear_repo_init_files_excluded(git_root: &Path, project_root: &Pat
         }
     };
 
-    let managed_entries = repo_init_exclude_entries(git_root, project_root, &managed_repo_skill_agents());
+    let managed_entries =
+        repo_init_exclude_entries(git_root, project_root, &managed_repo_skill_agents());
     let mut changed = false;
     let mut retained_lines = Vec::new();
     for line in content.lines() {

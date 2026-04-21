@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     actor_email VARCHAR,
     actor_source VARCHAR,
     event_type VARCHAR,
+    source VARCHAR,
+    sequence_number BIGINT,
     agent_type VARCHAR,
     model VARCHAR,
     tool_use_id VARCHAR,
@@ -185,6 +187,16 @@ fn ensure_promoted_columns(conn: &duckdb::Connection) -> Result<()> {
             "interaction_events",
             "tool_use_id",
             "ALTER TABLE interaction_events ADD COLUMN tool_use_id VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "source",
+            "ALTER TABLE interaction_events ADD COLUMN source VARCHAR DEFAULT ''",
+        ),
+        (
+            "interaction_events",
+            "sequence_number",
+            "ALTER TABLE interaction_events ADD COLUMN sequence_number BIGINT DEFAULT 0",
         ),
         (
             "interaction_events",
