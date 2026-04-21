@@ -21,6 +21,7 @@ pub struct UninstallArgs {
             "caching",
             "config",
             "agent_hooks",
+            "repo_config",
             "git_hooks",
             "shell",
         ]
@@ -47,9 +48,13 @@ pub struct UninstallArgs {
     #[arg(long, default_value_t = false)]
     pub config: bool,
 
-    /// Remove supported agent hooks.
+    /// Remove supported agent hooks and Bitloops-managed repo-local agent prompt surfaces.
     #[arg(long = "agent-hooks", default_value_t = false)]
     pub agent_hooks: bool,
+
+    /// Remove repo-local Bitloops policy files and managed `.git/info/exclude` entries.
+    #[arg(long = "repo-config", default_value_t = false)]
+    pub repo_config: bool,
 
     /// Remove git hooks.
     #[arg(long = "git-hooks", default_value_t = false)]
@@ -59,7 +64,7 @@ pub struct UninstallArgs {
     #[arg(long, default_value_t = false)]
     pub shell: bool,
 
-    /// Limit hook removal to the current repository.
+    /// Limit repo-local uninstall targets to the current repository or Bitloops project.
     #[arg(long = "only-current-project", default_value_t = false)]
     pub only_current_project: bool,
 
@@ -71,6 +76,7 @@ pub struct UninstallArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum UninstallTarget {
     AgentHooks,
+    RepoConfig,
     GitHooks,
     Shell,
     Data,
@@ -84,6 +90,7 @@ impl UninstallTarget {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::AgentHooks => "Agent hooks",
+            Self::RepoConfig => "Repo config",
             Self::GitHooks => "Git hooks",
             Self::Shell => "Shell integration",
             Self::Data => "Data",
@@ -97,6 +104,9 @@ impl UninstallTarget {
     pub(super) fn picker_label(self) -> &'static str {
         match self {
             Self::AgentHooks => "Agent hooks in known Bitloops projects",
+            Self::RepoConfig => {
+                "Repo-local `.bitloops*.toml` and managed exclude entries in known Bitloops projects"
+            }
             Self::GitHooks => "Git hooks in known repositories",
             Self::Shell => "Shell completion integration",
             Self::Data => "Global data and repo-local `.bitloops/` data",
@@ -110,6 +120,9 @@ impl UninstallTarget {
     pub(super) fn summary(self, hook_repo_count: usize, repo_data_count: usize) -> String {
         match self {
             Self::AgentHooks => format!("Agent hooks in {hook_repo_count} Bitloops project(s)"),
+            Self::RepoConfig => {
+                format!("Repo config in {hook_repo_count} Bitloops project(s)")
+            }
             Self::GitHooks => format!("Git hooks in {hook_repo_count} repo(s)"),
             Self::Shell => "Shell completion integration".to_string(),
             Self::Data => {
@@ -123,8 +136,9 @@ impl UninstallTarget {
     }
 }
 
-pub(super) const ALL_TARGETS: [UninstallTarget; 8] = [
+pub(super) const ALL_TARGETS: [UninstallTarget; 9] = [
     UninstallTarget::AgentHooks,
+    UninstallTarget::RepoConfig,
     UninstallTarget::GitHooks,
     UninstallTarget::Shell,
     UninstallTarget::Data,
@@ -174,17 +188,19 @@ pub(super) fn validate_scope_flags(
     }
 
     if targets.is_empty() {
-        bail!("`--only-current-project` requires `--agent-hooks` and/or `--git-hooks`");
+        bail!(
+            "`--only-current-project` requires `--agent-hooks`, `--repo-config`, and/or `--git-hooks`"
+        );
     }
 
     if targets.iter().any(|target| {
         !matches!(
             target,
-            UninstallTarget::AgentHooks | UninstallTarget::GitHooks
+            UninstallTarget::AgentHooks | UninstallTarget::RepoConfig | UninstallTarget::GitHooks
         )
     }) {
         bail!(
-            "`--only-current-project` can only be used with `--agent-hooks` and/or `--git-hooks`"
+            "`--only-current-project` can only be used with `--agent-hooks`, `--repo-config`, and/or `--git-hooks`"
         );
     }
 
@@ -211,6 +227,9 @@ fn targets_from_flags(args: &UninstallArgs) -> BTreeSet<UninstallTarget> {
     }
     if args.agent_hooks {
         selected.insert(UninstallTarget::AgentHooks);
+    }
+    if args.repo_config {
+        selected.insert(UninstallTarget::RepoConfig);
     }
     if args.git_hooks {
         selected.insert(UninstallTarget::GitHooks);

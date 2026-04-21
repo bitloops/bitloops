@@ -215,7 +215,7 @@ fn explicit_flags_collect_requested_targets_without_prompting() {
 }
 
 #[test]
-fn only_current_project_requires_hook_targets() {
+fn only_current_project_requires_repo_local_targets() {
     let targets = BTreeSet::from([UninstallTarget::Data]);
     let err = validate_scope_flags(
         &UninstallArgs {
@@ -225,12 +225,18 @@ fn only_current_project_requires_hook_targets() {
         &targets,
     )
     .unwrap_err();
-    assert!(format!("{err:#}").contains("--only-current-project"));
+    let rendered = format!("{err:#}");
+    assert!(rendered.contains("--only-current-project"));
+    assert!(rendered.contains("--repo-config"));
 }
 
 #[test]
-fn only_current_project_accepts_hook_only_targets() {
-    let targets = BTreeSet::from([UninstallTarget::AgentHooks, UninstallTarget::GitHooks]);
+fn only_current_project_accepts_repo_local_targets() {
+    let targets = BTreeSet::from([
+        UninstallTarget::AgentHooks,
+        UninstallTarget::RepoConfig,
+        UninstallTarget::GitHooks,
+    ]);
     validate_scope_flags(
         &UninstallArgs {
             only_current_project: true,
@@ -238,7 +244,7 @@ fn only_current_project_accepts_hook_only_targets() {
         },
         &targets,
     )
-    .expect("hook-only targets should be valid");
+    .expect("repo-local targets should be valid");
 }
 
 #[test]
@@ -437,7 +443,7 @@ supported = ["codex"]
 }
 
 #[test]
-fn uninstall_agent_hooks_removes_repo_policy_files_and_managed_exclude_entries() {
+fn uninstall_agent_hooks_keeps_repo_policy_files_and_policy_exclude_entries() {
     let repo = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
     let data = tempfile::tempdir().unwrap();
@@ -491,14 +497,81 @@ fn uninstall_agent_hooks_removes_repo_policy_files_and_managed_exclude_entries()
             )
             .unwrap();
 
-            assert!(!repo.path().join(REPO_POLICY_FILE_NAME).exists());
-            assert!(!repo.path().join(REPO_POLICY_LOCAL_FILE_NAME).exists());
+            assert!(repo.path().join(REPO_POLICY_FILE_NAME).exists());
+            assert!(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME).exists());
             assert!(!skill_path.exists());
 
             let exclude = fs::read_to_string(&exclude_path).unwrap();
             assert!(exclude.contains("coverage/"));
-            assert!(!exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
+            assert!(exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
             assert!(!exclude.contains(CODEX_SKILL_RELATIVE_PATH));
+        },
+    );
+}
+
+#[test]
+fn uninstall_repo_config_removes_repo_policy_files_and_policy_exclude_entries_only() {
+    let repo = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            fs::write(
+                repo.path().join(REPO_POLICY_FILE_NAME),
+                "[capture]\nenabled = true\n",
+            )
+            .unwrap();
+            fs::write(
+                repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+                "[agents]\nsupported = [\"codex\"]\n",
+            )
+            .unwrap();
+
+            let skill_path = repo.path().join(CODEX_SKILL_RELATIVE_PATH);
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(&skill_path, "managed").unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            fs::write(
+                &exclude_path,
+                format!("coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n"),
+            )
+            .unwrap();
+
+            run_uninstall_for_test(
+                UninstallArgs {
+                    repo_config: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                None,
+                None,
+                &|| Box::pin(async { Ok(()) }),
+                &|| Ok(()),
+                &|| Ok(Vec::new()),
+            )
+            .unwrap();
+
+            assert!(!repo.path().join(REPO_POLICY_FILE_NAME).exists());
+            assert!(!repo.path().join(REPO_POLICY_LOCAL_FILE_NAME).exists());
+            assert!(skill_path.exists());
+
+            let exclude = fs::read_to_string(&exclude_path).unwrap();
+            assert!(exclude.contains("coverage/"));
+            assert!(!exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
+            assert!(exclude.contains(CODEX_SKILL_RELATIVE_PATH));
         },
     );
 }
@@ -593,6 +666,43 @@ fn only_current_project_agent_hooks_falls_back_to_repo_root_without_policy() {
 
             assert_eq!(
                 scope.agent_project_roots,
+                vec![repo.path().canonicalize().unwrap()]
+            );
+        },
+    );
+}
+
+#[test]
+fn only_current_project_repo_config_falls_back_to_repo_root_without_policy() {
+    let repo = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            let scope = super::repo::resolve_scope(
+                &UninstallArgs {
+                    repo_config: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                &BTreeSet::from([UninstallTarget::RepoConfig]),
+            )
+            .unwrap();
+
+            assert_eq!(
+                scope.repo_config_project_roots,
                 vec![repo.path().canonicalize().unwrap()]
             );
         },

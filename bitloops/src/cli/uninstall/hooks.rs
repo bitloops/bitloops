@@ -35,13 +35,46 @@ pub(super) fn uninstall_agent_hooks(project_roots: &[PathBuf], out: &mut dyn Wri
             &configured,
             &mut project_out,
         )?;
-        let repo_cleanup = cleanup_project_repo_state(project_root)?;
-        if attempted == 0 && !repo_cleanup.changed() {
+        let cleared_exclude_entries = clear_project_managed_skill_excludes(project_root)?;
+        if attempted == 0 && !cleared_exclude_entries {
             continue;
         }
 
         writeln!(out, "  Agent hooks: {}", project_root.display())?;
         write!(out, "{}", String::from_utf8(project_out).unwrap())?;
+        if cleared_exclude_entries {
+            writeln!(
+                out,
+                "    Cleared managed agent skill .git/info/exclude entries."
+            )?;
+        }
+        cleaned_projects += 1;
+    }
+
+    if cleaned_projects == 0 {
+        writeln!(out, "  No agent hooks found.")?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn uninstall_repo_config(project_roots: &[PathBuf], out: &mut dyn Write) -> Result<()> {
+    if project_roots.is_empty() {
+        writeln!(
+            out,
+            "  No known Bitloops projects found for repo-config cleanup."
+        )?;
+        return Ok(());
+    }
+
+    let mut cleaned_projects = 0usize;
+    for project_root in project_roots {
+        let repo_cleanup = cleanup_project_repo_state(project_root)?;
+        if !repo_cleanup.changed() {
+            continue;
+        }
+
+        writeln!(out, "  Repo config: {}", project_root.display())?;
         if repo_cleanup.removed_policy_files > 0 {
             writeln!(
                 out,
@@ -50,13 +83,16 @@ pub(super) fn uninstall_agent_hooks(project_roots: &[PathBuf], out: &mut dyn Wri
             )?;
         }
         if repo_cleanup.cleared_exclude_entries {
-            writeln!(out, "    Cleared managed .git/info/exclude entries.")?;
+            writeln!(
+                out,
+                "    Cleared managed .bitloops.local.toml .git/info/exclude entry."
+            )?;
         }
         cleaned_projects += 1;
     }
 
     if cleaned_projects == 0 {
-        writeln!(out, "  No agent hooks found.")?;
+        writeln!(out, "  No repo config found.")?;
     }
 
     Ok(())
@@ -93,7 +129,9 @@ pub(super) fn uninstall_git_hooks(repo_roots: &[PathBuf], out: &mut dyn Write) -
 fn cleanup_project_repo_state(project_root: &std::path::Path) -> Result<ProjectRepoCleanup> {
     let removed_policy_files = remove_repo_policy_files(project_root)?;
     let cleared_exclude_entries = match crate::cli::enable::find_repo_root(project_root) {
-        Ok(git_root) => crate::cli::init::clear_repo_init_files_excluded(&git_root, project_root)?,
+        Ok(git_root) => {
+            crate::cli::init::clear_repo_local_policy_excluded(&git_root, project_root)?
+        }
         Err(_) => false,
     };
 
@@ -101,6 +139,15 @@ fn cleanup_project_repo_state(project_root: &std::path::Path) -> Result<ProjectR
         removed_policy_files,
         cleared_exclude_entries,
     })
+}
+
+fn clear_project_managed_skill_excludes(project_root: &std::path::Path) -> Result<bool> {
+    match crate::cli::enable::find_repo_root(project_root) {
+        Ok(git_root) => {
+            crate::cli::init::clear_repo_managed_skill_files_excluded(&git_root, project_root)
+        }
+        Err(_) => Ok(false),
+    }
 }
 
 fn remove_repo_policy_files(project_root: &std::path::Path) -> Result<usize> {

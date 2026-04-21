@@ -452,6 +452,9 @@ fn uninstall_action(
     if args.agent_hooks {
         flags.push("agent_hooks");
     }
+    if args.repo_config {
+        flags.push("repo_config");
+    }
     if args.git_hooks {
         flags.push("git_hooks");
     }

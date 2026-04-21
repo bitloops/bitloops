@@ -40,7 +40,27 @@ pub(crate) fn ensure_repo_init_files_excluded(
     Ok(())
 }
 
-pub(crate) fn clear_repo_init_files_excluded(git_root: &Path, project_root: &Path) -> Result<bool> {
+pub(crate) fn clear_repo_local_policy_excluded(
+    git_root: &Path,
+    project_root: &Path,
+) -> Result<bool> {
+    clear_repo_exclude_entries(
+        git_root,
+        repo_policy_exclude_entries(git_root, project_root),
+    )
+}
+
+pub(crate) fn clear_repo_managed_skill_files_excluded(
+    git_root: &Path,
+    project_root: &Path,
+) -> Result<bool> {
+    clear_repo_exclude_entries(
+        git_root,
+        repo_managed_skill_exclude_entries(git_root, project_root, &managed_repo_skill_agents()),
+    )
+}
+
+fn clear_repo_exclude_entries(git_root: &Path, managed_entries: Vec<String>) -> Result<bool> {
     let exclude_path = git_root.join(".git").join("info").join("exclude");
     let content = match std::fs::read_to_string(&exclude_path) {
         Ok(content) => content,
@@ -49,9 +69,6 @@ pub(crate) fn clear_repo_init_files_excluded(git_root: &Path, project_root: &Pat
             return Err(err).with_context(|| format!("reading {}", exclude_path.display()));
         }
     };
-
-    let managed_entries =
-        repo_init_exclude_entries(git_root, project_root, &managed_repo_skill_agents());
     let mut changed = false;
     let mut retained_lines = Vec::new();
     for line in content.lines() {
@@ -75,22 +92,43 @@ pub(crate) fn clear_repo_init_files_excluded(git_root: &Path, project_root: &Pat
     Ok(true)
 }
 
+fn repo_policy_exclude_entries(git_root: &Path, project_root: &Path) -> Vec<String> {
+    vec![exclude_entry_for_path(
+        git_root,
+        &project_root.join(REPO_POLICY_LOCAL_FILE_NAME),
+    )]
+}
+
+fn repo_managed_skill_exclude_entries(
+    git_root: &Path,
+    project_root: &Path,
+    selected_agents: &[&str],
+) -> Vec<String> {
+    repo_managed_skill_paths(project_root, selected_agents)
+        .into_iter()
+        .map(|path| exclude_entry_for_path(git_root, &path))
+        .collect()
+}
+
+fn exclude_entry_for_path(git_root: &Path, path: &Path) -> String {
+    path.strip_prefix(git_root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
 fn repo_init_exclude_entries(
     git_root: &Path,
     project_root: &Path,
     selected_agents: &[&str],
 ) -> Vec<String> {
-    let mut excluded_paths = vec![project_root.join(REPO_POLICY_LOCAL_FILE_NAME)];
-    excluded_paths.extend(repo_managed_skill_paths(project_root, selected_agents));
-    excluded_paths
-        .into_iter()
-        .map(|path| {
-            path.strip_prefix(git_root)
-                .unwrap_or(path.as_path())
-                .to_string_lossy()
-                .replace('\\', "/")
-        })
-        .collect()
+    let mut entries = repo_policy_exclude_entries(git_root, project_root);
+    entries.extend(repo_managed_skill_exclude_entries(
+        git_root,
+        project_root,
+        selected_agents,
+    ));
+    entries
 }
 
 fn managed_repo_skill_agents() -> [&'static str; 5] {
