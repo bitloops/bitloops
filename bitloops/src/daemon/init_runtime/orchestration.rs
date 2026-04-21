@@ -4,7 +4,16 @@ use crate::daemon::types::{
 };
 
 use super::lanes::{active_task, running_task};
-use super::stats::SessionWorkplaneStats;
+use super::stats::{SessionWorkplaneStats, StatusCounts, merge_status_counts};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SelectedSessionWorkplaneStats {
+    pub(crate) embedding_jobs: StatusCounts,
+    pub(crate) summary_jobs: StatusCounts,
+    pub(crate) blocked_embedding_reason: Option<String>,
+    pub(crate) blocked_summary_reason: Option<String>,
+    pub(crate) warning_failed_jobs_total: u64,
+}
 
 pub(crate) fn record_task_completion_seq(session: &mut InitSessionRecord, task: &DevqlTaskRecord) {
     if task.status != DevqlTaskStatus::Completed {
@@ -56,6 +65,61 @@ fn latest_completed_sync_seq(session: &InitSessionRecord) -> Option<u64> {
 pub(crate) fn session_requires_semantic_follow_up(session: &InitSessionRecord) -> bool {
     session.selections.embeddings_bootstrap.is_some()
         || session.selections.summaries_bootstrap.is_some()
+}
+
+pub(crate) fn selected_session_workplane_stats(
+    session: &InitSessionRecord,
+    stats: &SessionWorkplaneStats,
+) -> SelectedSessionWorkplaneStats {
+    let include_code_embeddings = session.selections.run_code_embeddings;
+    let include_summary_embeddings = session.selections.run_summary_embeddings;
+    let include_summaries = session.selections.run_summaries;
+
+    let embedding_jobs = merge_status_counts([
+        if include_code_embeddings {
+            stats.code_embedding_jobs.counts
+        } else {
+            StatusCounts::default()
+        },
+        if include_summary_embeddings {
+            stats.summary_embedding_jobs.counts
+        } else {
+            StatusCounts::default()
+        },
+    ]);
+    let summary_jobs = if include_summaries {
+        stats.summary_refresh_jobs.counts
+    } else {
+        StatusCounts::default()
+    };
+
+    let blocked_embedding_reason =
+        if include_code_embeddings && stats.code_embedding_jobs.counts.has_pending_or_running() {
+            stats.blocked_code_embedding_reason.clone()
+        } else if include_summary_embeddings
+            && stats.summary_embedding_jobs.counts.has_pending_or_running()
+        {
+            stats.blocked_summary_embedding_reason.clone()
+        } else {
+            None
+        };
+    let blocked_summary_reason =
+        if include_summaries && stats.summary_refresh_jobs.counts.has_pending_or_running() {
+            stats.blocked_summary_reason.clone()
+        } else {
+            None
+        };
+
+    SelectedSessionWorkplaneStats {
+        embedding_jobs,
+        summary_jobs,
+        blocked_embedding_reason,
+        blocked_summary_reason,
+        warning_failed_jobs_total: u64::from(include_code_embeddings)
+            * stats.code_embedding_jobs.counts.failed
+            + u64::from(include_summary_embeddings) * stats.summary_embedding_jobs.counts.failed
+            + u64::from(include_summaries) * stats.summary_refresh_jobs.counts.failed,
+    }
 }
 
 pub(crate) fn task_failed(task: Option<&DevqlTaskRecord>) -> bool {
@@ -283,7 +347,8 @@ pub(crate) fn session_has_remaining_work(
     follow_up_sync: Option<&DevqlTaskRecord>,
     embeddings_task: Option<&DevqlTaskRecord>,
     summary_run: Option<&SummaryBootstrapRunRecord>,
-    stats: &SessionWorkplaneStats,
+    current_state: StatusCounts,
+    selected_workplane: &SelectedSessionWorkplaneStats,
 ) -> bool {
     active_task(initial_sync).is_some()
         || active_task(ingest_task).is_some()
@@ -295,9 +360,9 @@ pub(crate) fn session_has_remaining_work(
                 SummaryBootstrapStatus::Queued | SummaryBootstrapStatus::Running
             )
         })
-        || stats.current_state.has_pending_or_running()
-        || stats.embedding_jobs.has_pending_or_running()
-        || stats.summary_jobs.has_pending_or_running()
+        || current_state.has_pending_or_running()
+        || selected_workplane.embedding_jobs.has_pending_or_running()
+        || selected_workplane.summary_jobs.has_pending_or_running()
 }
 
 pub(crate) fn session_fatal_failure_detail(
