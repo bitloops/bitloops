@@ -6,7 +6,8 @@ use std::path::Path;
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload;
 use crate::host::capability_host::CapabilityMailboxRegistration;
@@ -113,6 +114,14 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
                         embedding_items.push(embedding_mailbox_item_from_job(
                             self.init_session_id.clone(),
                             EmbeddingRepresentationKind::Code,
+                            job,
+                        )?);
+                        continue;
+                    }
+                    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => {
+                        embedding_items.push(embedding_mailbox_item_from_job(
+                            self.init_session_id.clone(),
+                            EmbeddingRepresentationKind::Identity,
                             job,
                         )?);
                         continue;
