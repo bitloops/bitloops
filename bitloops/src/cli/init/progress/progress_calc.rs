@@ -324,7 +324,7 @@ mod tests {
 
         let ratio = ratio.expect("queue lanes with coverage should be determinate");
         assert!((ratio - (262.0 / 556.0)).abs() < f64::EPSILON);
-        assert_eq!(summary, "  47% 262 of 556 embeddings ready · 294 left");
+        assert_eq!(summary, "  47% 262 of 556 code embeddings ready · 294 left");
     }
 
     #[test]

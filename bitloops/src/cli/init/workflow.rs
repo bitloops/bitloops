@@ -371,11 +371,13 @@ pub(crate) async fn run_for_project_root(
     }
     let mut embeddings_bootstrap = None;
     let mut prepared_summary_setup = None;
+    let mut login_required = false;
     let embeddings_selection =
         should_install_embeddings_during_init(project_root, &args, out, input)?;
     match embeddings_selection {
         InitEmbeddingsSetupSelection::Existing => {}
         InitEmbeddingsSetupSelection::Cloud => {
+            login_required = true;
             let gateway_url =
                 platform_embeddings_gateway_url_override(args.embeddings_gateway_url.as_deref());
             if args.install_default_daemon {
@@ -409,11 +411,17 @@ pub(crate) async fn run_for_project_root(
         }
         InitEmbeddingsSetupSelection::Skip => {}
     }
-    match choose_summary_setup_during_init(project_root, args.install_default_daemon, out, input)
-        .await?
-    {
+    let summary_selection =
+        choose_summary_setup_during_init(project_root, args.install_default_daemon, out, input)
+            .await?;
+    if matches!(summary_selection, SummarySetupSelection::Cloud) {
+        login_required = true;
+    }
+    if login_required {
+        crate::cli::login::ensure_logged_in().await?;
+    }
+    match summary_selection {
         SummarySetupSelection::Cloud => {
-            crate::cli::login::ensure_logged_in().await?;
             let gateway_url_override = platform_summary_gateway_url_override();
             if args.install_default_daemon {
                 prepared_summary_setup = Some(prepare_cloud_summary_generation_plan(

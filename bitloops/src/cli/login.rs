@@ -2,6 +2,19 @@ use anyhow::{Result, bail};
 use chrono::{Local, TimeZone};
 use clap::{Args, Subcommand};
 
+#[cfg(test)]
+use std::cell::RefCell;
+#[cfg(test)]
+use std::rc::Rc;
+
+#[cfg(test)]
+type EnsureLoggedInHook = dyn Fn() -> Result<crate::daemon::WorkosSessionDetails> + 'static;
+
+#[cfg(test)]
+thread_local! {
+    static ENSURE_LOGGED_IN_HOOK: RefCell<Option<Rc<EnsureLoggedInHook>>> = RefCell::new(None);
+}
+
 #[derive(Args, Debug, Clone, Default)]
 pub struct LoginArgs {
     #[command(subcommand)]
@@ -34,6 +47,11 @@ pub async fn run(args: LoginArgs) -> Result<()> {
 }
 
 pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDetails> {
+    #[cfg(test)]
+    if let Some(hook) = ENSURE_LOGGED_IN_HOOK.with(|cell| cell.borrow().clone()) {
+        return hook();
+    }
+
     match crate::daemon::prepare_workos_device_login().await? {
         crate::daemon::WorkosLoginStart::AlreadyLoggedIn(session) => {
             println!("Already signed in as {}.", session.display_label());
@@ -71,6 +89,25 @@ pub(crate) async fn ensure_logged_in() -> Result<crate::daemon::WorkosSessionDet
             Ok(session)
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn with_ensure_logged_in_hook<T>(
+    hook: impl Fn() -> Result<crate::daemon::WorkosSessionDetails> + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    ENSURE_LOGGED_IN_HOOK.with(|cell| {
+        assert!(
+            cell.borrow().is_none(),
+            "ensure_logged_in hook already installed"
+        );
+        *cell.borrow_mut() = Some(Rc::new(hook));
+    });
+    let result = f();
+    ENSURE_LOGGED_IN_HOOK.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
 }
 
 async fn run_status() -> Result<()> {

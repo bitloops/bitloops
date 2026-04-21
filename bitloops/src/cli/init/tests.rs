@@ -12,6 +12,7 @@ use crate::cli::embeddings::{
 use crate::cli::inference::{
     OllamaAvailability, with_ollama_probe_hook, with_summary_generation_configured_hook,
 };
+use crate::cli::login::with_ensure_logged_in_hook;
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, prompt_telemetry_consent, with_global_graphql_executor_hook,
     with_test_assume_daemon_running, with_test_tty_override,
@@ -152,6 +153,21 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .enable_all()
         .build()
         .expect("runtime")
+}
+
+fn fake_logged_in_session() -> crate::daemon::WorkosSessionDetails {
+    crate::daemon::WorkosSessionDetails {
+        client_id: "client_test".to_string(),
+        user_id: Some("user_123".to_string()),
+        user_email: Some("cli@example.com".to_string()),
+        user_first_name: Some("CLI".to_string()),
+        user_last_name: Some("User".to_string()),
+        organisation_id: Some("org_123".to_string()),
+        authentication_method: Some("GoogleOAuth".to_string()),
+        access_token_expires_at_unix: None,
+        authenticated_at_unix: 0,
+        updated_at_unix: 0,
+    }
 }
 
 fn render_install_default_daemon_handoff_with_mkcert(
@@ -3153,6 +3169,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
     let app_dirs = tempfile::tempdir().unwrap();
     let repo_id = test_repo_id(repo.path());
     let session_id = "init-session-cloud-embeddings";
+    let login_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
     setup_git_repo(&repo);
 
     with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
@@ -3165,147 +3182,173 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                 Ok(())
             },
             || {
-                with_env_vars(
-                    &[(
-                        "BITLOOPS_PLATFORM_GATEWAY_URL",
-                        Some("https://platform.example"),
-                    )],
+                with_ensure_logged_in_hook(
+                    {
+                        let login_calls = std::rc::Rc::clone(&login_calls);
+                        move || {
+                            *login_calls.borrow_mut() += 1;
+                            Ok(fake_logged_in_session())
+                        }
+                    },
                     || {
-                        with_global_graphql_executor_hook(
-                            |_runtime_root, _query, variables| {
-                                assert_eq!(variables["telemetry"], serde_json::json!(false));
-                                Ok(serde_json::json!({
-                                    "updateCliTelemetryConsent": {
-                                        "telemetry": false,
-                                        "needsPrompt": false
-                                    }
-                                }))
-                            },
+                        with_env_vars(
+                            &[(
+                                "BITLOOPS_PLATFORM_GATEWAY_URL",
+                                Some("https://platform.example"),
+                            )],
                             || {
-                                with_managed_platform_embeddings_install_hook(
-                                    {
-                                        let repo_root = repo.path().to_path_buf();
-                                        move || {
-                                            Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
-                                                version: "v0.2.0".to_string(),
-                                                binary_path: repo_root
-                                                    .join(".bitloops/test-bin/bitloops-platform-embeddings"),
-                                                freshly_installed: true,
-                                            })
-                                        }
+                                with_global_graphql_executor_hook(
+                                    |_runtime_root, _query, variables| {
+                                        assert_eq!(
+                                            variables["telemetry"],
+                                            serde_json::json!(false)
+                                        );
+                                        Ok(serde_json::json!({
+                                            "updateCliTelemetryConsent": {
+                                                "telemetry": false,
+                                                "needsPrompt": false
+                                            }
+                                        }))
                                     },
                                     || {
-                                        with_graphql_executor_hook(
+                                        with_managed_platform_embeddings_install_hook(
                                             {
-                                                let repo_id = repo_id.clone();
-                                                move |_repo_root, query, variables| {
-                                                    if query.contains("startInit(") {
-                                                        assert_eq!(variables["repoId"], repo_id);
-                                                        assert_eq!(
-                                                            variables["input"]["runCodeEmbeddings"],
-                                                            json!(false)
-                                                        );
-                                                        assert_eq!(
-                                                            variables["input"]["runSummaries"],
-                                                            json!(false)
-                                                        );
-                                                        assert_eq!(
-                                                            variables["input"]["runSummaryEmbeddings"],
-                                                            json!(false)
-                                                        );
-                                                        assert_eq!(
-                                                            variables["input"]["embeddingsBootstrap"]
-                                                                ["profileName"],
-                                                            json!("platform_code")
-                                                        );
-                                                        assert_eq!(
-                                                            variables["input"]["embeddingsBootstrap"]
-                                                                ["mode"],
-                                                            json!("PLATFORM")
-                                                        );
-                                                        assert_eq!(
-                                                            variables["input"]["embeddingsBootstrap"]
-                                                                ["gatewayUrlOverride"],
-                                                            json!(
-                                                                "https://platform.example/v1/embeddings"
-                                                            )
-                                                        );
-                                                        assert_eq!(
-                                                            variables["input"]["embeddingsBootstrap"]
-                                                                ["apiKeyEnv"],
-                                                            json!(
-                                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
-                                                            )
-                                                        );
-                                                        assert_eq!(
-                                                            variables["input"]["summariesBootstrap"],
-                                                            serde_json::Value::Null
-                                                        );
-                                                        return Ok(runtime_start_init_result_json(
-                                                            session_id,
-                                                        ));
-                                                    }
-
-                                                    if query.contains("runtimeSnapshot(") {
-                                                        return Ok(runtime_snapshot_json(
-                                                            repo_id.as_str(),
-                                                            session_id,
-                                                            RuntimeSessionSnapshotFixture {
-                                                                status: "COMPLETED",
-                                                                ..RuntimeSessionSnapshotFixture::default()
-                                                            },
-                                                        ));
-                                                    }
-
-                                                    panic!("unexpected repo-scoped query: {query}");
+                                                let repo_root = repo.path().to_path_buf();
+                                                move || {
+                                                    Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                                                        version: "v0.2.0".to_string(),
+                                                        binary_path: repo_root
+                                                            .join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                                                        freshly_installed: true,
+                                                    })
                                                 }
                                             },
                                             || {
-                                                let mut out = Vec::new();
-                                                let mut input = Cursor::new("1\n1\n");
-                                                let runtime = test_runtime();
-                                                runtime
-                                                    .block_on(run_with_io_async_for_project_root(
-                                                        InitArgs {
-                                                            install_default_daemon: true,
-                                                            force: false,
-                                                            disable_bitloops_skill: false,
-                                                            agent: vec![DEFAULT_AGENT.to_string()],
-                                                            telemetry: Some(false),
-                                                            no_telemetry: false,
-                                                            skip_baseline: false,
-                                                            sync: Some(false),
-                                                            ingest: Some(false),
-                                                            backfill: None,
-                                                            exclude: Vec::new(),
-                                                            exclude_from: Vec::new(),
-                                                            embeddings_runtime: None,
-                                                            no_embeddings: false,
-                                                            embeddings_gateway_url: None,
-                                                            embeddings_api_key_env:
-                                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
-                                                                    .to_string(),
-                                                        },
-                                                        repo.path(),
-                                                        &mut out,
-                                                        &mut input,
-                                                        None,
-                                                    ))
-                                                    .expect("run init with cloud embeddings");
-                                                std::mem::forget(runtime);
+                                                with_graphql_executor_hook(
+                                                    {
+                                                        let repo_id = repo_id.clone();
+                                                        move |_repo_root, query, variables| {
+                                                            if query.contains("startInit(") {
+                                                                assert_eq!(
+                                                                    variables["repoId"],
+                                                                    repo_id
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["runCodeEmbeddings"],
+                                                                    json!(false)
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["runSummaries"],
+                                                                    json!(false)
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["runSummaryEmbeddings"],
+                                                                    json!(false)
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["embeddingsBootstrap"]
+                                                                        ["profileName"],
+                                                                    json!("platform_code")
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["embeddingsBootstrap"]
+                                                                        ["mode"],
+                                                                    json!("PLATFORM")
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["embeddingsBootstrap"]
+                                                                        ["gatewayUrlOverride"],
+                                                                    json!(
+                                                                        "https://platform.example/v1/embeddings"
+                                                                    )
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["embeddingsBootstrap"]
+                                                                        ["apiKeyEnv"],
+                                                                    json!(
+                                                                        "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                    )
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["summariesBootstrap"],
+                                                                    serde_json::Value::Null
+                                                                );
+                                                                return Ok(
+                                                                    runtime_start_init_result_json(
+                                                                        session_id,
+                                                                    ),
+                                                                );
+                                                            }
 
-                                                let rendered =
-                                                    String::from_utf8(out).expect("utf8 output");
-                                                assert!(rendered.contains("Configure embeddings"));
-                                                assert!(rendered.contains("Embeddings"));
-                                                assert!(
-                                                    !rendered.contains(
-                                                        "Configured platform embeddings in"
-                                                    )
+                                                            if query.contains("runtimeSnapshot(") {
+                                                                return Ok(runtime_snapshot_json(
+                                                                    repo_id.as_str(),
+                                                                    session_id,
+                                                                    RuntimeSessionSnapshotFixture {
+                                                                        status: "COMPLETED",
+                                                                        ..RuntimeSessionSnapshotFixture::default()
+                                                                    },
+                                                                ));
+                                                            }
+
+                                                            panic!(
+                                                                "unexpected repo-scoped query: {query}"
+                                                            );
+                                                        }
+                                                    },
+                                                    || {
+                                                        let mut out = Vec::new();
+                                                        let mut input = Cursor::new("1\n1\n");
+                                                        let runtime = test_runtime();
+                                                        runtime
+                                                            .block_on(run_with_io_async_for_project_root(
+                                                                InitArgs {
+                                                                    install_default_daemon: true,
+                                                                    force: false,
+                                                                    disable_bitloops_skill: false,
+                                                                    agent: vec![DEFAULT_AGENT.to_string()],
+                                                                    telemetry: Some(false),
+                                                                    no_telemetry: false,
+                                                                    skip_baseline: false,
+                                                                    sync: Some(false),
+                                                                    ingest: Some(false),
+                                                                    backfill: None,
+                                                                    exclude: Vec::new(),
+                                                                    exclude_from: Vec::new(),
+                                                                    embeddings_runtime: None,
+                                                                    no_embeddings: false,
+                                                                    embeddings_gateway_url: None,
+                                                                    embeddings_api_key_env:
+                                                                        "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                            .to_string(),
+                                                                },
+                                                                repo.path(),
+                                                                &mut out,
+                                                                &mut input,
+                                                                None,
+                                                            ))
+                                                            .expect("run init with cloud embeddings");
+                                                        std::mem::forget(runtime);
+
+                                                        let rendered = String::from_utf8(out)
+                                                            .expect("utf8 output");
+                                                        assert!(
+                                                            !rendered
+                                                                .contains("Sign in to Bitloops")
+                                                        );
+                                                        assert!(
+                                                            rendered
+                                                                .contains("Configure embeddings")
+                                                        );
+                                                        assert!(rendered.contains("Embeddings"));
+                                                        assert!(!rendered.contains(
+                                                            "Configured platform embeddings in"
+                                                        ));
+                                                        assert!(!rendered.contains(
+                                                            "Installed managed standalone `bitloops-platform-embeddings` runtime"
+                                                        ));
+                                                    },
                                                 );
-                                                assert!(!rendered.contains(
-                                                    "Installed managed standalone `bitloops-platform-embeddings` runtime"
-                                                ));
                                             },
                                         );
                                     },
@@ -3317,6 +3360,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
             },
         );
     });
+    assert_eq!(*login_calls.borrow(), 1);
 }
 
 #[test]
@@ -3325,6 +3369,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
     let app_dirs = tempfile::tempdir().unwrap();
     let repo_id = test_repo_id(repo.path());
     let session_id = "init-session-cloud-embeddings-default-gateway";
+    let login_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
     setup_git_repo(&repo);
 
     with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
@@ -3337,138 +3382,352 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                 Ok(())
             },
             || {
-                with_env_vars(&[("BITLOOPS_PLATFORM_GATEWAY_URL", None)], || {
-                    with_global_graphql_executor_hook(
-                        |_runtime_root, _query, variables| {
-                            assert_eq!(variables["telemetry"], serde_json::json!(false));
-                            Ok(serde_json::json!({
-                                "updateCliTelemetryConsent": {
-                                    "telemetry": false,
-                                    "needsPrompt": false
-                                }
-                            }))
-                        },
-                        || {
-                            with_managed_platform_embeddings_install_hook(
-                                {
-                                    let repo_root = repo.path().to_path_buf();
-                                    move || {
-                                        Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
-                                            version: "v0.2.0".to_string(),
-                                            binary_path: repo_root.join(
-                                                ".bitloops/test-bin/bitloops-platform-embeddings",
-                                            ),
-                                            freshly_installed: true,
-                                        })
-                                    }
+                with_ensure_logged_in_hook(
+                    {
+                        let login_calls = std::rc::Rc::clone(&login_calls);
+                        move || {
+                            *login_calls.borrow_mut() += 1;
+                            Ok(fake_logged_in_session())
+                        }
+                    },
+                    || {
+                        with_env_vars(&[("BITLOOPS_PLATFORM_GATEWAY_URL", None)], || {
+                            with_global_graphql_executor_hook(
+                                |_runtime_root, _query, variables| {
+                                    assert_eq!(variables["telemetry"], serde_json::json!(false));
+                                    Ok(serde_json::json!({
+                                        "updateCliTelemetryConsent": {
+                                            "telemetry": false,
+                                            "needsPrompt": false
+                                        }
+                                    }))
                                 },
                                 || {
-                                    with_graphql_executor_hook(
+                                    with_managed_platform_embeddings_install_hook(
                                         {
-                                            let repo_id = repo_id.clone();
-                                            move |_repo_root, query, variables| {
-                                                if query.contains("startInit(") {
-                                                    assert_eq!(variables["repoId"], repo_id);
-                                                    assert_eq!(
-                                                        variables["input"]["runCodeEmbeddings"],
-                                                        json!(false)
-                                                    );
-                                                    assert_eq!(
-                                                        variables["input"]["runSummaries"],
-                                                        json!(false)
-                                                    );
-                                                    assert_eq!(
-                                                        variables["input"]["runSummaryEmbeddings"],
-                                                        json!(false)
-                                                    );
-                                                    assert_eq!(
-                                                        variables["input"]["embeddingsBootstrap"]["profileName"],
-                                                        json!("platform_code")
-                                                    );
-                                                    assert_eq!(
-                                                        variables["input"]["embeddingsBootstrap"]["mode"],
-                                                        json!("PLATFORM")
-                                                    );
-                                                    assert_eq!(
-                                                        variables["input"]["embeddingsBootstrap"]["gatewayUrlOverride"],
-                                                        serde_json::Value::Null
-                                                    );
-                                                    assert_eq!(
-                                                        variables["input"]["embeddingsBootstrap"]["apiKeyEnv"],
-                                                        json!("BITLOOPS_PLATFORM_GATEWAY_TOKEN")
-                                                    );
-                                                    assert_eq!(
-                                                        variables["input"]["summariesBootstrap"],
-                                                        serde_json::Value::Null
-                                                    );
-                                                    return Ok(runtime_start_init_result_json(
-                                                        session_id,
-                                                    ));
-                                                }
-
-                                                if query.contains("runtimeSnapshot(") {
-                                                    return Ok(runtime_snapshot_json(
-                                                        repo_id.as_str(),
-                                                        session_id,
-                                                        RuntimeSessionSnapshotFixture {
-                                                            status: "COMPLETED",
-                                                            ..RuntimeSessionSnapshotFixture::default(
-                                                            )
-                                                        },
-                                                    ));
-                                                }
-
-                                                panic!("unexpected repo-scoped query: {query}");
+                                            let repo_root = repo.path().to_path_buf();
+                                            move || {
+                                                Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                                                    version: "v0.2.0".to_string(),
+                                                    binary_path: repo_root.join(
+                                                        ".bitloops/test-bin/bitloops-platform-embeddings",
+                                                    ),
+                                                    freshly_installed: true,
+                                                })
                                             }
                                         },
                                         || {
-                                            let mut out = Vec::new();
-                                            let mut input = Cursor::new("1\n1\n");
-                                            let runtime = test_runtime();
-                                            runtime
-                                                .block_on(run_with_io_async_for_project_root(
-                                                    InitArgs {
-                                                        install_default_daemon: true,
-                                                        force: false,
-                                                        disable_bitloops_skill: false,
-                                                        agent: vec![DEFAULT_AGENT.to_string()],
-                                                        telemetry: Some(false),
-                                                        no_telemetry: false,
-                                                        skip_baseline: false,
-                                                        sync: Some(false),
-                                                        ingest: Some(false),
-                                                        backfill: None,
-                                                        exclude: Vec::new(),
-                                                        exclude_from: Vec::new(),
-                                                        embeddings_runtime: None,
-                                                        no_embeddings: false,
-                                                        embeddings_gateway_url: None,
-                                                        embeddings_api_key_env:
-                                                            "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
-                                                                .to_string(),
-                                                    },
-                                                    repo.path(),
-                                                    &mut out,
-                                                    &mut input,
-                                                    None,
-                                                ))
-                                                .expect(
-                                                    "cloud embeddings without a gateway override should succeed",
-                                                );
-                                            std::mem::forget(runtime);
-                                            let rendered =
-                                                String::from_utf8(out).expect("utf8 output");
-                                            assert!(rendered.contains("Embeddings"));
+                                            with_graphql_executor_hook(
+                                                {
+                                                    let repo_id = repo_id.clone();
+                                                    move |_repo_root, query, variables| {
+                                                        if query.contains("startInit(") {
+                                                            assert_eq!(
+                                                                variables["repoId"],
+                                                                repo_id
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["runCodeEmbeddings"],
+                                                                json!(false)
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["runSummaries"],
+                                                                json!(false)
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["runSummaryEmbeddings"],
+                                                                json!(false)
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["embeddingsBootstrap"]
+                                                                    ["profileName"],
+                                                                json!("platform_code")
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["embeddingsBootstrap"]
+                                                                    ["mode"],
+                                                                json!("PLATFORM")
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["embeddingsBootstrap"]
+                                                                    ["gatewayUrlOverride"],
+                                                                serde_json::Value::Null
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["embeddingsBootstrap"]
+                                                                    ["apiKeyEnv"],
+                                                                json!(
+                                                                    "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                )
+                                                            );
+                                                            assert_eq!(
+                                                                variables["input"]["summariesBootstrap"],
+                                                                serde_json::Value::Null
+                                                            );
+                                                            return Ok(
+                                                                runtime_start_init_result_json(
+                                                                    session_id,
+                                                                ),
+                                                            );
+                                                        }
+
+                                                        if query.contains("runtimeSnapshot(") {
+                                                            return Ok(runtime_snapshot_json(
+                                                                repo_id.as_str(),
+                                                                session_id,
+                                                                RuntimeSessionSnapshotFixture {
+                                                                    status: "COMPLETED",
+                                                                    ..RuntimeSessionSnapshotFixture::default(
+                                                                    )
+                                                                },
+                                                            ));
+                                                        }
+
+                                                        panic!(
+                                                            "unexpected repo-scoped query: {query}"
+                                                        );
+                                                    }
+                                                },
+                                                || {
+                                                    let mut out = Vec::new();
+                                                    let mut input = Cursor::new("1\n1\n");
+                                                    let runtime = test_runtime();
+                                                    runtime
+                                                        .block_on(run_with_io_async_for_project_root(
+                                                            InitArgs {
+                                                                install_default_daemon: true,
+                                                                force: false,
+                                                                disable_bitloops_skill: false,
+                                                                agent: vec![DEFAULT_AGENT.to_string()],
+                                                                telemetry: Some(false),
+                                                                no_telemetry: false,
+                                                                skip_baseline: false,
+                                                                sync: Some(false),
+                                                                ingest: Some(false),
+                                                                backfill: None,
+                                                                exclude: Vec::new(),
+                                                                exclude_from: Vec::new(),
+                                                                embeddings_runtime: None,
+                                                                no_embeddings: false,
+                                                                embeddings_gateway_url: None,
+                                                                embeddings_api_key_env:
+                                                                    "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                        .to_string(),
+                                                            },
+                                                            repo.path(),
+                                                            &mut out,
+                                                            &mut input,
+                                                            None,
+                                                        ))
+                                                        .expect(
+                                                            "cloud embeddings without a gateway override should succeed",
+                                                        );
+                                                    std::mem::forget(runtime);
+                                                    let rendered = String::from_utf8(out)
+                                                        .expect("utf8 output");
+                                                    assert!(
+                                                        !rendered.contains("Sign in to Bitloops")
+                                                    );
+                                                    assert!(rendered.contains("Embeddings"));
+                                                },
+                                            );
                                         },
                                     );
                                 },
                             );
-                        },
-                    );
-                });
+                        });
+                    },
+                );
             },
         );
     });
+    assert_eq!(*login_calls.borrow(), 1);
+}
+
+#[test]
+fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_summaries() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-cloud-embeddings-and-summaries";
+    let login_calls = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_ensure_logged_in_hook(
+                    {
+                        let login_calls = std::rc::Rc::clone(&login_calls);
+                        move || {
+                            *login_calls.borrow_mut() += 1;
+                            Ok(fake_logged_in_session())
+                        }
+                    },
+                    || {
+                        with_env_vars(
+                            &[(
+                                "BITLOOPS_PLATFORM_GATEWAY_URL",
+                                Some("https://platform.example"),
+                            )],
+                            || {
+                                with_global_graphql_executor_hook(
+                                    |_runtime_root, _query, variables| {
+                                        assert_eq!(
+                                            variables["telemetry"],
+                                            serde_json::json!(false)
+                                        );
+                                        Ok(serde_json::json!({
+                                            "updateCliTelemetryConsent": {
+                                                "telemetry": false,
+                                                "needsPrompt": false
+                                            }
+                                        }))
+                                    },
+                                    || {
+                                        with_managed_platform_embeddings_install_hook(
+                                            {
+                                                let repo_root = repo.path().to_path_buf();
+                                                move || {
+                                                    Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                                                        version: "v0.2.0".to_string(),
+                                                        binary_path: repo_root
+                                                            .join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                                                        freshly_installed: true,
+                                                    })
+                                                }
+                                            },
+                                            || {
+                                                with_graphql_executor_hook(
+                                                    {
+                                                        let repo_id = repo_id.clone();
+                                                        move |_repo_root, query, variables| {
+                                                            if query.contains("startInit(") {
+                                                                assert_eq!(
+                                                                    variables["repoId"],
+                                                                    repo_id
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["runCodeEmbeddings"],
+                                                                    json!(false)
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["runSummaries"],
+                                                                    json!(false)
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["runSummaryEmbeddings"],
+                                                                    json!(false)
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["embeddingsBootstrap"]
+                                                                        ["profileName"],
+                                                                    json!("platform_code")
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["embeddingsBootstrap"]
+                                                                        ["gatewayUrlOverride"],
+                                                                    json!(
+                                                                        "https://platform.example/v1/embeddings"
+                                                                    )
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["summariesBootstrap"]
+                                                                        ["action"],
+                                                                    json!("CONFIGURE_CLOUD")
+                                                                );
+                                                                assert_eq!(
+                                                                    variables["input"]["summariesBootstrap"]
+                                                                        ["gatewayUrlOverride"],
+                                                                    json!(
+                                                                        "https://platform.example/v1/chat/completions"
+                                                                    )
+                                                                );
+                                                                return Ok(
+                                                                    runtime_start_init_result_json(
+                                                                        session_id,
+                                                                    ),
+                                                                );
+                                                            }
+
+                                                            if query.contains("runtimeSnapshot(") {
+                                                                return Ok(runtime_snapshot_json(
+                                                                    repo_id.as_str(),
+                                                                    session_id,
+                                                                    RuntimeSessionSnapshotFixture {
+                                                                        status: "COMPLETED",
+                                                                        ..RuntimeSessionSnapshotFixture::default()
+                                                                    },
+                                                                ));
+                                                            }
+
+                                                            panic!(
+                                                                "unexpected repo-scoped query: {query}"
+                                                            );
+                                                        }
+                                                    },
+                                                    || {
+                                                        let mut out = Vec::new();
+                                                        let mut input = Cursor::new("1\n2\n");
+                                                        let runtime = test_runtime();
+                                                        runtime
+                                                            .block_on(run_with_io_async_for_project_root(
+                                                                InitArgs {
+                                                                    install_default_daemon: true,
+                                                                    force: false,
+                                                                    disable_bitloops_skill: false,
+                                                                    agent: vec![DEFAULT_AGENT.to_string()],
+                                                                    telemetry: Some(false),
+                                                                    no_telemetry: false,
+                                                                    skip_baseline: false,
+                                                                    sync: Some(false),
+                                                                    ingest: Some(false),
+                                                                    backfill: None,
+                                                                    exclude: Vec::new(),
+                                                                    exclude_from: Vec::new(),
+                                                                    embeddings_runtime: None,
+                                                                    no_embeddings: false,
+                                                                    embeddings_gateway_url: None,
+                                                                    embeddings_api_key_env:
+                                                                        "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                                                            .to_string(),
+                                                                },
+                                                                repo.path(),
+                                                                &mut out,
+                                                                &mut input,
+                                                                None,
+                                                            ))
+                                                            .expect("run init with cloud embeddings and summaries");
+                                                        std::mem::forget(runtime);
+
+                                                        let rendered = String::from_utf8(out)
+                                                            .expect("utf8 output");
+                                                        assert!(
+                                                            !rendered
+                                                                .contains("Sign in to Bitloops")
+                                                        );
+                                                    },
+                                                );
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+
+    assert_eq!(*login_calls.borrow(), 1);
 }
 
 #[test]
