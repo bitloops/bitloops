@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bitloops init --sync=true` no longer waits on unselected semantic enrichment lanes before completing**: init session status now filters queued summary-refresh, code-embedding, and summary-embedding work down to the lanes actually selected for that session. This fixes sync-only runs getting stuck on "Waiting for queued enrichment work to finish" when repo-level semantic summary refresh remained active in the background.
+
 ## [0.0.18] - 2026-04-21
 
 ### Changed
