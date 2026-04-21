@@ -163,9 +163,7 @@ bitloops uninstall --full
 
 DevQL is a typed GraphQL interface for querying artefacts, checkpoints, dependencies, and knowledge — available as a CLI DSL, raw GraphQL, or dashboard endpoint.
 
-[Read more here](./DevQL-Getting_Started.md)
-
-To try OpenAI-backed semantic summaries together with the standalone local embeddings runtime, see [Semantic + Embeddings Quickstart](./docs/semantic-embeddings-quickstart.md).
+[Read more here](https://bitloops.com/docs/concepts/devql)
 
 
 ## FAQs
