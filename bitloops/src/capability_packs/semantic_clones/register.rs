@@ -58,6 +58,20 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
             super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+            super::types::SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(
+                super::types::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
+            ),
+        )
+        .readiness_policy(CapabilityMailboxReadinessPolicy::EmbeddingsSlot(
+            super::types::SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT,
+        ))
+        .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
+    )?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            super::types::SEMANTIC_CLONES_CAPABILITY_ID,
             super::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
             CapabilityMailboxPolicy::Job,
             CapabilityMailboxHandler::Ingester(
@@ -99,7 +113,8 @@ mod tests {
     use crate::capability_packs::semantic_clones::types::{
         SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-        SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID, SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
+        SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+        SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
         SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
         SEMANTIC_CLONES_SUMMARY_STAGE_ID, SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
@@ -199,6 +214,10 @@ mod tests {
                 (
                     SEMANTIC_CLONES_CAPABILITY_ID,
                     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                ),
+                (
+                    SEMANTIC_CLONES_CAPABILITY_ID,
+                    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
                 ),
                 (
                     SEMANTIC_CLONES_CAPABILITY_ID,
