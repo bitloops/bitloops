@@ -14,6 +14,16 @@ use super::types::{
     InitRuntimeLaneWarningView,
 };
 
+pub(crate) struct SummaryEmbeddingsLaneContext<'a> {
+    pub(crate) initial_sync: Option<&'a DevqlTaskRecord>,
+    pub(crate) follow_up_sync: Option<&'a DevqlTaskRecord>,
+    pub(crate) embeddings_task: Option<&'a DevqlTaskRecord>,
+    pub(crate) summary_run: Option<&'a SummaryBootstrapRunRecord>,
+    pub(crate) current_state: StatusCounts,
+    pub(crate) progress: Option<InitRuntimeLaneProgressView>,
+    pub(crate) summaries_progress: Option<InitRuntimeLaneProgressView>,
+}
+
 pub(crate) fn derive_sync_lane(
     session: &InitSessionRecord,
     initial_sync: Option<&DevqlTaskRecord>,
@@ -384,15 +394,19 @@ pub(crate) fn derive_summaries_lane(
 
 pub(crate) fn derive_summary_embeddings_lane(
     session: &InitSessionRecord,
-    initial_sync: Option<&DevqlTaskRecord>,
-    follow_up_sync: Option<&DevqlTaskRecord>,
-    embeddings_task: Option<&DevqlTaskRecord>,
-    summary_run: Option<&SummaryBootstrapRunRecord>,
-    current_state: StatusCounts,
     stats: &SessionWorkplaneStats,
-    progress: Option<InitRuntimeLaneProgressView>,
-    summaries_progress: Option<InitRuntimeLaneProgressView>,
+    context: SummaryEmbeddingsLaneContext<'_>,
 ) -> InitRuntimeLaneView {
+    let SummaryEmbeddingsLaneContext {
+        initial_sync,
+        follow_up_sync,
+        embeddings_task,
+        summary_run,
+        current_state,
+        progress,
+        summaries_progress,
+    } = context;
+
     if !session.selections.run_summary_embeddings {
         return skipped_lane();
     }

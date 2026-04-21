@@ -21,8 +21,9 @@ use crate::host::runtime_store::{DaemonSqliteRuntimeStore, RepoSqliteRuntimeStor
 use crate::runtime_presentation::warning_summary;
 
 use super::lanes::{
-    derive_code_embeddings_lane, derive_ingest_lane, derive_session_status, derive_summaries_lane,
-    derive_summary_embeddings_lane, derive_sync_lane, running_task,
+    SummaryEmbeddingsLaneContext, derive_code_embeddings_lane, derive_ingest_lane,
+    derive_session_status, derive_summaries_lane, derive_summary_embeddings_lane, derive_sync_lane,
+    running_task,
 };
 use super::orchestration::{
     record_task_completion_seq, selected_top_level_terminal,
@@ -376,14 +377,16 @@ impl InitRuntimeCoordinator {
         );
         let summary_embeddings_lane = derive_summary_embeddings_lane(
             &session,
-            initial_sync.as_ref(),
-            follow_up_sync.as_ref(),
-            embeddings_task.as_ref(),
-            summary_run.as_ref(),
-            stats.current_state,
             &stats,
-            lane_progress.summary_embeddings.clone(),
-            lane_progress.summaries.clone(),
+            SummaryEmbeddingsLaneContext {
+                initial_sync: initial_sync.as_ref(),
+                follow_up_sync: follow_up_sync.as_ref(),
+                embeddings_task: embeddings_task.as_ref(),
+                summary_run: summary_run.as_ref(),
+                current_state: stats.current_state,
+                progress: lane_progress.summary_embeddings.clone(),
+                summaries_progress: lane_progress.summaries.clone(),
+            },
         );
 
         let fatal_failure_detail = session_fatal_failure_detail(

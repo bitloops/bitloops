@@ -808,16 +808,16 @@ async fn write_init_setup_handoff(
     }
     writeln!(
         out,
-        "──────────────────────────────────────────────────────────────"
+        "──────────────────────────────────────────────────────────────────"
     )?;
-    writeln!(out, "            🔍 Live Progress")?;
+    writeln!(out, "                   🔍 Live Progress")?;
     writeln!(
         out,
         " Feel free to close this terminal and continue with your day! 🌟"
     )?;
     writeln!(
         out,
-        "──────────────────────────────────────────────────────────────"
+        "──────────────────────────────────────────────────────────────────"
     )?;
     writeln!(out)?;
     out.flush()?;
