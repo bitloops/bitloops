@@ -56,4 +56,11 @@ mod tests {
         assert!(body.contains("For mixed prompts, try structured lookup first"));
         assert!(body.contains("help me understand the codebase"));
     }
+
+    #[test]
+    fn using_devql_skill_mentions_tests_stage_example() {
+        let body = using_devql_skill_body();
+        assert!(body.contains("tests { summary"));
+        assert!(body.contains("coveringTests"));
+    }
 }

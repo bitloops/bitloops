@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::diff_collector::DiffArtefactRecord;
 use super::shared::{determine_retention_class, read_effective_content};
@@ -235,9 +235,10 @@ impl SqliteSyncWriter {
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
-            let tx = connection
-                .transaction()
-                .context("starting SQLite sync writer transaction")?;
+            let tx = begin_immediate_transaction(
+                &mut connection,
+                "starting SQLite sync writer transaction",
+            )?;
             let mut rows_written = 0usize;
             let mut cache_store_operation_estimate = 0usize;
             let mut materialisation_operation_estimate = 0usize;
@@ -315,9 +316,10 @@ impl SqliteSyncWriter {
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
-            let tx = connection
-                .transaction()
-                .context("starting SQLite sync cache touch transaction")?;
+            let tx = begin_immediate_transaction(
+                &mut connection,
+                "starting SQLite sync cache touch transaction",
+            )?;
             let rows_written =
                 touch_cache_entries_tx(&tx, &touches).context("touching cached sync entries")?;
             tx.commit()
@@ -356,9 +358,10 @@ impl SqliteSyncWriter {
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
-            let tx = connection
-                .transaction()
-                .context("starting SQLite removal transaction")?;
+            let tx = begin_immediate_transaction(
+                &mut connection,
+                "starting SQLite removal transaction",
+            )?;
             let mut pre_artefacts = Vec::new();
             for path in &removed_paths {
                 pre_artefacts.extend(query_current_artefacts_for_path_tx(&tx, &repo_id, path)?);
@@ -742,6 +745,15 @@ fn open_sync_sqlite_connection(path: &PathBuf) -> Result<Connection> {
     Ok(connection)
 }
 
+fn begin_immediate_transaction<'connection>(
+    connection: &'connection mut Connection,
+    context: &'static str,
+) -> Result<Transaction<'connection>> {
+    connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .context(context)
+}
+
 fn query_current_artefacts_for_path_tx(
     tx: &rusqlite::Transaction<'_>,
     repo_id: &str,
@@ -789,6 +801,61 @@ pub(crate) fn sync_prepare_worker_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn writer_test_desired_file_state(
+        path: &str,
+        content_id: &str,
+    ) -> crate::host::devql::sync::types::DesiredFileState {
+        crate::host::devql::sync::types::DesiredFileState {
+            path: path.to_string(),
+            analysis_mode: crate::host::devql::AnalysisMode::Code,
+            file_role: crate::host::devql::FileRole::SourceCode,
+            text_index_mode: crate::host::devql::TextIndexMode::None,
+            language: "python".to_string(),
+            resolved_language: "python".to_string(),
+            dialect: None,
+            primary_context_id: None,
+            secondary_context_ids: Vec::new(),
+            frameworks: Vec::new(),
+            runtime_profile: None,
+            classification_reason: "sync_test".to_string(),
+            context_fingerprint: None,
+            extraction_fingerprint: format!("sync-test::{path}::{content_id}"),
+            head_content_id: Some(content_id.to_string()),
+            index_content_id: Some(content_id.to_string()),
+            worktree_content_id: Some(content_id.to_string()),
+            effective_content_id: content_id.to_string(),
+            effective_source: crate::host::devql::sync::types::EffectiveSource::Worktree,
+            exists_in_head: true,
+            exists_in_index: true,
+            exists_in_worktree: true,
+        }
+    }
+
+    fn writer_test_prepared_item(index: usize, path: &str) -> PreparedSyncItem {
+        let content_id = format!("content::{path}");
+        PreparedSyncItem {
+            index,
+            desired: writer_test_desired_file_state(path, &content_id),
+            extraction: crate::host::devql::sync::content_cache::CachedExtraction {
+                content_id: content_id.clone(),
+                language: "python".to_string(),
+                extraction_fingerprint: format!("sync-test::{path}::{content_id}"),
+                parser_version: "parser-version".to_string(),
+                extractor_version: "extractor-version".to_string(),
+                parse_status: crate::host::devql::sync::extraction::PARSE_STATUS_OK.to_string(),
+                artefacts: Vec::new(),
+                edges: Vec::new(),
+            },
+            prepared_rows: PreparedMaterialisationRows {
+                materialized_artefacts: Vec::new(),
+                materialized_edges: Vec::new(),
+            },
+            cache_store_retention_class: None,
+            cache_touch_key: None,
+            promote_cache_entry_to_git_backed: false,
+        }
+    }
 
     #[test]
     fn sync_prepare_worker_count_is_bounded() {
@@ -841,5 +908,56 @@ mod tests {
         assert!(batch.is_empty());
         assert!(!batch.should_flush());
         assert!(batch.flush_deadline().is_none());
+    }
+
+    #[tokio::test]
+    async fn sqlite_sync_writer_flush_waits_for_transient_write_lock() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let sqlite_path = dir.path().join("devql.sqlite");
+        let repo_id = "repo-id";
+        crate::host::devql::init_sqlite_schema(&sqlite_path)
+            .await
+            .expect("initialise sqlite schema");
+        let seed_connection =
+            open_sync_sqlite_connection(&sqlite_path).expect("open seed connection");
+        seed_connection
+            .execute(
+                "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![repo_id, "github", "bitloops", "sqlite-writer-test", "main"],
+            )
+            .expect("seed repository row");
+
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let sqlite_path_for_blocker = sqlite_path.clone();
+        let blocker = std::thread::spawn(move || {
+            let mut connection =
+                open_sync_sqlite_connection(&sqlite_path_for_blocker).expect("open blocker");
+            connection
+                .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+                .expect("configure blocker connection");
+            let tx = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .expect("start blocker transaction");
+            ready_tx.send(()).expect("signal blocker ready");
+            std::thread::sleep(Duration::from_millis(150));
+            tx.commit().expect("commit blocker transaction");
+        });
+        ready_rx.recv().expect("wait for blocker readiness");
+
+        let mut writer = SqliteSyncWriter::open(&sqlite_path)
+            .await
+            .expect("open sqlite sync writer");
+        writer.push_item(writer_test_prepared_item(
+            0,
+            "crates/red_knot_vendored/vendor/typeshed/stdlib/shlex.pyi",
+        ));
+
+        writer
+            .flush(repo_id, "parser-version", "extractor-version")
+            .await
+            .expect("flush should wait for transient write lock");
+
+        blocker.join().expect("join blocker thread");
     }
 }
