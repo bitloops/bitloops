@@ -20,6 +20,23 @@ pub(crate) struct LanguageArtefact {
     pub(crate) docstring: Option<String>,
 }
 
+pub(crate) fn normalize_artefact_signature(signature: &str) -> String {
+    let mut normalized = signature.trim();
+
+    if let Some(without_closing_brace) = normalized.strip_suffix('}') {
+        let candidate = without_closing_brace.trim_end();
+        if let Some(without_empty_body) = candidate.strip_suffix('{') {
+            normalized = without_empty_body.trim_end();
+        }
+    }
+
+    if let Some(without_opening_brace) = normalized.strip_suffix('{') {
+        normalized = without_opening_brace.trim_end();
+    }
+
+    normalized.to_string()
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct EdgeMetadata(pub(crate) Value);
 
@@ -88,4 +105,42 @@ pub(crate) struct DependencyEdge {
 pub(crate) struct RustUseExportEntry {
     pub(crate) path: String,
     pub(crate) export_name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_artefact_signature;
+
+    #[test]
+    fn normalize_artefact_signature_removes_trailing_body_openers() {
+        assert_eq!(
+            normalize_artefact_signature("export function hello() {"),
+            "export function hello()"
+        );
+        assert_eq!(normalize_artefact_signature("func Run() {"), "func Run()");
+        assert_eq!(
+            normalize_artefact_signature("impl Repo for PgRepo {"),
+            "impl Repo for PgRepo"
+        );
+    }
+
+    #[test]
+    fn normalize_artefact_signature_removes_empty_inline_bodies() {
+        assert_eq!(
+            normalize_artefact_signature("export class Widget {}"),
+            "export class Widget"
+        );
+        assert_eq!(
+            normalize_artefact_signature("render(): void { }"),
+            "render(): void"
+        );
+    }
+
+    #[test]
+    fn normalize_artefact_signature_preserves_non_trailing_braces() {
+        assert_eq!(
+            normalize_artefact_signature("struct User { id: u64 }"),
+            "struct User { id: u64 }"
+        );
+    }
 }

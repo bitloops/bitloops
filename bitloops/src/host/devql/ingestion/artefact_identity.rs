@@ -115,7 +115,7 @@ pub(super) fn extract_js_ts_functions(content: &str) -> Result<Vec<FunctionArtef
             end_byte: line_end_byte(&line_spans, end_line),
             end_line,
             name,
-            signature: line.trim().to_string(),
+            signature: crate::host::language_adapter::normalize_artefact_signature(line),
             start_line,
         });
     }

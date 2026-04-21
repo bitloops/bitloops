@@ -4,7 +4,8 @@ use anyhow::Result;
 
 use super::canonical::{TS_JS_CANONICAL_MAPPINGS, TS_JS_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    LanguageArtefact, LanguageKind, TsJsKind, is_supported_language_kind, resolve_canonical_kind,
+    LanguageArtefact, LanguageKind, TsJsKind, is_supported_language_kind,
+    normalize_artefact_signature, resolve_canonical_kind,
 };
 
 // JS/TS artefact extraction via tree-sitter.
@@ -242,13 +243,12 @@ pub(crate) fn push_js_ts_artefact(
         return;
     }
 
-    let signature = node
-        .utf8_text(content.as_bytes())
-        .ok()
-        .and_then(|s| s.lines().next())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let signature = normalize_artefact_signature(
+        node.utf8_text(content.as_bytes())
+            .ok()
+            .and_then(|s| s.lines().next())
+            .unwrap_or(""),
+    );
 
     out.push(LanguageArtefact {
         canonical_kind: resolve_canonical_kind(TS_JS_CANONICAL_MAPPINGS, language_kind, false)
