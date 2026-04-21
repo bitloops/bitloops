@@ -71,6 +71,7 @@ pub(crate) fn derive_tool_events_from_transcript_fragment(
 
     let lines = parse_from_bytes(transcript_fragment.as_bytes())?;
     let mut sequence_number = 1_i64;
+    let mut tool_use_block_number = 1_i64;
     let mut pending_tools = HashMap::<String, PendingTool>::new();
     let mut events = Vec::new();
 
@@ -91,8 +92,13 @@ pub(crate) fn derive_tool_events_from_transcript_fragment(
                     }
 
                     let is_subagent_task = tool_name.eq_ignore_ascii_case("task");
+                    // Fallback correlation ids must be unique per observed tool_use block,
+                    // not per emitted event. Task blocks are skipped as events, but they
+                    // still consume a position in the transcript.
+                    let fallback_tool_use_block_number = tool_use_block_number;
+                    tool_use_block_number += 1;
                     let tool_use_id = if block.id.trim().is_empty() {
-                        format!("{}:tool:{sequence_number:04}", ctx.turn_id)
+                        format!("{}:tool:{fallback_tool_use_block_number:04}", ctx.turn_id)
                     } else {
                         block.id.trim().to_string()
                     };
@@ -510,6 +516,35 @@ mod tests {
         let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
             .expect("derive transcript tool events");
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn idless_tool_uses_after_subagent_tasks_receive_unique_fallback_ids() {
+        let fragment = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"prompt\":\"delegate\"}},",
+            "{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"src/lib.rs\"}}",
+            "]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"turn-1:tool:0002\",\"content\":\"updated file\"}",
+            "]}}\n"
+        );
+
+        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+            .expect("derive transcript tool events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].event_type,
+            InteractionEventType::ToolInvocationObserved
+        );
+        assert_eq!(events[0].tool_use_id, "turn-1:tool:0002");
+        assert_eq!(events[0].tool_kind, "Edit");
+        assert_eq!(
+            events[1].event_type,
+            InteractionEventType::ToolResultObserved
+        );
+        assert_eq!(events[1].tool_use_id, "turn-1:tool:0002");
+        assert_eq!(events[1].tool_kind, "Edit");
     }
 
     #[test]
