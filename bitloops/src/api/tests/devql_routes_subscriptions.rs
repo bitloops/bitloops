@@ -342,6 +342,9 @@ async fn devql_runtime_route_executes_start_init_mutations() {
                     "input": {
                         "runSync": false,
                         "runIngest": false,
+                        "runCodeEmbeddings": false,
+                        "runSummaries": false,
+                        "runSummaryEmbeddings": false,
                         "ingestBackfill": serde_json::Value::Null,
                         "embeddingsBootstrap": serde_json::Value::Null,
                         "summariesBootstrap": serde_json::Value::Null,
@@ -451,6 +454,9 @@ async fn devql_runtime_route_executes_start_init_for_bound_repo_without_catalog_
                     "input": {
                         "runSync": false,
                         "runIngest": false,
+                        "runCodeEmbeddings": false,
+                        "runSummaries": false,
+                        "runSummaryEmbeddings": false,
                         "ingestBackfill": serde_json::Value::Null,
                         "embeddingsBootstrap": serde_json::Value::Null,
                         "summariesBootstrap": serde_json::Value::Null,

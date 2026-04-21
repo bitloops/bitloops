@@ -9,6 +9,12 @@ use super::summary_bootstrap::SummaryBootstrapRequest;
 pub struct StartInitSessionSelections {
     pub run_sync: bool,
     pub run_ingest: bool,
+    #[serde(default)]
+    pub run_code_embeddings: bool,
+    #[serde(default)]
+    pub run_summaries: bool,
+    #[serde(default)]
+    pub run_summary_embeddings: bool,
     pub ingest_backfill: Option<usize>,
     pub embeddings_bootstrap: Option<InitEmbeddingsBootstrapRequest>,
     pub summaries_bootstrap: Option<SummaryBootstrapRequest>,

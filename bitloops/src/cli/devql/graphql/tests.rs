@@ -503,6 +503,9 @@ fn start_init_runtime_mutation_serializes_runtime_orchestration_input() {
         repo_id: "repo-1".to_string(),
         run_sync: true,
         run_ingest: true,
+        run_code_embeddings: true,
+        run_summaries: true,
+        run_summary_embeddings: true,
         ingest_backfill: Some(25),
         embeddings_bootstrap: Some(super::types::RuntimeEmbeddingsBootstrapRequestInput {
             config_path: "/tmp/daemon-config.toml".to_string(),
@@ -525,6 +528,9 @@ fn start_init_runtime_mutation_serializes_runtime_orchestration_input() {
             assert_eq!(variables["repoId"], json!("repo-1"));
             assert_eq!(variables["input"]["runSync"], json!(true));
             assert_eq!(variables["input"]["runIngest"], json!(true));
+            assert_eq!(variables["input"]["runCodeEmbeddings"], json!(true));
+            assert_eq!(variables["input"]["runSummaries"], json!(true));
+            assert_eq!(variables["input"]["runSummaryEmbeddings"], json!(true));
             assert_eq!(variables["input"]["ingestBackfill"], json!(25));
             assert_eq!(
                 variables["input"]["embeddingsBootstrap"]["profileName"],
@@ -610,13 +616,14 @@ fn runtime_snapshot_query_deserializes_current_init_session_lane_state() {
                         "runIngest": false,
                         "embeddingsSelected": true,
                         "summariesSelected": false,
+                        "summaryEmbeddingsSelected": false,
                         "initialSyncTaskId": serde_json::Value::Null,
                         "ingestTaskId": serde_json::Value::Null,
                         "followUpSyncTaskId": serde_json::Value::Null,
                         "embeddingsBootstrapTaskId": serde_json::Value::Null,
-                        "summaryBootstrapRunId": serde_json::Value::Null,
+                        "summaryBootstrapTaskId": serde_json::Value::Null,
                         "terminalError": serde_json::Value::Null,
-                        "topPipelineLane": {
+                        "syncLane": {
                             "status": "RUNNING",
                             "waitingReason": "waiting_for_current_state_consumer",
                             "detail": serde_json::Value::Null,
@@ -627,7 +634,18 @@ fn runtime_snapshot_query_deserializes_current_init_session_lane_state() {
                             "failedCount": 0,
                             "completedCount": 0
                         },
-                        "embeddingsLane": {
+                        "ingestLane": {
+                            "status": "SKIPPED",
+                            "waitingReason": serde_json::Value::Null,
+                            "detail": serde_json::Value::Null,
+                            "taskId": serde_json::Value::Null,
+                            "runId": serde_json::Value::Null,
+                            "pendingCount": 0,
+                            "runningCount": 0,
+                            "failedCount": 0,
+                            "completedCount": 0
+                        },
+                        "codeEmbeddingsLane": {
                             "status": "COMPLETED",
                             "waitingReason": serde_json::Value::Null,
                             "detail": serde_json::Value::Null,
@@ -637,6 +655,17 @@ fn runtime_snapshot_query_deserializes_current_init_session_lane_state() {
                             "runningCount": 0,
                             "failedCount": 0,
                             "completedCount": 1
+                        },
+                        "summaryEmbeddingsLane": {
+                            "status": "SKIPPED",
+                            "waitingReason": serde_json::Value::Null,
+                            "detail": serde_json::Value::Null,
+                            "taskId": serde_json::Value::Null,
+                            "runId": serde_json::Value::Null,
+                            "pendingCount": 0,
+                            "runningCount": 0,
+                            "failedCount": 0,
+                            "completedCount": 0
                         },
                         "summariesLane": {
                             "status": "SKIPPED",
@@ -664,8 +693,8 @@ fn runtime_snapshot_query_deserializes_current_init_session_lane_state() {
                 session.waiting_reason.as_deref(),
                 Some("waiting_for_current_state_consumer")
             );
-            assert_eq!(session.top_pipeline_lane.pending_count, 1);
-            assert_eq!(session.embeddings_lane.status, "COMPLETED");
+            assert_eq!(session.sync_lane.pending_count, 1);
+            assert_eq!(session.code_embeddings_lane.status, "COMPLETED");
             assert_eq!(snapshot.task_queue.queued_tasks, 1);
         },
     );

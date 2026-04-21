@@ -11,6 +11,12 @@ pub(crate) struct StartInitInput {
     pub run_sync: bool,
     #[graphql(name = "runIngest")]
     pub run_ingest: bool,
+    #[graphql(name = "runCodeEmbeddings")]
+    pub run_code_embeddings: bool,
+    #[graphql(name = "runSummaries")]
+    pub run_summaries: bool,
+    #[graphql(name = "runSummaryEmbeddings")]
+    pub run_summary_embeddings: bool,
     #[graphql(name = "ingestBackfill")]
     pub ingest_backfill: Option<i32>,
     #[graphql(name = "embeddingsBootstrap")]
@@ -24,9 +30,18 @@ impl StartInitInput {
         if !self.run_ingest && self.ingest_backfill.is_some() {
             return Err("`ingestBackfill` requires `runIngest=true`".to_string());
         }
+        if self.run_summary_embeddings && !self.run_summaries {
+            return Err("`runSummaryEmbeddings` requires `runSummaries=true`".to_string());
+        }
+        if self.run_summary_embeddings && !self.run_code_embeddings {
+            return Err("`runSummaryEmbeddings` requires `runCodeEmbeddings=true`".to_string());
+        }
         Ok(StartInitSessionSelections {
             run_sync: self.run_sync,
             run_ingest: self.run_ingest,
+            run_code_embeddings: self.run_code_embeddings,
+            run_summaries: self.run_summaries,
+            run_summary_embeddings: self.run_summary_embeddings,
             ingest_backfill: self
                 .ingest_backfill
                 .map(|value| usize::try_from(value.max(0)).unwrap_or(usize::MAX)),

@@ -76,6 +76,7 @@ impl SemanticClonesMailboxIntentState {
     }
 }
 
+#[cfg(test)]
 pub fn activate_deferred_pipeline_mailboxes(repo_root: &Path, source: &str) -> Result<()> {
     let store = open_workplane_store_for_repo(repo_root)?;
     store.set_capability_workplane_mailbox_intents(
@@ -96,11 +97,35 @@ pub fn activate_embedding_pipeline_mailboxes(repo_root: &Path, source: &str) -> 
     )
 }
 
-pub fn activate_summary_refresh_mailbox(repo_root: &Path, source: &str) -> Result<()> {
+pub fn activate_selected_pipeline_mailboxes(
+    repo_root: &Path,
+    source: &str,
+    summary_refresh_active: bool,
+    code_embeddings_active: bool,
+    summary_embeddings_active: bool,
+    clone_rebuild_active: bool,
+) -> Result<()> {
+    let mut mailboxes = Vec::new();
+    if summary_refresh_active {
+        mailboxes.push(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX);
+    }
+    if code_embeddings_active {
+        mailboxes.push(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX);
+    }
+    if summary_embeddings_active {
+        mailboxes.push(SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX);
+    }
+    if clone_rebuild_active {
+        mailboxes.push(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX);
+    }
+    if mailboxes.is_empty() {
+        return Ok(());
+    }
+
     let store = open_workplane_store_for_repo(repo_root)?;
     store.set_capability_workplane_mailbox_intents(
         SEMANTIC_CLONES_CAPABILITY_ID,
-        std::iter::once(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX),
+        mailboxes,
         true,
         Some(source),
     )

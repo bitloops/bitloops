@@ -113,15 +113,18 @@ pub struct InitRuntimeSessionView {
     pub run_ingest: bool,
     pub embeddings_selected: bool,
     pub summaries_selected: bool,
+    pub summary_embeddings_selected: bool,
     pub initial_sync_task_id: Option<String>,
     pub ingest_task_id: Option<String>,
     pub follow_up_sync_task_id: Option<String>,
     pub embeddings_bootstrap_task_id: Option<String>,
     pub summary_bootstrap_task_id: Option<String>,
     pub terminal_error: Option<String>,
-    pub top_pipeline_lane: InitRuntimeLaneView,
-    pub embeddings_lane: InitRuntimeLaneView,
+    pub sync_lane: InitRuntimeLaneView,
+    pub ingest_lane: InitRuntimeLaneView,
+    pub code_embeddings_lane: InitRuntimeLaneView,
     pub summaries_lane: InitRuntimeLaneView,
+    pub summary_embeddings_lane: InitRuntimeLaneView,
 }
 
 #[derive(Debug, Clone, Serialize)]
