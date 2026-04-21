@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **SQLite sync materialisation now waits cleanly for transient writer contention**: the batched sync writer now starts `IMMEDIATE` SQLite transactions for current-state materialisation, cache-touch completion, and removed-path cleanup instead of beginning deferred transactions and upgrading later during row deletes. This fixes transient `database is locked` failures during sync materialisation when another writer briefly holds the database lock.
 - **`bitloops init --sync=true` no longer waits on unselected semantic enrichment lanes before completing**: init session status now filters queued summary-refresh, code-embedding, and summary-embedding work down to the lanes actually selected for that session. This fixes sync-only runs getting stuck on "Waiting for queued enrichment work to finish" when repo-level semantic summary refresh remained active in the background
 
 ### Changed
