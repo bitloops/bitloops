@@ -42,6 +42,22 @@ search or file reads.
 4. Return the concrete rows. Summaries are optional follow-up, not substitutes.
 5. If DevQL returns nothing useful, fall back to targeted repo search or file reads.
 
+## Selector Routing
+
+- If the prompt contains a path, line range, scoped symbol, backticked identifier, function-like token, or other code-ish artefact clue, prefer a structured selector first.
+- Use `path` or `path + lines` for file references, `symbolFqn` for exact symbol references, and `fuzzyName` when the user likely named a symbol approximately or misspelled it.
+- Use `semanticQuery` for conceptual behaviour or responsibility queries such as `build invoice pdf`, `validate webhook signature`, or `render checkout summary`.
+- Do not pass the whole conversational prompt into `semanticQuery` when it contains extra wrapper text such as `can you help`, `fix this`, or `help me understand the codebase`.
+- Distill semantic lookup into a short intent phrase instead of removing stopwords mechanically. Preserve meaningful qualifiers and drop conversational filler.
+- For mixed prompts, try structured lookup first and use `semanticQuery` as a fallback or supplement when the artefact clue is weak.
+
+Examples:
+
+- `renderInvoicePdf is broken` -> prefer `fuzzyName` or `symbolFqn`
+- `src/payments/invoice.ts:42` -> prefer `path + lines`
+- `find the code that builds invoice PDFs` -> prefer `semanticQuery`
+- `help me understand the codebase` -> do not use `semanticQuery` first; start with scoped `summary` or a concrete project/file selector
+
 ## Sandbox Execution
 
 - In sandboxed agent environments, run `bitloops devql ...` outside the sandbox by default.

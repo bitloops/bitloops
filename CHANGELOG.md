@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Added
 
+- **Slim `selectArtefacts` now supports natural-language semantic artefact selection**: slim GraphQL requests can now select current artefacts with `by: { semanticQuery: "find the artefacts that build invoice PDFs" }`. The selector embeds the caller-provided semantic query, compares it against prepared current artefact embeddings for the active semantic-clones code-embedding setup, keeps only similarity-ranked matches above the fixed `0.72` floor, and returns an empty selection when nothing is close enough. The slim SDL snapshot, checked-in schema export, DevQL docs, and repo-local agent guidance now document the new selector mode and clarify that `semanticQuery` is intended for distilled conceptual requests rather than whole conversational prompts.
 - **Slim `selectArtefacts` now supports typo-tolerant fuzzy artefact lookup by symbol name**: slim GraphQL requests can now select current artefacts with `by: { fuzzyName: "payLater()" }`, and the DevQL DSL now compiles `selectArtefacts(fuzzy_name:"payLater()")` to the same selector. The fuzzy matcher normalizes human-entered names from `symbol_fqn` leaf segments, preserves exact `symbolFqn` behaviour as an explicit selector, ranks matches best-first with exact/prefix/token/edit-distance signals, filters out weak matches below the fixed `0.6` threshold, and caps results at 10. The slim SDL snapshot, DevQL docs, and Bitloops-managed agent guidance/skill content now document the new selector mode.
 
 ### Fixed
