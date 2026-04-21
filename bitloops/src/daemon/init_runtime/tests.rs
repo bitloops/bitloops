@@ -21,7 +21,10 @@ use super::coordinator::InitRuntimeCoordinator;
 use super::lanes::{
     derive_code_embeddings_lane, derive_session_status, derive_summaries_lane, derive_sync_lane,
 };
-use super::orchestration::{semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync};
+use super::orchestration::{
+    selected_session_workplane_stats, semantic_bootstrap_waiting_reason,
+    semantic_follow_up_ready_for_sync,
+};
 use super::session_stats::{
     load_semantic_embedding_session_mailbox_counts, load_semantic_summary_session_mailbox_counts,
     summary_effective_work_item_count,
@@ -92,6 +95,40 @@ fn embeddings_only_session() -> InitSessionRecord {
         follow_up_sync_task_id: None,
         next_completion_seq: 0,
         initial_sync_completion_seq: None,
+        embeddings_bootstrap_completion_seq: None,
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    }
+}
+
+fn sync_only_session() -> InitSessionRecord {
+    InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: false,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: None,
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        ingest_task_id: None,
+        embeddings_bootstrap_task_id: None,
+        summary_bootstrap_task_id: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        next_completion_seq: 0,
+        initial_sync_completion_seq: Some(1),
         embeddings_bootstrap_completion_seq: None,
         summary_bootstrap_completion_seq: None,
         follow_up_sync_completion_seq: None,
@@ -420,7 +457,104 @@ fn refresh_lane_counts_excludes_clone_rebuild_from_embeddings_lane() {
             completed: 12,
         }
     );
-    assert_eq!(stats.warning_failed_jobs_total(), 3);
+    assert_eq!(stats.code_embedding_jobs.counts.failed, 1);
+    assert_eq!(stats.summary_embedding_jobs.counts.failed, 0);
+    assert_eq!(stats.summary_refresh_jobs.counts.failed, 2);
+}
+
+#[test]
+fn selected_session_workplane_stats_ignore_unselected_semantic_lanes() {
+    let session = sync_only_session();
+    let mut stats = SessionWorkplaneStats {
+        code_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 2,
+                running: 0,
+                failed: 1,
+                completed: 0,
+            },
+            latest_error: Some("code embeddings stalled".to_string()),
+        },
+        summary_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 0,
+                running: 3,
+                failed: 1,
+                completed: 0,
+            },
+            latest_error: Some("summary embeddings stalled".to_string()),
+        },
+        summary_refresh_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 4,
+                running: 0,
+                failed: 2,
+                completed: 0,
+            },
+            latest_error: Some("summary refresh stalled".to_string()),
+        },
+        blocked_code_embedding_reason: Some("code blocked".to_string()),
+        blocked_summary_embedding_reason: Some("summary embeddings blocked".to_string()),
+        blocked_summary_reason: Some("summary blocked".to_string()),
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let selected = selected_session_workplane_stats(&session, &stats);
+
+    assert_eq!(selected.embedding_jobs, StatusCounts::default());
+    assert_eq!(selected.summary_jobs, StatusCounts::default());
+    assert_eq!(selected.warning_failed_jobs_total, 0);
+    assert_eq!(selected.blocked_embedding_reason, None);
+    assert_eq!(selected.blocked_summary_reason, None);
+}
+
+#[test]
+fn selected_session_workplane_stats_only_include_requested_embedding_lanes() {
+    let session = embeddings_only_session();
+    let mut stats = SessionWorkplaneStats {
+        code_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 1,
+                running: 2,
+                failed: 1,
+                completed: 0,
+            },
+            latest_error: Some("code embeddings stalled".to_string()),
+        },
+        summary_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 5,
+                running: 6,
+                failed: 7,
+                completed: 0,
+            },
+            latest_error: Some("summary embeddings stalled".to_string()),
+        },
+        blocked_code_embedding_reason: Some("code blocked".to_string()),
+        blocked_summary_embedding_reason: Some("summary embeddings blocked".to_string()),
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let selected = selected_session_workplane_stats(&session, &stats);
+
+    assert_eq!(
+        selected.embedding_jobs,
+        StatusCounts {
+            pending: 1,
+            running: 2,
+            failed: 1,
+            completed: 0,
+        }
+    );
+    assert_eq!(selected.summary_jobs, StatusCounts::default());
+    assert_eq!(selected.warning_failed_jobs_total, 1);
+    assert_eq!(
+        selected.blocked_embedding_reason,
+        Some("code blocked".to_string())
+    );
+    assert_eq!(selected.blocked_summary_reason, None);
 }
 
 #[test]
