@@ -62,6 +62,7 @@ The slim, repo-scoped GraphQL surface also exposes a selection-oriented entry po
 
 - `symbolFqn`
 - `fuzzyName`
+- `semanticQuery`
 - `path`
 - `path` plus `lines`
 
