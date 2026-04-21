@@ -15,6 +15,23 @@ thread_local! {
     static ENSURE_LOGGED_IN_HOOK: RefCell<Option<Rc<EnsureLoggedInHook>>> = RefCell::new(None);
 }
 
+#[cfg(test)]
+fn clear_ensure_logged_in_hook() {
+    ENSURE_LOGGED_IN_HOOK.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+}
+
+#[cfg(test)]
+struct EnsureLoggedInHookGuard;
+
+#[cfg(test)]
+impl Drop for EnsureLoggedInHookGuard {
+    fn drop(&mut self) {
+        clear_ensure_logged_in_hook();
+    }
+}
+
 #[derive(Args, Debug, Clone, Default)]
 pub struct LoginArgs {
     #[command(subcommand)]
@@ -103,11 +120,8 @@ pub(crate) fn with_ensure_logged_in_hook<T>(
         );
         *cell.borrow_mut() = Some(Rc::new(hook));
     });
-    let result = f();
-    ENSURE_LOGGED_IN_HOOK.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
-    result
+    let _guard = EnsureLoggedInHookGuard;
+    f()
 }
 
 async fn run_status() -> Result<()> {
@@ -155,8 +169,25 @@ fn render_status_lines(session: &crate::daemon::WorkosSessionDetails) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
     use crate::cli::{Cli, Commands};
     use clap::Parser;
+
+    fn fake_session() -> crate::daemon::WorkosSessionDetails {
+        crate::daemon::WorkosSessionDetails {
+            client_id: "client_test".to_string(),
+            user_id: Some("user_123".to_string()),
+            user_email: Some("cli@example.com".to_string()),
+            user_first_name: Some("CLI".to_string()),
+            user_last_name: Some("User".to_string()),
+            organisation_id: Some("org_123".to_string()),
+            authentication_method: Some("GoogleOAuth".to_string()),
+            access_token_expires_at_unix: None,
+            authenticated_at_unix: 0,
+            updated_at_unix: 0,
+        }
+    }
 
     #[test]
     fn login_status_subcommand_parses() {
@@ -188,24 +219,25 @@ mod tests {
 
     #[test]
     fn login_status_does_not_render_the_access_token() {
-        let lines = super::render_status_lines(&crate::daemon::WorkosSessionDetails {
-            client_id: "client_test".to_string(),
-            user_id: Some("user_123".to_string()),
-            user_email: Some("cli@example.com".to_string()),
-            user_first_name: Some("CLI".to_string()),
-            user_last_name: Some("User".to_string()),
-            organisation_id: Some("org_123".to_string()),
-            authentication_method: Some("GoogleOAuth".to_string()),
-            access_token_expires_at_unix: None,
-            authenticated_at_unix: 0,
-            updated_at_unix: 0,
-        })
-        .expect("status lines");
+        let lines = super::render_status_lines(&fake_session()).expect("status lines");
 
         assert_eq!(lines[0], "Signed in as CLI User.");
         assert!(lines.contains(&"Email: cli@example.com".to_string()));
         assert!(lines.contains(&"Method: GoogleOAuth".to_string()));
         assert!(lines.contains(&"Organisation: org_123".to_string()));
         assert!(!lines.iter().any(|line| line.starts_with("Access token:")));
+    }
+
+    #[test]
+    fn ensure_logged_in_hook_is_cleared_after_panic() {
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            super::with_ensure_logged_in_hook(|| Ok(fake_session()), || panic!("boom"));
+        }));
+        assert!(panic.is_err(), "expected the inner closure to panic");
+
+        super::with_ensure_logged_in_hook(
+            || Ok(fake_session()),
+            || assert!(super::ENSURE_LOGGED_IN_HOOK.with(|cell| cell.borrow().is_some())),
+        );
     }
 }

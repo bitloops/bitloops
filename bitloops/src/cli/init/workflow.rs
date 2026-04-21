@@ -564,6 +564,7 @@ pub(crate) async fn run_for_project_root(
                     embeddings_bootstrap,
                     summaries_bootstrap,
                 },
+                show_live_progress_notice: !args.install_default_daemon,
             },
         )
         .await?;

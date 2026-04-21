@@ -6,8 +6,8 @@ use crate::adapters::agents::{AGENT_NAME_COPILOT, AGENT_NAME_OPEN_CODE};
 use crate::api::tls::with_test_mkcert_on_path;
 use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::embeddings::{
-    ManagedEmbeddingsBinaryInstallOutcome, ManagedPlatformEmbeddingsBinaryInstallOutcome,
-    with_managed_embeddings_install_hook, with_managed_platform_embeddings_install_hook,
+    ManagedPlatformEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
+    with_managed_platform_embeddings_install_hook,
 };
 use crate::cli::inference::{
     OllamaAvailability, with_ollama_probe_hook, with_summary_generation_configured_hook,
@@ -277,12 +277,6 @@ done
     ("sh".to_string(), vec![script_path.display().to_string()])
 }
 
-#[cfg(unix)]
-fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
-    let (_, args) = fake_runtime_command_and_args(repo_root);
-    std::path::PathBuf::from(args[0].clone())
-}
-
 #[cfg(windows)]
 fn fake_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
     let script_path = repo_root.join(".bitloops/test-bin/fake-init-embeddings-runtime.ps1");
@@ -343,25 +337,6 @@ while (($line = $stdin.ReadLine()) -ne $null) {
             script_path.display().to_string(),
         ],
     )
-}
-
-#[cfg(windows)]
-fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
-    let script_dir = repo_root.join(".bitloops/test-bin");
-    std::fs::create_dir_all(&script_dir).expect("create managed runtime dir");
-    let powershell_script = script_dir.join("fake-managed-init-embeddings-runtime.ps1");
-    let launcher = script_dir.join("fake-managed-init-embeddings-runtime.cmd");
-    let (_, args) = fake_runtime_command_and_args(repo_root);
-    std::fs::copy(&args[4], &powershell_script).expect("copy managed powershell script");
-    std::fs::write(
-        &launcher,
-        format!(
-            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
-            powershell_script.display()
-        ),
-    )
-    .expect("write managed runtime launcher");
-    launcher
 }
 
 fn write_runtime_only_daemon_config(config_path: &Path, command: &str, args: &[String]) {
@@ -458,8 +433,7 @@ fn runtime_snapshot_json(
     session_id: &str,
     fixture: RuntimeSessionSnapshotFixture,
 ) -> serde_json::Value {
-    let summary_embeddings_selected = fixture.summary_embeddings_selected
-        || (fixture.embeddings_selected && fixture.summaries_selected);
+    let summary_embeddings_selected = fixture.summary_embeddings_selected;
     let ingest_lane_status = fixture.ingest_lane_status.unwrap_or(if fixture.run_ingest {
         fixture.top_lane_status
     } else {
@@ -2136,7 +2110,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
             },
             || {
                 let mut out = Vec::new();
-                let mut input = Cursor::new("n\n3\n");
+                let mut input = Cursor::new("3\n");
                 let select = |_items: &[String], enable_bitloops_skill: bool| {
                     Ok(InitAgentSelection {
                         agents: vec!["claude-code".to_string()],
@@ -2506,18 +2480,21 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                     !config.contains("code_embeddings = \"local_code\""),
                     "plain init should not install embeddings:\n{config}"
                 );
+                let rendered = String::from_utf8(out).expect("utf8 output");
+                assert!(!rendered.contains("Configure embeddings"));
+                assert!(!rendered.contains("Install local embeddings as well?"));
             },
         );
     });
 }
 
 #[test]
-fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
+fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompts() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);
 
-    with_temp_app_dirs(&app_dirs, true, true, || {
+    with_temp_app_dirs_and_summary_configured(&app_dirs, true, true, false, || {
         let config_path = ensure_daemon_config_exists().expect("create default daemon config");
         write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
 
@@ -2533,16 +2510,10 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
             },
             || {
                 with_managed_embeddings_install_hook(
-                    move |repo_root| {
-                        Ok(ManagedEmbeddingsBinaryInstallOutcome {
-                            version: "v0.1.0".to_string(),
-                            binary_path: fake_managed_runtime_path(repo_root),
-                            freshly_installed: true,
-                        })
-                    },
+                    |_repo_root| panic!("plain init should not install embeddings"),
                     || {
                         let mut out = Vec::new();
-                        let mut input = Cursor::new("\n");
+                        let mut input = Cursor::new("");
                         let select = |_items: &[String], enable_bitloops_skill: bool| {
                             Ok(InitAgentSelection {
                                 agents: vec!["claude-code".to_string()],
@@ -2581,22 +2552,22 @@ fn run_init_interactive_prompts_for_embeddings_and_installs_when_accepted() {
                             .expect("run init");
 
                         let rendered = String::from_utf8(out).expect("utf8 output");
-                        assert!(rendered.contains("Install local embeddings as well?"));
-                        assert!(rendered.contains("Install embeddings now? (Y/n)"));
-                        assert!(rendered.contains("> "));
-                        assert!(rendered.contains("Preparing local embeddings setup..."));
-                        assert!(rendered.contains(
-                            "This can take a moment if the managed runtime needs to be downloaded."
-                        ));
-                        assert!(rendered.contains("Installed managed standalone"));
-                        assert!(rendered.contains("Pulled embedding profile `local_code`."));
+                        assert!(!rendered.contains("Configure embeddings"));
+                        assert!(!rendered.contains("Install local embeddings as well?"));
+                        assert!(!rendered.contains("Configure semantic summaries"));
 
                         let daemon_config = ensure_daemon_config_exists()
                             .expect("resolve daemon config after init");
                         let daemon_config =
                             std::fs::read_to_string(daemon_config).expect("read daemon config");
-                        assert!(daemon_config.contains("code_embeddings = \"local_code\""));
-                        assert!(daemon_config.contains("[inference.profiles.local_code]"));
+                        assert!(
+                            !daemon_config.contains("code_embeddings = \"local_code\""),
+                            "plain init should leave embeddings unconfigured:\n{daemon_config}"
+                        );
+                        assert!(
+                            !daemon_config.contains("summary_generation = "),
+                            "plain init should not configure semantic summaries:\n{daemon_config}"
+                        );
                     },
                 );
             },
@@ -4117,6 +4088,7 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                         run_ingest: false,
                                                         embeddings_selected: true,
                                                         summaries_selected: true,
+                                                        summary_embeddings_selected: true,
                                                         top_lane_status: "COMPLETED",
                                                         embeddings_lane_status: "RUNNING",
                                                         summaries_lane_status: "WAITING",
@@ -4133,6 +4105,7 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                         run_ingest: false,
                                                         embeddings_selected: true,
                                                         summaries_selected: true,
+                                                        summary_embeddings_selected: true,
                                                         top_lane_status: "COMPLETED",
                                                         embeddings_lane_status: "COMPLETED",
                                                         summaries_lane_status: "COMPLETED",
@@ -4283,6 +4256,7 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                                 run_sync: true,
                                                                                 embeddings_selected: true,
                                                                                 summaries_selected: true,
+                                                                                summary_embeddings_selected: true,
                                                                                 top_lane_status: "COMPLETED",
                                                                                 embeddings_lane_status: "COMPLETED",
                                                                                 summaries_lane_status: "COMPLETED",
@@ -4862,9 +4836,18 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                     .expect("run init");
 
                                 let rendered = String::from_utf8(out).expect("utf8 output");
-                                assert!(rendered.contains(
-                                    "This may take a few minutes depending on your codebase size."
-                                ));
+                                let live_progress_block = concat!(
+                                    "\n\n",
+                                    "──────────────────────────────────────────────────────────────────\n",
+                                    "                   🔍 Live Progress\n",
+                                    " Feel free to close this terminal and continue with your day! 🌟\n",
+                                    "──────────────────────────────────────────────────────────────────\n\n",
+                                    "This may take a few minutes depending on your codebase size.\n"
+                                );
+                                assert!(
+                                    rendered.contains(live_progress_block),
+                                    "expected live progress banner before the progress copy:\n{rendered}"
+                                );
                             },
                         )
                     },
