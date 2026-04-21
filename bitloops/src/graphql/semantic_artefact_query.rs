@@ -27,6 +27,8 @@ const DEFAULT_MIN_SEMANTIC_SCORE: f32 = 0.72;
 const DEFAULT_RESULT_LIMIT: usize = 20;
 const ANN_PREFILTER_MULTIPLIER: usize = 4;
 const ANN_PREFILTER_MIN_LIMIT: usize = 32;
+const SEMANTIC_QUERY_REPRESENTATION_KIND: EmbeddingRepresentationKind =
+    EmbeddingRepresentationKind::Identity;
 
 #[derive(Debug, Clone)]
 struct SemanticArtefactCandidate {
@@ -62,7 +64,7 @@ pub(crate) async fn select_semantic_artefacts(
     let selection = resolve_embedding_provider(
         &config,
         &inference,
-        EmbeddingRepresentationKind::Code,
+        SEMANTIC_QUERY_REPRESENTATION_KIND,
         EmbeddingProviderMode::ConfiguredStrict,
     )
     .map_err(|err| {
@@ -72,7 +74,7 @@ pub(crate) async fn select_semantic_artefacts(
     })?;
     let provider = selection.provider.ok_or_else(|| {
         bad_user_input_error(
-            "`semanticQuery` requires configured semantic clone code embeddings in `semantic_clones.inference.code_embeddings`",
+            "`semanticQuery` requires configured semantic clone identity embeddings in `semantic_clones.inference.code_embeddings`",
         )
     })?;
     let query_setup = resolve_embedding_setup(provider.as_ref()).map_err(|err| {
@@ -110,7 +112,7 @@ pub(crate) async fn select_semantic_artefacts(
     let relational = relational_store.to_local_inner();
 
     let active_setup =
-        load_active_embedding_setup(&relational, &repo_id, EmbeddingRepresentationKind::Code)
+        load_active_embedding_setup(&relational, &repo_id, SEMANTIC_QUERY_REPRESENTATION_KIND)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -163,15 +165,12 @@ async fn load_semantic_candidates(
         None,
     );
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
-    let representation_clause = [
-        EmbeddingRepresentationKind::Code,
-        EmbeddingRepresentationKind::Identity,
-    ]
-    .into_iter()
-    .flat_map(EmbeddingRepresentationKind::storage_values)
-    .map(|value| format!("'{}'", esc_pg(value)))
-    .collect::<Vec<_>>()
-    .join(", ");
+    let representation_clause = SEMANTIC_QUERY_REPRESENTATION_KIND
+        .storage_values()
+        .iter()
+        .map(|value| format!("'{}'", esc_pg(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!(
         "{filtered_cte} \
          SELECT filtered.symbol_id, filtered.artefact_id, filtered.path, filtered.language, \

@@ -1954,7 +1954,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_repo_scope()
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "render payload fragment" }) {
+              selectArtefacts(by: { semanticQuery: "render in page ts" }) {
                 count
                 artefacts {
                   path
@@ -1996,7 +1996,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_project_scop
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "build response payload" }) {
+              selectArtefacts(by: { semanticQuery: "caller in caller ts" }) {
                 count
                 artefacts {
                   path
@@ -2236,7 +2236,7 @@ async fn slim_select_artefacts_semantic_query_drives_summary_and_deps_and_tests(
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "build response payload" }) {
+              selectArtefacts(by: { semanticQuery: "caller in caller ts" }) {
                 count
                 summary
                 deps {

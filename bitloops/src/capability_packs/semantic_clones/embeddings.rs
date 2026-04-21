@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow, bail};
+use regex::Regex;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -8,7 +9,6 @@ use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureInput, render_dependency_context,
 };
 use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
-use regex::Regex;
 
 const EMBEDDING_FINGERPRINT_VERSION: &str = "symbol-embedding-fingerprint-v3";
 const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
@@ -453,7 +453,7 @@ fn strip_trailing_identity_path_suffix(tokens: &mut Vec<String>) {
 
 fn identity_identifier_regex() -> &'static Regex {
     static IDENTIFIER_REGEX: OnceLock<Regex> = OnceLock::new();
-    IDENTIFIER_REGEX.get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").unwrap())
+    IDENTIFIER_REGEX.get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("valid regex"))
 }
 
 fn split_identity_camel_case_word(input: &str) -> Vec<String> {
@@ -877,9 +877,15 @@ mod tests {
             .expect("baseline alias");
         let enriched = serde_json::from_str::<EmbeddingRepresentationKind>("\"enriched\"")
             .expect("enriched alias");
+        let identity = serde_json::from_str::<EmbeddingRepresentationKind>("\"identity\"")
+            .expect("identity representation");
+        let locator =
+            serde_json::from_str::<EmbeddingRepresentationKind>("\"locator\"").expect("alias");
 
         assert_eq!(baseline, EmbeddingRepresentationKind::Code);
         assert_eq!(enriched, EmbeddingRepresentationKind::Code);
+        assert_eq!(identity, EmbeddingRepresentationKind::Identity);
+        assert_eq!(locator, EmbeddingRepresentationKind::Identity);
     }
 
     #[test]

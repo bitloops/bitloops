@@ -712,19 +712,6 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
     conn.execute(
         "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
             repo_id, representation_kind, provider, model, dimension, setup_fingerprint
-        ) VALUES (?1, 'code', ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            repo_id.as_str(),
-            crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
-            "semantic-query-test-model",
-            3,
-            setup.setup_fingerprint,
-        ],
-    )
-    .expect("insert semantic query active setup");
-    conn.execute(
-        "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
-            repo_id, representation_kind, provider, model, dimension, setup_fingerprint
         ) VALUES (?1, 'identity', ?2, ?3, ?4, ?5)",
         rusqlite::params![
             repo_id.as_str(),
@@ -734,55 +721,7 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
             setup.setup_fingerprint,
         ],
     )
-    .expect("insert semantic query identity active setup");
-
-    for (artefact_id, path, content_id, symbol_id, input_hash, embedding) in [
-        (
-            "artefact::api-caller",
-            "packages/api/src/caller.ts",
-            "blob-api-caller",
-            "sym::api-caller",
-            "semantic-query-hash-api-caller",
-            "[1.0,0.0,0.0]",
-        ),
-        (
-            "artefact::api-target",
-            "packages/api/src/target.ts",
-            "blob-api-target",
-            "sym::api-target",
-            "semantic-query-hash-api-target",
-            "[0.4,0.4,-0.82]",
-        ),
-        (
-            "artefact::web-render",
-            "packages/web/src/page.ts",
-            "blob-web-page",
-            "sym::web-render",
-            "semantic-query-hash-web-render",
-            "[0.0,1.0,0.0]",
-        ),
-    ] {
-        conn.execute(
-            "INSERT OR REPLACE INTO symbol_embeddings_current (
-                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
-                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'code', ?6, ?7, ?8, ?9, ?10, ?11)",
-            rusqlite::params![
-                artefact_id,
-                repo_id.as_str(),
-                path,
-                content_id,
-                symbol_id,
-                setup.setup_fingerprint,
-                crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
-                "semantic-query-test-model",
-                3,
-                input_hash,
-                embedding,
-            ],
-        )
-        .expect("insert semantic query embedding row");
-    }
+    .expect("insert semantic query active setup");
 
     for (artefact_id, path, content_id, symbol_id, input_hash, embedding) in [
         (
