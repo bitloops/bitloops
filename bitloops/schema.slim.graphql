@@ -83,6 +83,7 @@ type ArtefactSelection {
 	count: Int!
 	summary: JSON!
 	artefacts(first: Int! = 20): [Artefact!]!
+	entries(first: Int! = 20): [DirectoryEntry!]!
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
 	clones(relationKind: String, minScore: Float): CloneStageResult!
 	deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
@@ -91,6 +92,7 @@ type ArtefactSelection {
 
 input ArtefactSelectorInput {
 	symbolFqn: String
+	fuzzyName: String
 	path: String
 	lines: LineRangeInput
 }
@@ -359,6 +361,17 @@ type DepsSummaryKindCounts {
 	extends: Int!
 	implements: Int!
 	exports: Int!
+}
+
+type DirectoryEntry {
+	path: String!
+	name: String!
+	entryKind: DirectoryEntryKind!
+}
+
+enum DirectoryEntryKind {
+	FILE
+	DIRECTORY
 }
 
 enum EdgeKind {

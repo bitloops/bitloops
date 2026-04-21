@@ -2,6 +2,7 @@ use async_graphql::{Context, Object, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use crate::graphql::fuzzy_artefact_name::select_fuzzy_named_artefacts;
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_user_input_error};
 
@@ -549,41 +550,82 @@ impl SlimQueryRoot {
         let scope = context.slim_root_scope();
         let selector = by.selection_mode()?;
 
-        let artefacts = match selector {
+        let selection = match selector {
             ArtefactSelectorMode::SymbolFqn(symbol_fqn) => {
                 let filter = ArtefactFilterInput {
                     symbol_fqn: Some(symbol_fqn),
                     ..Default::default()
                 };
-                context
+                let artefacts = context
                     .list_artefacts(None, Some(&filter), &scope)
                     .await
                     .map_err(|err| {
                         backend_error(format!(
                             "failed to resolve selected artefacts by symbolFqn: {err:#}"
                         ))
-                    })?
+                    })?;
+                ArtefactSelection::new(artefacts, Vec::new(), scope)
+            }
+            ArtefactSelectorMode::FuzzyName(fuzzy_name) => {
+                let artefacts =
+                    context
+                        .list_artefacts(None, None, &scope)
+                        .await
+                        .map_err(|err| {
+                            backend_error(format!(
+                                "failed to resolve selected artefacts by fuzzyName: {err:#}"
+                            ))
+                        })?;
+                let artefacts = select_fuzzy_named_artefacts(&fuzzy_name, artefacts);
+                ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
                 let normalized = context
                     .resolve_scope_path(&scope, &path, false)
                     .map_err(bad_user_input_error)?;
-                let filter = lines.map(|lines| ArtefactFilterInput {
-                    lines: Some(lines),
-                    ..Default::default()
-                });
-                context
-                    .list_artefacts(Some(&normalized), filter.as_ref(), &scope)
-                    .await
+                let metadata = context
+                    .repo_root_for_scope(&scope)
+                    .map(|repo_root| std::fs::metadata(repo_root.join(&normalized)).ok())
                     .map_err(|err| {
                         backend_error(format!(
                             "failed to resolve selected artefacts for `{normalized}`: {err:#}"
                         ))
-                    })?
+                    })?;
+
+                if metadata.as_ref().is_some_and(std::fs::Metadata::is_dir) {
+                    if lines.is_some() {
+                        return Err(bad_user_input_error(
+                            "directory paths do not support `lines`; select a file path instead",
+                        ));
+                    }
+
+                    let directory_entries = context
+                        .list_directory_entries(&normalized, &scope)
+                        .map_err(|err| {
+                            backend_error(format!(
+                                "failed to resolve directory entries for `{normalized}`: {err:#}"
+                            ))
+                        })?;
+                    ArtefactSelection::from_directory_entries(directory_entries, scope)
+                } else {
+                    let filter = lines.map(|lines| ArtefactFilterInput {
+                        lines: Some(lines),
+                        ..Default::default()
+                    });
+                    let artefacts = context
+                        .list_artefacts(Some(&normalized), filter.as_ref(), &scope)
+                        .await
+                        .map_err(|err| {
+                            backend_error(format!(
+                                "failed to resolve selected artefacts for `{normalized}`: {err:#}"
+                            ))
+                        })?;
+                    ArtefactSelection::new(artefacts, Vec::new(), scope)
+                }
             }
         };
 
-        Ok(ArtefactSelection::new(artefacts, scope))
+        Ok(selection)
     }
 
     async fn deps(

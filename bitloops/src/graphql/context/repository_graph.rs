@@ -15,11 +15,12 @@ use crate::artefact_query_planner::{ArtefactPagination, plan_graphql_artefact_qu
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
     Artefact, ArtefactFilterInput, ConnectionPagination, DependencyEdge, DepsDirection,
-    DepsFilterInput, FileContext,
+    DepsFilterInput, DirectoryEntry, DirectoryEntryKind, FileContext,
 };
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fs;
 
 impl DevqlGraphqlContext {
     pub(crate) fn validate_project_path(
@@ -94,6 +95,44 @@ impl DevqlGraphqlContext {
             .map(file_context_from_value)
             .map(|result| result.map(|file| file.with_scope(scope.clone())))
             .collect()
+    }
+
+    pub(crate) fn list_directory_entries(
+        &self,
+        path: &str,
+        scope: &ResolverScope,
+    ) -> Result<Vec<DirectoryEntry>> {
+        if !scope.contains_repo_path(path) {
+            return Ok(Vec::new());
+        }
+
+        let repo_root = self.repo_root_for_scope(scope)?;
+        let directory = repo_root.join(path);
+        let mut entries = fs::read_dir(&directory)
+            .with_context(|| format!("reading directory entries for `{}`", directory.display()))?
+            .map(|entry| {
+                let entry = entry.with_context(|| {
+                    format!("reading directory entry under `{}`", directory.display())
+                })?;
+                let entry_type = entry.file_type().with_context(|| {
+                    format!("reading file type for `{}`", entry.path().display())
+                })?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let path = format!("{path}/{name}");
+                let entry_kind = if entry_type.is_dir() {
+                    DirectoryEntryKind::Directory
+                } else {
+                    DirectoryEntryKind::File
+                };
+                Ok(DirectoryEntry {
+                    path,
+                    name,
+                    entry_kind,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(entries)
     }
 
     pub(crate) async fn list_artefacts(

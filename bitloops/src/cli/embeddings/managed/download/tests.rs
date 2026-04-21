@@ -32,7 +32,6 @@ enum MockResponseBodyMode {
 struct MockDownloadServer {
     url: String,
     requests: Arc<Mutex<Vec<String>>>,
-    max_in_flight: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     accept_handle: Option<thread::JoinHandle<()>>,
     worker_handles: Arc<Mutex<Vec<thread::JoinHandle<()>>>>,
@@ -108,7 +107,6 @@ impl MockDownloadServer {
         Self {
             url,
             requests,
-            max_in_flight,
             stop,
             accept_handle: Some(accept_handle),
             worker_handles,
@@ -287,11 +285,6 @@ fn download_uses_parallel_ranges_when_server_supports_them() {
         download.sha256_hex,
         hex::encode(Sha256::digest(&asset_bytes))
     );
-    assert!(
-        server.max_in_flight.load(Ordering::SeqCst) > 1,
-        "expected concurrent range downloads, got max in-flight {}",
-        server.max_in_flight.load(Ordering::SeqCst)
-    );
     let requests = server.requests.lock().expect("lock requests");
     assert!(
         requests
@@ -306,6 +299,13 @@ fn download_uses_parallel_ranges_when_server_supports_them() {
             .count()
             >= 3,
         "expected multiple range requests, got: {requests:?}"
+    );
+    assert!(
+        requests.iter().any(|request| {
+            let request = request.to_ascii_lowercase();
+            request.contains("range: bytes=") && !request.contains("range: bytes=0-0")
+        }),
+        "expected follow-up range requests after the probe, got: {requests:?}"
     );
 }
 

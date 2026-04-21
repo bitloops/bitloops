@@ -4,15 +4,17 @@ use anyhow::Result;
 use terminal_size::{Width, terminal_size};
 
 use crate::runtime_presentation::{
-    INIT_CODEBASE_LANE_LABEL, INIT_CODEBASE_SECTION_TITLE, INIT_EMBEDDINGS_LANE_LABEL,
-    INIT_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_LANE_LABEL, INIT_SUMMARIES_SECTION_TITLE,
+    INIT_CODE_EMBEDDINGS_LANE_LABEL, INIT_CODE_EMBEDDINGS_SECTION_TITLE, INIT_INGEST_LANE_LABEL,
+    INIT_INGEST_SECTION_TITLE, INIT_SUMMARIES_LANE_LABEL, INIT_SUMMARIES_SECTION_TITLE,
+    INIT_SUMMARY_EMBEDDINGS_LANE_LABEL, INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE,
+    INIT_SYNC_LANE_LABEL, INIT_SYNC_SECTION_TITLE,
 };
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, color_hex_if_enabled};
 
 use super::bars::SUCCESS_GREEN_HEX;
 use super::compact::{LaneRenderContext, compact_selected_section_titles, render_compact_lane};
 use super::session_status::compact_session_status_line;
-use super::task_lookup::{task_by_id, task_for_lane};
+use super::task_lookup::task_for_lane;
 use super::viewport::{clear_rendered_lines, fit_line, rendered_terminal_line_count};
 
 const INIT_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -107,27 +109,42 @@ impl RuntimeInitRenderer {
             .unwrap_or(0)
             + 12;
 
-        lines.extend(render_compact_lane(
-            INIT_CODEBASE_SECTION_TITLE,
-            &session.top_pipeline_lane,
-            INIT_CODEBASE_LANE_LABEL,
-            task_for_lane(snapshot, &session.top_pipeline_lane),
-            None,
-            label_width,
-            &render_context,
-        ));
+        if session.run_sync {
+            lines.extend(render_compact_lane(
+                INIT_SYNC_SECTION_TITLE,
+                &session.sync_lane,
+                INIT_SYNC_LANE_LABEL,
+                task_for_lane(snapshot, &session.sync_lane),
+                None,
+                label_width,
+                &render_context,
+            ));
+        }
+
+        if session.run_ingest {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.extend(render_compact_lane(
+                INIT_INGEST_SECTION_TITLE,
+                &session.ingest_lane,
+                INIT_INGEST_LANE_LABEL,
+                task_for_lane(snapshot, &session.ingest_lane),
+                None,
+                label_width,
+                &render_context,
+            ));
+        }
 
         if session.embeddings_selected {
-            lines.push(String::new());
-            let bootstrap_task = session
-                .embeddings_bootstrap_task_id
-                .as_deref()
-                .and_then(|task_id| task_by_id(snapshot, task_id));
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
             lines.extend(render_compact_lane(
-                INIT_EMBEDDINGS_SECTION_TITLE,
-                &session.embeddings_lane,
-                INIT_EMBEDDINGS_LANE_LABEL,
-                bootstrap_task,
+                INIT_CODE_EMBEDDINGS_SECTION_TITLE,
+                &session.code_embeddings_lane,
+                INIT_CODE_EMBEDDINGS_LANE_LABEL,
+                task_for_lane(snapshot, &session.code_embeddings_lane),
                 None,
                 label_width,
                 &render_context,
@@ -135,7 +152,9 @@ impl RuntimeInitRenderer {
         }
 
         if session.summaries_selected {
-            lines.push(String::new());
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
             let summary_run = snapshot
                 .summaries_bootstrap
                 .as_ref()
@@ -146,6 +165,21 @@ impl RuntimeInitRenderer {
                 INIT_SUMMARIES_LANE_LABEL,
                 None,
                 summary_run,
+                label_width,
+                &render_context,
+            ));
+        }
+
+        if session.summary_embeddings_selected {
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.extend(render_compact_lane(
+                INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE,
+                &session.summary_embeddings_lane,
+                INIT_SUMMARY_EMBEDDINGS_LANE_LABEL,
+                task_for_lane(snapshot, &session.summary_embeddings_lane),
+                None,
                 label_width,
                 &render_context,
             ));

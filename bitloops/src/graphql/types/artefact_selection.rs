@@ -1,4 +1,4 @@
-use async_graphql::{ComplexObject, Context, InputObject, Result, SimpleObject, types::Json};
+use async_graphql::{ComplexObject, Context, Enum, InputObject, Result, SimpleObject, types::Json};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -14,6 +14,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArtefactSelectorMode {
     SymbolFqn(String),
+    FuzzyName(String),
     Path {
         path: String,
         lines: Option<LineRangeInput>,
@@ -23,6 +24,7 @@ pub(crate) enum ArtefactSelectorMode {
 #[derive(Debug, Clone, InputObject)]
 pub struct ArtefactSelectorInput {
     pub symbol_fqn: Option<String>,
+    pub fuzzy_name: Option<String>,
     pub path: Option<String>,
     pub lines: Option<LineRangeInput>,
 }
@@ -35,6 +37,15 @@ impl ArtefactSelectorInput {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
+        let fuzzy_name = match self.fuzzy_name.as_deref() {
+            Some(value) if value.trim().is_empty() => {
+                return Err(bad_user_input_error(
+                    "`selectArtefacts(by: ...)` requires a non-empty `fuzzyName`",
+                ));
+            }
+            Some(value) => Some(value.trim().to_string()),
+            None => None,
+        };
         let path = self
             .path
             .as_deref()
@@ -42,28 +53,61 @@ impl ArtefactSelectorInput {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
 
-        match (symbol_fqn, path, self.lines.as_ref()) {
-            (Some(symbol_fqn), None, None) => Ok(ArtefactSelectorMode::SymbolFqn(symbol_fqn)),
-            (None, Some(path), lines) => {
-                if let Some(lines) = lines {
-                    lines.validate()?;
-                }
-                Ok(ArtefactSelectorMode::Path {
-                    path,
-                    lines: lines.cloned(),
-                })
-            }
-            (None, None, Some(_)) => Err(bad_user_input_error(
-                "`selectArtefacts(by: ...)` requires `path` when `lines` is provided",
-            )),
-            (Some(_), Some(_), _) | (Some(_), None, Some(_)) => Err(bad_user_input_error(
-                "`selectArtefacts(by: ...)` allows either `symbolFqn` or `path`/`lines`, not both",
-            )),
-            (None, None, None) => Err(bad_user_input_error(
+        let path_selector_requested = path.is_some() || self.lines.is_some();
+        let selector_count = usize::from(symbol_fqn.is_some())
+            + usize::from(fuzzy_name.is_some())
+            + usize::from(path_selector_requested);
+        if selector_count == 0 {
+            return Err(bad_user_input_error(
                 "`selectArtefacts(by: ...)` requires exactly one selector mode",
-            )),
+            ));
         }
+        if selector_count > 1 {
+            return Err(bad_user_input_error(
+                "`selectArtefacts(by: ...)` allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`",
+            ));
+        }
+        if path_selector_requested && path.is_none() {
+            return Err(bad_user_input_error(
+                "`selectArtefacts(by: ...)` requires `path` when `lines` is provided",
+            ));
+        }
+
+        if let Some(symbol_fqn) = symbol_fqn {
+            return Ok(ArtefactSelectorMode::SymbolFqn(symbol_fqn));
+        }
+        if let Some(fuzzy_name) = fuzzy_name {
+            return Ok(ArtefactSelectorMode::FuzzyName(fuzzy_name));
+        }
+
+        let path = path.expect("selector_count ensures path selector exists");
+        if let Some(lines) = self.lines.as_ref() {
+            lines.validate()?;
+        }
+        Ok(ArtefactSelectorMode::Path {
+            path,
+            lines: self.lines.clone(),
+        })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum DirectoryEntryKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct DirectoryEntry {
+    pub path: String,
+    pub name: String,
+    pub entry_kind: DirectoryEntryKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArtefactSelectionMode {
+    Artefacts,
+    DirectoryEntries,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -71,7 +115,11 @@ impl ArtefactSelectorInput {
 pub struct ArtefactSelection {
     pub count: IntCount,
     #[graphql(skip)]
+    mode: ArtefactSelectionMode,
+    #[graphql(skip)]
     pub(crate) artefacts: Vec<Artefact>,
+    #[graphql(skip)]
+    pub(crate) directory_entries: Vec<DirectoryEntry>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
@@ -79,10 +127,29 @@ pub struct ArtefactSelection {
 pub type IntCount = i32;
 
 impl ArtefactSelection {
-    pub(crate) fn new(artefacts: Vec<Artefact>, scope: ResolverScope) -> Self {
+    pub(crate) fn new(
+        artefacts: Vec<Artefact>,
+        directory_entries: Vec<DirectoryEntry>,
+        scope: ResolverScope,
+    ) -> Self {
         Self {
             count: saturating_i32(artefacts.len()),
+            mode: ArtefactSelectionMode::Artefacts,
             artefacts,
+            directory_entries,
+            scope,
+        }
+    }
+
+    pub(crate) fn from_directory_entries(
+        directory_entries: Vec<DirectoryEntry>,
+        scope: ResolverScope,
+    ) -> Self {
+        Self {
+            count: saturating_i32(directory_entries.len()),
+            mode: ArtefactSelectionMode::DirectoryEntries,
+            artefacts: Vec::new(),
+            directory_entries,
             scope,
         }
     }
@@ -207,6 +274,7 @@ impl From<TestsStageData> for TestsStageResult {
 #[ComplexObject]
 impl ArtefactSelection {
     async fn summary(&self, ctx: &Context<'_>) -> Result<JsonScalar> {
+        self.ensure_artefact_selection("summary")?;
         let checkpoints = self.resolve_checkpoint_stage_data(ctx, None, None).await?;
         let clones = self.resolve_clone_stage_data(ctx, None).await?;
         let deps = self
@@ -224,7 +292,13 @@ impl ArtefactSelection {
     }
 
     async fn artefacts(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<Artefact>> {
+        self.ensure_artefact_selection("artefacts")?;
         take_stage_items(&self.artefacts, first)
+    }
+
+    async fn entries(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<DirectoryEntry>> {
+        self.ensure_directory_selection("entries")?;
+        take_stage_items(&self.directory_entries, first)
     }
 
     async fn checkpoints(
@@ -233,6 +307,7 @@ impl ArtefactSelection {
         agent: Option<String>,
         since: Option<DateTimeScalar>,
     ) -> Result<CheckpointStageResult> {
+        self.ensure_artefact_selection("checkpoints")?;
         Ok(self
             .resolve_checkpoint_stage_data(ctx, agent.as_deref(), since.as_ref())
             .await?
@@ -245,6 +320,7 @@ impl ArtefactSelection {
         #[graphql(name = "relationKind")] relation_kind: Option<String>,
         #[graphql(name = "minScore")] min_score: Option<f64>,
     ) -> Result<CloneStageResult> {
+        self.ensure_artefact_selection("clones")?;
         let filter = ClonesFilterInput {
             relation_kind,
             min_score,
@@ -263,6 +339,7 @@ impl ArtefactSelection {
         #[graphql(default_with = "DepsDirection::Both")] direction: DepsDirection,
         #[graphql(name = "includeUnresolved", default = true)] include_unresolved: bool,
     ) -> Result<DependencyStageResult> {
+        self.ensure_artefact_selection("deps")?;
         Ok(self
             .resolve_dependency_stage_data(ctx, kind, direction, include_unresolved)
             .await?
@@ -275,6 +352,7 @@ impl ArtefactSelection {
         #[graphql(name = "minConfidence")] min_confidence: Option<f64>,
         #[graphql(name = "linkageSource")] linkage_source: Option<String>,
     ) -> Result<TestsStageResult> {
+        self.ensure_artefact_selection("tests")?;
         Ok(self
             .resolve_tests_stage_data(ctx, min_confidence, linkage_source)
             .await?
@@ -283,6 +361,24 @@ impl ArtefactSelection {
 }
 
 impl ArtefactSelection {
+    fn ensure_artefact_selection(&self, field: &str) -> Result<()> {
+        if self.mode == ArtefactSelectionMode::DirectoryEntries {
+            return Err(bad_user_input_error(format!(
+                "directory paths only support `entries`; `{field}` requires a file path instead"
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_directory_selection(&self, field: &str) -> Result<()> {
+        if self.mode == ArtefactSelectionMode::Artefacts {
+            return Err(bad_user_input_error(format!(
+                "file paths do not support `{field}`; select a directory path instead"
+            )));
+        }
+        Ok(())
+    }
+
     async fn resolve_checkpoint_stage_data(
         &self,
         ctx: &Context<'_>,
@@ -786,68 +882,5 @@ type TestHarnessTestsResult {
 }"#;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn artefact_selector_accepts_symbol_fqn_or_path_modes() {
-        let symbol = ArtefactSelectorInput {
-            symbol_fqn: Some("src/main.rs::main".to_string()),
-            path: None,
-            lines: None,
-        };
-        assert_eq!(
-            symbol.selection_mode().expect("symbol selector"),
-            ArtefactSelectorMode::SymbolFqn("src/main.rs::main".to_string())
-        );
-
-        let path = ArtefactSelectorInput {
-            symbol_fqn: None,
-            path: Some("src/main.rs".to_string()),
-            lines: Some(LineRangeInput { start: 20, end: 25 }),
-        };
-        assert_eq!(
-            path.selection_mode().expect("path selector"),
-            ArtefactSelectorMode::Path {
-                path: "src/main.rs".to_string(),
-                lines: Some(LineRangeInput { start: 20, end: 25 }),
-            }
-        );
-    }
-
-    #[test]
-    fn artefact_selector_rejects_invalid_combinations() {
-        let err = ArtefactSelectorInput {
-            symbol_fqn: Some("src/main.rs::main".to_string()),
-            path: Some("src/main.rs".to_string()),
-            lines: None,
-        }
-        .selection_mode()
-        .expect_err("mixed selector should fail");
-        assert!(
-            err.message
-                .contains("allows either `symbolFqn` or `path`/`lines`")
-        );
-
-        let err = ArtefactSelectorInput {
-            symbol_fqn: None,
-            path: None,
-            lines: Some(LineRangeInput { start: 20, end: 25 }),
-        }
-        .selection_mode()
-        .expect_err("lines without path should fail");
-        assert!(
-            err.message
-                .contains("requires `path` when `lines` is provided")
-        );
-
-        let err = ArtefactSelectorInput {
-            symbol_fqn: None,
-            path: None,
-            lines: None,
-        }
-        .selection_mode()
-        .expect_err("empty selector should fail");
-        assert!(err.message.contains("requires exactly one selector mode"));
-    }
-}
+#[path = "artefact_selection_tests.rs"]
+mod tests;

@@ -39,7 +39,8 @@ pub(crate) struct SessionWorkplaneStats {
     pub(crate) clone_rebuild_jobs: SessionMailboxStats,
     pub(crate) summary_refresh_jobs: SessionMailboxStats,
     pub(crate) failed_current_state_detail: Option<String>,
-    pub(crate) blocked_embedding_reason: Option<String>,
+    pub(crate) blocked_code_embedding_reason: Option<String>,
+    pub(crate) blocked_summary_embedding_reason: Option<String>,
     pub(crate) blocked_summary_reason: Option<String>,
 }
 
@@ -51,8 +52,9 @@ pub(crate) struct SessionMailboxStats {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RuntimeLaneProgressState {
-    pub(crate) embeddings: Option<InitRuntimeLaneProgressView>,
+    pub(crate) code_embeddings: Option<InitRuntimeLaneProgressView>,
     pub(crate) summaries: Option<InitRuntimeLaneProgressView>,
+    pub(crate) summary_embeddings: Option<InitRuntimeLaneProgressView>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -102,23 +104,6 @@ impl SessionWorkplaneStats {
             + self.summary_refresh_jobs.counts.failed
     }
 
-    pub(crate) fn active_embedding_mailbox(&self) -> Option<&'static str> {
-        [
-            (
-                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-                &self.code_embedding_jobs.counts,
-            ),
-            (
-                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-                &self.summary_embedding_jobs.counts,
-            ),
-        ]
-        .into_iter()
-        .find_map(|(mailbox_name, counts)| {
-            (counts.running > 0 || counts.pending > 0 || counts.failed > 0).then_some(mailbox_name)
-        })
-    }
-
     pub(crate) fn summary_warnings(&self) -> Vec<InitRuntimeLaneWarningView> {
         mailbox_warning(
             SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
@@ -128,19 +113,21 @@ impl SessionWorkplaneStats {
         .collect()
     }
 
-    pub(crate) fn embedding_warnings(&self) -> Vec<InitRuntimeLaneWarningView> {
-        [
-            mailbox_warning(
-                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-                &self.code_embedding_jobs,
-            ),
-            mailbox_warning(
-                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-                &self.summary_embedding_jobs,
-            ),
-        ]
+    pub(crate) fn code_embedding_warnings(&self) -> Vec<InitRuntimeLaneWarningView> {
+        mailbox_warning(
+            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            &self.code_embedding_jobs,
+        )
         .into_iter()
-        .flatten()
+        .collect()
+    }
+
+    pub(crate) fn summary_embedding_warnings(&self) -> Vec<InitRuntimeLaneWarningView> {
+        mailbox_warning(
+            SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+            &self.summary_embedding_jobs,
+        )
+        .into_iter()
         .collect()
     }
 }
@@ -154,13 +141,6 @@ fn mailbox_warning(
         message: workplane_warning_message(mailbox.counts.failed, mailbox.latest_error.as_deref()),
         retry_command: RETRY_FAILED_ENRICHMENTS_COMMAND.to_string(),
     })
-}
-
-pub(crate) fn is_init_embeddings_mailbox(mailbox_name: &str) -> bool {
-    matches!(
-        mailbox_name,
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
-    )
 }
 
 pub(crate) fn merge_status_counts<const N: usize>(counts: [StatusCounts; N]) -> StatusCounts {
@@ -185,16 +165,6 @@ pub(crate) fn mailbox_stats_mut<'a>(
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => &mut stats.summary_embedding_jobs,
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => &mut stats.clone_rebuild_jobs,
         _ => &mut stats.clone_rebuild_jobs,
-    }
-}
-
-pub(crate) fn stats_for_mailbox(stats: &SessionWorkplaneStats, mailbox_name: &str) -> StatusCounts {
-    match mailbox_name {
-        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => stats.summary_refresh_jobs.counts,
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => stats.code_embedding_jobs.counts,
-        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => stats.summary_embedding_jobs.counts,
-        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => stats.clone_rebuild_jobs.counts,
-        _ => StatusCounts::default(),
     }
 }
 

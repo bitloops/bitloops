@@ -7,13 +7,10 @@ use crate::adapters::agents::skill_install::{
 };
 use crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL;
 
+pub const CODEX_SKILL_RELATIVE_PATH: &str = ".agents/skills/bitloops/using-devql/SKILL.md";
+
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(".agents")
-        .join("skills")
-        .join("bitloops")
-        .join("using-devql")
-        .join("SKILL.md")
+    repo_root.join(CODEX_SKILL_RELATIVE_PATH)
 }
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
@@ -36,12 +33,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
             repo_skill_path(dir.path()),
-            dir.path()
-                .join(".agents")
-                .join("skills")
-                .join("bitloops")
-                .join("using-devql")
-                .join("SKILL.md")
+            dir.path().join(CODEX_SKILL_RELATIVE_PATH)
         );
     }
 

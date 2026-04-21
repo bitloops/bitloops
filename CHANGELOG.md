@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-04-21
+
+### Changed
+
+- **Slim DevQL `selectArtefacts` now treats file and directory paths as distinct selection modes**: file paths continue to expose `artefacts` from the selected file, while directory paths now behave as immediate-child `ls` listings through `entries` only. Directory selectors now reject artefact-only fields such as `artefacts`, `summary`, `checkpoints`, `clones`, `deps`, and `tests`, and file selectors now reject `entries`.
+- **`bitloops init --install-default-daemon` now stages semantic setup through explicit conditional lanes**: init progress is now reported as separate `Sync`, `Ingest`, `Code Embeddings`, `Summaries`, and `Summary Embeddings` lanes instead of combining sync and embedding work into broader sections. Runtime execution now follows the selected dependency order: sync runs first when enabled, ingest is queued after sync but remains independently selectable, code embeddings and summaries only run when sync is selected, and summary embeddings only run when summaries are enabled. During the summaries prompt, `Skip for now (recommended)` is now the default preselected option and `Bitloops Cloud (limited availability)` is listed second.
+- **Plain `bitloops init` now follows the same onboarding shape as the default-daemon flow, minus daemon-owned setup**: when embeddings and semantic summaries are still unconfigured, interactive plain init no longer prompts for Bitloops Cloud vs local embeddings, no longer asks to configure semantic summaries, and no longer performs those daemon-owned setup actions. Existing configured embeddings or summary lanes still participate in init runtime work, unresolved telemetry consent still appears in the final setup step, and the daemon auto-start option remains exclusive to `--install-default-daemon`.
+
+### Added
+
+- **Slim `selectArtefacts` now supports typo-tolerant fuzzy artefact lookup by symbol name**: slim GraphQL requests can now select current artefacts with `by: { fuzzyName: "payLater()" }`, and the DevQL DSL now compiles `selectArtefacts(fuzzy_name:"payLater()")` to the same selector. The fuzzy matcher normalizes human-entered names from `symbol_fqn` leaf segments, preserves exact `symbolFqn` behaviour as an explicit selector, ranks matches best-first with exact/prefix/token/edit-distance signals, filters out weak matches below the fixed `0.6` threshold, and caps results at 10. The slim SDL snapshot, DevQL docs, and Bitloops-managed agent guidance/skill content now document the new selector mode.
+
+### Fixed
+
+- **DevQL hook bootstrap now defers to installed repo-local skills and rules**: shared agent hook augmentation no longer inlines `using-devql` skill content or emits hook-time `bitloops devql query` suggestions. Session-start bootstrap now appears only when the agent-specific repo-local DevQL skill or rule is actually installed and only points the agent at that surface, while turn-start hook augmentation stays silent. OpenCode now follows the same presence-only contract through its plugin bootstrap path, and `bitloops init --disable-bitloops-skill` now suppresses both repo-local DevQL surfaces and the corresponding session-start bootstrap messaging.
+
 ## [0.0.17] - 2026-04-19
 
 ### Fixed

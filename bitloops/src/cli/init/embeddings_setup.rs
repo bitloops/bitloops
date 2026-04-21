@@ -36,63 +36,26 @@ pub(crate) fn should_install_embeddings_during_init(
         return Ok(InitEmbeddingsSetupSelection::Existing);
     }
 
-    if args.install_default_daemon {
-        if args.no_embeddings {
-            return Ok(InitEmbeddingsSetupSelection::Skip);
-        }
-
-        if let Some(runtime) = args.embeddings_runtime {
-            return Ok(match runtime {
-                EmbeddingsRuntime::Local => InitEmbeddingsSetupSelection::Local,
-                EmbeddingsRuntime::Platform => InitEmbeddingsSetupSelection::Cloud,
-            });
-        }
-
-        if !telemetry_consent::can_prompt_interactively() {
-            bail!(NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR);
-        }
-        return prompt_install_embeddings_setup_selection(out, input);
-    }
-
-    if !telemetry_consent::can_prompt_interactively() {
+    if !args.install_default_daemon {
         return Ok(InitEmbeddingsSetupSelection::Skip);
     }
 
-    Ok(if args.no_embeddings {
-        InitEmbeddingsSetupSelection::Skip
-    } else if prompt_install_embeddings(out, input)? {
-        match args.embeddings_runtime {
-            Some(EmbeddingsRuntime::Platform) => InitEmbeddingsSetupSelection::Cloud,
-            Some(EmbeddingsRuntime::Local) | None => InitEmbeddingsSetupSelection::Local,
-        }
-    } else {
-        InitEmbeddingsSetupSelection::Skip
-    })
-}
-
-fn prompt_install_embeddings(out: &mut dyn Write, input: &mut dyn BufRead) -> Result<bool> {
-    writeln!(out)?;
-    writeln!(out, "Install local embeddings as well?")?;
-    writeln!(
-        out,
-        "This is recommended and lets sync and ingest include them."
-    )?;
-
-    loop {
-        writeln!(out, "Install embeddings now? (Y/n)")?;
-        write!(out, "> ")?;
-        out.flush()?;
-
-        let mut line = String::new();
-        input
-            .read_line(&mut line)
-            .context("reading init embeddings install prompt response")?;
-        match line.trim().to_ascii_lowercase().as_str() {
-            "" | "y" | "yes" => return Ok(true),
-            "n" | "no" => return Ok(false),
-            _ => writeln!(out, "Please answer yes or no.")?,
-        }
+    if args.no_embeddings {
+        return Ok(InitEmbeddingsSetupSelection::Skip);
     }
+
+    if let Some(runtime) = args.embeddings_runtime {
+        return Ok(match runtime {
+            EmbeddingsRuntime::Local => InitEmbeddingsSetupSelection::Local,
+            EmbeddingsRuntime::Platform => InitEmbeddingsSetupSelection::Cloud,
+        });
+    }
+
+    if !telemetry_consent::can_prompt_interactively() {
+        bail!(NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR);
+    }
+
+    prompt_install_embeddings_setup_selection(out, input)
 }
 
 pub(crate) fn prompt_install_embeddings_setup_selection(

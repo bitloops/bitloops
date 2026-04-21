@@ -8,23 +8,15 @@ use crate::adapters::agents::skill_install::{
 use crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL;
 
 const GEMINI_DIR_NAME: &str = ".gemini";
-const SKILLS_DIR_NAME: &str = "skills";
-const BITLOOPS_DIR_NAME: &str = "bitloops";
-const USING_DEVQL_DIR_NAME: &str = "using-devql";
-const SKILL_FILE_NAME: &str = "SKILL.md";
 const GEMINI_MD_FILE_NAME: &str = "GEMINI.md";
+pub const GEMINI_SKILL_RELATIVE_PATH: &str = ".gemini/skills/bitloops/using-devql/SKILL.md";
 
 const MANAGED_BLOCK_START: &str = "<!-- bitloops-managed-start -->";
 const MANAGED_BLOCK_END: &str = "<!-- bitloops-managed-end -->";
 const MANAGED_IMPORT_LINE: &str = "@./.gemini/skills/bitloops/using-devql/SKILL.md";
 
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(GEMINI_DIR_NAME)
-        .join(SKILLS_DIR_NAME)
-        .join(BITLOOPS_DIR_NAME)
-        .join(USING_DEVQL_DIR_NAME)
-        .join(SKILL_FILE_NAME)
+    repo_root.join(GEMINI_SKILL_RELATIVE_PATH)
 }
 
 pub fn gemini_md_path(repo_root: &Path) -> PathBuf {

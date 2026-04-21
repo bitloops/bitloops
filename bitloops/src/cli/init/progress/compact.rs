@@ -1,6 +1,6 @@
 use crate::runtime_presentation::{
-    INIT_CODEBASE_SECTION_TITLE, INIT_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_SECTION_TITLE,
-    waiting_reason_label,
+    INIT_CODE_EMBEDDINGS_SECTION_TITLE, INIT_INGEST_SECTION_TITLE, INIT_SUMMARIES_SECTION_TITLE,
+    INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE, INIT_SYNC_SECTION_TITLE, waiting_reason_label,
 };
 
 use super::bars::{render_determinate_progress_bar, render_indeterminate_progress_bar};
@@ -19,12 +19,21 @@ pub(crate) struct LaneRenderContext<'a> {
 pub(crate) fn compact_selected_section_titles(
     session: &crate::cli::devql::graphql::RuntimeInitSessionGraphqlRecord,
 ) -> Vec<&'static str> {
-    let mut titles = vec![INIT_CODEBASE_SECTION_TITLE];
+    let mut titles = Vec::new();
+    if session.run_sync {
+        titles.push(INIT_SYNC_SECTION_TITLE);
+    }
+    if session.run_ingest {
+        titles.push(INIT_INGEST_SECTION_TITLE);
+    }
     if session.embeddings_selected {
-        titles.push(INIT_EMBEDDINGS_SECTION_TITLE);
+        titles.push(INIT_CODE_EMBEDDINGS_SECTION_TITLE);
     }
     if session.summaries_selected {
         titles.push(INIT_SUMMARIES_SECTION_TITLE);
+    }
+    if session.summary_embeddings_selected {
+        titles.push(INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE);
     }
     titles
 }
@@ -158,17 +167,24 @@ fn compact_lane_detail(
     title: &str,
     lane: &crate::cli::devql::graphql::RuntimeInitLaneGraphqlRecord,
 ) -> Option<String> {
-    if title == INIT_EMBEDDINGS_SECTION_TITLE {
-        return compact_ready_summary(lane, false).or_else(|| compact_lane_waiting_detail(lane));
+    if title == INIT_CODE_EMBEDDINGS_SECTION_TITLE || title == INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE
+    {
+        return compact_ready_summary(lane, false)
+            .or_else(|| compact_lane_waiting_detail(lane))
+            .or_else(|| lane.activity_label.clone())
+            .or_else(|| lane.detail.clone());
     }
     if title == INIT_SUMMARIES_SECTION_TITLE {
-        return compact_ready_summary(lane, true).or_else(|| compact_lane_waiting_detail(lane));
+        return compact_ready_summary(lane, true)
+            .or_else(|| compact_lane_waiting_detail(lane))
+            .or_else(|| lane.activity_label.clone())
+            .or_else(|| lane.detail.clone());
     }
 
     lane.activity_label
         .clone()
-        .or_else(|| lane.detail.clone())
         .or_else(|| compact_lane_waiting_detail(lane))
+        .or_else(|| lane.detail.clone())
         .or_else(|| {
             if lane.status.eq_ignore_ascii_case("completed") {
                 Some("Complete".to_string())
@@ -274,7 +290,7 @@ mod tests {
         RuntimeInitLaneQueueGraphqlRecord,
     };
     use crate::runtime_presentation::{
-        INIT_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_SECTION_TITLE,
+        INIT_CODE_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_SECTION_TITLE,
     };
 
     #[test]
@@ -329,7 +345,7 @@ mod tests {
         };
 
         assert_eq!(
-            compact_lane_detail(INIT_EMBEDDINGS_SECTION_TITLE, &lane),
+            compact_lane_detail(INIT_CODE_EMBEDDINGS_SECTION_TITLE, &lane),
             Some("  7 / 570 ready".to_string())
         );
         assert_eq!(

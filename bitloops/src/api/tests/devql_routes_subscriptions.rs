@@ -243,6 +243,7 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("searchInteractionTurns(input: InteractionSearchInputObject!)"));
     assert!(body.contains("chatHistory"));
     assert!(body.contains("selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!"));
+    assert!(body.contains("fuzzyName: String"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
     assert!(!body.contains("repo(name: String!): Repository!"));
 }
@@ -340,6 +341,9 @@ async fn devql_runtime_route_executes_start_init_mutations() {
                     "input": {
                         "runSync": false,
                         "runIngest": false,
+                        "runCodeEmbeddings": false,
+                        "runSummaries": false,
+                        "runSummaryEmbeddings": false,
                         "ingestBackfill": serde_json::Value::Null,
                         "embeddingsBootstrap": serde_json::Value::Null,
                         "summariesBootstrap": serde_json::Value::Null,
@@ -449,6 +453,9 @@ async fn devql_runtime_route_executes_start_init_for_bound_repo_without_catalog_
                     "input": {
                         "runSync": false,
                         "runIngest": false,
+                        "runCodeEmbeddings": false,
+                        "runSummaries": false,
+                        "runSummaryEmbeddings": false,
                         "ingestBackfill": serde_json::Value::Null,
                         "embeddingsBootstrap": serde_json::Value::Null,
                         "summariesBootstrap": serde_json::Value::Null,

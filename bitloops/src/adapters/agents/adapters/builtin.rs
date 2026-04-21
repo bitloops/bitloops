@@ -158,10 +158,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_COPILOT,
                 aliases: &["copilot", "copilot-cli", "github-copilot"],
                 is_default: false,
-                // Copilot inherits the shared generic session-start wording through the host
-                // builder, but Copilot CLI currently documents session-start output as ignored.
-                // Keep the advertised capability surface conservative until end-to-end model
-                // visibility is proven.
+                // Copilot can receive shared session-start bootstrap output when the repo-local
+                // DevQL skill exists, but the host no longer inlines the skill body or turn-time
+                // query suggestions. Keep the advertised capability surface conservative until
+                // end-to-end model visibility is proven.
                 capabilities: ANALYTICS_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -252,9 +252,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_CURSOR,
                 aliases: &[],
                 is_default: false,
-                // Cursor inherits the shared generic session-start wording through the host
-                // builder, but we keep the advertised capability surface conservative until live
-                // model visibility is validated outside repo tests.
+                // Cursor can receive shared session-start bootstrap output when the repo-local
+                // DevQL rule exists, but the host no longer inlines rule content or emits
+                // turn-time query suggestions. Keep the advertised capability surface
+                // conservative until live model visibility is validated outside repo tests.
                 capabilities: BASE_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -369,9 +370,10 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     format!("opencode -s {session_id}")
                 }
             },
-            // OpenCode's current plugin path forwards hook input into Bitloops but does not
-            // surface Bitloops stdout back into the model, so prompt augmentation remains
-            // intentionally disabled here until that transport gap is closed.
+            // OpenCode injects its own presence-only bootstrap through the repo-local plugin when
+            // the repo-local DevQL skill exists. The stdout prompt-augmentation transport remains
+            // disabled here because OpenCode still does not surface Bitloops hook stdout back
+            // into the model.
             None,
         ),
     ]

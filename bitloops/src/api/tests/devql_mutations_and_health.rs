@@ -1683,6 +1683,267 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
 }
 
 #[tokio::test]
+async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { fuzzyName: "targte()" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert!(
+        json["selectArtefacts"]["count"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 1
+    );
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert!(
+        artefacts
+            .iter()
+            .all(|artefact| artefact["path"] == "packages/api/src/target.ts"),
+        "unexpected fuzzy artefact paths: {artefacts:?}"
+    );
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_directory_entries_list_immediate_children_only() {
+    let repo = seed_graphql_monorepo_repo();
+    fs::create_dir_all(repo.path().join("packages/api/src/nested/deeper"))
+        .expect("create nested directory");
+    fs::write(
+        repo.path().join("packages/api/src/nested/deeper/hidden.ts"),
+        "export const hidden = true;\n",
+    )
+    .expect("write nested file");
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src" }) {
+                entries(first: 10) {
+                  path
+                  name
+                  entryKind
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let entries = json["selectArtefacts"]["entries"]
+        .as_array()
+        .expect("entries array");
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(entries[0]["name"], "caller.ts");
+    assert_eq!(entries[0]["entryKind"], "FILE");
+    assert_eq!(entries[1]["path"], "packages/api/src/nested");
+    assert_eq!(entries[1]["name"], "nested");
+    assert_eq!(entries[1]["entryKind"], "DIRECTORY");
+    assert_eq!(entries[2]["path"], "packages/api/src/target.ts");
+    assert_eq!(entries[2]["name"], "target.ts");
+    assert_eq!(entries[2]["entryKind"], "FILE");
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry["path"] != "packages/api/src/nested/deeper/hidden.ts"),
+        "expected immediate children only, got {entries:?}"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_directory_rejects_artefacts_field() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src" }) {
+                artefacts(first: 10) {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert!(
+        response.errors[0]
+            .message
+            .contains("directory paths only support `entries`"),
+        "expected directory artefacts validation error, got `{}`",
+        response.errors[0].message
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_directory_rejects_summary_and_stage_fields() {
+    let repo = seed_graphql_monorepo_repo_with_duckdb_events();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    for (field_name, selection) in [
+        ("summary", "summary"),
+        ("checkpoints", "checkpoints { summary }"),
+        ("clones", "clones { summary }"),
+        ("deps", "deps { summary }"),
+        ("tests", "tests { summary }"),
+    ] {
+        let response = schema
+            .execute(async_graphql::Request::new(format!(
+                r#"
+                {{
+                  selectArtefacts(by: {{ path: "src" }}) {{
+                    {selection}
+                  }}
+                }}
+                "#
+            )))
+            .await;
+
+        assert_eq!(
+            response.errors.len(),
+            1,
+            "expected one graphql error for field `{field_name}`"
+        );
+        let extensions = response.errors[0]
+            .extensions
+            .as_ref()
+            .expect("graphql error extensions");
+        assert_eq!(
+            extensions.get("code"),
+            Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+        );
+        assert!(
+            response.errors[0]
+                .message
+                .contains("directory paths only support `entries`"),
+            "expected directory {field_name} validation error, got `{}`",
+            response.errors[0].message
+        );
+    }
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_directory_rejects_lines_selector() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src", lines: { start: 1, end: 10 } }) {
+                count
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert!(
+        response.errors[0]
+            .message
+            .contains("directory paths do not support `lines`"),
+        "expected directory line-range validation error, got `{}`",
+        response.errors[0].message
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_file_rejects_entries_field() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src/caller.ts" }) {
+                entries(first: 10) {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert_eq!(response.errors.len(), 1, "expected one graphql error");
+    let extensions = response.errors[0]
+        .extensions
+        .as_ref()
+        .expect("graphql error extensions");
+    assert_eq!(
+        extensions.get("code"),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert!(
+        response.errors[0]
+            .message
+            .contains("file paths do not support `entries`"),
+        "expected file entries validation error, got `{}`",
+        response.errors[0].message
+    );
+}
+
+#[tokio::test]
 async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_items() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     seed_graphql_clone_data(repo.path());
