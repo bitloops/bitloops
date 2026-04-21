@@ -3,12 +3,16 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 
-pub(crate) const INIT_CODEBASE_SECTION_TITLE: &str = "Codebase";
-pub(crate) const INIT_CODEBASE_LANE_LABEL: &str = "Syncing files and commit history";
-pub(crate) const INIT_EMBEDDINGS_SECTION_TITLE: &str = "Embeddings";
-pub(crate) const INIT_EMBEDDINGS_LANE_LABEL: &str = "Building semantic index";
+pub(crate) const INIT_SYNC_SECTION_TITLE: &str = "Sync";
+pub(crate) const INIT_SYNC_LANE_LABEL: &str = "Syncing repository";
+pub(crate) const INIT_INGEST_SECTION_TITLE: &str = "Ingest";
+pub(crate) const INIT_INGEST_LANE_LABEL: &str = "Ingesting commit history";
+pub(crate) const INIT_CODE_EMBEDDINGS_SECTION_TITLE: &str = "Code Embeddings";
+pub(crate) const INIT_CODE_EMBEDDINGS_LANE_LABEL: &str = "Creating code embeddings";
 pub(crate) const INIT_SUMMARIES_SECTION_TITLE: &str = "Summaries";
 pub(crate) const INIT_SUMMARIES_LANE_LABEL: &str = "Generating summaries";
+pub(crate) const INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE: &str = "Summary Embeddings";
+pub(crate) const INIT_SUMMARY_EMBEDDINGS_LANE_LABEL: &str = "Creating summary embeddings";
 pub(crate) const RETRY_FAILED_ENRICHMENTS_COMMAND: &str =
     "bitloops daemon enrichments retry-failed";
 
@@ -46,6 +50,9 @@ pub(crate) fn lane_activity_label(detail: &str) -> &'static str {
         "sync" => "Syncing repository",
         "ingest" => "Ingesting commit history",
         "follow_up_sync" => "Running a follow-up sync",
+        "code_embeddings" => "Creating code embeddings",
+        "summary_embeddings" => "Creating summary embeddings",
+        "summaries" => "Generating summaries",
         "embeddings_bootstrap" => "Preparing the embeddings runtime",
         "summary_bootstrap" => "Preparing summary generation",
         "current_state_consumer" => "Applying codebase updates",
@@ -68,8 +75,10 @@ pub(crate) fn session_status_label(status: &str) -> &'static str {
 
 pub(crate) fn waiting_reason_label(reason: &str) -> &'static str {
     match reason {
+        "waiting_for_sync" => "Waiting for sync to finish",
         "waiting_for_embeddings_bootstrap" => "Waiting for the embeddings runtime to warm up",
         "waiting_for_summary_bootstrap" => "Waiting for summary generation to be ready",
+        "waiting_for_summaries" => "Waiting for summaries to be ready",
         "waiting_for_follow_up_sync" => "Waiting for the follow-up sync",
         "waiting_for_top_level_work" => "Waiting for the codebase work to finish",
         "waiting_for_bootstrap" => "Waiting for bootstrap work to finish",

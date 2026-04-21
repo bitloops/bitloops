@@ -557,6 +557,9 @@ fn runtime_start_input_json(input: &RuntimeStartInitInput) -> serde_json::Value 
     json!({
         "runSync": input.run_sync,
         "runIngest": input.run_ingest,
+        "runCodeEmbeddings": input.run_code_embeddings,
+        "runSummaries": input.run_summaries,
+        "runSummaryEmbeddings": input.run_summary_embeddings,
         "ingestBackfill": input.ingest_backfill,
         "embeddingsBootstrap": embeddings_bootstrap,
         "summariesBootstrap": summaries_bootstrap,

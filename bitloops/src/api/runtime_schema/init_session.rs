@@ -25,6 +25,8 @@ pub(crate) struct RuntimeInitSessionObject {
     pub embeddings_selected: bool,
     #[graphql(name = "summariesSelected")]
     pub summaries_selected: bool,
+    #[graphql(name = "summaryEmbeddingsSelected")]
+    pub summary_embeddings_selected: bool,
     #[graphql(name = "initialSyncTaskId")]
     pub initial_sync_task_id: Option<String>,
     #[graphql(name = "ingestTaskId")]
@@ -37,12 +39,16 @@ pub(crate) struct RuntimeInitSessionObject {
     pub summary_bootstrap_task_id: Option<ID>,
     #[graphql(name = "terminalError")]
     pub terminal_error: Option<String>,
-    #[graphql(name = "topPipelineLane")]
-    pub top_pipeline_lane: RuntimeInitLaneObject,
-    #[graphql(name = "embeddingsLane")]
-    pub embeddings_lane: RuntimeInitLaneObject,
+    #[graphql(name = "syncLane")]
+    pub sync_lane: RuntimeInitLaneObject,
+    #[graphql(name = "ingestLane")]
+    pub ingest_lane: RuntimeInitLaneObject,
+    #[graphql(name = "codeEmbeddingsLane")]
+    pub code_embeddings_lane: RuntimeInitLaneObject,
     #[graphql(name = "summariesLane")]
     pub summaries_lane: RuntimeInitLaneObject,
+    #[graphql(name = "summaryEmbeddingsLane")]
+    pub summary_embeddings_lane: RuntimeInitLaneObject,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -107,15 +113,18 @@ impl From<InitRuntimeSessionView> for RuntimeInitSessionObject {
             run_ingest: value.run_ingest,
             embeddings_selected: value.embeddings_selected,
             summaries_selected: value.summaries_selected,
+            summary_embeddings_selected: value.summary_embeddings_selected,
             initial_sync_task_id: value.initial_sync_task_id,
             ingest_task_id: value.ingest_task_id,
             follow_up_sync_task_id: value.follow_up_sync_task_id,
             embeddings_bootstrap_task_id: value.embeddings_bootstrap_task_id,
             summary_bootstrap_task_id: value.summary_bootstrap_task_id.map(ID::from),
             terminal_error: value.terminal_error,
-            top_pipeline_lane: value.top_pipeline_lane.into(),
-            embeddings_lane: value.embeddings_lane.into(),
+            sync_lane: value.sync_lane.into(),
+            ingest_lane: value.ingest_lane.into(),
+            code_embeddings_lane: value.code_embeddings_lane.into(),
             summaries_lane: value.summaries_lane.into(),
+            summary_embeddings_lane: value.summary_embeddings_lane.into(),
         }
     }
 }

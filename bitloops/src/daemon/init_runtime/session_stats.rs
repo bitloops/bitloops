@@ -16,9 +16,9 @@ use crate::host::runtime_store::{RepoSqliteRuntimeStore, SemanticMailboxItemKind
 
 use super::progress::load_summary_freshness_state;
 use super::stats::{
-    SessionWorkplaneStats, StatusCounts, SummaryFreshnessState, is_init_embeddings_mailbox,
-    mailbox_stats_mut, semantic_embedding_mailbox_name_for_representation,
-    semantic_embedding_representation_kind_for_mailbox, stats_for_mailbox,
+    SessionWorkplaneStats, StatusCounts, SummaryFreshnessState, mailbox_stats_mut,
+    semantic_embedding_mailbox_name_for_representation,
+    semantic_embedding_representation_kind_for_mailbox,
 };
 use super::workplane::repo_blocked_mailboxes;
 
@@ -157,11 +157,19 @@ pub(crate) fn load_session_workplane_stats(
                 }
                 continue;
             }
-            if is_init_embeddings_mailbox(blocked.mailbox_name.as_str())
-                && stats_for_mailbox(&stats, blocked.mailbox_name.as_str()).has_pending_or_running()
+            if blocked.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                && stats.code_embedding_jobs.counts.has_pending_or_running()
             {
                 stats
-                    .blocked_embedding_reason
+                    .blocked_code_embedding_reason
+                    .get_or_insert(blocked.reason.clone());
+                continue;
+            }
+            if blocked.mailbox_name == SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+                && stats.summary_embedding_jobs.counts.has_pending_or_running()
+            {
+                stats
+                    .blocked_summary_embedding_reason
                     .get_or_insert(blocked.reason.clone());
             }
         }

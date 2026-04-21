@@ -12,6 +12,7 @@ const INIT_PROGRESS_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) struct InitProgressOptions {
     pub(crate) start_input: crate::cli::devql::graphql::RuntimeStartInitInput,
+    pub(crate) show_live_progress_notice: bool,
 }
 
 pub(crate) async fn run_dual_init_progress(
@@ -26,6 +27,24 @@ pub(crate) async fn run_dual_init_progress(
     let session_id = start.init_session_id;
     let mut renderer = RuntimeInitRenderer::new();
     let mut polling_only = false;
+
+    if options.show_live_progress_notice {
+        writeln!(out)?;
+        writeln!(
+            out,
+            "──────────────────────────────────────────────────────────────────"
+        )?;
+        writeln!(out, "                   🔍 Live Progress")?;
+        writeln!(
+            out,
+            " Feel free to close this terminal and continue with your day! 🌟"
+        )?;
+        writeln!(
+            out,
+            "──────────────────────────────────────────────────────────────────"
+        )?;
+        writeln!(out)?;
+    }
 
     writeln!(
         out,
