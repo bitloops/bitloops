@@ -169,7 +169,7 @@ Key flags:
 | `--data`                 | Remove global data and repo-local `.bitloops/` data                       |
 | `--caching`              | Remove the global cache directory                                         |
 | `--config`               | Remove the global config directory and TLS artefacts                      |
-| `--agent-hooks`          | Remove supported agent hooks                                              |
+| `--agent-hooks`          | Remove supported agent hooks plus repo-local policy and managed exclude entries |
 | `--git-hooks`            | Remove Bitloops git hooks                                                 |
 | `--shell`                | Remove managed shell completion integration                               |
 | `--only-current-project` | Limit hook removal to the current repository                              |
@@ -179,6 +179,7 @@ Notes:
 
 - No flags opens an interactive multi-select picker when running in a TTY.
 - In non-interactive environments, you must pass explicit flags.
+- `--agent-hooks` and `--full` also remove repo-local `.bitloops.toml` and `.bitloops.local.toml` files, and clear the managed `.git/info/exclude` entries that `init` added.
 - `disable` is a capture toggle. Use `uninstall` for hook removal or machine-wide cleanup.
 - See [Uninstalling Bitloops](./uninstall.md) for target-by-target behaviour and caveats.
 

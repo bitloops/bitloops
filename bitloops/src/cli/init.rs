@@ -40,6 +40,7 @@ pub(super) use embeddings_setup::{
 #[cfg(test)]
 pub(super) use final_setup::InitFinalSetupSelection;
 pub(super) use final_setup::{InitFinalSetupPromptOptions, choose_final_setup_options};
+pub(crate) use repo_excludes::clear_repo_init_files_excluded;
 pub(super) use repo_excludes::ensure_repo_init_files_excluded;
 pub(super) use summary_setup::choose_summary_setup_during_init;
 

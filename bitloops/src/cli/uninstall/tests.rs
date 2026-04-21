@@ -16,10 +16,12 @@ use super::{
 };
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
+use crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH;
 use crate::cli::embeddings::{
     managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
 };
 use crate::cli::enable::SHELL_COMPLETION_COMMENT;
+use crate::config::{REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME};
 use crate::config::settings::SETTINGS_DIR;
 use crate::devql_transport::{RepoPathRegistry, RepoPathRegistryEntry, persist_repo_path_registry};
 use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
@@ -435,6 +437,73 @@ supported = ["codex"]
 }
 
 #[test]
+fn uninstall_agent_hooks_removes_repo_policy_files_and_managed_exclude_entries() {
+    let repo = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_platform_dirs(
+        &config,
+        &data,
+        &cache,
+        &state,
+        &home,
+        Some(repo.path()),
+        || {
+            fs::write(
+                repo.path().join(REPO_POLICY_FILE_NAME),
+                "[capture]\nenabled = true\n",
+            )
+            .unwrap();
+            fs::write(
+                repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+                "[agents]\nsupported = [\"codex\"]\n",
+            )
+            .unwrap();
+
+            let skill_path = repo.path().join(CODEX_SKILL_RELATIVE_PATH);
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(&skill_path, "managed").unwrap();
+
+            let exclude_path = repo.path().join(".git/info/exclude");
+            fs::write(
+                &exclude_path,
+                format!("coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n"),
+            )
+            .unwrap();
+
+            run_uninstall_for_test(
+                UninstallArgs {
+                    agent_hooks: true,
+                    only_current_project: true,
+                    force: true,
+                    ..UninstallArgs::default()
+                },
+                None,
+                None,
+                &|| Box::pin(async { Ok(()) }),
+                &|| Ok(()),
+                &|| Ok(Vec::new()),
+            )
+            .unwrap();
+
+            assert!(!repo.path().join(REPO_POLICY_FILE_NAME).exists());
+            assert!(!repo.path().join(REPO_POLICY_LOCAL_FILE_NAME).exists());
+            assert!(!skill_path.exists());
+
+            let exclude = fs::read_to_string(&exclude_path).unwrap();
+            assert!(exclude.contains("coverage/"));
+            assert!(!exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
+            assert!(!exclude.contains(CODEX_SKILL_RELATIVE_PATH));
+        },
+    );
+}
+
+#[test]
 fn uninstall_agent_hooks_discovers_nested_bitloops_project_roots() {
     let repo = tempfile::tempdir().unwrap();
     let app = repo.path().join("packages/app");
@@ -683,6 +752,16 @@ fn full_uninstall_removes_supported_temp_artefacts() {
         Some(repo.path()),
         || {
             fs::create_dir_all(repo.path().join(SETTINGS_DIR)).unwrap();
+            fs::write(
+                repo.path().join(REPO_POLICY_FILE_NAME),
+                "[capture]\nenabled = true\n",
+            )
+            .unwrap();
+            fs::write(
+                repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+                "[agents]\nsupported = [\"codex\"]\n",
+            )
+            .unwrap();
             fs::create_dir_all(bitloops_config_dir().unwrap()).unwrap();
             fs::create_dir_all(bitloops_data_dir().unwrap()).unwrap();
             fs::create_dir_all(bitloops_cache_dir().unwrap()).unwrap();
@@ -695,6 +774,12 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             .unwrap();
             codex_hooks::install_hooks_at(repo.path(), false, false).unwrap();
             assert!(repo.path().join(".codex/config.toml").exists());
+            let exclude_path = repo.path().join(".git/info/exclude");
+            fs::write(
+                &exclude_path,
+                format!("coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n"),
+            )
+            .unwrap();
             git_hooks::install_git_hooks(repo.path(), false).unwrap();
 
             let registry_path = bitloops_state_dir()
@@ -730,6 +815,8 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             assert!(service_called.load(std::sync::atomic::Ordering::SeqCst));
             assert!(!codex_hooks::are_hooks_installed_at(repo.path()));
             assert!(repo.path().join(".codex/config.toml").exists());
+            assert!(!repo.path().join(REPO_POLICY_FILE_NAME).exists());
+            assert!(!repo.path().join(REPO_POLICY_LOCAL_FILE_NAME).exists());
             assert!(!git_hooks::is_git_hook_installed(repo.path()));
             assert!(!repo.path().join(SETTINGS_DIR).exists());
             assert!(!bitloops_config_dir().unwrap().exists());
@@ -739,6 +826,10 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             assert!(!home.path().join(".bitloops").join("certs").exists());
             assert!(!home.path().join(".zshrc").exists());
             assert!(!binary_path.exists());
+            let exclude = fs::read_to_string(&exclude_path).unwrap();
+            assert!(exclude.contains("coverage/"));
+            assert!(!exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
+            assert!(!exclude.contains(CODEX_SKILL_RELATIVE_PATH));
         },
     );
 }

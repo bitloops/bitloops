@@ -6,12 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **`bitloops uninstall` now cleans up .bitloops.local.toml**: repo-local `.bitloops.toml` and `.bitloops.local.toml` cleanup, plus removal of the managed `.git/info/exclude` entries that `bitloops init` adds.
+
 ### Fixed
 
 - **`bitloops init --sync=true` no longer waits on unselected semantic enrichment lanes before completing**: init session status now filters queued summary-refresh, code-embedding, and summary-embedding work down to the lanes actually selected for that session. This fixes sync-only runs getting stuck on "Waiting for queued enrichment work to finish" when repo-level semantic summary refresh remained active in the background
 
 ### Changed
+
 - **Bitloops-managed `using-devql` guidance now shows the zero-argument GraphQL `tests` stage and clarifies direct artefact targeting**: the shared DevQL skill/rule content now demonstrates `selectArtefacts(...){ tests { ... } }` instead of the argument-bearing `tests(linkageSource: "static_analysis")` form, trims the sample `coveringTests` payload to the most useful fields plus line spans, and clarifies that `tests` returns tests directly linked to the selected artefact so empty results remain expected for code reached only indirectly through DI wiring, helpers, or higher-level integration paths.
+- **`bitloops uninstall --agent-hooks` now --repo-config**: repo-local `.bitloops.toml` and `.bitloops.local.toml` cleanup, plus removal of the managed `.git/info/exclude` entries that `bitloops init` adds, is now described as dedicated `--repo-config` cleanup rather than being folded into `--agent-hooks`.
 
 ## [0.0.18] - 2026-04-21
 
