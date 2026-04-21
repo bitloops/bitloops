@@ -1999,6 +1999,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_project_scop
               selectArtefacts(by: { semanticQuery: "caller in caller ts" }) {
                 count
                 artefacts {
+                  score
                   path
                   symbolFqn
                 }
@@ -2020,6 +2021,11 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_project_scop
         .as_array()
         .expect("artefacts array");
     assert_eq!(artefacts.len(), 1);
+    let score = artefacts[0]["score"].as_f64().expect("semantic score");
+    assert!(
+        score >= 0.72,
+        "expected semantic score above cutoff, got {score}"
+    );
     assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
     assert_eq!(
         artefacts[0]["symbolFqn"],
