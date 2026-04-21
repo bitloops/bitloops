@@ -12,7 +12,8 @@ use super::super::runtime_config::resolve_semantic_clones_config;
 use super::super::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use super::super::workplane::{repo_backfill_dedupe_key, resolve_effective_mailbox_intent};
 use super::jobs::{artefact_job, repo_backfill_job, repo_backfill_jobs};
@@ -64,6 +65,7 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                         "cleared_paths": cleared_paths,
                         "enqueued_summary_jobs": 0,
                         "enqueued_code_embedding_jobs": 0,
+                        "enqueued_identity_embedding_jobs": 0,
                         "enqueued_summary_embedding_jobs": 0,
                         "enqueued_clone_rebuild": 0,
                         "reconcile_mode": reconcile_mode_label(request.reconcile_mode),
@@ -96,6 +98,7 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
             let mut jobs = Vec::new();
             let mut summary_job_count = 0_u64;
             let mut code_embedding_job_count = 0_u64;
+            let mut identity_embedding_job_count = 0_u64;
             let mut summary_embedding_job_count = 0_u64;
             let mut clone_rebuild_job_count = 0_u64;
 
@@ -135,6 +138,23 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                         code_embedding_job_count += 1;
                     }
                 }
+
+                if is_full_reconcile {
+                    let repo_backfill_jobs = repo_backfill_jobs(
+                        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                        full_reconcile_artefact_ids,
+                    )?;
+                    identity_embedding_job_count += repo_backfill_jobs.len() as u64;
+                    jobs.extend(repo_backfill_jobs);
+                } else {
+                    for artefact_id in &artefact_ids {
+                        jobs.push(artefact_job(
+                            SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                            artefact_id,
+                        )?);
+                        identity_embedding_job_count += 1;
+                    }
+                }
             }
 
             if intent.summary_embeddings_active && !intent.summary_refresh_active {
@@ -157,6 +177,7 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
             }
 
             let embedding_pipeline_scheduled = code_embedding_job_count > 0
+                || identity_embedding_job_count > 0
                 || summary_embedding_job_count > 0
                 || (summary_job_count > 0 && intent.summary_embeddings_active);
             if intent.clone_rebuild_active
@@ -191,6 +212,7 @@ impl CurrentStateConsumer for SemanticClonesCurrentStateConsumer {
                     "cleared_paths": cleared_paths,
                     "enqueued_summary_jobs": summary_job_count,
                     "enqueued_code_embedding_jobs": code_embedding_job_count,
+                    "enqueued_identity_embedding_jobs": identity_embedding_job_count,
                     "enqueued_summary_embedding_jobs": summary_embedding_job_count,
                     "enqueued_clone_rebuild": clone_rebuild_job_count,
                     "reconcile_mode": reconcile_mode_label(request.reconcile_mode),

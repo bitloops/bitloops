@@ -9,6 +9,7 @@ use crate::host::runtime_store::types::RepoSqliteRuntimeStore;
 
 const SEMANTIC_SUMMARY_REFRESH_MAILBOX_NAME: &str = "semantic_clones.summary_refresh";
 const SEMANTIC_CODE_EMBEDDING_MAILBOX_NAME: &str = "semantic_clones.embedding.code";
+const SEMANTIC_IDENTITY_EMBEDDING_MAILBOX_NAME: &str = "semantic_clones.embedding.identity";
 const SEMANTIC_SUMMARY_EMBEDDING_MAILBOX_NAME: &str = "semantic_clones.embedding.summary";
 
 impl RepoSqliteRuntimeStore {
@@ -121,6 +122,7 @@ impl RepoSqliteRuntimeStore {
                     let (representation_kind, status, count) = row?;
                     let mailbox_name = match representation_kind.as_str() {
                         "summary" => SEMANTIC_SUMMARY_EMBEDDING_MAILBOX_NAME,
+                        "identity" | "locator" => SEMANTIC_IDENTITY_EMBEDDING_MAILBOX_NAME,
                         _ => SEMANTIC_CODE_EMBEDDING_MAILBOX_NAME,
                     };
                     let Some(entry) = status_by_mailbox.get_mut(mailbox_name) else {

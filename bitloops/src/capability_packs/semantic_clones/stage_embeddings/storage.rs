@@ -288,6 +288,7 @@ fn parse_representation_kind(raw: &str) -> Option<embeddings::EmbeddingRepresent
     match raw.trim().to_ascii_lowercase().as_str() {
         "code" | "baseline" | "enriched" => Some(embeddings::EmbeddingRepresentationKind::Code),
         "summary" => Some(embeddings::EmbeddingRepresentationKind::Summary),
+        "identity" | "locator" => Some(embeddings::EmbeddingRepresentationKind::Identity),
         _ => None,
     }
 }
