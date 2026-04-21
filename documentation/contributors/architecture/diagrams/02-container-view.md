@@ -114,7 +114,7 @@ flowchart LR
 ### `__daemon-process`
 
 - This is the actual long-lived daemon server process.
-- It runs the HTTP/GraphQL/dashboard runtime, ensures DevQL storage is current, starts enrichment coordination, and writes daemon runtime state in [`bitloops/src/daemon/server_runtime.rs`](../../../../bitloops/src/daemon/server_runtime.rs#L42).
+- It runs the HTTP/GraphQL/dashboard runtime, ensures DevQL storage is current, starts enrichment coordination, and writes daemon runtime state in [`bitloops/src/daemon/server_runtime.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/daemon/server_runtime.rs#L42).
 - This is the process that serves `/devql`, `/devql/global`, dashboard assets, and related local API traffic.
 - In detached and service modes, the CLI spawns this hidden entrypoint.
 - In foreground mode, the same server runtime can run directly from the CLI process instead of spawning a separate child.
@@ -123,13 +123,13 @@ flowchart LR
 
 - This is not the main daemon server.
 - It is a small local control service used for service-managed lifecycle.
-- It binds a loopback control listener and exposes `/daemon/start`, `/daemon/stop`, and `/daemon/restart` in [`bitloops/src/daemon/supervisor_api.rs`](../../../../bitloops/src/daemon/supervisor_api.rs#L3).
+- It binds a loopback control listener and exposes `/daemon/start`, `/daemon/stop`, and `/daemon/restart` in [`bitloops/src/daemon/supervisor_api.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/daemon/supervisor_api.rs#L3).
 - Its job is to manage the daemon process, not to serve DevQL or dashboard traffic.
 - Architecturally it is a control-plane process.
 
 ### `__devql-watcher`
 
 - This is a separate background file-watcher process, not the daemon.
-- It watches the repo with `notify`, debounces events, filters ignored paths, initializes local watch schema, and registers itself in repo runtime SQLite in [`bitloops/src/host/devql/watch.rs`](../../../../bitloops/src/host/devql/watch.rs#L61).
-- After batching changes, it computes changed paths and enqueues sync work with source `Watcher` via [`bitloops/src/host/devql/capture.rs`](../../../../bitloops/src/host/devql/capture.rs#L23).
+- It watches the repo with `notify`, debounces events, filters ignored paths, initializes local watch schema, and registers itself in repo runtime SQLite in [`bitloops/src/host/devql/watch.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/host/devql/watch.rs#L61).
+- After batching changes, it computes changed paths and enqueues sync work with source `Watcher` via [`bitloops/src/host/devql/capture.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/host/devql/capture.rs#L23).
 - Its job is to detect filesystem changes and hand off sync work.

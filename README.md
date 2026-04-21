@@ -21,8 +21,19 @@
 
 [![Fork](https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork)](https://github.com/bitloops/bitloops/network/) [![Star](https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star)](https://github.com/bitloops/bitloops/stargazers/) [![Commits](https://badgen.net/github/commits/bitloops/bitloops?color=6b7280)](https://github.com/bitloops/bitloops/commits/) [![Version](https://img.shields.io/github/v/tag/bitloops/bitloops?style=flat-square&color=7404e4)](https://github.com/bitloops/bitloops/tags/) [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/releases) [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827)](https://github.com/bitloops/bitloops/blob/main/LICENSE) [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/graphs/contributors) [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square)](https://github.com/bitloops/bitloops) [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
 </div>
-
-<br>
+    
+> [!WARNING]
+> **Project status: Alpha / Work in Progress**
+>
+> Bitloops is under active development in the open. It is **not production-ready** yet.
+>
+> You should currently expect:
+> - breaking changes between releases
+> - incomplete or evolving documentation
+> - rough edges in onboarding and agent integrations
+> - limited support for some environments and workflows
+>
+> We welcome early adopters, testers, and contributors who are comfortable trying experimental developer tooling and sharing feedback.
 
 ## About Bitloops
 
