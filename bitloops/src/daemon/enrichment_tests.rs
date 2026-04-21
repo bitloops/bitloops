@@ -1586,6 +1586,60 @@ fn embedding_mailbox_batch_claim_leases_up_to_fifty_items_from_embedding_inbox_o
 }
 
 #[test]
+fn embedding_mailbox_batch_claim_leases_identity_items_when_embeddings_are_configured() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    let _config_path = configure_embeddings_for_repo(&target, "local_code");
+
+    for index in 0..2 {
+        insert_embedding_mailbox_item(
+            &coordinator,
+            &target,
+            EmbeddingMailboxItemFixture {
+                repo_id: &repo_id,
+                item_id: &format!("identity-item-{index}"),
+                representation_kind: "identity",
+                status: SemanticMailboxItemStatus::Pending,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some(&format!("identity-{index}")),
+                payload_json: None,
+                submitted_at_unix: (index + 1) as u64,
+                updated_at_unix: (index + 1) as u64,
+                attempts: 0,
+                lease_token: None,
+                lease_expires_at_unix: None,
+                last_error: None,
+            },
+        );
+    }
+
+    let claimed = super::claim_embedding_mailbox_batch(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+    )
+    .expect("claim embedding mailbox batch")
+    .expect("identity embedding mailbox batch should be claimable");
+
+    assert_eq!(claimed.items.len(), 2);
+    assert_eq!(claimed.representation_kind.to_string(), "identity");
+    assert!(
+        claimed
+            .items
+            .iter()
+            .all(|item| item.representation_kind == "identity"),
+    );
+    assert_eq!(
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Leased).len(),
+        2,
+    );
+    assert_eq!(
+        load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending).len(),
+        0,
+    );
+}
+
+#[test]
 fn projected_workplane_status_counts_inbox_backed_batches() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
