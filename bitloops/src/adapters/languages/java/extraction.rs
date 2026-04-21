@@ -5,7 +5,8 @@ use tree_sitter::Node;
 
 use super::canonical::{JAVA_CANONICAL_MAPPINGS, JAVA_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    JavaKind, LanguageArtefact, LanguageKind, is_supported_language_kind, resolve_canonical_kind,
+    JavaKind, LanguageArtefact, LanguageKind, is_supported_language_kind,
+    normalize_artefact_signature, resolve_canonical_kind,
 };
 
 struct JavaArtefactDescriptor {
@@ -358,12 +359,12 @@ pub(crate) fn trimmed_node_text(node: Node<'_>, content: &str) -> Option<String>
 }
 
 fn node_signature(node: Node<'_>, content: &str) -> String {
-    node.utf8_text(content.as_bytes())
-        .ok()
-        .and_then(|text| text.lines().next())
-        .unwrap_or("")
-        .trim()
-        .to_string()
+    normalize_artefact_signature(
+        node.utf8_text(content.as_bytes())
+            .ok()
+            .and_then(|text| text.lines().next())
+            .unwrap_or(""),
+    )
 }
 
 fn import_reference(node: Node<'_>, content: &str) -> Option<String> {

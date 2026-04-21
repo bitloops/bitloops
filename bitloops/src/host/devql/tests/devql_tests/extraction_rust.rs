@@ -49,6 +49,13 @@ fn run() {
         .find(|a| a.language_kind == LanguageKind::rust(RustKind::ImplItem))
         .expect("expected impl artefact");
     assert_eq!(impl_item.canonical_kind, None);
+    assert_eq!(impl_item.signature, "impl DoThing for User");
+
+    let function = artefacts
+        .iter()
+        .find(|a| a.language_kind == LanguageKind::rust(RustKind::FunctionItem) && a.name == "run")
+        .expect("expected free function artefact");
+    assert_eq!(function.signature, "fn run()");
 }
 
 #[test]
