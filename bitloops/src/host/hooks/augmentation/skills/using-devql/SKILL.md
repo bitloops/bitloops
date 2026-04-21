@@ -2,7 +2,8 @@
 name: using-devql
 description: >
   Use when understanding code structure, resolving artefacts by path or line
-  range, resolving approximate symbol names with fuzzy lookup, finding
+  range, resolving approximate symbol names with fuzzy lookup, resolving
+  conceptual requests with semanticQuery, finding
   callers/usages/imports/tests/checkpoints/clones/dependencies,
   or answering architecture questions in a repo with DevQL enabled.
 ---
@@ -34,7 +35,8 @@ search or file reads.
 
 ## Agent Flow
 
-1. Select the target with `symbolFqn`, `fuzzyName`, `path`, or `path + lines`.
+1. Select the target with `symbolFqn`, `fuzzyName`, `semanticQuery`, `path`, or `path + lines`.
+   Use `semanticQuery` when the request is conceptual rather than tied to a known file or symbol.
 2. Ask for `summary` only if you need orientation or to discover which stage to expand.
 3. Rerun with `artefacts(first: ...)` or the relevant stage `items(first: ...)`.
 4. Return the concrete rows. Summaries are optional follow-up, not substitutes.
@@ -57,6 +59,9 @@ bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", line
 
 # Fuzzy lookup when the symbol name is approximate or may be misspelled
 bitloops devql query '{ selectArtefacts(by: { fuzzyName: "<approx-symbol-name>" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
+
+# Semantic lookup for free-form conceptual requests
+bitloops devql query '{ selectArtefacts(by: { semanticQuery: "<natural-language request>" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
 
 # Concrete callers/usages/imports once the symbol is known
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { items(first: 50) { edgeKind startLine endLine fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'

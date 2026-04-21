@@ -40,4 +40,11 @@ mod tests {
         assert!(body.contains("tests { summary"));
         assert!(body.contains("coveringTests"));
     }
+
+    #[test]
+    fn using_devql_skill_mentions_semantic_query_lookup() {
+        let body = using_devql_skill_body();
+        assert!(body.contains("semanticQuery"));
+        assert!(body.contains("<natural-language request>"));
+    }
 }

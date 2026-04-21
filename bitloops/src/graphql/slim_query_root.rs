@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 use crate::graphql::fuzzy_artefact_name::select_fuzzy_named_artefacts;
 use crate::graphql::pack_adapter::StageResolverAdapter;
+use crate::graphql::semantic_artefact_query::select_semantic_artefacts;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_user_input_error};
 
 use super::types::artefact_selection::ArtefactSelectorMode;
@@ -577,6 +578,10 @@ impl SlimQueryRoot {
                             ))
                         })?;
                 let artefacts = select_fuzzy_named_artefacts(&fuzzy_name, artefacts);
+                ArtefactSelection::new(artefacts, Vec::new(), scope)
+            }
+            ArtefactSelectorMode::SemanticQuery(semantic_query) => {
+                let artefacts = select_semantic_artefacts(context, &scope, &semantic_query).await?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {

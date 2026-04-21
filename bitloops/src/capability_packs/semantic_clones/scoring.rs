@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup;
+use crate::vector_search::HnswLikeIndex;
 
 const SYMBOL_CLONE_FINGERPRINT_VERSION: &str = "symbol-clone-fingerprint-v3";
 const MAX_CLONE_EDGES_PER_SOURCE: usize = 20;
@@ -231,7 +232,7 @@ struct CandidateGroupKey {
 struct GroupAnnIndex {
     global_indices: Vec<usize>,
     local_by_global: HashMap<usize, usize>,
-    index: ann::HnswLikeIndex,
+    index: HnswLikeIndex,
 }
 
 pub fn build_symbol_clone_edges(inputs: &[SymbolCloneCandidateInput]) -> SymbolCloneBuildResult {
@@ -441,7 +442,7 @@ where
             continue;
         }
 
-        let index = ann::HnswLikeIndex::build(&vectors);
+        let index = HnswLikeIndex::build(&vectors);
         let local_by_global = indexed_global_indices
             .iter()
             .enumerate()
@@ -612,9 +613,6 @@ mod classification;
 mod explanation;
 // utils: jaccard, hashing, token helpers, path/name similarity
 mod utils;
-// ann: in-memory HNSW-like nearest-neighbour index for semantic prefiltering
-mod ann;
-
 use self::classification::*;
 use self::core::*;
 use self::explanation::*;
