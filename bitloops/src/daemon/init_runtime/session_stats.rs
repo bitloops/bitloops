@@ -5,7 +5,8 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
     payload_artefact_id, payload_is_repo_backfill, payload_repo_backfill_artefact_ids,
@@ -157,7 +158,8 @@ pub(crate) fn load_session_workplane_stats(
                 }
                 continue;
             }
-            if blocked.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+            if (blocked.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                || blocked.mailbox_name == SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX)
                 && stats.code_embedding_jobs.counts.has_pending_or_running()
             {
                 stats
@@ -232,7 +234,9 @@ fn latest_semantic_mailbox_error(
                 |row| Ok((row.get::<_, i64>(1)?, row.get::<_, Option<String>>(0)?)),
             )
             .optional(),
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
             let representation_kind =
                 semantic_embedding_representation_kind_for_mailbox(mailbox_name);
             conn.query_row(
@@ -240,7 +244,10 @@ fn latest_semantic_mailbox_error(
                  FROM semantic_embedding_mailbox_items
                  WHERE repo_id = ?1
                    AND init_session_id = ?2
-                   AND representation_kind = ?3
+                   AND (
+                       representation_kind = ?3
+                       OR (?3 = 'identity' AND representation_kind = 'locator')
+                   )
                    AND status = 'failed'
                  ORDER BY updated_at_unix DESC
                  LIMIT 1",

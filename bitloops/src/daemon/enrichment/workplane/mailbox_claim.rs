@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::unix_timestamp_now;
 use crate::host::devql::esc_pg;
@@ -113,6 +113,9 @@ pub(crate) fn claim_embedding_mailbox_batch(
                     EmbeddingRepresentationKind::Summary => {
                         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
                     }
+                    EmbeddingRepresentationKind::Identity => {
+                        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+                    }
                     EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
                 };
                 let job = mailbox_readiness_job(&repo_id, &repo_root, &config_root, mailbox_name);
@@ -204,6 +207,7 @@ fn load_embedding_mailbox_repo_candidates(
         |row| {
             let representation_kind = match row.get::<_, String>(3)?.as_str() {
                 "summary" => EmbeddingRepresentationKind::Summary,
+                "identity" | "locator" => EmbeddingRepresentationKind::Identity,
                 _ => EmbeddingRepresentationKind::Code,
             };
             Ok((

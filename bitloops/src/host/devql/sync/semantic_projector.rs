@@ -83,6 +83,15 @@ pub(crate) async fn project_path(
             &desired.path,
             &desired.effective_content_id,
             &inputs,
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Identity,
+            Arc::clone(&embedding_provider),
+        )
+        .await?;
+        upsert_current_symbol_embedding_rows(
+            relational,
+            &desired.path,
+            &desired.effective_content_id,
+            &inputs,
             crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
             embedding_provider,
         )

@@ -12,7 +12,8 @@ use crate::capability_packs::semantic_clones::runtime_config::{
 };
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
     load_effective_mailbox_intent_for_repo, payload_representation_kind,
@@ -120,7 +121,9 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                 Err(err) => JobExecutionOutcome::failed(err),
             }
         }
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
             let Some(representation_kind) = payload_representation_kind(&job.mailbox_name) else {
                 return JobExecutionOutcome::failed(anyhow::anyhow!(
                     "embedding mailbox `{}` missing representation mapping",
@@ -171,9 +174,15 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                         error: None,
                         follow_ups: plan.follow_ups,
                     };
-                    outcome
-                        .follow_ups
-                        .push(clone_edges_rebuild_follow_up_from_workplane(job));
+                    if matches!(
+                        representation_kind,
+                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                            | crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
+                    ) {
+                        outcome
+                            .follow_ups
+                            .push(clone_edges_rebuild_follow_up_from_workplane(job));
+                    }
                     outcome
                 }
                 Err(err) => JobExecutionOutcome::failed(err),

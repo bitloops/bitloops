@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_graphql::Result as GraphqlResult;
@@ -162,12 +163,15 @@ async fn load_semantic_candidates(
         None,
     );
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
-    let representation_clause = EmbeddingRepresentationKind::Code
-        .storage_values()
-        .iter()
-        .map(|value| format!("'{}'", esc_pg(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
+    let representation_clause = [
+        EmbeddingRepresentationKind::Code,
+        EmbeddingRepresentationKind::Identity,
+    ]
+    .into_iter()
+    .flat_map(EmbeddingRepresentationKind::storage_values)
+    .map(|value| format!("'{}'", esc_pg(value)))
+    .collect::<Vec<_>>()
+    .join(", ");
     let sql = format!(
         "{filtered_cte} \
          SELECT filtered.symbol_id, filtered.artefact_id, filtered.path, filtered.language, \
@@ -277,9 +281,11 @@ fn rank_semantic_candidates(
             })
             .then_with(|| left.artefact.id.as_str().cmp(right.artefact.id.as_str()))
     });
-    ranked.truncate(result_limit);
+    let mut seen_artefact_ids = HashSet::new();
     ranked
         .into_iter()
+        .filter(|candidate| seen_artefact_ids.insert(candidate.artefact.id.to_string()))
+        .take(result_limit)
         .map(|candidate| candidate.artefact)
         .collect()
 }
@@ -602,5 +608,41 @@ mod tests {
             rank_semantic_candidates(&[1.0, 0.0, 0.5], candidates, VectorSearchMode::Ann, 0.0, 10);
 
         assert_eq!(ann, exact);
+    }
+
+    #[test]
+    fn semantic_ranking_dedupes_multiple_representation_hits_for_same_artefact() {
+        let ranked = rank_semantic_candidates(
+            &[1.0, 0.0, 0.0],
+            vec![
+                sample_candidate(
+                    "shared",
+                    "src/user.ts",
+                    "src/user.ts::User::name",
+                    vec![0.99, 0.01, 0.0],
+                ),
+                sample_candidate(
+                    "shared",
+                    "src/user.ts",
+                    "src/user.ts::User::name",
+                    vec![0.98, 0.02, 0.0],
+                ),
+                sample_candidate(
+                    "other",
+                    "src/other.ts",
+                    "src/other.ts::other",
+                    vec![0.97, 0.03, 0.0],
+                ),
+            ],
+            VectorSearchMode::Exact,
+            0.72,
+            20,
+        );
+
+        let ids = ranked
+            .into_iter()
+            .map(|artefact| artefact.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["shared", "other"]);
     }
 }
