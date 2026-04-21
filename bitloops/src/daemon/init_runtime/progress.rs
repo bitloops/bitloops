@@ -9,7 +9,6 @@ use crate::config::resolve_semantic_clones_config_for_repo;
 use crate::daemon::types::InitSessionRecord;
 use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 
-use super::lanes::derive_embeddings_completed_count;
 use super::stats::{RuntimeLaneProgressState, SessionWorkplaneStats, SummaryFreshnessState};
 use super::types::InitRuntimeLaneProgressView;
 
@@ -39,45 +38,80 @@ pub(crate) fn load_runtime_lane_progress(
     let summary_embeddings_enabled =
         embedding_slot_for_representation(&semantic_clones, EmbeddingRepresentationKind::Summary)
             .is_some();
-    let code_embeddings_total = u64::from(code_embeddings_enabled) * total_eligible;
-    let summary_embeddings_total = u64::from(summary_embeddings_enabled) * total_eligible;
-    let embeddings_total = code_embeddings_total + summary_embeddings_total;
-    let embeddings_completed = derive_embeddings_completed_count(
+    let code_embeddings_total =
+        u64::from(session.selections.run_code_embeddings && code_embeddings_enabled)
+            * total_eligible;
+    let summary_embeddings_total =
+        u64::from(session.selections.run_summary_embeddings && summary_embeddings_enabled)
+            * total_eligible;
+    let code_embeddings_completed = lane_completed_count(
         code_embeddings_total,
         code_embeddings_completed,
         stats.code_embedding_jobs.counts,
-        summary_embeddings_total,
-        summary_embeddings_completed,
-        summaries_completed,
-        stats.summary_embedding_jobs.counts,
-    )
-    .min(embeddings_total);
-    let summaries_total = if session.selections.summaries_bootstrap.is_some() {
+    );
+    let summaries_total = if session.selections.run_summaries {
         total_eligible
     } else {
         0
     };
     let summaries_completed = summaries_completed.min(summaries_total);
+    let summary_embeddings_completed = summary_embeddings_completed_count(
+        summary_embeddings_total,
+        summary_embeddings_completed,
+        summaries_completed,
+        stats.summary_embedding_jobs.counts,
+    );
     let summary_in_memory_completed =
         summary_in_memory_completed.min(summaries_total.saturating_sub(summaries_completed));
 
     Ok(RuntimeLaneProgressState {
-        embeddings: (session.selections.embeddings_bootstrap.is_some() && embeddings_total > 0)
+        code_embeddings: (session.selections.run_code_embeddings && code_embeddings_total > 0)
             .then(|| InitRuntimeLaneProgressView {
-                completed: embeddings_completed,
+                completed: code_embeddings_completed,
                 in_memory_completed: 0,
-                total: embeddings_total,
-                remaining: embeddings_total.saturating_sub(embeddings_completed),
+                total: code_embeddings_total,
+                remaining: code_embeddings_total.saturating_sub(code_embeddings_completed),
             }),
-        summaries: (session.selections.summaries_bootstrap.is_some() && summaries_total > 0).then(
-            || InitRuntimeLaneProgressView {
+        summaries: (session.selections.run_summaries && summaries_total > 0).then(|| {
+            InitRuntimeLaneProgressView {
                 completed: summaries_completed,
                 in_memory_completed: summary_in_memory_completed,
                 total: summaries_total,
                 remaining: summaries_total.saturating_sub(summaries_completed),
-            },
-        ),
+            }
+        }),
+        summary_embeddings: (session.selections.run_summary_embeddings
+            && summary_embeddings_total > 0)
+            .then(|| InitRuntimeLaneProgressView {
+                completed: summary_embeddings_completed,
+                in_memory_completed: 0,
+                total: summary_embeddings_total,
+                remaining: summary_embeddings_total.saturating_sub(summary_embeddings_completed),
+            }),
     })
+}
+
+fn lane_completed_count(
+    total: u64,
+    completed_current: u64,
+    counts: super::stats::StatusCounts,
+) -> u64 {
+    total
+        .saturating_sub(counts.pending + counts.running + counts.failed)
+        .max(completed_current.min(total))
+}
+
+fn summary_embeddings_completed_count(
+    total: u64,
+    completed_current: u64,
+    summaries_completed: u64,
+    counts: super::stats::StatusCounts,
+) -> u64 {
+    summaries_completed
+        .saturating_sub(counts.pending + counts.running + counts.failed)
+        .max(completed_current.min(total))
+        .min(total)
+        .min(summaries_completed)
 }
 
 fn count_eligible_current_artefacts(

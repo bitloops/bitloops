@@ -21,8 +21,8 @@ use crate::host::runtime_store::{DaemonSqliteRuntimeStore, RepoSqliteRuntimeStor
 use crate::runtime_presentation::warning_summary;
 
 use super::lanes::{
-    derive_embeddings_lane, derive_session_status, derive_summaries_lane, derive_top_pipeline_lane,
-    running_task,
+    derive_code_embeddings_lane, derive_ingest_lane, derive_session_status, derive_summaries_lane,
+    derive_summary_embeddings_lane, derive_sync_lane, running_task,
 };
 use super::orchestration::{
     record_task_completion_seq, selected_top_level_terminal,
@@ -349,27 +349,40 @@ impl InitRuntimeCoordinator {
             }
         };
 
-        let top_pipeline_lane = derive_top_pipeline_lane(
+        let sync_lane = derive_sync_lane(
             &session,
             initial_sync.as_ref(),
-            ingest_task.as_ref(),
             follow_up_sync.as_ref(),
             stats.current_state,
         );
-        let embeddings_lane = derive_embeddings_lane(
+        let ingest_lane = derive_ingest_lane(&session, initial_sync.as_ref(), ingest_task.as_ref());
+        let code_embeddings_lane = derive_code_embeddings_lane(
             &session,
             initial_sync.as_ref(),
             follow_up_sync.as_ref(),
             embeddings_task.as_ref(),
+            stats.current_state,
             &stats,
-            lane_progress.embeddings.clone(),
+            lane_progress.code_embeddings.clone(),
         );
         let summaries_lane = derive_summaries_lane(
             &session,
             initial_sync.as_ref(),
             follow_up_sync.as_ref(),
             summary_run.as_ref(),
+            stats.current_state,
             &stats,
+            lane_progress.summaries.clone(),
+        );
+        let summary_embeddings_lane = derive_summary_embeddings_lane(
+            &session,
+            initial_sync.as_ref(),
+            follow_up_sync.as_ref(),
+            embeddings_task.as_ref(),
+            summary_run.as_ref(),
+            stats.current_state,
+            &stats,
+            lane_progress.summary_embeddings.clone(),
             lane_progress.summaries.clone(),
         );
 
@@ -411,7 +424,10 @@ impl InitRuntimeCoordinator {
         let follow_up_satisfied = !follow_up_pending;
         let selected_top_level_terminal =
             selected_top_level_terminal(&session, initial_sync.as_ref(), ingest_task.as_ref());
-        let blocked_embedding = stats.blocked_embedding_reason.clone();
+        let blocked_embedding = stats
+            .blocked_code_embedding_reason
+            .clone()
+            .or(stats.blocked_summary_embedding_reason.clone());
         let blocked_summary = stats.blocked_summary_reason.clone();
         let waiting_reason = if has_fatal_failure {
             Some("failed".to_string())
@@ -503,8 +519,9 @@ impl InitRuntimeCoordinator {
             follow_up_sync_required: follow_up_pending,
             run_sync: session.selections.run_sync,
             run_ingest: session.selections.run_ingest,
-            embeddings_selected: session.selections.embeddings_bootstrap.is_some(),
-            summaries_selected: session.selections.summaries_bootstrap.is_some(),
+            embeddings_selected: session.selections.run_code_embeddings,
+            summaries_selected: session.selections.run_summaries,
+            summary_embeddings_selected: session.selections.run_summary_embeddings,
             initial_sync_task_id: session.initial_sync_task_id,
             ingest_task_id: session.ingest_task_id,
             follow_up_sync_task_id: session.follow_up_sync_task_id,
@@ -515,9 +532,11 @@ impl InitRuntimeCoordinator {
             } else {
                 None
             },
-            top_pipeline_lane,
-            embeddings_lane,
+            sync_lane,
+            ingest_lane,
+            code_embeddings_lane,
             summaries_lane,
+            summary_embeddings_lane,
         }))
     }
 

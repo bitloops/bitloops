@@ -2,8 +2,9 @@ use crate::adapters::agents::agent_display_name;
 use crate::cli::enable::find_repo_root;
 use crate::config::settings;
 use crate::runtime_presentation::{
-    INIT_CODEBASE_LANE_LABEL, INIT_EMBEDDINGS_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL,
-    queue_state_summary, session_status_label, task_kind_label, waiting_reason_label,
+    INIT_CODE_EMBEDDINGS_LANE_LABEL, INIT_INGEST_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL,
+    INIT_SUMMARY_EMBEDDINGS_LANE_LABEL, INIT_SYNC_LANE_LABEL, queue_state_summary,
+    session_status_label, task_kind_label, waiting_reason_label,
 };
 use crate::utils::strings;
 use anyhow::Result;
@@ -213,21 +214,47 @@ pub async fn run(args: StatusArgs) -> Result<()> {
             if let Some(summary) = session.warning_summary.as_ref() {
                 writeln!(out, "  warning: {summary}")?;
             }
-            writeln!(
-                out,
-                "  codebase: {}",
-                format_runtime_lane_summary(INIT_CODEBASE_LANE_LABEL, &session.top_pipeline_lane)
-            )?;
-            writeln!(
-                out,
-                "  embeddings: {}",
-                format_runtime_lane_summary(INIT_EMBEDDINGS_LANE_LABEL, &session.embeddings_lane,)
-            )?;
-            writeln!(
-                out,
-                "  summaries: {}",
-                format_runtime_lane_summary(INIT_SUMMARIES_LANE_LABEL, &session.summaries_lane,)
-            )?;
+            if session.run_sync {
+                writeln!(
+                    out,
+                    "  sync: {}",
+                    format_runtime_lane_summary(INIT_SYNC_LANE_LABEL, &session.sync_lane)
+                )?;
+            }
+            if session.run_ingest {
+                writeln!(
+                    out,
+                    "  ingest: {}",
+                    format_runtime_lane_summary(INIT_INGEST_LANE_LABEL, &session.ingest_lane)
+                )?;
+            }
+            if session.embeddings_selected {
+                writeln!(
+                    out,
+                    "  code embeddings: {}",
+                    format_runtime_lane_summary(
+                        INIT_CODE_EMBEDDINGS_LANE_LABEL,
+                        &session.code_embeddings_lane,
+                    )
+                )?;
+            }
+            if session.summaries_selected {
+                writeln!(
+                    out,
+                    "  summaries: {}",
+                    format_runtime_lane_summary(INIT_SUMMARIES_LANE_LABEL, &session.summaries_lane,)
+                )?;
+            }
+            if session.summary_embeddings_selected {
+                writeln!(
+                    out,
+                    "  summary embeddings: {}",
+                    format_runtime_lane_summary(
+                        INIT_SUMMARY_EMBEDDINGS_LANE_LABEL,
+                        &session.summary_embeddings_lane,
+                    )
+                )?;
+            }
             if let Some(error) = session.terminal_error.as_ref() {
                 writeln!(out, "  error: {error}")?;
             }

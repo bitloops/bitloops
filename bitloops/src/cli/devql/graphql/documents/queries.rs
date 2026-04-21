@@ -494,13 +494,14 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
           runIngest
           embeddingsSelected
           summariesSelected
+          summaryEmbeddingsSelected
           initialSyncTaskId
           ingestTaskId
           followUpSyncTaskId
           embeddingsBootstrapTaskId
           summaryBootstrapTaskId
           terminalError
-          topPipelineLane {
+          syncLane {
             status
             waitingReason
             detail
@@ -528,7 +529,35 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
             failedCount
             completedCount
           }
-          embeddingsLane {
+          ingestLane {
+            status
+            waitingReason
+            detail
+            activityLabel
+            taskId
+            runId
+            progress {
+              completed
+              inMemoryCompleted
+              total
+              remaining
+            }
+            queue {
+              queued
+              running
+              failed
+            }
+            warnings {
+              componentLabel
+              message
+              retryCommand
+            }
+            pendingCount
+            runningCount
+            failedCount
+            completedCount
+          }
+          codeEmbeddingsLane {
             status
             waitingReason
             detail
@@ -557,6 +586,34 @@ pub(crate) const RUNTIME_SNAPSHOT_QUERY: &str = r#"
             completedCount
           }
           summariesLane {
+            status
+            waitingReason
+            detail
+            activityLabel
+            taskId
+            runId
+            progress {
+              completed
+              inMemoryCompleted
+              total
+              remaining
+            }
+            queue {
+              queued
+              running
+              failed
+            }
+            warnings {
+              componentLabel
+              message
+              retryCommand
+            }
+            pendingCount
+            runningCount
+            failedCount
+            completedCount
+          }
+          summaryEmbeddingsLane {
             status
             waitingReason
             detail

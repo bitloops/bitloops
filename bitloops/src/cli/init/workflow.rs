@@ -4,10 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use crate::adapters::agents::AgentAdapterRegistry;
-use crate::capability_packs::semantic_clones::workplane::{
-    activate_deferred_pipeline_mailboxes, activate_embedding_pipeline_mailboxes,
-    activate_summary_refresh_mailbox,
-};
+use crate::capability_packs::semantic_clones::workplane::activate_selected_pipeline_mailboxes;
 use crate::cli::embeddings::{
     install_or_bootstrap_embeddings, install_or_configure_platform_embeddings,
     platform_embeddings_gateway_url_override,
@@ -465,18 +462,14 @@ pub(crate) async fn run_for_project_root(
         }
         SummarySetupSelection::Skip => {}
     }
-    if args.install_default_daemon {
-        activate_selected_init_mailboxes(
-            &git_root,
-            matches!(
-                embeddings_selection,
-                InitEmbeddingsSetupSelection::Existing
-                    | InitEmbeddingsSetupSelection::Cloud
-                    | InitEmbeddingsSetupSelection::Local
-            ),
-            prepared_summary_setup.is_some() || summary_generation_configured(project_root),
-        )?;
-    }
+    let code_embeddings_selected = matches!(
+        embeddings_selection,
+        InitEmbeddingsSetupSelection::Existing
+            | InitEmbeddingsSetupSelection::Cloud
+            | InitEmbeddingsSetupSelection::Local
+    );
+    let summaries_selected =
+        prepared_summary_setup.is_some() || summary_generation_configured(project_root);
     let final_setup_selection = choose_final_setup_options(
         args.sync,
         out,
@@ -511,8 +504,31 @@ pub(crate) async fn run_for_project_root(
     }
     let should_sync = final_setup_selection.sync;
     let should_ingest = final_setup_selection.ingest;
+    let run_code_embeddings = should_sync && code_embeddings_selected;
+    let run_summaries = should_sync && summaries_selected;
+    let run_summary_embeddings = run_summaries && code_embeddings_selected;
     if args.install_default_daemon {
-        write_init_setup_handoff(out).await?;
+        activate_selected_init_mailboxes(
+            &git_root,
+            run_code_embeddings,
+            run_summaries,
+            run_summary_embeddings,
+        )?;
+    }
+    if args.install_default_daemon {
+        write_init_setup_handoff(
+            out,
+            InitSetupHandoffOptions {
+                run_sync: should_sync,
+                run_ingest: should_ingest,
+                run_code_embeddings,
+                run_summaries,
+                run_summary_embeddings,
+                prepare_embeddings_runtime: embeddings_bootstrap.is_some() && !run_code_embeddings,
+                prepare_summary_generation: prepared_summary_setup.is_some() && !run_summaries,
+            },
+        )
+        .await?;
     }
     if should_sync
         || should_ingest
@@ -533,6 +549,9 @@ pub(crate) async fn run_for_project_root(
                     repo_id: scope.repo.repo_id.clone(),
                     run_sync: should_sync,
                     run_ingest: should_ingest,
+                    run_code_embeddings,
+                    run_summaries,
+                    run_summary_embeddings,
                     ingest_backfill,
                     embeddings_bootstrap,
                     summaries_bootstrap,
@@ -655,18 +674,19 @@ fn install_embeddings_during_init(project_root: &Path, out: &mut dyn Write) -> R
 
 fn activate_selected_init_mailboxes(
     repo_root: &Path,
-    embeddings_enabled: bool,
+    code_embeddings_enabled: bool,
     summaries_enabled: bool,
+    summary_embeddings_enabled: bool,
 ) -> Result<()> {
-    match (embeddings_enabled, summaries_enabled) {
-        (true, true) => activate_deferred_pipeline_mailboxes(repo_root, "init")
-            .context("activating semantic clones deferred mailboxes for init"),
-        (true, false) => activate_embedding_pipeline_mailboxes(repo_root, "init")
-            .context("activating semantic clones embedding mailboxes for init"),
-        (false, true) => activate_summary_refresh_mailbox(repo_root, "init")
-            .context("activating semantic clones summary mailboxes for init"),
-        (false, false) => Ok(()),
-    }
+    activate_selected_pipeline_mailboxes(
+        repo_root,
+        "init",
+        summaries_enabled,
+        code_embeddings_enabled,
+        summary_embeddings_enabled,
+        code_embeddings_enabled || summary_embeddings_enabled,
+    )
+    .context("activating semantic clones init mailboxes")
 }
 
 fn runtime_summary_bootstrap_request_from_plan(
@@ -708,11 +728,45 @@ fn runtime_summary_bootstrap_request_from_plan(
     }
 }
 
-async fn write_init_setup_handoff(out: &mut dyn Write) -> Result<()> {
+#[derive(Debug, Clone, Copy)]
+struct InitSetupHandoffOptions {
+    run_sync: bool,
+    run_ingest: bool,
+    run_code_embeddings: bool,
+    run_summaries: bool,
+    run_summary_embeddings: bool,
+    prepare_embeddings_runtime: bool,
+    prepare_summary_generation: bool,
+}
+
+async fn write_init_setup_handoff(
+    out: &mut dyn Write,
+    options: InitSetupHandoffOptions,
+) -> Result<()> {
     let tick = color_hex_if_enabled("✓", SUCCESS_GREEN_HEX);
     let dashboard_url = current_dashboard_url()
         .await?
         .unwrap_or_else(default_dashboard_url_for_init_handoff);
+    let mut background_steps = Vec::new();
+    if options.run_sync {
+        background_steps.push("Syncing your current codebase");
+    }
+    if options.run_ingest {
+        background_steps.push("Ingesting your git history");
+    }
+    if options.run_code_embeddings {
+        background_steps.push("Creating code embeddings for semantic search");
+    } else if options.prepare_embeddings_runtime {
+        background_steps.push("Preparing the embeddings runtime");
+    }
+    if options.run_summaries {
+        background_steps.push("Generating file and module summaries");
+    } else if options.prepare_summary_generation {
+        background_steps.push("Preparing summary generation");
+    }
+    if options.run_summary_embeddings {
+        background_steps.push("Creating summary embeddings");
+    }
 
     writeln!(out)?;
     writeln!(
@@ -723,16 +777,24 @@ async fn write_init_setup_handoff(out: &mut dyn Write) -> Result<()> {
     writeln!(out)?;
     writeln!(out, "{tick} Setup complete")?;
     writeln!(out)?;
-    writeln!(
-        out,
-        "Bitloops is now building your project's Intelligence Layer in the background."
-    )?;
-    writeln!(out)?;
-    writeln!(out, "What’s happening:")?;
-    writeln!(out, "  • Syncing your codebase and commit history")?;
-    writeln!(out, "  • Indexing code for semantic search")?;
-    writeln!(out, "  • Generating file and module summaries")?;
-    writeln!(out)?;
+    if background_steps.is_empty() {
+        writeln!(
+            out,
+            "Bitloops is ready. No background indexing steps were selected during setup."
+        )?;
+        writeln!(out)?;
+    } else {
+        writeln!(
+            out,
+            "Bitloops is now continuing the setup you selected in the background."
+        )?;
+        writeln!(out)?;
+        writeln!(out, "What’s happening:")?;
+        for step in background_steps {
+            writeln!(out, "  • {step}")?;
+        }
+        writeln!(out)?;
+    }
     writeln!(out, "You can:")?;
     writeln!(out, "  • View progress: {dashboard_url}")?;
     writeln!(out, "  • Check status anytime: bitloops status")?;
@@ -744,9 +806,19 @@ async fn write_init_setup_handoff(out: &mut dyn Write) -> Result<()> {
     if should_render_local_http_mkcert_notice(&dashboard_url) {
         write_local_http_mkcert_notice(out)?;
     }
-    writeln!(out, "────────────────────────────────────────")?;
-    writeln!(out, " Live progress")?;
-    writeln!(out, "────────────────────────────────────────")?;
+    writeln!(
+        out,
+        "──────────────────────────────────────────────────────────────"
+    )?;
+    writeln!(out, "            🔍 Live Progress")?;
+    writeln!(
+        out,
+        " Feel free to close this terminal and continue with your day! 🌟"
+    )?;
+    writeln!(
+        out,
+        "──────────────────────────────────────────────────────────────"
+    )?;
     writeln!(out)?;
     out.flush()?;
     Ok(())

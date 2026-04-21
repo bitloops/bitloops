@@ -1,6 +1,7 @@
 use crate::runtime_presentation::{
-    INIT_EMBEDDINGS_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL, embeddings_bootstrap_phase_label,
-    ingest_phase_label, summary_bootstrap_phase_label, sync_phase_label, waiting_reason_label,
+    INIT_CODE_EMBEDDINGS_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL, INIT_SUMMARY_EMBEDDINGS_LANE_LABEL,
+    embeddings_bootstrap_phase_label, ingest_phase_label, summary_bootstrap_phase_label,
+    sync_phase_label, waiting_reason_label,
 };
 
 use super::compact::lane_progress_counts;
@@ -124,8 +125,10 @@ fn progress_summary(
     let ratio = (counts.visible_completed as f64 / counts.total as f64).clamp(0.0, 1.0);
     let noun = if title == INIT_SUMMARIES_LANE_LABEL {
         "summaries"
-    } else if title == INIT_EMBEDDINGS_LANE_LABEL {
-        "embeddings"
+    } else if title == INIT_CODE_EMBEDDINGS_LANE_LABEL {
+        "code embeddings"
+    } else if title == INIT_SUMMARY_EMBEDDINGS_LANE_LABEL {
+        "summary embeddings"
     } else {
         "items"
     };
@@ -229,7 +232,8 @@ mod tests {
         RuntimeInitLaneQueueGraphqlRecord,
     };
     use crate::runtime_presentation::{
-        INIT_EMBEDDINGS_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL, waiting_reason_label,
+        INIT_CODE_EMBEDDINGS_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL,
+        INIT_SUMMARY_EMBEDDINGS_LANE_LABEL, waiting_reason_label,
     };
 
     #[test]
@@ -283,7 +287,7 @@ mod tests {
             completed_count: 0,
         };
 
-        let (ratio, summary) = lane_progress(INIT_EMBEDDINGS_LANE_LABEL, &lane);
+        let (ratio, summary) = lane_progress(INIT_CODE_EMBEDDINGS_LANE_LABEL, &lane);
 
         assert!(ratio.is_none());
         assert_eq!(summary, " Waiting for the embeddings runtime to warm up ");
@@ -316,7 +320,7 @@ mod tests {
             completed_count: 8,
         };
 
-        let (ratio, summary) = lane_progress(INIT_EMBEDDINGS_LANE_LABEL, &lane);
+        let (ratio, summary) = lane_progress(INIT_CODE_EMBEDDINGS_LANE_LABEL, &lane);
 
         let ratio = ratio.expect("queue lanes with coverage should be determinate");
         assert!((ratio - (262.0 / 556.0)).abs() < f64::EPSILON);
@@ -354,6 +358,40 @@ mod tests {
 
         assert_eq!(ratio, Some(1.0));
         assert_eq!(summary, " 100% 225 of 225 summaries ready · 0 left");
+    }
+
+    #[test]
+    fn summary_embedding_lane_progress_uses_specific_noun() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "running".to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: Some("Creating summary embeddings".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 12,
+                in_memory_completed: 0,
+                total: 40,
+                remaining: 28,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord {
+                queued: 4,
+                running: 1,
+                failed: 0,
+            },
+            warnings: Vec::new(),
+            pending_count: 4,
+            running_count: 1,
+            failed_count: 0,
+            completed_count: 12,
+        };
+
+        let (ratio, summary) = lane_progress(INIT_SUMMARY_EMBEDDINGS_LANE_LABEL, &lane);
+
+        let ratio = ratio.expect("summary embedding lane should render a determinate ratio");
+        assert!((ratio - 0.3).abs() < f64::EPSILON);
+        assert_eq!(summary, "  30% 12 of 40 summary embeddings ready · 28 left");
     }
 
     #[test]

@@ -19,8 +19,7 @@ use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 use super::coordinator::InitRuntimeCoordinator;
 use super::lanes::{
-    derive_embeddings_completed_count, derive_embeddings_lane, derive_session_status,
-    derive_summaries_lane, derive_top_pipeline_lane,
+    derive_code_embeddings_lane, derive_session_status, derive_summaries_lane, derive_sync_lane,
 };
 use super::orchestration::{semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync};
 use super::session_stats::{
@@ -72,6 +71,9 @@ fn embeddings_only_session() -> InitSessionRecord {
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -357,56 +359,6 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
 }
 
 #[test]
-fn embeddings_completed_count_uses_queue_backlog_until_current_projection_catches_up() {
-    let completed = derive_embeddings_completed_count(
-        278,
-        2,
-        StatusCounts {
-            pending: 0,
-            running: 0,
-            failed: 0,
-            completed: 278,
-        },
-        278,
-        6,
-        278,
-        StatusCounts {
-            pending: 226,
-            running: 1,
-            failed: 1,
-            completed: 50,
-        },
-    );
-
-    assert_eq!(completed, 328);
-}
-
-#[test]
-fn embeddings_completed_count_never_exceeds_available_summaries() {
-    let completed = derive_embeddings_completed_count(
-        278,
-        278,
-        StatusCounts {
-            pending: 0,
-            running: 0,
-            failed: 0,
-            completed: 278,
-        },
-        278,
-        10,
-        40,
-        StatusCounts {
-            pending: 5,
-            running: 0,
-            failed: 0,
-            completed: 35,
-        },
-    );
-
-    assert_eq!(completed, 313);
-}
-
-#[test]
 fn refresh_lane_counts_excludes_clone_rebuild_from_embeddings_lane() {
     let mut stats = SessionWorkplaneStats {
         code_embedding_jobs: SessionMailboxStats {
@@ -472,8 +424,9 @@ fn refresh_lane_counts_excludes_clone_rebuild_from_embeddings_lane() {
 }
 
 #[test]
-fn embeddings_lane_ignores_clone_rebuild_activity_and_warnings() {
+fn code_embeddings_lane_ignores_clone_rebuild_activity_and_warnings() {
     let session = embeddings_only_session();
+    let initial_sync = completed_sync_task("sync-task-1", 10);
     let mut stats = SessionWorkplaneStats {
         code_embedding_jobs: SessionMailboxStats {
             counts: StatusCounts {
@@ -497,7 +450,15 @@ fn embeddings_lane_ignores_clone_rebuild_activity_and_warnings() {
     };
     stats.refresh_lane_counts();
 
-    let lane = derive_embeddings_lane(&session, None, None, None, &stats, None);
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        None,
+        StatusCounts::default(),
+        &stats,
+        None,
+    );
 
     assert_eq!(lane.status, "queued");
     assert_eq!(lane.queue.queued, 1);
@@ -509,6 +470,7 @@ fn embeddings_lane_ignores_clone_rebuild_activity_and_warnings() {
 
 #[test]
 fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embeddings() {
+    let initial_sync = completed_sync_task("sync-task-1", 10);
     let session = InitSessionRecord {
         init_session_id: "init-session-1".to_string(),
         repo_id: "repo-1".to_string(),
@@ -517,6 +479,9 @@ fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embedding
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -581,7 +546,15 @@ fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embedding
         ..SessionWorkplaneStats::default()
     };
 
-    let lane = derive_summaries_lane(&session, None, None, Some(&summary_run), &stats, None);
+    let lane = derive_summaries_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        Some(&summary_run),
+        StatusCounts::default(),
+        &stats,
+        None,
+    );
 
     assert_eq!(lane.status, "waiting");
     assert_eq!(lane.waiting_reason.as_deref(), Some("blocked_mailbox"));
@@ -602,6 +575,9 @@ fn semantic_bootstrap_waiting_reason_distinguishes_embeddings_only() {
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -702,6 +678,9 @@ fn summaries_lane_waits_for_follow_up_sync_after_summary_bootstrap_finishes_late
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -760,6 +739,7 @@ fn summaries_lane_waits_for_follow_up_sync_after_summary_bootstrap_finishes_late
         Some(&initial_sync),
         None,
         Some(&summary_run),
+        StatusCounts::default(),
         &SessionWorkplaneStats::default(),
         None,
     );
@@ -785,6 +765,9 @@ fn summaries_lane_becomes_warning_after_failed_jobs_drain() {
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -861,6 +844,7 @@ fn summaries_lane_becomes_warning_after_failed_jobs_drain() {
         Some(&initial_sync),
         None,
         Some(&summary_run),
+        StatusCounts::default(),
         &stats,
         Some(InitRuntimeLaneProgressView {
             completed: 277,
@@ -884,6 +868,9 @@ fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -942,6 +929,7 @@ fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
         Some(&initial_sync),
         None,
         Some(&summary_run),
+        StatusCounts::default(),
         &SessionWorkplaneStats::default(),
         Some(InitRuntimeLaneProgressView {
             completed: 272,
@@ -971,6 +959,9 @@ fn summary_follow_up_can_start_before_embeddings_bootstrap_finishes() {
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -1075,6 +1066,9 @@ fn embeddings_can_trigger_a_second_follow_up_after_summary_follow_up_completes()
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
             ingest_backfill: None,
             embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
                 config_path: PathBuf::from("/tmp/config-1/config.toml"),
@@ -1171,7 +1165,7 @@ fn embeddings_can_trigger_a_second_follow_up_after_summary_follow_up_completes()
 }
 
 #[test]
-fn top_pipeline_lane_reports_failed_sync_task() {
+fn sync_lane_reports_failed_sync_task() {
     let session = InitSessionRecord {
         init_session_id: "init-session-1".to_string(),
         repo_id: "repo-1".to_string(),
@@ -1180,6 +1174,9 @@ fn top_pipeline_lane_reports_failed_sync_task() {
         selections: StartInitSessionSelections {
             run_sync: true,
             run_ingest: false,
+            run_code_embeddings: false,
+            run_summaries: false,
+            run_summary_embeddings: false,
             ingest_backfill: None,
             embeddings_bootstrap: None,
             summaries_bootstrap: None,
@@ -1228,13 +1225,7 @@ fn top_pipeline_lane_reports_failed_sync_task() {
         result: None,
     };
 
-    let lane = derive_top_pipeline_lane(
-        &session,
-        Some(&sync_task),
-        None,
-        None,
-        StatusCounts::default(),
-    );
+    let lane = derive_sync_lane(&session, Some(&sync_task), None, StatusCounts::default());
 
     assert_eq!(lane.status, "failed");
     assert_eq!(lane.waiting_reason.as_deref(), Some("failed"));

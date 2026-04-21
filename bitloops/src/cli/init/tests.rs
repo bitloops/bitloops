@@ -387,14 +387,19 @@ struct RuntimeSessionSnapshotFixture {
     run_ingest: bool,
     embeddings_selected: bool,
     summaries_selected: bool,
+    summary_embeddings_selected: bool,
     terminal_error: Option<&'static str>,
     top_lane_status: &'static str,
     top_lane_waiting_reason: Option<&'static str>,
     top_lane_detail: Option<&'static str>,
+    ingest_lane_status: Option<&'static str>,
+    ingest_lane_waiting_reason: Option<&'static str>,
     embeddings_lane_status: &'static str,
     embeddings_lane_waiting_reason: Option<&'static str>,
     summaries_lane_status: &'static str,
     summaries_lane_waiting_reason: Option<&'static str>,
+    summary_embeddings_lane_status: Option<&'static str>,
+    summary_embeddings_lane_waiting_reason: Option<&'static str>,
 }
 
 impl Default for RuntimeSessionSnapshotFixture {
@@ -407,14 +412,19 @@ impl Default for RuntimeSessionSnapshotFixture {
             run_ingest: false,
             embeddings_selected: false,
             summaries_selected: false,
+            summary_embeddings_selected: false,
             terminal_error: None,
             top_lane_status: "SKIPPED",
             top_lane_waiting_reason: None,
             top_lane_detail: None,
+            ingest_lane_status: None,
+            ingest_lane_waiting_reason: None,
             embeddings_lane_status: "SKIPPED",
             embeddings_lane_waiting_reason: None,
             summaries_lane_status: "SKIPPED",
             summaries_lane_waiting_reason: None,
+            summary_embeddings_lane_status: None,
+            summary_embeddings_lane_waiting_reason: None,
         }
     }
 }
@@ -432,6 +442,21 @@ fn runtime_snapshot_json(
     session_id: &str,
     fixture: RuntimeSessionSnapshotFixture,
 ) -> serde_json::Value {
+    let summary_embeddings_selected = fixture.summary_embeddings_selected
+        || (fixture.embeddings_selected && fixture.summaries_selected);
+    let ingest_lane_status = fixture.ingest_lane_status.unwrap_or(if fixture.run_ingest {
+        fixture.top_lane_status
+    } else {
+        "SKIPPED"
+    });
+    let summary_embeddings_lane_status =
+        fixture
+            .summary_embeddings_lane_status
+            .unwrap_or(if summary_embeddings_selected {
+                fixture.embeddings_lane_status
+            } else {
+                "SKIPPED"
+            });
     json!({
         "runtimeSnapshot": {
             "repoId": repo_id,
@@ -477,13 +502,14 @@ fn runtime_snapshot_json(
                 "runIngest": fixture.run_ingest,
                 "embeddingsSelected": fixture.embeddings_selected,
                 "summariesSelected": fixture.summaries_selected,
+                "summaryEmbeddingsSelected": summary_embeddings_selected,
                 "initialSyncTaskId": serde_json::Value::Null,
                 "ingestTaskId": serde_json::Value::Null,
                 "followUpSyncTaskId": serde_json::Value::Null,
                 "embeddingsBootstrapTaskId": serde_json::Value::Null,
-                "summaryBootstrapRunId": serde_json::Value::Null,
+                "summaryBootstrapTaskId": serde_json::Value::Null,
                 "terminalError": fixture.terminal_error,
-                "topPipelineLane": {
+                "syncLane": {
                     "status": fixture.top_lane_status,
                     "waitingReason": fixture.top_lane_waiting_reason,
                     "detail": fixture.top_lane_detail,
@@ -494,7 +520,18 @@ fn runtime_snapshot_json(
                     "failedCount": 0,
                     "completedCount": if fixture.top_lane_status.eq_ignore_ascii_case("completed") { 1 } else { 0 }
                 },
-                "embeddingsLane": {
+                "ingestLane": {
+                    "status": ingest_lane_status,
+                    "waitingReason": fixture.ingest_lane_waiting_reason,
+                    "detail": serde_json::Value::Null,
+                    "taskId": serde_json::Value::Null,
+                    "runId": serde_json::Value::Null,
+                    "pendingCount": 0,
+                    "runningCount": 0,
+                    "failedCount": 0,
+                    "completedCount": if ingest_lane_status.eq_ignore_ascii_case("completed") { 1 } else { 0 }
+                },
+                "codeEmbeddingsLane": {
                     "status": fixture.embeddings_lane_status,
                     "waitingReason": fixture.embeddings_lane_waiting_reason,
                     "detail": serde_json::Value::Null,
@@ -515,6 +552,17 @@ fn runtime_snapshot_json(
                     "runningCount": 0,
                     "failedCount": 0,
                     "completedCount": if fixture.summaries_lane_status.eq_ignore_ascii_case("completed") { 1 } else { 0 }
+                },
+                "summaryEmbeddingsLane": {
+                    "status": summary_embeddings_lane_status,
+                    "waitingReason": fixture.summary_embeddings_lane_waiting_reason.or(fixture.embeddings_lane_waiting_reason),
+                    "detail": serde_json::Value::Null,
+                    "taskId": serde_json::Value::Null,
+                    "runId": serde_json::Value::Null,
+                    "pendingCount": 0,
+                    "runningCount": 0,
+                    "failedCount": 0,
+                    "completedCount": if summary_embeddings_lane_status.eq_ignore_ascii_case("completed") { 1 } else { 0 }
                 }
             }
         }
@@ -2338,7 +2386,7 @@ fn run_init_with_install_default_daemon_shows_mkcert_notice_before_live_progress
     let notice =
         "Notice: local dashboard HTTPS is unavailable because `mkcert` is not on your PATH.";
     let progress_url = "  • View progress: http://127.0.0.1:5667";
-    let live_progress = "Live progress";
+    let live_progress = "Live Progress";
 
     assert!(
         rendered.contains(progress_url),
@@ -2612,6 +2660,18 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             json!(false)
                                                                         );
                                                                         assert_eq!(
+                                                                            variables["input"]["runCodeEmbeddings"],
+                                                                            json!(false)
+                                                                        );
+                                                                        assert_eq!(
+                                                                            variables["input"]["runSummaries"],
+                                                                            json!(false)
+                                                                        );
+                                                                        assert_eq!(
+                                                                            variables["input"]["runSummaryEmbeddings"],
+                                                                            json!(false)
+                                                                        );
+                                                                        assert_eq!(
                                                                             variables["input"]["embeddingsBootstrap"]["profileName"],
                                                                             json!("local_code")
                                                                         );
@@ -2632,10 +2692,6 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             session_id,
                                                                             RuntimeSessionSnapshotFixture {
                                                                                 status: "COMPLETED",
-                                                                                embeddings_selected: true,
-                                                                                summaries_selected: true,
-                                                                                embeddings_lane_status: "COMPLETED",
-                                                                                summaries_lane_status: "COMPLETED",
                                                                                 ..RuntimeSessionSnapshotFixture::default()
                                                                             },
                                                                         ));
@@ -2647,7 +2703,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                             || {
                                                                 let mut out = Vec::new();
                                                                 let mut input =
-                                                                    Cursor::new("2\n\n");
+                                                                    Cursor::new("3\n\n");
                                                                 let select = |_items: &[String],
                                                                               enable_bitloops_skill: bool| {
                                                                     Ok(InitAgentSelection {
@@ -2689,20 +2745,23 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                 let rendered =
                                                                     String::from_utf8(out)
                                                                         .expect("utf8 output");
+                                                                assert!(!rendered.contains(
+                                                                    "Sign in to Bitloops"
+                                                                ));
                                                                 assert!(rendered.contains(
                                                                     "Configure semantic summaries"
                                                                 ));
                                                                 assert!(rendered.contains(
-                                                                    "1. Bitloops Cloud (recommended)"
+                                                                    "1. Skip for now (recommended)"
                                                                 ));
                                                                 assert!(
                                                                     rendered.contains(
-                                                                        "2. Local (Ollama)"
+                                                                        "2. Bitloops Cloud (limited availability)"
                                                                     )
                                                                 );
                                                                 assert!(
                                                                     rendered.contains(
-                                                                        "3. Skip for now"
+                                                                        "3. Local (Ollama)"
                                                                     )
                                                                 );
                                                                 assert!(
@@ -2788,6 +2847,18 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                         assert_eq!(variables["input"]["runSync"], json!(false));
                                         assert_eq!(variables["input"]["runIngest"], json!(false));
                                         assert_eq!(
+                                            variables["input"]["runCodeEmbeddings"],
+                                            json!(false)
+                                        );
+                                        assert_eq!(
+                                            variables["input"]["runSummaries"],
+                                            json!(false)
+                                        );
+                                        assert_eq!(
+                                            variables["input"]["runSummaryEmbeddings"],
+                                            json!(false)
+                                        );
+                                        assert_eq!(
                                             variables["input"]["embeddingsBootstrap"]["profileName"],
                                             json!("local_code")
                                         );
@@ -2803,8 +2874,6 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                             repo_id.as_str(),
                                             session_id,
                                             RuntimeSessionSnapshotFixture {
-                                                embeddings_selected: true,
-                                                embeddings_lane_status: "COMPLETED",
                                                 status: "COMPLETED",
                                                 ..RuntimeSessionSnapshotFixture::default()
                                             },
@@ -2858,10 +2927,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                 assert!(!rendered.contains("Embeddings bootstrap phase:"));
                                 assert!(rendered.contains("✓ Setup complete"));
                                 assert!(rendered.contains(
-                                    "Bitloops is now building your project's Intelligence Layer in the background."
+                                    "Bitloops is now continuing the setup you selected in the background."
                                 ));
-                                assert!(rendered.contains("Live progress"));
-                                assert!(rendered.contains("Embeddings"));
+                                assert!(rendered.contains("Live Progress"));
+                                assert!(rendered.contains("Preparing the embeddings runtime"));
                                 let config = std::fs::read_to_string(
                                     repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
                                 )
@@ -3133,6 +3202,18 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                     if query.contains("startInit(") {
                                                         assert_eq!(variables["repoId"], repo_id);
                                                         assert_eq!(
+                                                            variables["input"]["runCodeEmbeddings"],
+                                                            json!(false)
+                                                        );
+                                                        assert_eq!(
+                                                            variables["input"]["runSummaries"],
+                                                            json!(false)
+                                                        );
+                                                        assert_eq!(
+                                                            variables["input"]["runSummaryEmbeddings"],
+                                                            json!(false)
+                                                        );
+                                                        assert_eq!(
                                                             variables["input"]["embeddingsBootstrap"]
                                                                 ["profileName"],
                                                             json!("platform_code")
@@ -3171,9 +3252,6 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                             session_id,
                                                             RuntimeSessionSnapshotFixture {
                                                                 status: "COMPLETED",
-                                                                embeddings_selected: true,
-                                                                embeddings_lane_status: "COMPLETED",
-                                                                top_lane_status: "COMPLETED",
                                                                 ..RuntimeSessionSnapshotFixture::default()
                                                             },
                                                         ));
@@ -3184,7 +3262,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                             },
                                             || {
                                                 let mut out = Vec::new();
-                                                let mut input = Cursor::new("1\n3\n\n");
+                                                let mut input = Cursor::new("1\n1\n");
                                                 let runtime = test_runtime();
                                                 runtime
                                                     .block_on(run_with_io_async_for_project_root(
@@ -3214,6 +3292,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                         None,
                                                     ))
                                                     .expect("run init with cloud embeddings");
+                                                std::mem::forget(runtime);
 
                                                 let rendered =
                                                     String::from_utf8(out).expect("utf8 output");
@@ -3291,6 +3370,18 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                 if query.contains("startInit(") {
                                                     assert_eq!(variables["repoId"], repo_id);
                                                     assert_eq!(
+                                                        variables["input"]["runCodeEmbeddings"],
+                                                        json!(false)
+                                                    );
+                                                    assert_eq!(
+                                                        variables["input"]["runSummaries"],
+                                                        json!(false)
+                                                    );
+                                                    assert_eq!(
+                                                        variables["input"]["runSummaryEmbeddings"],
+                                                        json!(false)
+                                                    );
+                                                    assert_eq!(
                                                         variables["input"]["embeddingsBootstrap"]["profileName"],
                                                         json!("platform_code")
                                                     );
@@ -3321,9 +3412,6 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                         session_id,
                                                         RuntimeSessionSnapshotFixture {
                                                             status: "COMPLETED",
-                                                            embeddings_selected: true,
-                                                            embeddings_lane_status: "COMPLETED",
-                                                            top_lane_status: "COMPLETED",
                                                             ..RuntimeSessionSnapshotFixture::default(
                                                             )
                                                         },
@@ -3335,7 +3423,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                         },
                                         || {
                                             let mut out = Vec::new();
-                                            let mut input = Cursor::new("1\n3\n\n");
+                                            let mut input = Cursor::new("1\n1\n");
                                             let runtime = test_runtime();
                                             runtime
                                                 .block_on(run_with_io_async_for_project_root(
@@ -3367,6 +3455,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                 .expect(
                                                     "cloud embeddings without a gateway override should succeed",
                                                 );
+                                            std::mem::forget(runtime);
                                             let rendered =
                                                 String::from_utf8(out).expect("utf8 output");
                                             assert!(rendered.contains("Embeddings"));
@@ -3432,6 +3521,18 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                     json!(true)
                                                 );
                                                 assert_eq!(
+                                                    variables["input"]["runCodeEmbeddings"],
+                                                    json!(true)
+                                                );
+                                                assert_eq!(
+                                                    variables["input"]["runSummaries"],
+                                                    json!(true)
+                                                );
+                                                assert_eq!(
+                                                    variables["input"]["runSummaryEmbeddings"],
+                                                    json!(true)
+                                                );
+                                                assert_eq!(
                                                     variables["input"]["ingestBackfill"],
                                                     json!(50)
                                                 );
@@ -3454,8 +3555,14 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                         run_sync: true,
                                                         run_ingest: true,
                                                         embeddings_selected: true,
+                                                        summaries_selected: true,
+                                                        summary_embeddings_selected: true,
                                                         top_lane_status: "COMPLETED",
                                                         embeddings_lane_status: "COMPLETED",
+                                                        summaries_lane_status: "COMPLETED",
+                                                        summary_embeddings_lane_status: Some(
+                                                            "COMPLETED",
+                                                        ),
                                                         ..RuntimeSessionSnapshotFixture::default()
                                                     },
                                                 ));
@@ -3499,9 +3606,9 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                         let rendered = strip_ansi_escape_sequences(&rendered);
                                         assert!(rendered.contains("✓ Setup complete"));
                                         assert!(rendered.contains(
-                                            "Bitloops is now building your project's Intelligence Layer in the background."
+                                            "Bitloops is now continuing the setup you selected in the background."
                                         ));
-                                        assert!(rendered.contains("Live progress"));
+                                        assert!(rendered.contains("Live Progress"));
                                         assert!(rendered.contains(
                                             "This may take a few minutes depending on your codebase size."
                                         ));
@@ -4428,6 +4535,15 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                     assert_eq!(variables["repoId"], repo_id);
                                     assert_eq!(variables["input"]["runSync"], json!(false));
                                     assert_eq!(variables["input"]["runIngest"], json!(true));
+                                    assert_eq!(
+                                        variables["input"]["runCodeEmbeddings"],
+                                        json!(false)
+                                    );
+                                    assert_eq!(variables["input"]["runSummaries"], json!(false));
+                                    assert_eq!(
+                                        variables["input"]["runSummaryEmbeddings"],
+                                        json!(false)
+                                    );
                                     assert_eq!(variables["input"]["ingestBackfill"], json!(50));
                                     assert_eq!(
                                         variables["input"]["embeddingsBootstrap"],
@@ -4553,6 +4669,18 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             assert_eq!(variables["repoId"], repo_id);
                                             assert_eq!(variables["input"]["runSync"], json!(false));
                                             assert_eq!(variables["input"]["runIngest"], json!(true));
+                                            assert_eq!(
+                                                variables["input"]["runCodeEmbeddings"],
+                                                json!(false)
+                                            );
+                                            assert_eq!(
+                                                variables["input"]["runSummaries"],
+                                                json!(false)
+                                            );
+                                            assert_eq!(
+                                                variables["input"]["runSummaryEmbeddings"],
+                                                json!(false)
+                                            );
                                             assert_eq!(
                                                 variables["input"]["ingestBackfill"],
                                                 json!(10)
