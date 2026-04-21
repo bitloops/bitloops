@@ -85,6 +85,9 @@ bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { dep
 # Discover the exact row fields for the chosen stage
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { schema } } }'
 
+# Concrete tests that directly target the selected artefact
+bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { tests { summary items(first: 20) { artefact { name filePath startLine endLine } coveringTests { testName suiteName filePath startLine endLine } } } } }'
+
 # use sparingly to see the whole schema
 bitloops devql schema
 ```

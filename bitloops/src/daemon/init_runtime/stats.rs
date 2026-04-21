@@ -99,12 +99,6 @@ impl SessionWorkplaneStats {
         ]);
     }
 
-    pub(crate) fn warning_failed_jobs_total(&self) -> u64 {
-        self.code_embedding_jobs.counts.failed
-            + self.summary_embedding_jobs.counts.failed
-            + self.summary_refresh_jobs.counts.failed
-    }
-
     pub(crate) fn summary_warnings(&self) -> Vec<InitRuntimeLaneWarningView> {
         mailbox_warning(
             SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
