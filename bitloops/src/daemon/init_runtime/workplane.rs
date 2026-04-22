@@ -5,7 +5,8 @@ use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::enrichment::worker_count::configured_enrichment_worker_budgets_for_repo;
 use crate::daemon::types::BlockedMailboxStatus;
@@ -56,6 +57,9 @@ pub(crate) fn workplane_snapshot_from_mailboxes(
     let code_embedding_mailbox = snapshot_mailboxes
         .iter()
         .find(|mailbox| mailbox.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX);
+    let identity_embedding_mailbox = snapshot_mailboxes
+        .iter()
+        .find(|mailbox| mailbox.mailbox_name == SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX);
     let summary_embedding_mailbox = snapshot_mailboxes
         .iter()
         .find(|mailbox| mailbox.mailbox_name == SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX);
@@ -90,30 +94,45 @@ pub(crate) fn workplane_snapshot_from_mailboxes(
             active_workers: code_embedding_mailbox
                 .map(|mailbox| mailbox.running_jobs)
                 .unwrap_or_default()
+                + identity_embedding_mailbox
+                    .map(|mailbox| mailbox.running_jobs)
+                    .unwrap_or_default()
                 + summary_embedding_mailbox
                     .map(|mailbox| mailbox.running_jobs)
                     .unwrap_or_default(),
             pending_jobs: code_embedding_mailbox
                 .map(|mailbox| mailbox.pending_jobs)
                 .unwrap_or_default()
+                + identity_embedding_mailbox
+                    .map(|mailbox| mailbox.pending_jobs)
+                    .unwrap_or_default()
                 + summary_embedding_mailbox
                     .map(|mailbox| mailbox.pending_jobs)
                     .unwrap_or_default(),
             running_jobs: code_embedding_mailbox
                 .map(|mailbox| mailbox.running_jobs)
                 .unwrap_or_default()
+                + identity_embedding_mailbox
+                    .map(|mailbox| mailbox.running_jobs)
+                    .unwrap_or_default()
                 + summary_embedding_mailbox
                     .map(|mailbox| mailbox.running_jobs)
                     .unwrap_or_default(),
             failed_jobs: code_embedding_mailbox
                 .map(|mailbox| mailbox.failed_jobs)
                 .unwrap_or_default()
+                + identity_embedding_mailbox
+                    .map(|mailbox| mailbox.failed_jobs)
+                    .unwrap_or_default()
                 + summary_embedding_mailbox
                     .map(|mailbox| mailbox.failed_jobs)
                     .unwrap_or_default(),
             completed_recent_jobs: code_embedding_mailbox
                 .map(|mailbox| mailbox.completed_recent_jobs)
                 .unwrap_or_default()
+                + identity_embedding_mailbox
+                    .map(|mailbox| mailbox.completed_recent_jobs)
+                    .unwrap_or_default()
                 + summary_embedding_mailbox
                     .map(|mailbox| mailbox.completed_recent_jobs)
                     .unwrap_or_default(),

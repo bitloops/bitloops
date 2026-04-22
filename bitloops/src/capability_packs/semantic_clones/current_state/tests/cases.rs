@@ -11,7 +11,7 @@ use crate::host::capability_host::{
 
 use super::super::super::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use super::super::consumer::SemanticClonesCurrentStateConsumer;
 use super::support::{
@@ -116,12 +116,14 @@ async fn reconcile_delta_clears_paths_and_enqueues_expected_jobs() -> Result<()>
         vec![
             SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
             SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
         ]
     );
     assert_eq!(metrics["affected_paths"], json!(1));
     assert_eq!(metrics["cleared_paths"], json!(1));
     assert_eq!(metrics["enqueued_summary_jobs"], json!(1));
     assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(1));
+    assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(1));
     assert_eq!(metrics["enqueued_summary_embedding_jobs"], json!(0));
     assert_eq!(metrics["enqueued_clone_rebuild"], json!(0));
     assert_eq!(metrics["reconcile_mode"], json!("merged_delta"));
@@ -272,6 +274,7 @@ async fn reconcile_full_reconcile_enqueues_repo_backfill_jobs() -> Result<()> {
         vec![
             SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
             SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
             SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
         ]
     );
@@ -296,14 +299,15 @@ async fn reconcile_full_reconcile_enqueues_repo_backfill_jobs() -> Result<()> {
     );
     assert_eq!(
         crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
-            &jobs[2].payload,
-            jobs[2].mailbox_name.as_str(),
+            &jobs[3].payload,
+            jobs[3].mailbox_name.as_str(),
         ),
         1,
         "clone rebuild remains a single logical work item",
     );
     assert_eq!(metrics["enqueued_summary_jobs"], json!(1));
     assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(1));
+    assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(1));
     assert_eq!(metrics["enqueued_summary_embedding_jobs"], json!(0));
     assert_eq!(metrics["enqueued_clone_rebuild"], json!(1));
     assert_eq!(metrics["reconcile_mode"], json!("full_reconcile"));
@@ -346,9 +350,14 @@ async fn reconcile_full_reconcile_chunks_backfill_jobs_for_parallel_mailbox_work
         .iter()
         .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX)
         .collect::<Vec<_>>();
+    let identity_jobs = jobs
+        .iter()
+        .filter(|job| job.mailbox_name == SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX)
+        .collect::<Vec<_>>();
 
     assert_eq!(summary_jobs.len(), 2);
     assert_eq!(code_jobs.len(), 2);
+    assert_eq!(identity_jobs.len(), 2);
     assert_eq!(
         jobs.iter()
             .filter(|job| job.mailbox_name == SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
@@ -379,6 +388,18 @@ async fn reconcile_full_reconcile_chunks_backfill_jobs_for_parallel_mailbox_work
             .sum::<u64>(),
         55
     );
+    assert_eq!(
+        identity_jobs
+            .iter()
+            .map(|job| {
+                crate::capability_packs::semantic_clones::workplane::payload_work_item_count(
+                    &job.payload,
+                    job.mailbox_name.as_str(),
+                )
+            })
+            .sum::<u64>(),
+        55
+    );
     assert!(summary_jobs.iter().all(|job| {
         crate::capability_packs::semantic_clones::workplane::payload_repo_backfill_artefact_ids(
             &job.payload,
@@ -387,6 +408,7 @@ async fn reconcile_full_reconcile_chunks_backfill_jobs_for_parallel_mailbox_work
     }));
     assert_eq!(metrics["enqueued_summary_jobs"], json!(2));
     assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(2));
+    assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(2));
     assert_eq!(metrics["enqueued_clone_rebuild"], json!(1));
     Ok(())
 }

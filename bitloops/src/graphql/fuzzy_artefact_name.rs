@@ -37,7 +37,10 @@ pub(crate) fn select_fuzzy_named_artefacts(query: &str, artefacts: Vec<Artefact>
             .then_with(|| left.artefact.id.as_str().cmp(right.artefact.id.as_str()))
     });
     ranked.truncate(DEFAULT_RESULT_LIMIT);
-    ranked.into_iter().map(|match_| match_.artefact).collect()
+    ranked
+        .into_iter()
+        .map(|candidate| candidate.artefact.with_score(candidate.score as f64))
+        .collect()
 }
 
 fn candidate_name_from_artefact(artefact: &Artefact) -> Option<String> {
@@ -254,6 +257,7 @@ mod tests {
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-20T09:00:00Z")
                 .expect("valid timestamp"),
+            score: None,
             scope: ResolverScope::default(),
         }
     }

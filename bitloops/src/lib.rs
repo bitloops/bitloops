@@ -15,6 +15,7 @@ pub(crate) mod runtime_presentation;
 pub mod storage;
 pub mod telemetry;
 pub mod utils;
+pub(crate) mod vector_search;
 
 #[cfg(test)]
 pub(crate) mod test_support;

@@ -647,6 +647,301 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
     }
 }
 
+pub(super) fn seed_graphql_semantic_query_inputs(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open semantic query sqlite");
+    let setup = crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
+        crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+        "semantic-query-test-model",
+        3,
+    );
+
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS semantic_embedding_setups (
+    setup_fingerprint TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
+    artefact_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    representation_kind TEXT NOT NULL DEFAULT 'code',
+    setup_fingerprint TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
+    repo_id TEXT NOT NULL,
+    representation_kind TEXT NOT NULL DEFAULT 'code',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    setup_fingerprint TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (repo_id, representation_kind)
+);
+"#,
+    )
+    .expect("initialise semantic query embedding tables");
+    conn.execute(
+        "INSERT OR REPLACE INTO semantic_embedding_setups (
+            setup_fingerprint, provider, model, dimension
+        ) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            setup.setup_fingerprint,
+            setup.provider,
+            setup.model,
+            i64::try_from(setup.dimension).expect("setup dimension fits in i64"),
+        ],
+    )
+    .expect("insert semantic query setup");
+    conn.execute(
+        "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
+            repo_id, representation_kind, provider, model, dimension, setup_fingerprint
+        ) VALUES (?1, 'identity', ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            repo_id.as_str(),
+            crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+            "semantic-query-test-model",
+            3,
+            setup.setup_fingerprint,
+        ],
+    )
+    .expect("insert semantic query active setup");
+
+    for (artefact_id, path, content_id, symbol_id, input_hash, embedding) in [
+        (
+            "artefact::api-caller",
+            "packages/api/src/caller.ts",
+            "blob-api-caller",
+            "sym::api-caller",
+            "semantic-query-hash-api-caller-identity",
+            "[0.0,-1.0,0.0]",
+        ),
+        (
+            "artefact::api-target",
+            "packages/api/src/target.ts",
+            "blob-api-target",
+            "sym::api-target",
+            "semantic-query-hash-api-target-identity",
+            "[0.0,0.0,-1.0]",
+        ),
+        (
+            "artefact::web-render",
+            "packages/web/src/page.ts",
+            "blob-web-page",
+            "sym::web-render",
+            "semantic-query-hash-web-render-identity",
+            "[0.0,0.0,1.0]",
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'identity', ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                path,
+                content_id,
+                symbol_id,
+                setup.setup_fingerprint,
+                crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+                "semantic-query-test-model",
+                3,
+                input_hash,
+                embedding,
+            ],
+        )
+        .expect("insert semantic query identity embedding row");
+    }
+}
+
+#[cfg(unix)]
+fn fake_semantic_query_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-semantic-query-runtime.sh");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake semantic query runtime dir");
+    }
+    fs::write(
+        &script_path,
+        r#"#!/bin/sh
+printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
+while IFS= read -r line; do
+  req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"embed"'*'"texts":["build response payload"]'*)
+      vector='[[1.0,0.0,0.0]]'
+      ;;
+    *'"cmd":"embed"'*'"texts":["render payload fragment"]'*)
+      vector='[[0.0,1.0,0.0]]'
+      ;;
+    *'"cmd":"embed"'*'"texts":["caller in caller ts"]'*)
+      vector='[[0.0,-1.0,0.0]]'
+      ;;
+    *'"cmd":"embed"'*'"texts":["render in page ts"]'*)
+      vector='[[0.0,0.0,1.0]]'
+      ;;
+    *'"cmd":"embed"'*)
+      vector='[[-1.0,0.0,0.0]]'
+      ;;
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true,"model":"semantic-query-test-model"}\n' "$req_id"
+      exit 0
+      ;;
+    *)
+      printf '{"id":"%s","ok":false,"error":{"message":"unexpected request"}}\n' "$req_id"
+      continue
+      ;;
+  esac
+  printf '{"id":"%s","ok":true,"vectors":%s,"model":"semantic-query-test-model"}\n' "$req_id" "$vector"
+done
+"#,
+    )
+    .expect("write fake semantic query runtime script");
+    let mut permissions = fs::metadata(&script_path)
+        .expect("stat fake semantic query runtime script")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions)
+        .expect("chmod fake semantic query runtime script");
+    (
+        "/bin/sh".to_string(),
+        vec![script_path.to_string_lossy().into_owned()],
+    )
+}
+
+#[cfg(windows)]
+fn fake_semantic_query_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
+    let script_path = repo_root.join(".bitloops/test-bin/fake-semantic-query-runtime.ps1");
+    if let Some(parent) = script_path.parent() {
+        fs::create_dir_all(parent).expect("create fake semantic query runtime dir");
+    }
+    fs::write(
+        &script_path,
+        r#"
+$ready = @{ event = "ready"; protocol = 1; capabilities = @("embed", "shutdown") }
+$ready | ConvertTo-Json -Compress
+while (($line = [Console]::In.ReadLine()) -ne $null) {
+  if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  $request = $line | ConvertFrom-Json
+  switch ($request.cmd) {
+    "embed" {
+      $text = $request.texts[0]
+      if ($text -eq "build response payload") {
+        $vector = @(@(1.0, 0.0, 0.0))
+      } elseif ($text -eq "render payload fragment") {
+        $vector = @(@(0.0, 1.0, 0.0))
+      } elseif ($text -eq "caller in caller ts") {
+        $vector = @(@(0.0, -1.0, 0.0))
+      } elseif ($text -eq "render in page ts") {
+        $vector = @(@(0.0, 0.0, 1.0))
+      } else {
+        $vector = @(@(-1.0, 0.0, 0.0))
+      }
+      $response = @{
+        id = $request.id
+        ok = $true
+        vectors = $vector
+        model = "semantic-query-test-model"
+      }
+      $response | ConvertTo-Json -Compress
+    }
+    "shutdown" {
+      $response = @{
+        id = $request.id
+        ok = $true
+        model = "semantic-query-test-model"
+      }
+      $response | ConvertTo-Json -Compress
+      exit 0
+    }
+    default {
+      $response = @{
+        id = $request.id
+        ok = $false
+        error = @{ message = "unexpected request" }
+      }
+      $response | ConvertTo-Json -Compress
+    }
+  }
+}
+"#,
+    )
+    .expect("write fake semantic query runtime script");
+    (
+        "powershell".to_string(),
+        vec![
+            "-NoProfile".to_string(),
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script_path.to_string_lossy().into_owned(),
+        ],
+    )
+}
+
+pub(super) fn configure_graphql_semantic_query_runtime(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let (command, args) = fake_semantic_query_runtime_command_and_args(repo_root);
+    let runtime_args = args
+        .iter()
+        .map(|arg| serde_json::Value::String(arg.clone()))
+        .collect::<Vec<_>>();
+    write_envelope_config(
+        repo_root,
+        json!({
+            "stores": {
+                "relational": {
+                    "sqlite_path": sqlite_path.to_string_lossy()
+                }
+            },
+            "semantic_clones": {
+                "summary_mode": "off",
+                "embedding_mode": "deterministic",
+                "inference": {
+                    "code_embeddings": "semantic_query_test"
+                }
+            },
+            "inference": {
+                "runtimes": {
+                    "bitloops_local_embeddings": {
+                        "command": command,
+                        "args": runtime_args,
+                        "startup_timeout_secs": 5,
+                        "request_timeout_secs": 5
+                    }
+                },
+                "profiles": {
+                    "semantic_query_test": {
+                        "task": "embeddings",
+                        "driver": crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+                        "runtime": "bitloops_local_embeddings",
+                        "model": "semantic-query-test-model"
+                    }
+                }
+            }
+        }),
+    );
+}
+
 pub(super) fn seed_graphql_same_file_method_clone_data(repo_root: &Path) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");

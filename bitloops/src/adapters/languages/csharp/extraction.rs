@@ -5,7 +5,8 @@ use tree_sitter::Node;
 
 use super::canonical::{CSHARP_CANONICAL_MAPPINGS, CSHARP_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    CSharpKind, LanguageArtefact, LanguageKind, is_supported_language_kind, resolve_canonical_kind,
+    CSharpKind, LanguageArtefact, LanguageKind, is_supported_language_kind,
+    normalize_artefact_signature, resolve_canonical_kind,
 };
 
 struct CSharpArtefactDescriptor {
@@ -66,7 +67,7 @@ fn collect_modifiers(node: Node<'_>, content: &str) -> Vec<String> {
 
 fn first_line_of(node: Node<'_>, content: &str) -> String {
     trimmed_node_text(node, content)
-        .and_then(|text| text.lines().next().map(str::trim).map(str::to_string))
+        .and_then(|text| text.lines().next().map(normalize_artefact_signature))
         .unwrap_or_default()
 }
 

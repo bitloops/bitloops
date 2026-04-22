@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::{
-    ActiveEmbeddingRepresentationState, build_symbol_embedding_input_hash,
-    build_symbol_embedding_inputs, build_symbol_embedding_row, resolve_embedding_setup,
-    symbol_embeddings_require_reindex,
+    ActiveEmbeddingRepresentationState, EmbeddingRepresentationKind,
+    build_symbol_embedding_input_hash, build_symbol_embedding_inputs, build_symbol_embedding_row,
+    resolve_embedding_setup, symbol_embeddings_require_reindex,
 };
 use crate::capability_packs::semantic_clones::runtime_config::{
     EmbeddingProviderMode, resolve_embedding_provider, resolve_semantic_clones_config,
@@ -193,7 +193,11 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         ));
     }
 
-    let clone_rebuild_signal = if upserted_any {
+    let clone_rebuild_signal = if upserted_any
+        && matches!(
+            batch.representation_kind,
+            EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Summary
+        ) {
         Some(CapabilityWorkplaneJobInsert::new(
             SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
             None,

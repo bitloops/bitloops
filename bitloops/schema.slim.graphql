@@ -36,6 +36,7 @@ type Artefact {
 	contentHash: String
 	blobSha: String!
 	createdAt: DateTime!
+	score: Float
 	parent: Artefact
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
@@ -93,6 +94,7 @@ type ArtefactSelection {
 input ArtefactSelectorInput {
 	symbolFqn: String
 	fuzzyName: String
+	semanticQuery: String
 	path: String
 	lines: LineRangeInput
 }

@@ -61,6 +61,9 @@ impl EnrichmentCoordinator {
             EmbeddingRepresentationKind::Code => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
             }
+            EmbeddingRepresentationKind::Identity => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+            }
             EmbeddingRepresentationKind::Summary => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
             }
@@ -200,6 +203,9 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             EmbeddingRepresentationKind::Code => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
             }
+            EmbeddingRepresentationKind::Identity => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+            }
             EmbeddingRepresentationKind::Summary => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
             }
@@ -222,6 +228,9 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         let mailbox_name = match representation_kind {
             EmbeddingRepresentationKind::Code => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+            }
+            EmbeddingRepresentationKind::Identity => {
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
             }
             EmbeddingRepresentationKind::Summary => {
                 crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX

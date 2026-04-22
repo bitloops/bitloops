@@ -15,6 +15,7 @@ use super::{
 pub(crate) enum ArtefactSelectorMode {
     SymbolFqn(String),
     FuzzyName(String),
+    SemanticQuery(String),
     Path {
         path: String,
         lines: Option<LineRangeInput>,
@@ -25,6 +26,7 @@ pub(crate) enum ArtefactSelectorMode {
 pub struct ArtefactSelectorInput {
     pub symbol_fqn: Option<String>,
     pub fuzzy_name: Option<String>,
+    pub semantic_query: Option<String>,
     pub path: Option<String>,
     pub lines: Option<LineRangeInput>,
 }
@@ -46,6 +48,15 @@ impl ArtefactSelectorInput {
             Some(value) => Some(value.trim().to_string()),
             None => None,
         };
+        let semantic_query = match self.semantic_query.as_deref() {
+            Some(value) if value.trim().is_empty() => {
+                return Err(bad_user_input_error(
+                    "`selectArtefacts(by: ...)` requires a non-empty `semanticQuery`",
+                ));
+            }
+            Some(value) => Some(value.trim().to_string()),
+            None => None,
+        };
         let path = self
             .path
             .as_deref()
@@ -56,6 +67,7 @@ impl ArtefactSelectorInput {
         let path_selector_requested = path.is_some() || self.lines.is_some();
         let selector_count = usize::from(symbol_fqn.is_some())
             + usize::from(fuzzy_name.is_some())
+            + usize::from(semantic_query.is_some())
             + usize::from(path_selector_requested);
         if selector_count == 0 {
             return Err(bad_user_input_error(
@@ -64,7 +76,7 @@ impl ArtefactSelectorInput {
         }
         if selector_count > 1 {
             return Err(bad_user_input_error(
-                "`selectArtefacts(by: ...)` allows exactly one of `symbolFqn`, `fuzzyName`, or `path`/`lines`",
+                "`selectArtefacts(by: ...)` allows exactly one of `symbolFqn`, `fuzzyName`, `semanticQuery`, or `path`/`lines`",
             ));
         }
         if path_selector_requested && path.is_none() {
@@ -78,6 +90,9 @@ impl ArtefactSelectorInput {
         }
         if let Some(fuzzy_name) = fuzzy_name {
             return Ok(ArtefactSelectorMode::FuzzyName(fuzzy_name));
+        }
+        if let Some(semantic_query) = semantic_query {
+            return Ok(ArtefactSelectorMode::SemanticQuery(semantic_query));
         }
 
         let path = path.expect("selector_count ensures path selector exists");
