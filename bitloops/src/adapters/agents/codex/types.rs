@@ -139,6 +139,8 @@ pub struct CodexToolHookRaw {
     pub tool_name: String,
     pub tool_use_id: String,
     pub command: String,
+    pub tool_input: Option<Value>,
+    pub tool_response: Option<Value>,
 }
 
 pub fn parse_codex_tool_hook(raw: &str) -> Result<CodexToolHookRaw> {
@@ -199,6 +201,16 @@ pub fn parse_codex_tool_hook(raw: &str) -> Result<CodexToolHookRaw> {
             .unwrap_or_default(),
         command: first_non_empty_string(&value, &["/tool_input/command", "/toolInput/command"])
             .unwrap_or_default(),
+        tool_input: value
+            .pointer("/tool_input")
+            .cloned()
+            .or_else(|| value.pointer("/toolInput").cloned())
+            .filter(|inner| !inner.is_null()),
+        tool_response: value
+            .pointer("/tool_response")
+            .cloned()
+            .or_else(|| value.pointer("/toolResponse").cloned())
+            .filter(|inner| !inner.is_null()),
     })
 }
 

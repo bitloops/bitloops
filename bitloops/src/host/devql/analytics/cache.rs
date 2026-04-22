@@ -10,7 +10,9 @@ use tokio::sync::Mutex as AsyncMutex;
 use super::super::{DevqlConfig, RelationalStorage, duckdb_query_rows_path, esc_ch, esc_pg};
 use super::derived_tables::derive_interaction_tables;
 use super::row_access::{ignore_missing_table, row_string, sql_in_list};
-use super::source_tables::{clickhouse_rows, load_source_tables};
+use super::source_tables::{
+    clickhouse_rows, load_runtime_interaction_watermarks, load_source_tables,
+};
 use super::specs::{
     CACHE_CURRENT_FILE_STATE_SPEC, CACHE_INTERACTION_EVENTS_SPEC, CACHE_INTERACTION_SESSIONS_SPEC,
     CACHE_INTERACTION_TURNS_SPEC, CACHE_REPO_SYNC_STATE_SPEC, CACHE_REPOSITORIES_SPEC,
@@ -41,7 +43,7 @@ pub(super) async fn refresh_analytics_cache(
         .await
         .context("connecting analytics relational storage")?;
     let current_watermarks =
-        collect_source_watermarks(cfg, backends, &relational, &repo_ids).await?;
+        collect_source_watermarks(cfg, backends, &relational, repositories).await?;
     let cached_watermarks = load_cached_watermarks(&cache_path, &repo_ids).await?;
 
     let stale_repo_ids = repo_ids
@@ -333,8 +335,12 @@ async fn collect_source_watermarks(
     cfg: &DevqlConfig,
     backends: &StoreBackendConfig,
     relational: &RelationalStorage,
-    repo_ids: &[String],
+    repositories: &[AnalyticsRepository],
 ) -> Result<BTreeMap<String, RepoWatermark>> {
+    let repo_ids = repositories
+        .iter()
+        .map(|repository| repository.repo_id.clone())
+        .collect::<Vec<_>>();
     let mut watermarks = repo_ids
         .iter()
         .cloned()
@@ -347,7 +353,7 @@ async fn collect_source_watermarks(
             .query_rows(&format!(
                 "SELECT repo_id, COALESCE(last_sync_completed_at, '') AS watermark \
              FROM repo_sync_state WHERE repo_id IN ({})",
-                sql_in_list(repo_ids, esc_pg)
+                sql_in_list(&repo_ids, esc_pg)
             ))
             .await
             .or_else(ignore_missing_table)?,
@@ -360,7 +366,7 @@ async fn collect_source_watermarks(
             .query_rows(&format!(
                 "SELECT repo_id, COALESCE(MAX(last_synced_at), '') AS watermark \
              FROM current_file_state WHERE repo_id IN ({}) GROUP BY repo_id",
-                sql_in_list(repo_ids, esc_pg)
+                sql_in_list(&repo_ids, esc_pg)
             ))
             .await
             .or_else(ignore_missing_table)?,
@@ -375,7 +381,7 @@ async fn collect_source_watermarks(
                 .query_rows_remote(&format!(
                     "SELECT repo_id, COALESCE(last_sync_completed_at::text, '') AS watermark \
                      FROM repo_sync_state WHERE repo_id IN ({})",
-                    sql_in_list(repo_ids, esc_pg)
+                    sql_in_list(&repo_ids, esc_pg)
                 ))
                 .await
                 .or_else(ignore_missing_table)?,
@@ -388,7 +394,7 @@ async fn collect_source_watermarks(
                 .query_rows_remote(&format!(
                     "SELECT repo_id, COALESCE(MAX(last_synced_at), '') AS watermark \
                      FROM current_file_state WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(repo_ids, esc_pg)
+                    sql_in_list(&repo_ids, esc_pg)
                 ))
                 .await
                 .or_else(ignore_missing_table)?,
@@ -405,7 +411,7 @@ async fn collect_source_watermarks(
                 &format!(
                     "SELECT repo_id, max(updated_at) AS watermark \
                      FROM interaction_sessions WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(repo_ids, esc_ch)
+                    sql_in_list(&repo_ids, esc_ch)
                 ),
             )
             .await
@@ -420,7 +426,7 @@ async fn collect_source_watermarks(
                 &format!(
                     "SELECT repo_id, max(updated_at) AS watermark \
                      FROM interaction_turns WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(repo_ids, esc_ch)
+                    sql_in_list(&repo_ids, esc_ch)
                 ),
             )
             .await
@@ -435,7 +441,7 @@ async fn collect_source_watermarks(
                 &format!(
                     "SELECT repo_id, max(event_time) AS watermark \
                      FROM interaction_events WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(repo_ids, esc_ch)
+                    sql_in_list(&repo_ids, esc_ch)
                 ),
             )
             .await
@@ -454,7 +460,7 @@ async fn collect_source_watermarks(
                 &format!(
                     "SELECT repo_id, COALESCE(MAX(updated_at), '') AS watermark \
                      FROM interaction_sessions WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(repo_ids, esc_pg)
+                    sql_in_list(&repo_ids, esc_pg)
                 ),
             )
             .await
@@ -469,7 +475,7 @@ async fn collect_source_watermarks(
                 &format!(
                     "SELECT repo_id, COALESCE(MAX(updated_at), '') AS watermark \
                      FROM interaction_turns WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(repo_ids, esc_pg)
+                    sql_in_list(&repo_ids, esc_pg)
                 ),
             )
             .await
@@ -484,7 +490,7 @@ async fn collect_source_watermarks(
                 &format!(
                     "SELECT repo_id, COALESCE(MAX(event_time), '') AS watermark \
                      FROM interaction_events WHERE repo_id IN ({}) GROUP BY repo_id",
-                    sql_in_list(repo_ids, esc_pg)
+                    sql_in_list(&repo_ids, esc_pg)
                 ),
             )
             .await
@@ -492,6 +498,13 @@ async fn collect_source_watermarks(
             "watermark",
             false,
         );
+    }
+
+    for (repo_id, value) in load_runtime_interaction_watermarks(cfg, repositories) {
+        let entry = watermarks.entry(repo_id).or_default();
+        if value > entry.events {
+            entry.events = value;
+        }
     }
 
     Ok(watermarks)

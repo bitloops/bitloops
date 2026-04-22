@@ -1,17 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use super::super::{
     DevqlConfig, RelationalStorage, clickhouse_query_data, duckdb_query_rows_path, esc_pg,
+    sqlite_value_to_json,
 };
 use super::row_access::{ignore_missing_table, row_string, set_row_string, sql_in_list};
 use super::specs::{
-    CACHE_CURRENT_FILE_STATE_SPEC, CACHE_REPO_SYNC_STATE_SPEC, CACHE_REPOSITORIES_SPEC,
+    CACHE_CURRENT_FILE_STATE_SPEC, CACHE_INTERACTION_EVENTS_SPEC, CACHE_INTERACTION_SESSIONS_SPEC,
+    CACHE_INTERACTION_TURNS_SPEC, CACHE_REPO_SYNC_STATE_SPEC, CACHE_REPOSITORIES_SPEC,
 };
 use super::types::{AnalyticsRepository, AnalyticsSourceTables};
 use crate::config::StoreBackendConfig;
+use crate::host::interactions::db_store::SqliteInteractionSpool;
+use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 pub(super) async fn load_source_tables(
     cfg: &DevqlConfig,
@@ -108,6 +112,22 @@ pub(super) async fn load_source_tables(
                     .or_else(ignore_missing_table)?,
             )
         };
+    let runtime_overlay = load_runtime_interaction_overlay(cfg, repositories);
+    let interaction_sessions = merge_rows(
+        interaction_sessions,
+        runtime_overlay.interaction_sessions,
+        CACHE_INTERACTION_SESSIONS_SPEC.key_columns,
+    );
+    let interaction_turns = merge_rows(
+        interaction_turns,
+        runtime_overlay.interaction_turns,
+        CACHE_INTERACTION_TURNS_SPEC.key_columns,
+    );
+    let interaction_events = merge_rows(
+        interaction_events,
+        runtime_overlay.interaction_events,
+        CACHE_INTERACTION_EVENTS_SPEC.key_columns,
+    );
 
     Ok(AnalyticsSourceTables {
         repositories: repositories_rows,
@@ -117,6 +137,36 @@ pub(super) async fn load_source_tables(
         interaction_turns,
         interaction_events,
     })
+}
+
+#[derive(Default)]
+struct RuntimeInteractionOverlay {
+    interaction_sessions: Vec<Value>,
+    interaction_turns: Vec<Value>,
+    interaction_events: Vec<Value>,
+}
+
+pub(super) fn load_runtime_interaction_watermarks(
+    cfg: &DevqlConfig,
+    repositories: &[AnalyticsRepository],
+) -> BTreeMap<String, String> {
+    let mut watermarks = BTreeMap::new();
+    for repository in repositories {
+        let Some(spool) = open_runtime_spool(cfg, repository) else {
+            continue;
+        };
+        let repo_ids = vec![repository.repo_id.clone()];
+        let rows = query_runtime_spool_rows(&spool, &runtime_interaction_watermark_sql(&repo_ids))
+            .unwrap_or_default();
+        let watermark = rows
+            .first()
+            .map(|row| row_string(row, "watermark"))
+            .unwrap_or_default();
+        if !watermark.is_empty() {
+            watermarks.insert(repository.repo_id.clone(), watermark);
+        }
+    }
+    watermarks
 }
 
 pub(super) fn ensure_repository_catalog_rows(
@@ -207,6 +257,112 @@ fn local_repositories_sql(repo_ids: &[String]) -> String {
          LEFT JOIN repo_sync_state AS s ON s.repo_id = r.repo_id \
          WHERE r.repo_id IN ({})",
         sql_in_list(repo_ids, esc_pg)
+    )
+}
+
+fn load_runtime_interaction_overlay(
+    cfg: &DevqlConfig,
+    repositories: &[AnalyticsRepository],
+) -> RuntimeInteractionOverlay {
+    let mut overlay = RuntimeInteractionOverlay::default();
+    for repository in repositories {
+        let Some(spool) = open_runtime_spool(cfg, repository) else {
+            continue;
+        };
+        let repo_ids = vec![repository.repo_id.clone()];
+        overlay.interaction_sessions.extend(
+            query_runtime_spool_rows(&spool, &local_interaction_sessions_sql(&repo_ids))
+                .unwrap_or_default(),
+        );
+        overlay.interaction_turns.extend(
+            query_runtime_spool_rows(&spool, &local_interaction_turns_sql(&repo_ids))
+                .unwrap_or_default(),
+        );
+        overlay.interaction_events.extend(
+            query_runtime_spool_rows(&spool, &local_interaction_events_sql(&repo_ids))
+                .unwrap_or_default(),
+        );
+    }
+    overlay
+}
+
+fn open_runtime_spool(
+    cfg: &DevqlConfig,
+    repository: &AnalyticsRepository,
+) -> Option<SqliteInteractionSpool> {
+    let repo_root = repository_runtime_root(cfg, repository)?;
+    let store = RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, repo_root).ok()?;
+    store.interaction_spool().ok()
+}
+
+fn repository_runtime_root<'a>(
+    cfg: &'a DevqlConfig,
+    repository: &'a AnalyticsRepository,
+) -> Option<&'a std::path::Path> {
+    repository.repo_root.as_deref().or_else(|| {
+        if repository.repo_id == cfg.repo.repo_id {
+            Some(cfg.repo_root.as_path())
+        } else {
+            None
+        }
+    })
+}
+
+fn query_runtime_spool_rows(spool: &SqliteInteractionSpool, sql: &str) -> Result<Vec<Value>> {
+    spool.with_connection(|conn| sqlite_query_rows(conn, sql))
+}
+
+fn sqlite_query_rows(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<Value>> {
+    let mut stmt = conn
+        .prepare(sql)
+        .context("preparing runtime interaction spool query")?;
+    let column_names = stmt
+        .column_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<Vec<_>>();
+    let mut rows = stmt
+        .query([])
+        .context("executing runtime interaction spool query")?;
+    let mut out = Vec::new();
+
+    while let Some(row) = rows
+        .next()
+        .context("iterating runtime interaction spool rows")?
+    {
+        let mut object = serde_json::Map::new();
+        for (index, column_name) in column_names.iter().enumerate() {
+            let value = row.get_ref(index).with_context(|| {
+                format!(
+                    "reading runtime interaction spool value for column index {index} (`{column_name}`)"
+                )
+            })?;
+            object.insert(column_name.clone(), sqlite_value_to_json(value));
+        }
+        out.push(Value::Object(object));
+    }
+
+    Ok(out)
+}
+
+fn runtime_interaction_watermark_sql(repo_ids: &[String]) -> String {
+    format!(
+        "SELECT COALESCE(MAX(changed_at), '') AS watermark
+         FROM (
+            SELECT COALESCE(NULLIF(updated_at, ''), NULLIF(last_event_at, ''), NULLIF(started_at, ''), '') AS changed_at
+            FROM interaction_sessions
+            WHERE repo_id IN ({repo_ids})
+            UNION ALL
+            SELECT COALESCE(NULLIF(updated_at, ''), NULLIF(ended_at, ''), NULLIF(started_at, ''), '') AS changed_at
+            FROM interaction_turns
+            WHERE repo_id IN ({repo_ids})
+            UNION ALL
+            SELECT COALESCE(event_time, '') AS changed_at
+            FROM interaction_events
+            WHERE repo_id IN ({repo_ids})
+         ) AS runtime_changes
+         WHERE changed_at <> ''",
+        repo_ids = sql_in_list(repo_ids, esc_pg),
     )
 }
 

@@ -4,10 +4,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::super::{DevqlConfig, sqlite_query_rows_path};
+use super::super::DevqlConfig;
 use super::row_access::{is_missing_table_error, optional_row_string, row_string};
 use super::types::{AnalyticsRepoScope, AnalyticsRepository};
 use crate::config::StoreBackendConfig;
+use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 
 fn current_repository(cfg: &DevqlConfig) -> AnalyticsRepository {
     AnalyticsRepository {
@@ -62,10 +63,9 @@ async fn list_known_repositories(
     cfg: &DevqlConfig,
     backends: &StoreBackendConfig,
 ) -> Result<Vec<AnalyticsRepository>> {
-    let sqlite_path = backends
-        .relational
-        .resolve_sqlite_db_path_for_repo(&cfg.repo_root)
-        .context("resolving analytics repository catalogue SQLite path")?;
+    let relational =
+        DefaultRelationalStore::open_local_for_backend_config(&cfg.repo_root, &backends.relational)
+            .context("opening local relational store for analytics repository catalogue")?;
     let sql = "SELECT r.repo_id, \
                       COALESCE(s.repo_root, '') AS repo_root, \
                       COALESCE(r.provider, '') AS provider, \
@@ -76,7 +76,7 @@ async fn list_known_repositories(
                FROM repositories AS r \
                LEFT JOIN repo_sync_state AS s ON s.repo_id = r.repo_id \
                ORDER BY r.name ASC, r.provider ASC, r.organization ASC";
-    let rows = match sqlite_query_rows_path(&sqlite_path, sql).await {
+    let rows = match relational.query_rows(sql).await {
         Ok(rows) => rows,
         Err(err) if is_missing_table_error(&err) => Vec::new(),
         Err(err) => return Err(err).context("querying analytics repository catalogue"),

@@ -27,6 +27,7 @@ pub use handlers_session::{handle_lifecycle_session_start, handle_lifecycle_turn
 pub use handlers_tail::{
     handle_lifecycle_compaction, handle_lifecycle_session_end, handle_lifecycle_subagent_end,
     handle_lifecycle_subagent_start, handle_lifecycle_todo_checkpoint,
+    handle_lifecycle_tool_invocation, handle_lifecycle_tool_result,
 };
 pub use transcript::{create_context_file, read_and_parse_hook_input, resolve_transcript_offset};
 pub use turn_end::handle_lifecycle_turn_end;
