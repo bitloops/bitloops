@@ -245,7 +245,7 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!"));
     assert!(body.contains("search: String"));
     assert!(!body.contains("fuzzyName: String"));
-    assert!(!body.contains("semanticQuery: String"));
+    assert!(!body.contains("naturalLanguage: String"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
     assert!(!body.contains("repo(name: String!): Repository!"));
 }
