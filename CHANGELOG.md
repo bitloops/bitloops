@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Changed
 - **Bitloops-managed `using-devql` guidance now shows the zero-argument GraphQL `tests` stage and clarifies direct artefact targeting**: the shared DevQL skill/rule content now demonstrates `selectArtefacts(...){ tests { ... } }` instead of the argument-bearing `tests(linkageSource: "static_analysis")` form, trims the sample `coveringTests` payload to the most useful fields plus line spans, and clarifies that `tests` returns tests directly linked to the selected artefact so empty results remain expected for code reached only indirectly through DI wiring, helpers, or higher-level integration paths.
+- **Slim `selectArtefacts` now uses one unified `search` selector for approximate and conceptual lookup**: slim GraphQL and DevQL DSL callers now use `search` / `search:` instead of the split `fuzzyName`, `semanticQuery`, and `fuzzy_name:` selectors. Unified search returns one flat artefact list composed from up to 5 fuzzy symbol-name hits and up to 5 embedding-backed hits, keeps fuzzy matches first, dedupes overlapping artefacts, preserves optional `Artefact.score` for explicit debugging, expands embedding lookup across identity, code, and summary representations, and adds short-query fuzzy heuristics that suppress single-token false positives without regressing exact, prefix, or typo-tolerant matches.
 
 ## [0.0.18] - 2026-04-21
 

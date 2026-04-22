@@ -67,7 +67,7 @@ For the full selector contract and stage semantics, see [selectArtefacts](/guide
 
 ```graphql
 {
-  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+  selectArtefacts(by: { search: "payLater()" }) {
     artefacts(first: 10) {
       path
       symbolFqn

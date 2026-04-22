@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context as _, Result, anyhow};
 use async_graphql::Result as GraphqlResult;
@@ -13,7 +13,8 @@ use crate::capability_packs::semantic_clones::embeddings::{
 };
 use crate::capability_packs::semantic_clones::load_active_embedding_setup;
 use crate::capability_packs::semantic_clones::runtime_config::{
-    EmbeddingProviderMode, resolve_embedding_provider, resolve_semantic_clones_config,
+    EmbeddingProviderMode, embeddings_enabled, resolve_embedding_provider,
+    resolve_semantic_clones_config,
 };
 use crate::graphql::types::{Artefact, CanonicalKind, DateTimeScalar};
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
@@ -24,15 +25,19 @@ use crate::host::relational_store::DefaultRelationalStore;
 use crate::vector_search::{HnswLikeIndex, VectorSearchMode, normalized_cosine_similarity};
 
 const DEFAULT_MIN_SEMANTIC_SCORE: f32 = 0.72;
-const DEFAULT_RESULT_LIMIT: usize = 20;
+const DEFAULT_RESULT_LIMIT: usize = 5;
 const ANN_PREFILTER_MULTIPLIER: usize = 4;
 const ANN_PREFILTER_MIN_LIMIT: usize = 32;
-const SEMANTIC_QUERY_REPRESENTATION_KIND: EmbeddingRepresentationKind =
-    EmbeddingRepresentationKind::Identity;
+const SEARCH_REPRESENTATION_KINDS: [EmbeddingRepresentationKind; 3] = [
+    EmbeddingRepresentationKind::Identity,
+    EmbeddingRepresentationKind::Code,
+    EmbeddingRepresentationKind::Summary,
+];
 
 #[derive(Debug, Clone)]
 struct SemanticArtefactCandidate {
     artefact: Artefact,
+    representation_kind: EmbeddingRepresentationKind,
     embedding: Vec<f32>,
     setup: EmbeddingSetup,
 }
@@ -45,116 +50,125 @@ pub(crate) async fn select_semantic_artefacts(
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
         return Err(bad_user_input_error(
-            "`selectArtefacts(by: ...)` requires a non-empty `semanticQuery`",
+            "`selectArtefacts(by: ...)` requires a non-empty `search`",
         ));
     }
 
     let repo_id = context.repo_id_for_scope(scope).map_err(|err| {
         backend_error(format!(
-            "failed to resolve repository for semanticQuery selection: {err:#}"
+            "failed to resolve repository for search selection: {err:#}"
         ))
     })?;
     let host = context.capability_host_arc().map_err(|err| {
         backend_error(format!(
-            "failed to resolve capability host for semanticQuery selection: {err:#}"
+            "failed to resolve capability host for search selection: {err:#}"
         ))
     })?;
     let config = resolve_semantic_clones_config(&host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
+    if !embeddings_enabled(&config) {
+        return Ok(Vec::new());
+    }
     let inference = host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
-    let selection = resolve_embedding_provider(
-        &config,
-        &inference,
-        SEMANTIC_QUERY_REPRESENTATION_KIND,
-        EmbeddingProviderMode::ConfiguredStrict,
-    )
-    .map_err(|err| {
-        backend_error(format!(
-            "failed to resolve semanticQuery embeddings provider: {err:#}"
-        ))
-    })?;
-    let provider = selection.provider.ok_or_else(|| {
-        bad_user_input_error(
-            "`semanticQuery` requires configured semantic clone identity embeddings in `semantic_clones.inference.code_embeddings`",
-        )
-    })?;
-    let query_setup = resolve_embedding_setup(provider.as_ref()).map_err(|err| {
-        backend_error(format!(
-            "failed to resolve semanticQuery embedding setup: {err:#}"
-        ))
-    })?;
-    let query_embedding = provider
-        .embed(trimmed_query, EmbeddingInputType::Query)
-        .map_err(|err| backend_error(format!("failed to embed semanticQuery: {err:#}")))?;
-    if query_embedding.is_empty() {
-        return Err(backend_error(
-            "semanticQuery embedding provider returned an empty vector",
-        ));
-    }
-    if query_embedding.len() != query_setup.dimension {
-        return Err(bad_user_input_error(format!(
-            "`semanticQuery` embedding dimension {} did not match the configured setup dimension {}",
-            query_embedding.len(),
-            query_setup.dimension
-        )));
-    }
 
     let repo_root = context.repo_root_for_scope(scope).map_err(|err| {
         backend_error(format!(
-            "failed to resolve repository root for semanticQuery selection: {err:#}"
+            "failed to resolve repository root for search selection: {err:#}"
         ))
     })?;
     let relational_store =
         DefaultRelationalStore::open_local_for_repo_root(&repo_root).map_err(|err| {
             backend_error(format!(
-                "failed to open relational store for semanticQuery selection: {err:#}"
+                "failed to open relational store for search selection: {err:#}"
             ))
         })?;
     let relational = relational_store.to_local_inner();
 
-    let active_setup =
-        load_active_embedding_setup(&relational, &repo_id, SEMANTIC_QUERY_REPRESENTATION_KIND)
+    let candidates =
+        load_semantic_candidates(context, scope, &repo_id, &SEARCH_REPRESENTATION_KINDS)
             .await
             .map_err(|err| {
                 backend_error(format!(
-                    "failed to load active embedding setup for semanticQuery selection: {err:#}"
+                    "failed to load candidate artefacts for search selection: {err:#}"
                 ))
             })?;
-    if let Some(active_setup) = active_setup
-        && active_setup.setup != query_setup
-    {
-        return Err(bad_user_input_error(format!(
-            "`semanticQuery` embeddings were prepared for {} but the active inference profile resolved to {}",
-            describe_setup(&active_setup.setup),
-            describe_setup(&query_setup)
-        )));
-    }
 
-    let candidates = load_semantic_candidates(context, scope, &repo_id)
-        .await
+    let mut embedding_hits = Vec::new();
+    for representation_kind in SEARCH_REPRESENTATION_KINDS {
+        let selection = resolve_embedding_provider(
+            &config,
+            &inference,
+            representation_kind,
+            EmbeddingProviderMode::ConfiguredDegrade,
+        )
         .map_err(|err| {
             backend_error(format!(
-                "failed to load candidate artefacts for semanticQuery selection: {err:#}"
+                "failed to resolve {representation_kind} embeddings provider for search: {err:#}"
             ))
         })?;
-    let compatible_candidates =
-        compatible_candidates_for_setup(candidates, &query_setup).map_err(bad_user_input_error)?;
-    if compatible_candidates.is_empty() {
-        return Ok(Vec::new());
+        let Some(provider) = selection.provider else {
+            continue;
+        };
+        let query_setup = resolve_embedding_setup(provider.as_ref()).map_err(|err| {
+            backend_error(format!(
+                "failed to resolve {representation_kind} embedding setup for search: {err:#}"
+            ))
+        })?;
+        let active_setup =
+            load_active_embedding_setup(&relational, &repo_id, representation_kind)
+                .await
+                .map_err(|err| {
+                    backend_error(format!(
+                        "failed to load active {representation_kind} embedding setup for search: {err:#}"
+                    ))
+                })?;
+        if let Some(active_setup) = active_setup
+            && active_setup.setup != query_setup
+        {
+            continue;
+        }
+
+        let compatible_candidates = compatible_candidates_for_representation_setup(
+            &candidates,
+            representation_kind,
+            &query_setup,
+        );
+        if compatible_candidates.is_empty() {
+            continue;
+        }
+
+        let query_embedding = provider
+            .embed(trimmed_query, EmbeddingInputType::Query)
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to embed search query for {representation_kind}: {err:#}"
+                ))
+            })?;
+        if query_embedding.is_empty() {
+            return Err(backend_error(format!(
+                "{representation_kind} embedding provider returned an empty vector for search",
+            )));
+        }
+        if query_embedding.len() != query_setup.dimension {
+            continue;
+        }
+
+        embedding_hits.extend(rank_semantic_candidates(
+            &query_embedding,
+            compatible_candidates,
+            VectorSearchMode::Auto,
+            DEFAULT_MIN_SEMANTIC_SCORE,
+            DEFAULT_RESULT_LIMIT,
+        ));
     }
 
-    Ok(rank_semantic_candidates(
-        &query_embedding,
-        compatible_candidates,
-        VectorSearchMode::Auto,
-        DEFAULT_MIN_SEMANTIC_SCORE,
-        DEFAULT_RESULT_LIMIT,
-    ))
+    Ok(merge_semantic_hits(embedding_hits, DEFAULT_RESULT_LIMIT))
 }
 
 async fn load_semantic_candidates(
     context: &DevqlGraphqlContext,
     scope: &ResolverScope,
     repo_id: &str,
+    representation_kinds: &[EmbeddingRepresentationKind],
 ) -> Result<Vec<SemanticArtefactCandidate>> {
     let spec = plan_graphql_artefact_query(
         repo_id,
@@ -165,9 +179,11 @@ async fn load_semantic_candidates(
         None,
     );
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
-    let representation_clause = SEMANTIC_QUERY_REPRESENTATION_KIND
-        .storage_values()
+    let representation_clause = representation_kinds
         .iter()
+        .flat_map(|kind| kind.storage_values().iter().copied())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .map(|value| format!("'{}'", esc_pg(value)))
         .collect::<Vec<_>>()
         .join(", ");
@@ -178,6 +194,7 @@ async fn load_semantic_candidates(
                 filtered.parent_artefact_id, filtered.start_line, filtered.end_line, \
                 filtered.start_byte, filtered.end_byte, filtered.signature, filtered.modifiers, \
                 filtered.docstring, filtered.blob_sha, filtered.content_hash, filtered.created_at, \
+                se.representation_kind AS representation_kind, \
                 se.setup_fingerprint, se.provider AS embedding_provider, \
                 se.model AS embedding_model, se.dimension AS embedding_dimension, \
                 se.embedding \
@@ -196,32 +213,56 @@ async fn load_semantic_candidates(
     rows.into_iter().map(candidate_from_row).collect()
 }
 
-fn compatible_candidates_for_setup(
-    candidates: Vec<SemanticArtefactCandidate>,
+fn compatible_candidates_for_representation_setup(
+    candidates: &[SemanticArtefactCandidate],
+    representation_kind: EmbeddingRepresentationKind,
     query_setup: &EmbeddingSetup,
-) -> std::result::Result<Vec<SemanticArtefactCandidate>, String> {
-    let mut compatible = Vec::new();
-    let mut mismatched_setup = None;
+) -> Vec<SemanticArtefactCandidate> {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.representation_kind == representation_kind && candidate.setup == *query_setup
+        })
+        .cloned()
+        .collect()
+}
 
+fn merge_semantic_hits(candidates: Vec<Artefact>, result_limit: usize) -> Vec<Artefact> {
+    if candidates.is_empty() || result_limit == 0 {
+        return Vec::new();
+    }
+
+    let mut best_by_artefact_id = HashMap::new();
     for candidate in candidates {
-        if candidate.setup == *query_setup {
-            compatible.push(candidate);
-        } else if mismatched_setup.is_none() {
-            mismatched_setup = Some(candidate.setup);
+        let artefact_id = candidate.id.to_string();
+        match best_by_artefact_id.get(&artefact_id) {
+            Some(existing) if compare_scored_artefacts(existing, &candidate).is_lt() => continue,
+            _ => {
+                best_by_artefact_id.insert(artefact_id, candidate);
+            }
         }
     }
 
-    if compatible.is_empty()
-        && let Some(mismatched_setup) = mismatched_setup
-    {
-        return Err(format!(
-            "`semanticQuery` embeddings were prepared for {} but the active inference profile resolved to {}",
-            describe_setup(&mismatched_setup),
-            describe_setup(query_setup)
-        ));
-    }
+    let mut merged = best_by_artefact_id.into_values().collect::<Vec<_>>();
+    merged.sort_by(compare_scored_artefacts);
+    merged.truncate(result_limit);
+    merged
+}
 
-    Ok(compatible)
+fn compare_scored_artefacts(left: &Artefact, right: &Artefact) -> Ordering {
+    right
+        .score
+        .unwrap_or_default()
+        .partial_cmp(&left.score.unwrap_or_default())
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| left.path.cmp(&right.path))
+        .then_with(|| {
+            left.symbol_fqn
+                .as_deref()
+                .unwrap_or_default()
+                .cmp(right.symbol_fqn.as_deref().unwrap_or_default())
+        })
+        .then_with(|| left.id.as_str().cmp(right.id.as_str()))
 }
 
 fn rank_semantic_candidates(
@@ -297,6 +338,7 @@ struct RankedSemanticArtefact {
 
 fn candidate_from_row(row: Value) -> Result<SemanticArtefactCandidate> {
     let artefact = artefact_from_value(&row)?;
+    let representation_kind = representation_kind_from_row(&row)?;
     let setup = embedding_setup_from_row(&row)?;
     let embedding = embedding_from_row(&row)?;
     if embedding.len() != setup.dimension {
@@ -310,9 +352,23 @@ fn candidate_from_row(row: Value) -> Result<SemanticArtefactCandidate> {
 
     Ok(SemanticArtefactCandidate {
         artefact,
+        representation_kind,
         embedding,
         setup,
     })
+}
+
+fn representation_kind_from_row(row: &Value) -> Result<EmbeddingRepresentationKind> {
+    match string_field(row, "representation_kind")?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "code" | "baseline" | "enriched" => Ok(EmbeddingRepresentationKind::Code),
+        "summary" => Ok(EmbeddingRepresentationKind::Summary),
+        "identity" | "locator" => Ok(EmbeddingRepresentationKind::Identity),
+        other => Err(anyhow!("unknown representation kind `{other}`")),
+    }
 }
 
 fn artefact_from_value(row: &Value) -> Result<Artefact> {
@@ -453,13 +509,6 @@ fn parse_storage_datetime(value: &str) -> Result<DateTimeScalar> {
     .with_context(|| format!("normalising storage timestamp `{value}`"))
 }
 
-fn describe_setup(setup: &EmbeddingSetup) -> String {
-    format!(
-        "provider `{}` model `{}` dimension {} (setup `{}`)",
-        setup.provider, setup.model, setup.dimension, setup.setup_fingerprint
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +548,7 @@ mod tests {
     ) -> SemanticArtefactCandidate {
         SemanticArtefactCandidate {
             artefact: sample_artefact(id, path, symbol_fqn),
+            representation_kind: EmbeddingRepresentationKind::Identity,
             embedding,
             setup: EmbeddingSetup::new("bitloops_embeddings_ipc", "semantic-query-test-model", 3),
         }
@@ -556,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_query_setup_mismatch_returns_user_facing_error() {
+    fn semantic_candidate_filter_skips_setup_mismatches() {
         let query_setup = EmbeddingSetup::new("provider-a", "model-a", 3);
         let mismatched = sample_candidate(
             "caller",
@@ -565,11 +615,13 @@ mod tests {
             vec![1.0, 0.0, 0.0],
         );
 
-        let err = compatible_candidates_for_setup(vec![mismatched], &query_setup)
-            .expect_err("mismatched setup should fail");
-        assert!(err.contains("`semanticQuery` embeddings were prepared for"));
-        assert!(err.contains("provider `bitloops_embeddings_ipc`"));
-        assert!(err.contains("provider `provider-a`"));
+        let compatible = compatible_candidates_for_representation_setup(
+            &[mismatched],
+            EmbeddingRepresentationKind::Identity,
+            &query_setup,
+        );
+
+        assert!(compatible.is_empty());
     }
 
     #[test]
@@ -641,6 +693,24 @@ mod tests {
         );
 
         let ids = ranked
+            .into_iter()
+            .map(|artefact| artefact.id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["shared", "other"]);
+    }
+
+    #[test]
+    fn semantic_merge_keeps_highest_scoring_representation_hit_per_artefact() {
+        let merged = merge_semantic_hits(
+            vec![
+                sample_artefact("shared", "src/user.ts", "src/user.ts::user").with_score(0.81),
+                sample_artefact("shared", "src/user.ts", "src/user.ts::user").with_score(0.93),
+                sample_artefact("other", "src/other.ts", "src/other.ts::other").with_score(0.9),
+            ],
+            5,
+        );
+
+        let ids = merged
             .into_iter()
             .map(|artefact| artefact.id.to_string())
             .collect::<Vec<_>>();

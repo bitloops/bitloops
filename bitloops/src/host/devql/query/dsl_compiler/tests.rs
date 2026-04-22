@@ -602,8 +602,8 @@ fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
 }
 
 #[test]
-fn compile_slim_select_artefacts_fuzzy_name_selector() {
-    let parsed = parse_devql_query(r#"selectArtefacts(fuzzy_name:"payLater()")->checkpoints()"#)
+fn compile_slim_select_artefacts_search_selector() {
+    let parsed = parse_devql_query(r#"selectArtefacts(search:"payLater()")->checkpoints()"#)
         .expect("query parses");
 
     let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
@@ -612,7 +612,7 @@ fn compile_slim_select_artefacts_fuzzy_name_selector() {
     assert_eq!(
         graphql,
         r#"query {
-  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+  selectArtefacts(by: { search: "payLater()" }) {
     checkpoints {
       summary
     }
@@ -622,18 +622,17 @@ fn compile_slim_select_artefacts_fuzzy_name_selector() {
 }
 
 #[test]
-fn compile_slim_select_artefacts_rejects_fuzzy_name_mixed_with_lines() {
-    let parsed = parse_devql_query(
-        r#"selectArtefacts(fuzzy_name:"payLater()",lines:20..25)->checkpoints()"#,
-    )
-    .expect("query parses");
+fn compile_slim_select_artefacts_rejects_search_mixed_with_lines() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(search:"payLater()",lines:20..25)->checkpoints()"#)
+            .expect("query parses");
 
     let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
         .expect_err("invalid selector should fail");
 
     assert!(
         err.to_string()
-            .contains("allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"),
+            .contains("allows exactly one of symbol_fqn:, search:, or path:/lines:"),
         "unexpected error: {err:#}"
     );
 }
@@ -650,7 +649,7 @@ fn compile_slim_select_artefacts_rejects_symbol_fqn_mixed_with_lines() {
 
     assert!(
         err.to_string()
-            .contains("allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"),
+            .contains("allows exactly one of symbol_fqn:, search:, or path:/lines:"),
         "unexpected error: {err:#}"
     );
 }

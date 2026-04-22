@@ -93,8 +93,7 @@ type ArtefactSelection {
 
 input ArtefactSelectorInput {
 	symbolFqn: String
-	fuzzyName: String
-	semanticQuery: String
+	search: String
 	path: String
 	lines: LineRangeInput
 }

@@ -42,8 +42,7 @@ Use DevQL first for code understanding in this repo.\n\
 Quick-start commands:\n\
 ```bash\n\
 bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\" }) { summary } }'\n\
-bitloops devql query '{ selectArtefacts(by: { semanticQuery: \"<natural-language request>\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
-bitloops devql query '{ selectArtefacts(by: { fuzzyName: \"<approx-symbol-name>\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
+bitloops devql query '{ selectArtefacts(by: { search: \"<natural-language request or approx symbol>\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { summary } }'\n\
 bitloops devql schema --global\n\
 ```\n\
@@ -78,8 +77,7 @@ mod tests {
 
         let guidance = build_turn_guidance(dir.path(), "Help me find payLatr()");
 
-        assert!(guidance.contains("semanticQuery"));
-        assert!(guidance.contains("fuzzyName"));
-        assert!(guidance.contains("<approx-symbol-name>"));
+        assert!(guidance.contains("search"));
+        assert!(guidance.contains("<natural-language request or approx symbol>"));
     }
 }

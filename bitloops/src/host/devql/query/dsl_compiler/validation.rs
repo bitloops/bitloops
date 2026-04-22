@@ -410,17 +410,17 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let fuzzy_name = selector
-        .fuzzy_name
+    let search = selector
+        .search
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if selector
-        .fuzzy_name
+        .search
         .as_deref()
         .is_some_and(|value| value.trim().is_empty())
     {
-        bail!("selectArtefacts(...) requires fuzzy_name: to be non-empty");
+        bail!("selectArtefacts(...) requires search: to be non-empty");
     }
     let path = selector
         .path
@@ -430,15 +430,13 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
 
     let path_selector_requested = path.is_some() || selector.lines.is_some();
     let selector_count = usize::from(symbol_fqn.is_some())
-        + usize::from(fuzzy_name.is_some())
+        + usize::from(search.is_some())
         + usize::from(path_selector_requested);
     if selector_count == 0 {
-        bail!("selectArtefacts(...) requires symbol_fqn:, fuzzy_name:, or path:");
+        bail!("selectArtefacts(...) requires symbol_fqn:, search:, or path:");
     }
     if selector_count > 1 {
-        bail!(
-            "selectArtefacts(...) allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"
-        );
+        bail!("selectArtefacts(...) allows exactly one of symbol_fqn:, search:, or path:/lines:");
     }
     if path_selector_requested && path.is_none() {
         bail!("selectArtefacts(...) requires path: when lines: is provided");
