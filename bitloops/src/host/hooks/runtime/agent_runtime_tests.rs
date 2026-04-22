@@ -1292,7 +1292,10 @@ fn claude_post_task_persists_subagent_events_before_save_task_step_failure() {
     );
 
     assert_eq!(interaction_row_counts(dir.path()), (0, 0, 2));
-    assert_sorted_event_types(dir.path(), vec!["subagent_start", "subagent_end"]);
+    assert_sorted_event_types(
+        dir.path(),
+        vec!["subagent_run_started", "subagent_run_finished"],
+    );
 }
 
 #[test]

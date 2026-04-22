@@ -9,7 +9,7 @@ use super::targets::{ALL_TARGETS, UninstallTarget};
 pub(super) fn confirm_uninstall(
     out: &mut dyn Write,
     targets: &BTreeSet<UninstallTarget>,
-    agent_project_roots: &[PathBuf],
+    project_roots: &[PathBuf],
     hook_repo_roots: &[PathBuf],
     repo_data_roots: &[PathBuf],
 ) -> Result<bool> {
@@ -18,7 +18,7 @@ pub(super) fn confirm_uninstall(
     confirm_uninstall_with_input(
         out,
         targets,
-        agent_project_roots,
+        project_roots,
         hook_repo_roots,
         repo_data_roots,
         &mut input,
@@ -28,7 +28,7 @@ pub(super) fn confirm_uninstall(
 fn confirm_uninstall_with_input(
     out: &mut dyn Write,
     targets: &BTreeSet<UninstallTarget>,
-    agent_project_roots: &[PathBuf],
+    project_roots: &[PathBuf],
     hook_repo_roots: &[PathBuf],
     repo_data_roots: &[PathBuf],
     input: &mut dyn BufRead,
@@ -41,10 +41,11 @@ fn confirm_uninstall_with_input(
         .filter(|target| targets.contains(target))
     {
         let summary = match target {
-            UninstallTarget::AgentHooks => {
+            UninstallTarget::AgentHooks | UninstallTarget::RepoConfig => {
                 format!(
-                    "Agent hooks in {} Bitloops project(s)",
-                    agent_project_roots.len()
+                    "{} in {} Bitloops project(s)",
+                    target.label(),
+                    project_roots.len()
                 )
             }
             _ => target.summary(hook_repo_roots.len(), repo_data_roots.len()),

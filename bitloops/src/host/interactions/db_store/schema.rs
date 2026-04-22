@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     actor_source TEXT NOT NULL DEFAULT '',
     event_type TEXT NOT NULL,
     event_time TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    sequence_number INTEGER NOT NULL DEFAULT 0,
     agent_type TEXT NOT NULL DEFAULT '',
     model TEXT NOT NULL DEFAULT '',
     tool_use_id TEXT NOT NULL DEFAULT '',
@@ -80,19 +82,46 @@ CREATE TABLE IF NOT EXISTS interaction_events (
 "#;
 
 const AUXILIARY_TABLES_SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS interaction_tool_uses (
-    tool_use_id TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS interaction_tool_invocations (
+    tool_invocation_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
     session_id TEXT NOT NULL DEFAULT '',
     turn_id TEXT NOT NULL DEFAULT '',
-    tool_kind TEXT NOT NULL DEFAULT '',
-    task_description TEXT NOT NULL DEFAULT '',
-    subagent_id TEXT NOT NULL DEFAULT '',
+    tool_use_id TEXT NOT NULL DEFAULT '',
+    tool_name TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    input_summary TEXT NOT NULL DEFAULT '',
+    output_summary TEXT NOT NULL DEFAULT '',
+    command TEXT NOT NULL DEFAULT '',
+    command_binary TEXT NOT NULL DEFAULT '',
+    command_argv TEXT NOT NULL DEFAULT '[]',
     transcript_path TEXT NOT NULL DEFAULT '',
     started_at TEXT,
     ended_at TEXT,
+    started_sequence_number INTEGER,
+    ended_sequence_number INTEGER,
     updated_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (repo_id, tool_use_id)
+    PRIMARY KEY (repo_id, tool_invocation_id)
+);
+
+CREATE TABLE IF NOT EXISTS interaction_subagent_runs (
+    subagent_run_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    turn_id TEXT NOT NULL DEFAULT '',
+    tool_use_id TEXT NOT NULL DEFAULT '',
+    subagent_id TEXT NOT NULL DEFAULT '',
+    subagent_type TEXT NOT NULL DEFAULT '',
+    task_description TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    transcript_path TEXT NOT NULL DEFAULT '',
+    child_session_id TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    ended_at TEXT,
+    started_sequence_number INTEGER,
+    ended_sequence_number INTEGER,
+    updated_at TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (repo_id, subagent_run_id)
 );
 
 CREATE TABLE IF NOT EXISTS interaction_session_search_documents (
@@ -173,8 +202,14 @@ ON interaction_events (repo_id, session_id, event_time, event_id);
 CREATE INDEX IF NOT EXISTS interaction_events_tool_use_idx
 ON interaction_events (repo_id, tool_use_id, event_time, event_id);
 
-CREATE INDEX IF NOT EXISTS interaction_tool_uses_session_idx
-ON interaction_tool_uses (repo_id, session_id, turn_id, updated_at);
+CREATE INDEX IF NOT EXISTS interaction_tool_invocations_session_idx
+ON interaction_tool_invocations (repo_id, session_id, turn_id, updated_at);
+
+CREATE INDEX IF NOT EXISTS interaction_tool_invocations_binary_idx
+ON interaction_tool_invocations (repo_id, command_binary, updated_at);
+
+CREATE INDEX IF NOT EXISTS interaction_subagent_runs_session_idx
+ON interaction_subagent_runs (repo_id, session_id, turn_id, updated_at);
 
 CREATE INDEX IF NOT EXISTS interaction_session_search_documents_time_idx
 ON interaction_session_search_documents (repo_id, started_at, updated_at);
@@ -433,6 +468,14 @@ pub(super) fn ensure_additive_columns(conn: &rusqlite::Connection) -> Result<()>
                 "ALTER TABLE interaction_events ADD COLUMN event_time TEXT NOT NULL DEFAULT ''",
             ),
             (
+                "source",
+                "ALTER TABLE interaction_events ADD COLUMN source TEXT NOT NULL DEFAULT ''",
+            ),
+            (
+                "sequence_number",
+                "ALTER TABLE interaction_events ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0",
+            ),
+            (
                 "agent_type",
                 "ALTER TABLE interaction_events ADD COLUMN agent_type TEXT NOT NULL DEFAULT ''",
             ),
@@ -534,5 +577,7 @@ CREATE TABLE interaction_events (
         let event_columns = sqlite_table_columns(&conn, "interaction_events").unwrap();
         assert!(event_columns.contains("model"));
         assert!(event_columns.contains("payload"));
+        assert!(event_columns.contains("source"));
+        assert!(event_columns.contains("sequence_number"));
     }
 }

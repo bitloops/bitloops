@@ -26,7 +26,7 @@ use super::lanes::{
     running_task,
 };
 use super::orchestration::{
-    record_task_completion_seq, selected_top_level_terminal,
+    record_task_completion_seq, selected_session_workplane_stats, selected_top_level_terminal,
     semantic_bootstrap_still_outstanding_after_initial_sync, semantic_bootstrap_waiting_reason,
     semantic_bootstraps_ready, semantic_bootstraps_terminal, semantic_follow_up_pending,
     semantic_follow_up_ready_for_sync, session_fatal_failure_detail, session_has_remaining_work,
@@ -398,15 +398,17 @@ impl InitRuntimeCoordinator {
             &stats,
         );
         let has_fatal_failure = fatal_failure_detail.is_some();
+        let selected_workplane = selected_session_workplane_stats(&session, &stats);
         let has_remaining_work = session_has_remaining_work(
             initial_sync.as_ref(),
             ingest_task.as_ref(),
             follow_up_sync.as_ref(),
             embeddings_task.as_ref(),
             summary_run.as_ref(),
-            &stats,
+            stats.current_state,
+            &selected_workplane,
         );
-        let warning_failures = stats.warning_failed_jobs_total();
+        let warning_failures = selected_workplane.warning_failed_jobs_total;
         let has_warnings = warning_failures > 0;
         let semantic_bootstraps_terminal =
             semantic_bootstraps_terminal(&session, embeddings_task.as_ref(), summary_run.as_ref());
@@ -427,11 +429,8 @@ impl InitRuntimeCoordinator {
         let follow_up_satisfied = !follow_up_pending;
         let selected_top_level_terminal =
             selected_top_level_terminal(&session, initial_sync.as_ref(), ingest_task.as_ref());
-        let blocked_embedding = stats
-            .blocked_code_embedding_reason
-            .clone()
-            .or(stats.blocked_summary_embedding_reason.clone());
-        let blocked_summary = stats.blocked_summary_reason.clone();
+        let blocked_embedding = selected_workplane.blocked_embedding_reason.clone();
+        let blocked_summary = selected_workplane.blocked_summary_reason.clone();
         let waiting_reason = if has_fatal_failure {
             Some("failed".to_string())
         } else if !selected_top_level_terminal {
@@ -440,10 +439,10 @@ impl InitRuntimeCoordinator {
             Some("waiting_for_current_state_consumer".to_string())
         } else if blocked_embedding.is_some() || blocked_summary.is_some() {
             Some("waiting_on_blocked_mailbox".to_string())
-        } else if stats.embedding_jobs.pending > 0
-            || stats.embedding_jobs.running > 0
-            || stats.summary_jobs.pending > 0
-            || stats.summary_jobs.running > 0
+        } else if selected_workplane.embedding_jobs.pending > 0
+            || selected_workplane.embedding_jobs.running > 0
+            || selected_workplane.summary_jobs.pending > 0
+            || selected_workplane.summary_jobs.running > 0
         {
             Some("waiting_for_workplane".to_string())
         } else if bootstrap_waiting {
@@ -467,10 +466,10 @@ impl InitRuntimeCoordinator {
             && follow_up_satisfied
             && stats.current_state.pending == 0
             && stats.current_state.running == 0
-            && stats.embedding_jobs.pending == 0
-            && stats.embedding_jobs.running == 0
-            && stats.summary_jobs.pending == 0
-            && stats.summary_jobs.running == 0
+            && selected_workplane.embedding_jobs.pending == 0
+            && selected_workplane.embedding_jobs.running == 0
+            && selected_workplane.summary_jobs.pending == 0
+            && selected_workplane.summary_jobs.running == 0
             && blocked_embedding.is_none()
             && blocked_summary.is_none();
         let terminal_failed = has_fatal_failure && !has_remaining_work;

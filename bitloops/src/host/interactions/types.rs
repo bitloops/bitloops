@@ -99,6 +99,10 @@ pub struct InteractionEvent {
     pub event_type: InteractionEventType,
     pub event_time: String,
     #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub sequence_number: i64,
+    #[serde(default)]
     pub agent_type: String,
     #[serde(default)]
     pub model: String,
@@ -115,23 +119,65 @@ pub struct InteractionEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct InteractionToolUse {
-    pub tool_use_id: String,
+pub struct InteractionToolInvocation {
+    pub tool_invocation_id: String,
     pub repo_id: String,
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
     pub turn_id: String,
     #[serde(default)]
-    pub tool_kind: String,
+    pub tool_use_id: String,
     #[serde(default)]
-    pub task_description: String,
+    pub tool_name: String,
     #[serde(default)]
-    pub subagent_id: String,
+    pub source: String,
+    #[serde(default)]
+    pub input_summary: String,
+    #[serde(default)]
+    pub output_summary: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub command_binary: String,
+    #[serde(default)]
+    pub command_argv: Vec<String>,
     #[serde(default)]
     pub transcript_path: String,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
+    pub started_sequence_number: Option<i64>,
+    pub ended_sequence_number: Option<i64>,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct InteractionSubagentRun {
+    pub subagent_run_id: String,
+    pub repo_id: String,
+    #[serde(default)]
+    pub session_id: String,
+    #[serde(default)]
+    pub turn_id: String,
+    #[serde(default)]
+    pub tool_use_id: String,
+    #[serde(default)]
+    pub subagent_id: String,
+    #[serde(default)]
+    pub subagent_type: String,
+    #[serde(default)]
+    pub task_description: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub transcript_path: String,
+    #[serde(default)]
+    pub child_session_id: String,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub started_sequence_number: Option<i64>,
+    pub ended_sequence_number: Option<i64>,
     #[serde(default)]
     pub updated_at: String,
 }
@@ -172,6 +218,8 @@ pub enum InteractionEventType {
     TurnEnd,
     Compaction,
     SessionEnd,
+    ToolInvocationObserved,
+    ToolResultObserved,
     SubagentStart,
     SubagentEnd,
 }
@@ -184,8 +232,10 @@ impl InteractionEventType {
             Self::TurnEnd => "turn_end",
             Self::Compaction => "compaction",
             Self::SessionEnd => "session_end",
-            Self::SubagentStart => "subagent_start",
-            Self::SubagentEnd => "subagent_end",
+            Self::ToolInvocationObserved => "tool_invocation_observed",
+            Self::ToolResultObserved => "tool_result_observed",
+            Self::SubagentStart => "subagent_run_started",
+            Self::SubagentEnd => "subagent_run_finished",
         }
     }
 
@@ -196,8 +246,10 @@ impl InteractionEventType {
             "turn_end" => Some(Self::TurnEnd),
             "compaction" => Some(Self::Compaction),
             "session_end" => Some(Self::SessionEnd),
-            "subagent_start" => Some(Self::SubagentStart),
-            "subagent_end" => Some(Self::SubagentEnd),
+            "tool_invocation_observed" => Some(Self::ToolInvocationObserved),
+            "tool_result_observed" => Some(Self::ToolResultObserved),
+            "subagent_start" | "subagent_run_started" => Some(Self::SubagentStart),
+            "subagent_end" | "subagent_run_finished" => Some(Self::SubagentEnd),
             _ => None,
         }
     }
@@ -221,6 +273,8 @@ mod tests {
             InteractionEventType::TurnEnd,
             InteractionEventType::Compaction,
             InteractionEventType::SessionEnd,
+            InteractionEventType::ToolInvocationObserved,
+            InteractionEventType::ToolResultObserved,
             InteractionEventType::SubagentStart,
             InteractionEventType::SubagentEnd,
         ];
@@ -229,6 +283,14 @@ mod tests {
             let parsed = InteractionEventType::parse(s).expect(s);
             assert_eq!(v, parsed);
         }
+        assert_eq!(
+            InteractionEventType::parse("subagent_start"),
+            Some(InteractionEventType::SubagentStart)
+        );
+        assert_eq!(
+            InteractionEventType::parse("subagent_end"),
+            Some(InteractionEventType::SubagentEnd)
+        );
     }
 
     #[test]

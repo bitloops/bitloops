@@ -6,7 +6,9 @@ use crate::host::interactions::query::{
     InteractionBrowseFilter, InteractionLinkedCheckpoint, InteractionSessionSearchHit,
     InteractionSessionSummary, InteractionTurnSearchHit, InteractionTurnSummary,
 };
-use crate::host::interactions::types::{InteractionEvent, InteractionToolUse};
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionSubagentRun, InteractionToolInvocation,
+};
 
 #[derive(Debug, Clone, Default, InputObject)]
 pub struct InteractionFilterInput {
@@ -58,10 +60,32 @@ pub struct InteractionToolUseObject {
     pub id: ID,
     pub session_id: String,
     pub turn_id: Option<String>,
+    pub tool_use_id: Option<String>,
     pub tool_kind: Option<String>,
     pub task_description: Option<String>,
-    pub subagent_id: Option<String>,
+    pub input_summary: Option<String>,
+    pub output_summary: Option<String>,
+    pub source: Option<String>,
+    pub command: Option<String>,
+    pub command_binary: Option<String>,
+    pub command_argv: Vec<String>,
     pub transcript_path: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct InteractionSubagentRunObject {
+    pub id: ID,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub tool_use_id: Option<String>,
+    pub subagent_id: Option<String>,
+    pub subagent_type: Option<String>,
+    pub task_description: Option<String>,
+    pub source: Option<String>,
+    pub transcript_path: Option<String>,
+    pub child_session_id: Option<String>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
 }
@@ -82,6 +106,7 @@ pub struct InteractionSessionObject {
     pub token_usage: Option<InteractionTokenUsage>,
     pub file_paths: Vec<String>,
     pub tool_uses: Vec<InteractionToolUseObject>,
+    pub subagent_runs: Vec<InteractionSubagentRunObject>,
     pub linked_checkpoints: Vec<InteractionCommitAuthorObject>,
     pub latest_commit_author: Option<InteractionCommitAuthorObject>,
 }
@@ -103,6 +128,7 @@ pub struct InteractionTurnObject {
     pub files_modified: Vec<String>,
     pub checkpoint_id: Option<String>,
     pub tool_uses: Vec<InteractionToolUseObject>,
+    pub subagent_runs: Vec<InteractionSubagentRunObject>,
     pub linked_checkpoints: Vec<InteractionCommitAuthorObject>,
     pub latest_commit_author: Option<InteractionCommitAuthorObject>,
 }
@@ -116,6 +142,8 @@ pub struct InteractionEventObject {
     pub actor: Option<InteractionActorObject>,
     pub event_type: String,
     pub event_time: String,
+    pub source: Option<String>,
+    pub sequence_number: i64,
     pub agent_type: String,
     pub model: Option<String>,
     pub tool_use_id: Option<String>,
@@ -222,17 +250,43 @@ impl InteractionCommitAuthorObject {
 }
 
 impl InteractionToolUseObject {
-    fn from_domain(tool_use: &InteractionToolUse) -> Self {
+    fn from_domain(tool_use: &InteractionToolInvocation) -> Self {
         Self {
-            id: ID(tool_use.tool_use_id.clone()),
+            id: ID(tool_use.tool_invocation_id.clone()),
             session_id: tool_use.session_id.clone(),
             turn_id: non_empty(&tool_use.turn_id),
-            tool_kind: non_empty(&tool_use.tool_kind),
-            task_description: non_empty(&tool_use.task_description),
-            subagent_id: non_empty(&tool_use.subagent_id),
+            tool_use_id: non_empty(&tool_use.tool_use_id),
+            tool_kind: non_empty(&tool_use.tool_name),
+            task_description: non_empty(&tool_use.input_summary)
+                .or_else(|| non_empty(&tool_use.output_summary)),
+            input_summary: non_empty(&tool_use.input_summary),
+            output_summary: non_empty(&tool_use.output_summary),
+            source: non_empty(&tool_use.source),
+            command: non_empty(&tool_use.command),
+            command_binary: non_empty(&tool_use.command_binary),
+            command_argv: tool_use.command_argv.clone(),
             transcript_path: non_empty(&tool_use.transcript_path),
             started_at: tool_use.started_at.clone(),
             ended_at: tool_use.ended_at.clone(),
+        }
+    }
+}
+
+impl InteractionSubagentRunObject {
+    fn from_domain(subagent_run: &InteractionSubagentRun) -> Self {
+        Self {
+            id: ID(subagent_run.subagent_run_id.clone()),
+            session_id: subagent_run.session_id.clone(),
+            turn_id: non_empty(&subagent_run.turn_id),
+            tool_use_id: non_empty(&subagent_run.tool_use_id),
+            subagent_id: non_empty(&subagent_run.subagent_id),
+            subagent_type: non_empty(&subagent_run.subagent_type),
+            task_description: non_empty(&subagent_run.task_description),
+            source: non_empty(&subagent_run.source),
+            transcript_path: non_empty(&subagent_run.transcript_path),
+            child_session_id: non_empty(&subagent_run.child_session_id),
+            started_at: subagent_run.started_at.clone(),
+            ended_at: subagent_run.ended_at.clone(),
         }
     }
 }
@@ -265,6 +319,11 @@ impl InteractionSessionObject {
                 .tool_uses
                 .iter()
                 .map(InteractionToolUseObject::from_domain)
+                .collect(),
+            subagent_runs: summary
+                .subagent_runs
+                .iter()
+                .map(InteractionSubagentRunObject::from_domain)
                 .collect(),
             linked_checkpoints: summary
                 .linked_checkpoints
@@ -320,6 +379,11 @@ impl InteractionTurnObject {
                 .iter()
                 .map(InteractionToolUseObject::from_domain)
                 .collect(),
+            subagent_runs: summary
+                .subagent_runs
+                .iter()
+                .map(InteractionSubagentRunObject::from_domain)
+                .collect(),
             linked_checkpoints: summary
                 .linked_checkpoints
                 .iter()
@@ -356,6 +420,8 @@ impl InteractionEventObject {
             ),
             event_type: event.event_type.as_str().to_string(),
             event_time: event.event_time.clone(),
+            source: non_empty(&event.source),
+            sequence_number: event.sequence_number,
             agent_type: event.agent_type.clone(),
             model: non_empty(&event.model),
             tool_use_id: non_empty(&event.tool_use_id),

@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn picker_toggle_and_submit_selects_requested_targets() {
-        let selected = collect_selection(b"xjx\n")
+        let selected = collect_selection(b"xjjx\n")
             .expect("selection should succeed")
             .expect("selection should not be cancelled");
 
