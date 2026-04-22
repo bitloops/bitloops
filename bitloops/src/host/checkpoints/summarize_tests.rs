@@ -392,6 +392,7 @@ fn test_build_condensed_transcript_assistant_responses() {
         "assistant-1",
         vec![ContentBlock {
             r#type: "text".to_string(),
+            id: String::new(),
             text: "I'll help you with that.".to_string(),
             name: String::new(),
             input: Value::Null,
@@ -411,6 +412,7 @@ fn test_build_condensed_transcript_tool_calls() {
         "assistant-1",
         vec![ContentBlock {
             r#type: "tool_use".to_string(),
+            id: String::new(),
             text: String::new(),
             name: "Read".to_string(),
             input: must_json(ToolInput {
@@ -440,6 +442,7 @@ fn test_build_condensed_transcript_tool_call_with_command() {
         "assistant-1",
         vec![ContentBlock {
             r#type: "tool_use".to_string(),
+            id: String::new(),
             text: String::new(),
             name: "Bash".to_string(),
             input: must_json(ToolInput {
@@ -467,6 +470,7 @@ fn test_build_condensed_transcript_skill_tool_minimal_detail() {
         "assistant-1",
         vec![ContentBlock {
             r#type: "tool_use".to_string(),
+            id: String::new(),
             text: String::new(),
             name: "Skill".to_string(),
             input: must_json(ToolInput {
@@ -495,6 +499,7 @@ fn test_build_condensed_transcript_web_fetch_minimal_detail() {
         "assistant-1",
         vec![ContentBlock {
             r#type: "tool_use".to_string(),
+            id: String::new(),
             text: String::new(),
             name: "WebFetch".to_string(),
             input: must_json(ToolInput {
@@ -529,6 +534,7 @@ fn test_build_condensed_transcript_skips_skill_content_injection() {
             "assistant-1",
             vec![ContentBlock {
                 r#type: "tool_use".to_string(),
+                id: String::new(),
                 text: String::new(),
                 name: "Skill".to_string(),
                 input: must_json(ToolInput {
@@ -609,12 +615,14 @@ fn test_build_condensed_transcript_mixed_content() {
             vec![
                 ContentBlock {
                     r#type: "text".to_string(),
+                    id: String::new(),
                     text: "I'll create that file for you.".to_string(),
                     name: String::new(),
                     input: Value::Null,
                 },
                 ContentBlock {
                     r#type: "tool_use".to_string(),
+                    id: String::new(),
                     text: String::new(),
                     name: "Write".to_string(),
                     input: must_json(ToolInput {
@@ -674,6 +682,7 @@ fn test_build_condensed_transcript_skips_empty_content() {
             "assistant-1",
             vec![ContentBlock {
                 r#type: "text".to_string(),
+                id: String::new(),
                 text: String::new(),
                 name: String::new(),
                 input: Value::Null,

@@ -17,7 +17,7 @@ mod tty;
 pub use targets::UninstallArgs;
 
 use confirm::confirm_uninstall;
-use hooks::{uninstall_agent_hooks, uninstall_git_hooks};
+use hooks::{uninstall_agent_hooks, uninstall_git_hooks, uninstall_repo_config};
 use repo::resolve_scope;
 use shell::uninstall_shell_integration;
 use system::{
@@ -75,7 +75,11 @@ async fn run_with_context(
         && !confirm_uninstall(
             out,
             &targets,
-            &scope.agent_project_roots,
+            if scope.agent_project_roots.is_empty() {
+                &scope.repo_config_project_roots
+            } else {
+                &scope.agent_project_roots
+            },
             &scope.hook_repo_roots,
             &scope.repo_data_roots,
         )?
@@ -94,6 +98,9 @@ async fn run_with_context(
     {
         let result = match target {
             UninstallTarget::AgentHooks => uninstall_agent_hooks(&scope.agent_project_roots, out),
+            UninstallTarget::RepoConfig => {
+                uninstall_repo_config(&scope.repo_config_project_roots, out)
+            }
             UninstallTarget::GitHooks => uninstall_git_hooks(&scope.hook_repo_roots, out),
             UninstallTarget::Shell => uninstall_shell_integration(out),
             UninstallTarget::Data => uninstall_data(&scope.repo_data_roots, out),

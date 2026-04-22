@@ -484,6 +484,8 @@ type InteractionEventObject {
 	actor: InteractionActorObject
 	eventType: String!
 	eventTime: String!
+	source: String
+	sequenceNumber: Int!
 	agentType: String!
 	model: String
 	toolUseId: String
@@ -545,6 +547,7 @@ type InteractionSessionObject {
 	tokenUsage: InteractionTokenUsage
 	filePaths: [String!]!
 	toolUses: [InteractionToolUseObject!]!
+	subagentRuns: [InteractionSubagentRunObject!]!
 	linkedCheckpoints: [InteractionCommitAuthorObject!]!
 	latestCommitAuthor: InteractionCommitAuthorObject
 }
@@ -553,6 +556,21 @@ type InteractionSessionSearchHitObject {
 	session: InteractionSessionObject!
 	score: Int!
 	matchedFields: [String!]!
+}
+
+type InteractionSubagentRunObject {
+	id: ID!
+	sessionId: String!
+	turnId: String
+	toolUseId: String
+	subagentId: String
+	subagentType: String
+	taskDescription: String
+	source: String
+	transcriptPath: String
+	childSessionId: String
+	startedAt: String
+	endedAt: String
 }
 
 type InteractionTokenUsage {
@@ -567,9 +585,15 @@ type InteractionToolUseObject {
 	id: ID!
 	sessionId: String!
 	turnId: String
+	toolUseId: String
 	toolKind: String
 	taskDescription: String
-	subagentId: String
+	inputSummary: String
+	outputSummary: String
+	source: String
+	command: String
+	commandBinary: String
+	commandArgv: [String!]!
 	transcriptPath: String
 	startedAt: String
 	endedAt: String
@@ -602,6 +626,7 @@ type InteractionTurnObject {
 	filesModified: [String!]!
 	checkpointId: String
 	toolUses: [InteractionToolUseObject!]!
+	subagentRuns: [InteractionSubagentRunObject!]!
 	linkedCheckpoints: [InteractionCommitAuthorObject!]!
 	latestCommitAuthor: InteractionCommitAuthorObject
 }

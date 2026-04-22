@@ -24,6 +24,7 @@ use crate::host::hooks::runtime::agent_runtime::helpers::{
 };
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::tool_events::INTERACTION_SOURCE_LIVE_HOOK;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession,
 };
@@ -248,6 +249,7 @@ pub fn handle_lifecycle_subagent_start(
                 repo_id: spool.repo_id().to_string(),
                 event_type: InteractionEventType::SubagentStart,
                 event_time: now_rfc3339(),
+                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
                 agent_type: String::new(),
                 model: resolve_interaction_model(&event.model, &event.session_ref),
                 payload: serde_json::json!({
@@ -293,6 +295,7 @@ pub fn handle_lifecycle_subagent_end(
                 repo_id: spool.repo_id().to_string(),
                 event_type: InteractionEventType::SubagentEnd,
                 event_time: now_rfc3339(),
+                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
                 agent_type: String::new(),
                 model: resolve_interaction_model(&event.model, &event.session_ref),
                 payload: serde_json::json!({

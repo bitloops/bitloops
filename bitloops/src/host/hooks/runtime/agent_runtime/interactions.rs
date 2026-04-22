@@ -9,6 +9,10 @@ use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::checkpoints::strategy::manual_commit::current_branch_name;
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::tool_events::{
+    DerivedToolEventContext, INTERACTION_SOURCE_LIVE_HOOK,
+    derive_tool_events_from_transcript_fragment, transcript_derived_turn_end_sequence,
+};
 use crate::host::interactions::transcript_fragment::read_transcript_fragment_from_path;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
@@ -382,6 +386,38 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
         if let Err(err) = spool.record_turn(&turn) {
             eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
         }
+        let derived_tool_events = match derive_tool_events_from_transcript_fragment(
+            &DerivedToolEventContext {
+                repo_id: spool.repo_id(),
+                session_id,
+                turn_id: &turn.turn_id,
+                branch: &branch,
+                actor_id: &actor_id,
+                actor_name: &actor_name,
+                actor_email: &actor_email,
+                actor_source: &actor_source,
+                event_time: &event_time,
+                agent_type: &agent_type,
+                model: &model,
+                transcript_path,
+            },
+            &transcript_fragment,
+        ) {
+            Ok(events) => events,
+            Err(err) => {
+                eprintln!(
+                    "[bitloops] Warning: failed to derive transcript tool events for interaction turn end: {err:#}"
+                );
+                Vec::new()
+            }
+        };
+        for derived_event in &derived_tool_events {
+            if let Err(err) = spool.record_event(derived_event) {
+                eprintln!(
+                    "[bitloops] Warning: failed to spool transcript-derived tool event: {err}"
+                );
+            }
+        }
         if let Err(err) = spool.record_event(&InteractionEvent {
             event_id: interaction_event_id(),
             session_id: session_id.to_string(),
@@ -394,6 +430,7 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
             actor_source,
             event_type: InteractionEventType::TurnEnd,
             event_time,
+            sequence_number: transcript_derived_turn_end_sequence(&derived_tool_events),
             agent_type,
             model,
             payload: serde_json::json!({
@@ -543,6 +580,8 @@ pub(super) fn record_subagent_interaction_event(
             actor_source,
             event_type,
             event_time,
+            source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
+            sequence_number: 0,
             agent_type: interaction_agent_type(state, Some(profile)),
             model,
             tool_use_id,

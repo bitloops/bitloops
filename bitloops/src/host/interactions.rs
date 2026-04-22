@@ -3,6 +3,7 @@ pub(crate) mod interaction_repository;
 pub(crate) mod model;
 pub(crate) mod query;
 pub mod store;
+pub(crate) mod tool_events;
 pub(crate) mod transcript_fragment;
 pub mod types;
 

@@ -7,7 +7,7 @@ title: Uninstalling Bitloops
 
 `bitloops disable` turns capture off in the nearest discovered project policy while leaving hooks installed.
 
-`bitloops uninstall` removes Bitloops-managed artefacts from your machine and, for hook targets, from known repositories.
+`bitloops uninstall` removes Bitloops-managed artefacts from your machine and, for repo-local targets, from known repositories or Bitloops projects.
 
 ## Interactive And Non-Interactive Use
 
@@ -34,6 +34,12 @@ Remove hook integration from all known repositories:
 bitloops uninstall --agent-hooks --git-hooks
 ```
 
+Remove repo-local Bitloops policy from all known projects:
+
+```bash
+bitloops uninstall --repo-config
+```
+
 Remove hook integration only from the current repository:
 
 ```bash
@@ -56,17 +62,18 @@ bitloops uninstall --config --data --caching --service --shell
 | `--data` | Platform data directory plus repo-local `.bitloops/` data |
 | `--caching` | Platform cache directory |
 | `--config` | Platform config directory plus TLS artefacts in `~/.bitloops/certs` |
-| `--agent-hooks` | Supported agent hooks |
+| `--agent-hooks` | Supported agent hooks plus Bitloops-managed repo-local agent guidance and matching exclude entries |
+| `--repo-config` | Repo-local `.bitloops.toml`, `.bitloops.local.toml`, and the managed `.bitloops.local.toml` exclude entry |
 | `--git-hooks` | Git hooks installed by Bitloops |
 | `--shell` | Managed shell completion integration |
-| `--only-current-project` | Restrict hook removal to the current repository |
+| `--only-current-project` | Restrict repo-local uninstall targets to the current repository or project |
 | `--force` | Skip the confirmation prompt |
 
-## Hook Scope
+## Repo-Local Scope
 
-By default, `--agent-hooks` and `--git-hooks` operate on all known repositories. Bitloops builds that list from the daemon repo registry and also includes the current repository when it can resolve one.
+By default, `--agent-hooks`, `--repo-config`, and `--git-hooks` operate on all known repositories or Bitloops projects. Bitloops builds that list from the daemon repo registry and also includes the current repository when it can resolve one.
 
-`--only-current-project` is valid only with `--agent-hooks` and/or `--git-hooks`.
+`--only-current-project` is valid only with `--agent-hooks`, `--repo-config`, and/or `--git-hooks`.
 
 If you only want to pause capture without removing hooks, use `bitloops disable`.
 
@@ -80,14 +87,16 @@ If you only want to pause capture without removing hooks, use `bitloops disable`
 - global config, data, cache, and state directories
 - TLS artefacts in `~/.bitloops/certs`
 - Bitloops hook integration in known repositories
+- Bitloops-managed repo-local agent guidance and matching exclude entries
+- repo-local `.bitloops.toml` and `.bitloops.local.toml` policy files in cleaned projects
+- the managed `.bitloops.local.toml` `.git/info/exclude` entry in cleaned projects
 - repo-local `.bitloops/` data directories in known repositories
 
 ## What Bitloops Does Not Remove
 
 Bitloops only removes artefacts it manages. It does not remove:
 
-- `.bitloops.toml`
-- `.bitloops.local.toml`
+- non-Bitloops entries in `.git/info/exclude`
 - unrelated user shell configuration
 - non-Bitloops entries in agent config files
 

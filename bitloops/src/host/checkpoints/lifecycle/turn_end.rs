@@ -23,6 +23,10 @@ use crate::host::checkpoints::transcript::metadata::{
 };
 use crate::host::interactions::model::resolve_interaction_model_from_bytes;
 use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::tool_events::{
+    DerivedToolEventContext, derive_tool_events_from_transcript_fragment,
+    transcript_derived_turn_end_sequence,
+};
 use crate::host::interactions::transcript_fragment::{
     transcript_fragment_from_bytes, transcript_position_from_bytes,
 };
@@ -272,6 +276,38 @@ pub fn handle_lifecycle_turn_end(
         if let Err(err) = spool.record_turn(&turn) {
             eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
         }
+        let derived_tool_events = match derive_tool_events_from_transcript_fragment(
+            &DerivedToolEventContext {
+                repo_id: spool.repo_id(),
+                session_id: &session_id,
+                turn_id: &turn.turn_id,
+                branch: "",
+                actor_id: "",
+                actor_name: "",
+                actor_email: "",
+                actor_source: "",
+                event_time: &interaction_now,
+                agent_type: &ctx.agent_type,
+                model: &model,
+                transcript_path: &transcript_ref,
+            },
+            &transcript_fragment,
+        ) {
+            Ok(events) => events,
+            Err(err) => {
+                eprintln!(
+                    "[bitloops] Warning: failed to derive transcript tool events for lifecycle turn end: {err:#}"
+                );
+                Vec::new()
+            }
+        };
+        for derived_event in &derived_tool_events {
+            if let Err(err) = spool.record_event(derived_event) {
+                eprintln!(
+                    "[bitloops] Warning: failed to spool transcript-derived lifecycle tool event: {err}"
+                );
+            }
+        }
         if let Err(err) = spool.record_event(&InteractionEvent {
             event_id: generate_interaction_event_id(),
             session_id: session_id.to_string(),
@@ -279,6 +315,7 @@ pub fn handle_lifecycle_turn_end(
             repo_id: spool.repo_id().to_string(),
             event_type: InteractionEventType::TurnEnd,
             event_time: interaction_now.clone(),
+            sequence_number: transcript_derived_turn_end_sequence(&derived_tool_events),
             agent_type: ctx.agent_type.clone(),
             model,
             payload: serde_json::json!({

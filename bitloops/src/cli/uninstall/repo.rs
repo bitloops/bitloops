@@ -12,6 +12,7 @@ use crate::utils::platform_dirs::bitloops_state_dir;
 pub(super) struct ResolvedScope {
     pub(super) hook_repo_roots: Vec<PathBuf>,
     pub(super) agent_project_roots: Vec<PathBuf>,
+    pub(super) repo_config_project_roots: Vec<PathBuf>,
     pub(super) repo_data_roots: Vec<PathBuf>,
 }
 
@@ -32,16 +33,22 @@ pub(super) fn resolve_scope(
         Vec::new()
     };
 
+    let project_roots = if targets.contains(&UninstallTarget::AgentHooks)
+        || targets.contains(&UninstallTarget::RepoConfig)
+    {
+        resolve_target_project_roots(args)?
+    } else {
+        Vec::new()
+    };
+
     let agent_project_roots = if targets.contains(&UninstallTarget::AgentHooks) {
-        if args.only_current_project {
-            vec![current_bitloops_project_root()?
-                .or(current_repo_root()?)
-                .context(
-                    "`--only-current-project` requires running inside a git repository or Bitloops project",
-                )?]
-        } else {
-            discover_bitloops_project_roots()?
-        }
+        project_roots.clone()
+    } else {
+        Vec::new()
+    };
+
+    let repo_config_project_roots = if targets.contains(&UninstallTarget::RepoConfig) {
+        project_roots
     } else {
         Vec::new()
     };
@@ -55,8 +62,21 @@ pub(super) fn resolve_scope(
     Ok(ResolvedScope {
         hook_repo_roots,
         agent_project_roots,
+        repo_config_project_roots,
         repo_data_roots,
     })
+}
+
+fn resolve_target_project_roots(args: &UninstallArgs) -> Result<Vec<PathBuf>> {
+    if args.only_current_project {
+        return Ok(vec![current_bitloops_project_root()?
+            .or(current_repo_root()?)
+            .context(
+                "`--only-current-project` requires running inside a git repository or Bitloops project",
+            )?]);
+    }
+
+    discover_bitloops_project_roots()
 }
 
 fn discover_known_repo_roots() -> Result<Vec<PathBuf>> {

@@ -194,6 +194,11 @@ pub(super) fn event_from_row(row: &Value) -> Result<InteractionEvent> {
         event_type: InteractionEventType::parse(&event_type_raw)
             .ok_or_else(|| anyhow!("unknown interaction event type `{event_type_raw}`"))?,
         event_time: required_string(row, "event_time")?,
+        source: optional_string(row, "source"),
+        sequence_number: row
+            .get("sequence_number")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
         agent_type: optional_string(row, "agent_type"),
         model: optional_string(row, "model"),
         tool_use_id: optional_string(row, "tool_use_id"),

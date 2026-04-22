@@ -30,6 +30,8 @@ pub struct ContentBlock {
     #[serde(rename = "type")]
     pub r#type: String,
     #[serde(default)]
+    pub id: String,
+    #[serde(default)]
     pub text: String,
     #[serde(default)]
     pub name: String,
