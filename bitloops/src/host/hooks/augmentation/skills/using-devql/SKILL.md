@@ -3,7 +3,7 @@ name: using-devql
 description: >
   Use when understanding code structure, resolving artefacts by path or line
   range, resolving approximate symbol names with fuzzy lookup, resolving
-  conceptual requests with unified search, finding
+  conceptual requests with semantic search, both via unified `search`, finding
   callers/usages/imports/tests/checkpoints/clones/dependencies,
   or answering architecture questions in a repo with DevQL enabled.
 ---
@@ -46,7 +46,10 @@ search or file reads.
 
 - If the prompt contains a path, line range, scoped symbol, backticked identifier, function-like token, or other code-ish artefact clue, prefer a structured selector first.
 - Use `path` or `path + lines` for file references, `symbolFqn` for exact symbol references, and `search` when the user likely named a symbol approximately, misspelled it, or asked for behaviour conceptually.
-with queries such as `build invoice pdf`, `validate webhook signature`, or `render checkout summary`.
+- Use `search` in two distinct ways:
+  fuzzy symbol lookup with short approximate identifiers such as `payLatr()`, `renderInvoicePdf`, or `UserServce.create`;
+  semantic/conceptual lookup with short intent phrases such as `build invoice pdf`, `validate webhook signature`, or `render checkout summary`.
+- Both routes use unified `search`; fuzzy and semantic are query styles, not separate selectors.
 - Do not pass the whole conversational prompt into `search` when it contains extra wrapper text such as `can you help`, `fix this`, or `help me understand the codebase`.
 - Distill semantic lookup into a short intent phrase instead of removing stopwords mechanically. Preserve meaningful qualifiers and drop conversational filler.
 - For mixed prompts, try structured lookup first and use `search` as a fallback or supplement when the artefact clue is weak.
@@ -73,7 +76,13 @@ bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>" }) { 
 # Concrete artefacts for a known file or line range
 bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", lines: { start: <start>, end: <end> } }) { artefacts(first: 20) { path symbolFqn canonicalKind startLine endLine } } }'
 
-# Unified search for approximate symbols or conceptual requests
+# Fuzzy lookup for approximate or misspelled symbol names
+bitloops devql query '{ selectArtefacts(by: { search: "payLatr()" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
+
+# Semantic lookup for conceptual behaviour search
+bitloops devql query '{ selectArtefacts(by: { search: "build invoice pdf" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
+
+# Generic search template when you need to fill in either style manually
 bitloops devql query '{ selectArtefacts(by: { search: "<natural-language request or approx symbol>" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
 
 # Concrete callers/usages/imports once the symbol is known

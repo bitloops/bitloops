@@ -42,6 +42,8 @@ Use DevQL first for code understanding in this repo.\n\
 Quick-start commands:\n\
 ```bash\n\
 bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\" }) { summary } }'\n\
+bitloops devql query '{ selectArtefacts(by: { search: \"payLatr()\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
+bitloops devql query '{ selectArtefacts(by: { search: \"build invoice pdf\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
 bitloops devql query '{ selectArtefacts(by: { search: \"<natural-language request or approx symbol>\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { summary } }'\n\
 bitloops devql schema --global\n\
@@ -79,5 +81,16 @@ mod tests {
 
         assert!(guidance.contains("search"));
         assert!(guidance.contains("<natural-language request or approx symbol>"));
+        assert!(guidance.contains("payLatr()"));
+    }
+
+    #[test]
+    fn build_turn_guidance_includes_semantic_lookup_in_generic_guidance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let guidance = build_turn_guidance(dir.path(), "Find the code that builds invoice PDFs");
+
+        assert!(guidance.contains("search"));
+        assert!(guidance.contains("build invoice pdf"));
     }
 }

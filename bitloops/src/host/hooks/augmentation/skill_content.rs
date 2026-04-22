@@ -32,6 +32,8 @@ mod tests {
         let body = using_devql_skill_body();
         assert!(body.contains("search"));
         assert!(body.contains("<natural-language request or approx symbol>"));
+        assert!(body.contains("payLatr()"));
+        assert!(body.contains("build invoice pdf"));
     }
 
     #[test]
@@ -41,6 +43,7 @@ mod tests {
         assert!(body.contains("Do not pass the whole conversational prompt into `search`"));
         assert!(body.contains("For mixed prompts, try structured lookup first"));
         assert!(body.contains("help me understand the codebase"));
+        assert!(body.contains("fuzzy and semantic are query styles"));
     }
 
     #[test]
