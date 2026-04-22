@@ -558,8 +558,9 @@ fn degenerate_embedding_groups_fall_back_to_full_group_scoring() {
         distractor.path = format!("src/archive/distractor_{idx}.ts");
         distractor.symbol_fqn = format!("src/archive/distractor_{idx}.ts::archive_customer");
         distractor.normalized_name = format!("archive_customer_{idx}");
-        distractor.normalized_signature =
-            Some(format!("function archive_customer_{idx}(customer_id: string)"));
+        distractor.normalized_signature = Some(format!(
+            "function archive_customer_{idx}(customer_id: string)"
+        ));
         distractor.identifier_tokens = vec![
             "archive".to_string(),
             "customer".to_string(),
@@ -584,9 +585,12 @@ fn degenerate_embedding_groups_fall_back_to_full_group_scoring() {
         CloneScoringOptions::new(1),
     );
 
-    assert!(result.edges.iter().any(|edge| {
-        edge.source_symbol_id == "source" && edge.target_symbol_id == "target"
-    }));
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| { edge.source_symbol_id == "source" && edge.target_symbol_id == "target" })
+    );
 }
 
 #[test]

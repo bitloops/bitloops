@@ -350,8 +350,7 @@ fn build_symbol_clone_edges_for_sources(
             } else if let Some(group_member_indices) = group_indices.get(&group_key) {
                 insert_group_members(&mut target_indices, group_member_indices, source_idx);
             }
-            if let Some(summary_group_key) = summary_candidate_group_key(source)
-            {
+            if let Some(summary_group_key) = summary_candidate_group_key(source) {
                 if let Some(group_ann_index) = summary_group_ann_indexes.get(&summary_group_key)
                     && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
                 {
