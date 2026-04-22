@@ -2302,3 +2302,44 @@ fn semantic_clone_store_evidence_proves_rebuild_when_store_has_current_rows() {
         }
     ));
 }
+
+#[test]
+fn build_select_artefacts_search_query_escapes_input_and_omits_score() {
+    let query = build_select_artefacts_search_query(r#"invoice "document" renderer"#);
+
+    assert!(query.contains(r#"search: "invoice \"document\" renderer""#));
+    assert!(query.contains("path"));
+    assert!(query.contains("symbolFqn"));
+    assert!(!query.contains("score"));
+}
+
+#[test]
+fn extract_select_artefacts_search_observation_reads_count_and_symbols() {
+    let value = serde_json::json!({
+        "selectArtefacts": {
+            "count": 2,
+            "artefacts": [
+                {
+                    "path": "src/render/render-invoice.ts",
+                    "symbolFqn": "src/render/render-invoice.ts::renderInvoice"
+                },
+                {
+                    "path": "src/render/render-invoice-document.ts",
+                    "symbolFqn": "src/render/render-invoice-document.ts::renderInvoiceDocument"
+                }
+            ]
+        }
+    });
+
+    let observation =
+        extract_select_artefacts_search_observation(&value).expect("extract search observation");
+
+    assert_eq!(observation.count, 2);
+    assert_eq!(
+        observation.symbols,
+        vec![
+            "src/render/render-invoice.ts::renderInvoice".to_string(),
+            "src/render/render-invoice-document.ts::renderInvoiceDocument".to_string(),
+        ]
+    );
+}

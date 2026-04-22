@@ -344,6 +344,46 @@ pub(super) fn then_devql_artefacts_returns_results(
     })
 }
 
+pub(super) fn then_devql_select_artefacts_search_returns_symbol(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let search = ctx.matches[1].1.clone();
+        let expected_symbol = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "DevQL selectArtefacts search returns symbol",
+            helpers::assert_devql_select_artefacts_search_returns_symbol(
+                world,
+                &repo_name,
+                &search,
+                &expected_symbol,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_devql_select_artefacts_search_returns_at_least(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let search = ctx.matches[1].1.clone();
+        let min_count = ctx.matches[2]
+            .1
+            .parse::<usize>()
+            .expect("selectArtefacts search min_count should parse as usize");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "DevQL selectArtefacts search returns at least",
+            helpers::assert_devql_select_artefacts_search_returns_at_least(
+                world, &repo_name, &search, min_count,
+            ),
+        );
+    })
+}
+
 pub(super) fn then_devql_checkpoints_returns_results(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
