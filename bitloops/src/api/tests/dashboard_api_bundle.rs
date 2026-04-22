@@ -533,6 +533,50 @@ async fn dashboard_interaction_queries_return_session_detail_buckets_and_search_
     );
 }
 
+#[test]
+fn interaction_commit_author_buckets_do_not_block_on_relational_write_locks() {
+    let repo = seed_dashboard_repo();
+    let sqlite_path = checkpoint_sqlite_path(repo.path());
+    let lock_conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite");
+    lock_conn
+        .execute_batch("BEGIN IMMEDIATE;")
+        .expect("hold relational writer lock");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let repo_root = repo.path().to_path_buf();
+    let worker = std::thread::spawn(move || {
+        let result = crate::host::interactions::query::list_commit_author_buckets(
+            &repo_root,
+            &crate::host::interactions::query::InteractionBrowseFilter::default(),
+        );
+        tx.send(result)
+            .expect("send interaction commit author buckets");
+    });
+
+    let received = rx.recv_timeout(std::time::Duration::from_millis(250));
+
+    lock_conn
+        .execute_batch("ROLLBACK;")
+        .expect("release relational writer lock");
+
+    let buckets = match received {
+        Ok(result) => result.expect("load interaction commit author buckets"),
+        Err(err) => {
+            let delayed = rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("query should finish after releasing relational writer lock");
+            let delayed_error = delayed.err().map(|err| err.to_string());
+            panic!(
+                "interaction commit author query blocked on a transient relational write lock: {err}; eventual error after releasing lock: {delayed_error:?}"
+            );
+        }
+    };
+
+    worker.join().expect("join interaction query worker");
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets[0].author_email, "alice@example.com");
+}
+
 #[tokio::test]
 async fn dashboard_kpis_includes_expected_aggregates() {
     let repo = seed_dashboard_repo();
