@@ -11,8 +11,7 @@ use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
     CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
     DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
-    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    DepsSummary, DepsSummaryFilterInput, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -444,6 +443,8 @@ impl Artefact {
         )
     }
 
+    // Temporarily hidden from the typed GraphQL surface until coverage is refreshed.
+    /*
     async fn coverage(
         &self,
         ctx: &Context<'_>,
@@ -465,6 +466,7 @@ impl Artefact {
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
     }
+    */
 
     async fn copy_lineage(&self, ctx: &Context<'_>) -> Result<Vec<ArtefactCopyLineage>> {
         ctx.data_unchecked::<DevqlGraphqlContext>()

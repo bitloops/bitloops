@@ -19,7 +19,7 @@ use super::types::{
     InteractionTurnEdge, InteractionTurnSearchHitObject, KnowledgeItemConnection,
     KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
     TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
@@ -812,6 +812,8 @@ impl SlimQueryRoot {
         )
     }
 
+    // Temporarily hidden from the typed GraphQL surface until coverage is refreshed.
+    /*
     async fn coverage(
         &self,
         ctx: &Context<'_>,
@@ -844,6 +846,7 @@ impl SlimQueryRoot {
                 .map_err(|err| map_stage_adapter_error("coverage", err))?,
         )
     }
+    */
 
     #[graphql(name = "testsSummary")]
     async fn tests_summary(&self, ctx: &Context<'_>) -> Result<TestHarnessCommitSummary> {
