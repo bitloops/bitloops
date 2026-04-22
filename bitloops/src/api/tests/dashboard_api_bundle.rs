@@ -183,6 +183,7 @@ async fn dashboard_sdl_route_returns_schema_text() {
     assert!(body.contains("type DashboardSubscriptionRoot"));
     assert!(body.contains("health: HealthStatus!"));
     assert!(body.contains("repositories: [DashboardRepository!]!"));
+    assert!(body.contains("analyticsSql("));
     assert!(body.contains("kpis("));
     assert!(body.contains("interactionKpis("));
     assert!(body.contains("interactionSessions("));
@@ -196,6 +197,50 @@ async fn dashboard_sdl_route_returns_schema_text() {
     assert!(body.contains("fetchBundle: DashboardFetchBundleResult!"));
     assert!(!body.contains("postgres:"));
     assert!(!body.contains("clickhouse:"));
+}
+
+#[tokio::test]
+async fn dashboard_analytics_sql_query_returns_rows_and_metadata() {
+    let repo = seed_dashboard_repo();
+    seed_dashboard_analytics_sources(repo.path());
+    let app = dashboard_app(
+        repo.path(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    );
+
+    let (status, payload) = request_dashboard_graphql(
+        app,
+        r#"
+        {
+          analyticsSql(input: { sql: "SELECT repo_id, path FROM analytics.current_file_state" }) {
+            rowCount
+            truncated
+            durationMs
+            repoIds
+            warnings
+            columns {
+              name
+              logicalType
+            }
+            rows
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let result = &payload["data"]["analyticsSql"];
+    assert_eq!(result["rowCount"].as_u64(), Some(1));
+    assert_eq!(result["truncated"], Value::Bool(false));
+    assert_eq!(result["columns"][0]["name"], Value::from("repo_id"));
+    assert_eq!(result["columns"][1]["name"], Value::from("path"));
+    assert_eq!(result["rows"][0]["path"], Value::from("src/lib.rs"));
+    assert_eq!(
+        result["repoIds"][0],
+        Value::from(crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id"))
+    );
 }
 
 #[tokio::test]

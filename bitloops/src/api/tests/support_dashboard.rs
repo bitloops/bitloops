@@ -499,6 +499,151 @@ fn seed_dashboard_interactions(repo_root: &Path, checkpoint_id: &str) {
         .expect("assign checkpoint to interaction turn");
 }
 
+pub(super) fn seed_dashboard_analytics_sources(repo_root: &Path) {
+    use crate::host::interactions::interaction_repository::create_interaction_repository;
+    use crate::host::interactions::store::InteractionEventRepository;
+    use crate::host::interactions::types::{
+        InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
+    };
+
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo = crate::host::devql::resolve_repo_identity(repo_root)
+        .expect("resolve repo identity for dashboard analytics");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    conn.execute(
+        "INSERT INTO repo_sync_state (
+            repo_id, repo_root, active_branch, head_commit_sha, head_tree_sha, parser_version,
+            extractor_version, scope_exclusions_fingerprint, last_sync_started_at,
+            last_sync_completed_at, last_sync_status, last_sync_reason
+         ) VALUES (
+            ?1, ?2, 'main', 'abc', 'def', '1', '1', '', '2026-04-22T09:00:00Z',
+            '2026-04-22T09:05:00Z', 'completed', ''
+         )
+         ON CONFLICT(repo_id) DO UPDATE SET
+            repo_root = excluded.repo_root,
+            active_branch = excluded.active_branch,
+            last_sync_completed_at = excluded.last_sync_completed_at,
+            last_sync_status = excluded.last_sync_status",
+        rusqlite::params![repo.repo_id, repo_root.to_string_lossy().to_string()],
+    )
+    .expect("upsert repo_sync_state row");
+    conn.execute(
+        "INSERT INTO current_file_state (
+            repo_id, path, analysis_mode, file_role, text_index_mode, language, resolved_language,
+            dialect, primary_context_id, secondary_context_ids_json, frameworks_json,
+            runtime_profile, classification_reason, context_fingerprint, extraction_fingerprint,
+            head_content_id, index_content_id, worktree_content_id, effective_content_id,
+            effective_source, parser_version, extractor_version, exists_in_head, exists_in_index,
+            exists_in_worktree, last_synced_at
+         ) VALUES (
+            ?1, 'src/lib.rs', 'code', 'source_code', 'none', 'rust', 'rust', '', '', '[]', '[]',
+            '', 'seeded', '', 'analytics-1', 'head-1', 'index-1', 'worktree-1', 'effective-1',
+            'worktree', '1', '1', 1, 1, 1, '2026-04-22T09:04:00Z'
+         )
+         ON CONFLICT(repo_id, path) DO UPDATE SET
+            extraction_fingerprint = excluded.extraction_fingerprint,
+            effective_content_id = excluded.effective_content_id,
+            last_synced_at = excluded.last_synced_at",
+        rusqlite::params![repo.repo_id],
+    )
+    .expect("upsert current_file_state row");
+
+    let events_cfg = crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve analytics backend config")
+        .events;
+    let repository = create_interaction_repository(&events_cfg, repo_root, repo.repo_id.clone())
+        .expect("create interaction repository");
+
+    repository
+        .upsert_session(&InteractionSession {
+            session_id: "session-analytics".to_string(),
+            repo_id: repo.repo_id.clone(),
+            branch: "main".to_string(),
+            actor_id: "actor-analytics".to_string(),
+            actor_name: "Alice".to_string(),
+            actor_email: "alice@example.com".to_string(),
+            actor_source: "seed".to_string(),
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            first_prompt: "Inspect analytics".to_string(),
+            transcript_path: "/tmp/transcript.jsonl".to_string(),
+            worktree_path: repo_root.to_string_lossy().to_string(),
+            worktree_id: "worktree-analytics".to_string(),
+            started_at: "2026-04-22T09:00:00Z".to_string(),
+            ended_at: None,
+            last_event_at: "2026-04-22T09:02:00Z".to_string(),
+            updated_at: "2026-04-22T09:02:00Z".to_string(),
+        })
+        .expect("upsert analytics session");
+    repository
+        .upsert_turn(&InteractionTurn {
+            turn_id: "turn-analytics".to_string(),
+            session_id: "session-analytics".to_string(),
+            repo_id: repo.repo_id.clone(),
+            branch: "main".to_string(),
+            actor_id: "actor-analytics".to_string(),
+            actor_name: "Alice".to_string(),
+            actor_email: "alice@example.com".to_string(),
+            actor_source: "seed".to_string(),
+            turn_number: 1,
+            prompt: "Inspect analytics".to_string(),
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            started_at: "2026-04-22T09:00:00Z".to_string(),
+            ended_at: Some("2026-04-22T09:02:00Z".to_string()),
+            token_usage: Some(
+                crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
+                    input_tokens: 120,
+                    output_tokens: 80,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    api_call_count: 1,
+                    subagent_tokens: None,
+                },
+            ),
+            summary: "Analysed tool usage".to_string(),
+            prompt_count: 1,
+            transcript_offset_start: Some(0),
+            transcript_offset_end: Some(64),
+            transcript_fragment: "fragment".to_string(),
+            files_modified: vec!["src/lib.rs".to_string()],
+            checkpoint_id: None,
+            updated_at: "2026-04-22T09:02:00Z".to_string(),
+        })
+        .expect("upsert analytics turn");
+    repository
+        .append_event(&InteractionEvent {
+            event_id: "event-analytics-1".to_string(),
+            session_id: "session-analytics".to_string(),
+            turn_id: Some("turn-analytics".to_string()),
+            repo_id: repo.repo_id,
+            branch: "main".to_string(),
+            actor_id: "actor-analytics".to_string(),
+            actor_name: "Alice".to_string(),
+            actor_email: "alice@example.com".to_string(),
+            actor_source: "seed".to_string(),
+            event_type: InteractionEventType::ToolInvocationObserved,
+            event_time: "2026-04-22T09:01:00Z".to_string(),
+            source: "transcript_derivation".to_string(),
+            sequence_number: 1,
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            tool_use_id: "toolu-analytics-1".to_string(),
+            tool_kind: "bash".to_string(),
+            task_description: "rg analytics src".to_string(),
+            subagent_id: String::new(),
+            payload: json!({
+                "tool_name": "bash",
+                "input_summary": "rg analytics src",
+                "command": "rg analytics src",
+                "command_binary": "rg",
+                "command_argv": ["rg", "analytics", "src"],
+                "transcript_path": "/tmp/transcript.jsonl"
+            }),
+        })
+        .expect("append analytics event");
+}
+
 fn seed_dashboard_commit_row(repo_root: &Path, commit_sha: &str) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let sqlite =
