@@ -28,17 +28,12 @@ mod tests {
     }
 
     #[test]
-    fn using_devql_skill_mentions_fuzzy_name_lookup() {
+    fn using_devql_skill_mentions_search_lookup() {
         let body = using_devql_skill_body();
-        assert!(body.contains("fuzzyName"));
-        assert!(body.contains("<approx-symbol-name>"));
-    }
-
-    #[test]
-    fn using_devql_skill_mentions_natural_language_lookup() {
-        let body = using_devql_skill_body();
-        assert!(body.contains("naturalLanguage"));
-        assert!(body.contains("<natural-language request>"));
+        assert!(body.contains("search"));
+        assert!(body.contains("<natural-language request or approx symbol>"));
+        assert!(body.contains("payLatr()"));
+        assert!(body.contains("build invoice pdf"));
     }
 
     #[test]
@@ -52,13 +47,14 @@ mod tests {
     }
 
     #[test]
-    fn using_devql_skill_requires_natural_language_followed_by_summary() {
+    fn using_devql_skill_requires_search_followed_by_summary_for_natural_language_prompts() {
         let body = using_devql_skill_body();
         assert!(body.contains("If the input is natural language"));
         assert!(body.contains("always follow with `summary`"));
         assert!(body.contains("before expanding"));
         assert!(body.contains("stages."));
         assert!(body.contains("resolve concrete artefacts/files first"));
+        assert!(body.contains("with `search`"));
     }
 
     #[test]
@@ -77,11 +73,10 @@ mod tests {
     fn using_devql_skill_explains_selector_routing() {
         let body = using_devql_skill_body();
         assert!(body.contains("Selector Routing"));
-        assert!(
-            body.contains("Do not pass the whole conversational prompt into `naturalLanguage`")
-        );
+        assert!(body.contains("Do not pass the whole conversational prompt into `search`"));
         assert!(body.contains("For mixed prompts, try structured lookup first"));
         assert!(body.contains("help me understand the codebase"));
+        assert!(body.contains("fuzzy and semantic are query styles"));
     }
 
     #[test]

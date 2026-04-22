@@ -1683,7 +1683,7 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() {
+async fn slim_select_artefacts_search_prefers_fuzzy_hits_in_project_scope() {
     let repo = seed_graphql_monorepo_repo();
     let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
 
@@ -1691,7 +1691,7 @@ async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() 
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { fuzzyName: "targte()" }) {
+              selectArtefacts(by: { search: "targte()" }) {
                 count
                 artefacts {
                   path
@@ -1944,7 +1944,7 @@ async fn slim_select_artefacts_file_rejects_entries_field() {
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_resolves_semantic_query_selection_in_repo_scope() {
+async fn slim_select_artefacts_search_resolves_embedding_hits_in_repo_scope() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_semantic_query_inputs(repo.path());
     configure_graphql_semantic_query_runtime(repo.path());
@@ -1954,7 +1954,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_repo_scope()
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { naturalLanguage: "render in page ts" }) {
+              selectArtefacts(by: { search: "render in page ts" }) {
                 count
                 artefacts {
                   path
@@ -1986,7 +1986,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_repo_scope()
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_resolves_semantic_query_selection_in_project_scope() {
+async fn slim_select_artefacts_search_resolves_embedding_hits_in_project_scope() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_semantic_query_inputs(repo.path());
     configure_graphql_semantic_query_runtime(repo.path());
@@ -1996,7 +1996,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_project_scop
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { naturalLanguage: "caller in caller ts" }) {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
                 count
                 artefacts {
                   score
@@ -2034,8 +2034,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_project_scop
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_name_and_path_terms()
-{
+async fn slim_select_artefacts_search_resolves_identity_name_and_path_terms() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_semantic_query_inputs(repo.path());
     configure_graphql_semantic_query_runtime(repo.path());
@@ -2045,7 +2044,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_n
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { naturalLanguage: "caller in caller ts" }) {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
                 count
                 artefacts {
                   path
@@ -2077,7 +2076,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_n
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_path_terms() {
+async fn slim_select_artefacts_search_resolves_identity_path_terms() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_semantic_query_inputs(repo.path());
     configure_graphql_semantic_query_runtime(repo.path());
@@ -2087,7 +2086,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_p
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { naturalLanguage: "render in page ts" }) {
+              selectArtefacts(by: { search: "render in page ts" }) {
                 count
                 artefacts {
                   path
@@ -2115,6 +2114,95 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_p
     assert_eq!(
         artefacts[0]["symbolFqn"],
         "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "build response payload" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 2);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+    assert_eq!(artefacts[1]["path"], "packages/api/src/target.ts");
+    assert_eq!(
+        artefacts[1]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_dedupes_overlapping_fuzzy_and_embedding_hits() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
     );
 }
 
@@ -2220,7 +2308,7 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_semantic_query_drives_summary_and_deps_and_tests() {
+async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     seed_graphql_clone_data(repo.path());
     seed_graphql_semantic_query_inputs(repo.path());
@@ -2242,7 +2330,7 @@ async fn slim_select_artefacts_semantic_query_drives_summary_and_deps_and_tests(
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { naturalLanguage: "caller in caller ts" }) {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
                 count
                 summary
                 deps {
@@ -2295,7 +2383,7 @@ async fn slim_select_artefacts_semantic_query_drives_summary_and_deps_and_tests(
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_semantic_query_returns_empty_when_no_match_is_close() {
+async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
     let repo = seed_graphql_monorepo_repo();
     seed_graphql_semantic_query_inputs(repo.path());
     configure_graphql_semantic_query_runtime(repo.path());
@@ -2305,7 +2393,7 @@ async fn slim_select_artefacts_semantic_query_returns_empty_when_no_match_is_clo
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { naturalLanguage: "unrelated zeta quaternion" }) {
+              selectArtefacts(by: { search: "unrelated zeta quaternion" }) {
                 count
                 artefacts {
                   path

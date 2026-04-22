@@ -709,57 +709,114 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
         ],
     )
     .expect("insert semantic query setup");
-    conn.execute(
-        "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
-            repo_id, representation_kind, provider, model, dimension, setup_fingerprint
-        ) VALUES (?1, 'identity', ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            repo_id.as_str(),
-            crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
-            "semantic-query-test-model",
-            3,
-            setup.setup_fingerprint,
-        ],
-    )
-    .expect("insert semantic query active setup");
+    for representation_kind in ["identity", "code", "summary"] {
+        conn.execute(
+            "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
+                repo_id, representation_kind, provider, model, dimension, setup_fingerprint
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                repo_id.as_str(),
+                representation_kind,
+                crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+                "semantic-query-test-model",
+                3,
+                setup.setup_fingerprint,
+            ],
+        )
+        .expect("insert semantic query active setup");
+    }
 
-    for (artefact_id, path, content_id, symbol_id, input_hash, embedding) in [
+    for (representation_kind, (artefact_id, path, content_id, symbol_id, input_hash, embedding)) in [
         (
-            "artefact::api-caller",
-            "packages/api/src/caller.ts",
-            "blob-api-caller",
-            "sym::api-caller",
-            "semantic-query-hash-api-caller-identity",
-            "[0.0,-1.0,0.0]",
+            "identity",
+            (
+                "artefact::api-caller",
+                "packages/api/src/caller.ts",
+                "blob-api-caller",
+                "sym::api-caller",
+                "semantic-query-hash-api-caller-identity",
+                "[0.0,-1.0,0.0]",
+            ),
         ),
         (
-            "artefact::api-target",
-            "packages/api/src/target.ts",
-            "blob-api-target",
-            "sym::api-target",
-            "semantic-query-hash-api-target-identity",
-            "[0.0,0.0,-1.0]",
+            "identity",
+            (
+                "artefact::api-target",
+                "packages/api/src/target.ts",
+                "blob-api-target",
+                "sym::api-target",
+                "semantic-query-hash-api-target-identity",
+                "[0.0,0.0,-1.0]",
+            ),
         ),
         (
-            "artefact::web-render",
-            "packages/web/src/page.ts",
-            "blob-web-page",
-            "sym::web-render",
-            "semantic-query-hash-web-render-identity",
-            "[0.0,0.0,1.0]",
+            "identity",
+            (
+                "artefact::web-render",
+                "packages/web/src/page.ts",
+                "blob-web-page",
+                "sym::web-render",
+                "semantic-query-hash-web-render-identity",
+                "[0.0,0.0,1.0]",
+            ),
+        ),
+        (
+            "code",
+            (
+                "artefact::api-caller",
+                "packages/api/src/caller.ts",
+                "blob-api-caller",
+                "sym::api-caller",
+                "semantic-query-hash-api-caller-code",
+                "[1.0,0.0,0.0]",
+            ),
+        ),
+        (
+            "code",
+            (
+                "artefact::web-render",
+                "packages/web/src/page.ts",
+                "blob-web-page",
+                "sym::web-render",
+                "semantic-query-hash-web-render-code",
+                "[0.0,1.0,0.0]",
+            ),
+        ),
+        (
+            "summary",
+            (
+                "artefact::api-target",
+                "packages/api/src/target.ts",
+                "blob-api-target",
+                "sym::api-target",
+                "semantic-query-hash-api-target-summary",
+                "[0.98,0.02,0.0]",
+            ),
+        ),
+        (
+            "summary",
+            (
+                "artefact::web-render",
+                "packages/web/src/page.ts",
+                "blob-web-page",
+                "sym::web-render",
+                "semantic-query-hash-web-render-summary",
+                "[0.0,0.95,0.05]",
+            ),
         ),
     ] {
         conn.execute(
             "INSERT OR REPLACE INTO symbol_embeddings_current (
                 artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
                 setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'identity', ?6, ?7, ?8, ?9, ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 artefact_id,
                 repo_id.as_str(),
                 path,
                 content_id,
                 symbol_id,
+                representation_kind,
                 setup.setup_fingerprint,
                 crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
                 "semantic-query-test-model",
@@ -794,6 +851,9 @@ while IFS= read -r line; do
       vector='[[0.0,1.0,0.0]]'
       ;;
     *'"cmd":"embed"'*'"texts":["caller in caller ts"]'*)
+      vector='[[0.0,-1.0,0.0]]'
+      ;;
+    *'"cmd":"embed"'*'"texts":["caller"]'*)
       vector='[[0.0,-1.0,0.0]]'
       ;;
     *'"cmd":"embed"'*'"texts":["render in page ts"]'*)
@@ -850,6 +910,8 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
       } elseif ($text -eq "render payload fragment") {
         $vector = @(@(0.0, 1.0, 0.0))
       } elseif ($text -eq "caller in caller ts") {
+        $vector = @(@(0.0, -1.0, 0.0))
+      } elseif ($text -eq "caller") {
         $vector = @(@(0.0, -1.0, 0.0))
       } elseif ($text -eq "render in page ts") {
         $vector = @(@(0.0, 0.0, 1.0))
@@ -917,7 +979,8 @@ pub(super) fn configure_graphql_semantic_query_runtime(repo_root: &Path) {
                 "summary_mode": "off",
                 "embedding_mode": "deterministic",
                 "inference": {
-                    "code_embeddings": "semantic_query_test"
+                    "code_embeddings": "semantic_query_test",
+                    "summary_embeddings": "semantic_query_test"
                 }
             },
             "inference": {

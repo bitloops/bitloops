@@ -44,11 +44,11 @@ Exactly one selector mode must be used.
 
 This usually resolves to `0..1` logical artefacts, but callers should treat the result as a set.
 
-### By `fuzzyName`
+### By `search`
 
 ```graphql
 {
-  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+  selectArtefacts(by: { search: "payLater()" }) {
     count
     artefacts {
       path
@@ -58,23 +58,12 @@ This usually resolves to `0..1` logical artefacts, but callers should treat the 
 }
 ```
 
-This searches current artefacts in scope by normalized symbol name, including typo-tolerant matches such as `payLater()` or `payLatr()`. v1 returns up to 10 best-first matches and does not expose scores in the API.
+`search` runs two internal lanes and returns one flat artefact list:
 
-### By `naturalLanguage`
+- up to 5 fuzzy symbol-name matches, including typo-tolerant requests such as `payLater()` or `payLatr()`
+- up to 5 embedding-backed conceptual matches across identity, code, and summary representations
 
-```graphql
-{
-  selectArtefacts(by: { naturalLanguage: "find the artefacts that build invoice PDFs" }) {
-    count
-    artefacts {
-      path
-      symbolFqn
-    }
-  }
-}
-```
-
-This embeds free-form natural language and compares it against prepared current artefact embeddings in the active slim scope. Results are ordered by internal similarity, weak matches are dropped, and v1 does not expose scores in the API.
+Fuzzy hits are returned first, embedding-only hits follow, weak matches are dropped, and `score` remains optional debug output rather than part of the default contract.
 
 ### By `path` and `lines`
 
@@ -112,11 +101,9 @@ This resolves all current artefacts in the file.
 
 ## Validation Rules
 
-- `symbolFqn` cannot be combined with `fuzzyName`, `naturalLanguage`, `path`, or `lines`
-- `fuzzyName` cannot be combined with `symbolFqn`, `naturalLanguage`, `path`, or `lines`
-- `fuzzyName` must be non-empty
-- `naturalLanguage` cannot be combined with `symbolFqn`, `fuzzyName`, `path`, or `lines`
-- `naturalLanguage` must be non-empty
+- `symbolFqn` cannot be combined with `search`, `path`, or `lines`
+- `search` cannot be combined with `symbolFqn`, `path`, or `lines`
+- `search` must be non-empty
 - `lines` requires `path`
 - empty selectors are rejected
 - selector paths are resolved relative to the slim request scope, including project-scoped slim requests
@@ -319,7 +306,7 @@ The DevQL DSL supports `selectArtefacts(...)` with flat selector args:
 
 ```text
 selectArtefacts(symbol_fqn:"rust-app/src/main.rs::main")->checkpoints()
-selectArtefacts(fuzzy_name:"payLater()")->checkpoints()
+selectArtefacts(search:"payLater()")->checkpoints()
 selectArtefacts(path:"rust-app/src/main.rs",lines:6..10)->deps()
 selectArtefacts(path:"rust-app/src/main.rs")->tests(min_confidence:0.8)
 ```

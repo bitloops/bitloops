@@ -14,8 +14,7 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArtefactSelectorMode {
     SymbolFqn(String),
-    FuzzyName(String),
-    NaturalLanguage(String),
+    Search(String),
     Path {
         path: String,
         lines: Option<LineRangeInput>,
@@ -25,8 +24,7 @@ pub(crate) enum ArtefactSelectorMode {
 #[derive(Debug, Clone, InputObject)]
 pub struct ArtefactSelectorInput {
     pub symbol_fqn: Option<String>,
-    pub fuzzy_name: Option<String>,
-    pub natural_language: Option<String>,
+    pub search: Option<String>,
     pub path: Option<String>,
     pub lines: Option<LineRangeInput>,
 }
@@ -39,19 +37,10 @@ impl ArtefactSelectorInput {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
-        let fuzzy_name = match self.fuzzy_name.as_deref() {
+        let search = match self.search.as_deref() {
             Some(value) if value.trim().is_empty() => {
                 return Err(bad_user_input_error(
-                    "`selectArtefacts(by: ...)` requires a non-empty `fuzzyName`",
-                ));
-            }
-            Some(value) => Some(value.trim().to_string()),
-            None => None,
-        };
-        let natural_language = match self.natural_language.as_deref() {
-            Some(value) if value.trim().is_empty() => {
-                return Err(bad_user_input_error(
-                    "`selectArtefacts(by: ...)` requires a non-empty `naturalLanguage`",
+                    "`selectArtefacts(by: ...)` requires a non-empty `search`",
                 ));
             }
             Some(value) => Some(value.trim().to_string()),
@@ -66,8 +55,7 @@ impl ArtefactSelectorInput {
 
         let path_selector_requested = path.is_some() || self.lines.is_some();
         let selector_count = usize::from(symbol_fqn.is_some())
-            + usize::from(fuzzy_name.is_some())
-            + usize::from(natural_language.is_some())
+            + usize::from(search.is_some())
             + usize::from(path_selector_requested);
         if selector_count == 0 {
             return Err(bad_user_input_error(
@@ -76,7 +64,7 @@ impl ArtefactSelectorInput {
         }
         if selector_count > 1 {
             return Err(bad_user_input_error(
-                "`selectArtefacts(by: ...)` allows exactly one of `symbolFqn`, `fuzzyName`, `naturalLanguage`, or `path`/`lines`",
+                "`selectArtefacts(by: ...)` allows exactly one of `symbolFqn`, `search`, or `path`/`lines`",
             ));
         }
         if path_selector_requested && path.is_none() {
@@ -88,11 +76,8 @@ impl ArtefactSelectorInput {
         if let Some(symbol_fqn) = symbol_fqn {
             return Ok(ArtefactSelectorMode::SymbolFqn(symbol_fqn));
         }
-        if let Some(fuzzy_name) = fuzzy_name {
-            return Ok(ArtefactSelectorMode::FuzzyName(fuzzy_name));
-        }
-        if let Some(natural_language) = natural_language {
-            return Ok(ArtefactSelectorMode::NaturalLanguage(natural_language));
+        if let Some(search) = search {
+            return Ok(ArtefactSelectorMode::Search(search));
         }
 
         let path = path.expect("selector_count ensures path selector exists");
