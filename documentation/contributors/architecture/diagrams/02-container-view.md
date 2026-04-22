@@ -33,13 +33,14 @@ flowchart LR
 
     subgraph RepoLocal["Repo-local state"]
         RepoRuntime["Repo runtime SQLite"]
+        ProducerSpool["Producer spool"]
         RepoState["Working tree + .git"]
     end
 
     subgraph Daemon["Daemon-owned runtime"]
         Api["HTTP / GraphQL / WS"]
         Host["DevQL host + capability host"]
-        Queue["Task queue + workers"]
+        Queue["Task / worker orchestration"]
         DaemonRuntime["Daemon runtime state"]
     end
 
@@ -81,10 +82,11 @@ flowchart LR
 
     Hooks --> RepoRuntime
     Hooks --> RepoState
-    Hooks -. enqueue follow-up work .-> Queue
+    Hooks -. queue follow-up work .-> ProducerSpool
 
     Watcher --> RepoRuntime
-    Watcher -. enqueue sync work .-> Queue
+    Watcher -. queue sync work .-> ProducerSpool
+    ProducerSpool -. claimed by .-> Queue
 
     DaemonProc --> Api
     Api --> Host
@@ -107,15 +109,16 @@ flowchart LR
 - The daemon is the center of the query and worker runtime.
 - The watcher is a distinct background process.
 - Hook entrypoints are real runtime boundaries because agents and Git invoke them independently of normal CLI flows.
-- The repo runtime store is operational state. The relational, event, and blob stores are durable query state.
+- The repo runtime store and producer spool are operational state. The relational, event, and blob stores are durable query state.
+- Watcher-driven and capture-triggered DevQL follow-up work is staged repo-locally before the daemon claims it.
 
 ## What each hidden process is
 
 ### `__daemon-process`
 
 - This is the actual long-lived daemon server process.
-- It runs the HTTP/GraphQL/dashboard runtime, ensures DevQL storage is current, starts enrichment coordination, and writes daemon runtime state in [`bitloops/src/daemon/server_runtime.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/daemon/server_runtime.rs#L42).
-- This is the process that serves `/devql`, `/devql/global`, dashboard assets, and related local API traffic.
+- It runs the HTTP/GraphQL/dashboard runtime, ensures DevQL storage is current, starts the daemon worker runtime, and writes daemon runtime state in [`bitloops/src/daemon/server_runtime.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/daemon/server_runtime.rs#L42).
+- This is the process that serves `/devql`, `/devql/global`, `/devql/runtime`, `/devql/dashboard`, dashboard assets, and related local API traffic.
 - In detached and service modes, the CLI spawns this hidden entrypoint.
 - In foreground mode, the same server runtime can run directly from the CLI process instead of spawning a separate child.
 
@@ -131,5 +134,5 @@ flowchart LR
 
 - This is a separate background file-watcher process, not the daemon.
 - It watches the repo with `notify`, debounces events, filters ignored paths, initializes local watch schema, and registers itself in repo runtime SQLite in [`bitloops/src/host/devql/watch.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/host/devql/watch.rs#L61).
-- After batching changes, it computes changed paths and enqueues sync work with source `Watcher` via [`bitloops/src/host/devql/capture.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/host/devql/capture.rs#L23).
-- Its job is to detect filesystem changes and hand off sync work.
+- After batching changes, it computes changed paths, records temporary workspace state, and writes producer-spool jobs for daemon follow-up via [`bitloops/src/host/devql/capture.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/host/devql/capture.rs#L23).
+- Its job is to detect filesystem changes and hand off follow-up work through repo-local runtime state.

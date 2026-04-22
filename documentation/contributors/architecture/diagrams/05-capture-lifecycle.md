@@ -13,9 +13,9 @@ sequenceDiagram
     participant Strategy as "Checkpoint strategy"
     participant Git as "Working tree + Git"
     participant Repo as "Interaction repository"
-    participant Queue as "DevQL task handoff"
+    participant Spool as "DevQL producer spool"
 
-    Agent->>Hooks: session-start / prompt / tool / stop
+    Agent->>Hooks: session-start / prompt / tool / stop hooks
     Hooks->>Lifecycle: normalize native hook payload
     Lifecycle->>Runtime: persist live session state
     Lifecycle->>Strategy: save step or task step
@@ -23,17 +23,17 @@ sequenceDiagram
     Strategy->>Runtime: persist checkpoint metadata
     Lifecycle->>Repo: append interaction events
 
-    Note over Agent,Queue: Git lifecycle callbacks are a separate trigger path.
+    Note over Agent,Spool: Git lifecycle callbacks are a separate trigger path.
 
     Git->>Hooks: post-commit / post-merge / post-checkout / pre-push
     Hooks->>Strategy: invoke git lifecycle callback
     Strategy->>Repo: reconcile uncheckpointed turns
     Strategy->>Runtime: update commit and checkpoint mappings
-    Strategy-->>Queue: enqueue DevQL follow-up when required
+    Strategy-->>Spool: queue DevQL follow-up when required
 ```
 
 ## Notes
 
 - Capture is about provenance and checkpoint formation.
 - The strategy decides how session turns map to temporary or committed checkpoints.
-- Git lifecycle callbacks can trigger DevQL follow-up work, but that does not make sync part of the capture flow.
+- Git lifecycle callbacks can queue repo-local DevQL follow-up work, but that does not make sync part of the capture flow.
