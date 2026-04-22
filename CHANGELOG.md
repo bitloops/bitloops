@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **`bitloops init --sync=true` no longer waits on unselected semantic enrichment lanes before completing**: init session status now filters queued summary-refresh, code-embedding, and summary-embedding work down to the lanes actually selected for that session. This fixes sync-only runs getting stuck on "Waiting for queued enrichment work to finish" when repo-level semantic summary refresh remained active in the background
+- **DevQL hook enforcement is now skill-gated by the installed repo-local surface**: enabling the Bitloops-managed `using-devql` skill now installs the repo-local DevQL surface and emits direct startup guidance, disabling the skill emits no DevQL guidance, Claude Code and Codex regain targeted prompt-time reinforcement, and Cursor stays on session-start plus rule-based guidance.
 
 ### Changed
 

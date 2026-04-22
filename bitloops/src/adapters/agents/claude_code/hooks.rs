@@ -19,7 +19,7 @@ const CMD_USER_PROMPT_SUBMIT: &str = "bitloops hooks claude-code user-prompt-sub
 const CMD_PRE_TASK: &str = "bitloops hooks claude-code pre-task";
 const CMD_POST_TASK: &str = "bitloops hooks claude-code post-task";
 const CMD_POST_TODO: &str = "bitloops hooks claude-code post-todo";
-const SESSION_START_MATCHER: &str = "startup|clear|compact";
+const SESSION_START_MATCHER: &str = "startup|resume|clear|compact";
 
 /// A single hook entry within a matcher.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -676,7 +676,7 @@ mod tests {
             );
             assert_hook_exists(
                 &session_start,
-                "startup|clear|compact",
+                "startup|resume|clear|compact",
                 &cmd_session_start,
                 "Bitloops SessionStart hook",
             );
@@ -855,7 +855,7 @@ mod tests {
         let session_start = read_hook_type(&dir, "SessionStart");
         assert_hook_exists(
             &session_start,
-            "startup|clear|compact",
+            "startup|resume|clear|compact",
             "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start",
             "Bitloops SessionStart hook with daemon config override",
         );
@@ -913,6 +913,29 @@ mod tests {
         assert!(
             !are_hooks_installed(dir.path()),
             "are_hooks_installed should be false when Stop hook is missing"
+        );
+    }
+
+    #[test]
+    fn install_hooks_installs_session_start_matcher_with_resume_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+
+        install_hooks(dir.path(), false).unwrap();
+
+        let session_start = read_hook_type(&dir, "SessionStart");
+        assert_eq!(
+            session_start.len(),
+            1,
+            "should install a single SessionStart matcher"
+        );
+        assert_eq!(
+            session_start[0].matcher, "startup|resume|clear|compact",
+            "SessionStart matcher should include resume"
+        );
+        assert_eq!(
+            session_start[0].hooks[0].command,
+            crate::adapters::agents::managed_hook_command(CMD_SESSION_START),
+            "SessionStart matcher should install the Bitloops command"
         );
     }
 }
