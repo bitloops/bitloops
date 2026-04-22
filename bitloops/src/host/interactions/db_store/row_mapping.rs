@@ -73,9 +73,9 @@ pub(super) fn map_turn_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Interact
 }
 
 pub(super) fn map_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InteractionEvent> {
-    let payload_raw: String = row.get(17)?;
+    let payload_raw: String = row.get(19)?;
     let payload = serde_json::from_str::<serde_json::Value>(&payload_raw).map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(17, rusqlite::types::Type::Text, Box::new(err))
+        rusqlite::Error::FromSqlConversionFailure(19, rusqlite::types::Type::Text, Box::new(err))
     })?;
     let event_type_raw: String = row.get(9)?;
     let event_type = InteractionEventType::parse(&event_type_raw).ok_or_else(|| {
@@ -100,12 +100,14 @@ pub(super) fn map_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Interac
         actor_source: row.get(8)?,
         event_type,
         event_time: row.get(10)?,
-        agent_type: row.get(11)?,
-        model: row.get(12)?,
-        tool_use_id: row.get(13)?,
-        tool_kind: row.get(14)?,
-        task_description: row.get(15)?,
-        subagent_id: row.get(16)?,
+        source: row.get(11)?,
+        sequence_number: row.get(12)?,
+        agent_type: row.get(13)?,
+        model: row.get(14)?,
+        tool_use_id: row.get(15)?,
+        tool_kind: row.get(16)?,
+        task_description: row.get(17)?,
+        subagent_id: row.get(18)?,
         payload,
     })
 }

@@ -154,14 +154,14 @@ impl ClickHouseInteractionRepository {
             "INSERT INTO interaction_events (
                 event_id, event_time, repo_id, session_id, turn_id, branch,
                 actor_id, actor_name, actor_email, actor_source,
-                event_type, agent_type, model, tool_use_id, tool_kind,
+                event_type, source, sequence_number, agent_type, model, tool_use_id, tool_kind,
                 task_description, subagent_id, payload
              ) VALUES (
                 '{event_id}', coalesce(parseDateTime64BestEffortOrNull('{event_time}'), now64(3)),
                 '{repo_id}', '{session_id}', '{turn_id}', '{branch}',
                 '{actor_id}', '{actor_name}', '{actor_email}', '{actor_source}',
-                '{event_type}', '{agent_type}', '{model}', '{tool_use_id}', '{tool_kind}',
-                '{task_description}', '{subagent_id}', '{payload}'
+                '{event_type}', '{source}', {sequence_number}, '{agent_type}', '{model}',
+                '{tool_use_id}', '{tool_kind}', '{task_description}', '{subagent_id}', '{payload}'
              )",
             event_id = esc_ch(&event.event_id),
             event_time = esc_ch(&event.event_time),
@@ -174,6 +174,8 @@ impl ClickHouseInteractionRepository {
             actor_email = esc_ch(&event.actor_email),
             actor_source = esc_ch(&event.actor_source),
             event_type = esc_ch(event.event_type.as_str()),
+            source = esc_ch(&event.source),
+            sequence_number = event.sequence_number,
             agent_type = esc_ch(&event.agent_type),
             model = esc_ch(&event.model),
             tool_use_id = esc_ch(&event.tool_use_id),
@@ -425,11 +427,11 @@ impl ClickHouseInteractionRepository {
             &format!(
                 "SELECT event_id, session_id, turn_id, repo_id, branch,
                         actor_id, actor_name, actor_email, actor_source, event_type,
-                        toString(event_time) AS event_time, agent_type, model, tool_use_id,
+                        toString(event_time) AS event_time, source, sequence_number, agent_type, model, tool_use_id,
                         tool_kind, task_description, subagent_id, payload
                  FROM interaction_events
                  WHERE {}
-                 ORDER BY event_time DESC, event_id DESC
+                 ORDER BY event_time DESC, sequence_number DESC, event_id DESC
                  LIMIT {}",
                 conditions.join(" AND "),
                 limit.max(1),
@@ -563,6 +565,8 @@ CREATE TABLE IF NOT EXISTS interaction_events (
     actor_email String,
     actor_source String,
     event_type String,
+    source String,
+    sequence_number Int64,
     agent_type String,
     model String,
     tool_use_id String,
@@ -602,6 +606,8 @@ const SCHEMA_MIGRATIONS: &[&str] = &[
     "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS actor_name String AFTER actor_id",
     "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS actor_email String AFTER actor_name",
     "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS actor_source String AFTER actor_email",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS source String AFTER event_type",
+    "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS sequence_number Int64 AFTER source",
     "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS tool_use_id String AFTER model",
     "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS tool_kind String AFTER tool_use_id",
     "ALTER TABLE interaction_events ADD COLUMN IF NOT EXISTS task_description String AFTER tool_kind",

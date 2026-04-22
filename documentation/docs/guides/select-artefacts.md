@@ -104,6 +104,9 @@ This resolves all current artefacts in the file.
 - `symbolFqn` cannot be combined with `search`, `path`, or `lines`
 - `search` cannot be combined with `symbolFqn`, `path`, or `lines`
 - `search` must be non-empty
+- `symbolFqn` cannot be combined with `search`, `path`, or `lines`
+- `search` cannot be combined with `symbolFqn`, `path`, or `lines`
+- `search` must be non-empty
 - `lines` requires `path`
 - empty selectors are rejected
 - selector paths are resolved relative to the slim request scope, including project-scoped slim requests

@@ -141,13 +141,13 @@ impl DuckDbInteractionRepository {
         let sql = format!(
             "INSERT OR IGNORE INTO interaction_events (
                 event_id, event_time, repo_id, session_id, turn_id, branch, actor_id,
-                actor_name, actor_email, actor_source, event_type, agent_type, model,
-                tool_use_id, tool_kind, task_description, subagent_id, payload
+                actor_name, actor_email, actor_source, event_type, source, sequence_number,
+                agent_type, model, tool_use_id, tool_kind, task_description, subagent_id, payload
              ) VALUES (
                 '{event_id}', '{event_time}', '{repo_id}', '{session_id}', '{turn_id}',
                 '{branch}', '{actor_id}', '{actor_name}', '{actor_email}', '{actor_source}',
-                '{event_type}', '{agent_type}', '{model}', '{tool_use_id}', '{tool_kind}',
-                '{task_description}', '{subagent_id}', '{payload}'
+                '{event_type}', '{source}', {sequence_number}, '{agent_type}', '{model}',
+                '{tool_use_id}', '{tool_kind}', '{task_description}', '{subagent_id}', '{payload}'
              )",
             event_id = esc_pg(&event.event_id),
             event_time = esc_pg(&event.event_time),
@@ -160,6 +160,8 @@ impl DuckDbInteractionRepository {
             actor_email = esc_pg(&event.actor_email),
             actor_source = esc_pg(&event.actor_source),
             event_type = esc_pg(event.event_type.as_str()),
+            source = esc_pg(&event.source),
+            sequence_number = event.sequence_number,
             agent_type = esc_pg(&event.agent_type),
             model = esc_pg(&event.model),
             tool_use_id = esc_pg(&event.tool_use_id),
@@ -308,14 +310,14 @@ impl DuckDbInteractionRepository {
         ensure_current_schema(&conn)?;
         let mut sql = format!(
             "SELECT event_id, session_id, turn_id, repo_id, branch, actor_id, actor_name,
-                    actor_email, actor_source, event_type, event_time, agent_type, model,
-                    tool_use_id, tool_kind, task_description, subagent_id, payload
+                    actor_email, actor_source, event_type, event_time, source, sequence_number,
+                    agent_type, model, tool_use_id, tool_kind, task_description, subagent_id, payload
              FROM interaction_events
              WHERE repo_id = '{repo_id}'",
             repo_id = esc_pg(&self.repo_id),
         );
         append_event_filter_sql(&mut sql, filter);
-        sql.push_str(" ORDER BY event_time DESC, event_id DESC");
+        sql.push_str(" ORDER BY event_time DESC, sequence_number DESC, event_id DESC");
         sql.push_str(&format!(" LIMIT {}", limit.max(1)));
 
         let mut stmt = conn.prepare(&sql)?;

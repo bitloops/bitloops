@@ -96,7 +96,7 @@ pub(super) fn session_matches_filter(
         && !summary
             .tool_uses
             .iter()
-            .any(|tool_use| eq_ignore_ascii_case(tool_use.tool_kind.as_str(), tool_kind))
+            .any(|tool_use| eq_ignore_ascii_case(tool_use.tool_name.as_str(), tool_kind))
     {
         return false;
     }
@@ -200,7 +200,7 @@ pub(super) fn turn_matches_filter(
         && !summary
             .tool_uses
             .iter()
-            .any(|tool_use| eq_ignore_ascii_case(tool_use.tool_kind.as_str(), tool_kind))
+            .any(|tool_use| eq_ignore_ascii_case(tool_use.tool_name.as_str(), tool_kind))
     {
         return false;
     }
