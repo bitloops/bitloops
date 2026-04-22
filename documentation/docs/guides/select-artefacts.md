@@ -60,11 +60,11 @@ This usually resolves to `0..1` logical artefacts, but callers should treat the 
 
 This searches current artefacts in scope by normalized symbol name, including typo-tolerant matches such as `payLater()` or `payLatr()`. v1 returns up to 10 best-first matches and does not expose scores in the API.
 
-### By `semanticQuery`
+### By `naturalLanguage`
 
 ```graphql
 {
-  selectArtefacts(by: { semanticQuery: "find the artefacts that build invoice PDFs" }) {
+  selectArtefacts(by: { naturalLanguage: "find the artefacts that build invoice PDFs" }) {
     count
     artefacts {
       path
@@ -112,11 +112,11 @@ This resolves all current artefacts in the file.
 
 ## Validation Rules
 
-- `symbolFqn` cannot be combined with `fuzzyName`, `semanticQuery`, `path`, or `lines`
-- `fuzzyName` cannot be combined with `symbolFqn`, `semanticQuery`, `path`, or `lines`
+- `symbolFqn` cannot be combined with `fuzzyName`, `naturalLanguage`, `path`, or `lines`
+- `fuzzyName` cannot be combined with `symbolFqn`, `naturalLanguage`, `path`, or `lines`
 - `fuzzyName` must be non-empty
-- `semanticQuery` cannot be combined with `symbolFqn`, `fuzzyName`, `path`, or `lines`
-- `semanticQuery` must be non-empty
+- `naturalLanguage` cannot be combined with `symbolFqn`, `fuzzyName`, `path`, or `lines`
+- `naturalLanguage` must be non-empty
 - `lines` requires `path`
 - empty selectors are rejected
 - selector paths are resolved relative to the slim request scope, including project-scoped slim requests
