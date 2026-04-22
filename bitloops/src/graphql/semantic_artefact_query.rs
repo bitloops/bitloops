@@ -45,18 +45,18 @@ pub(crate) async fn select_semantic_artefacts(
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
         return Err(bad_user_input_error(
-            "`selectArtefacts(by: ...)` requires a non-empty `semanticQuery`",
+            "`selectArtefacts(by: ...)` requires a non-empty `naturalLanguage`",
         ));
     }
 
     let repo_id = context.repo_id_for_scope(scope).map_err(|err| {
         backend_error(format!(
-            "failed to resolve repository for semanticQuery selection: {err:#}"
+            "failed to resolve repository for naturalLanguage selection: {err:#}"
         ))
     })?;
     let host = context.capability_host_arc().map_err(|err| {
         backend_error(format!(
-            "failed to resolve capability host for semanticQuery selection: {err:#}"
+            "failed to resolve capability host for naturalLanguage selection: {err:#}"
         ))
     })?;
     let config = resolve_semantic_clones_config(&host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
@@ -69,30 +69,30 @@ pub(crate) async fn select_semantic_artefacts(
     )
     .map_err(|err| {
         backend_error(format!(
-            "failed to resolve semanticQuery embeddings provider: {err:#}"
+            "failed to resolve naturalLanguage embeddings provider: {err:#}"
         ))
     })?;
     let provider = selection.provider.ok_or_else(|| {
         bad_user_input_error(
-            "`semanticQuery` requires configured semantic clone identity embeddings in `semantic_clones.inference.code_embeddings`",
+            "`naturalLanguage` requires configured semantic clone identity embeddings in `semantic_clones.inference.code_embeddings`",
         )
     })?;
     let query_setup = resolve_embedding_setup(provider.as_ref()).map_err(|err| {
         backend_error(format!(
-            "failed to resolve semanticQuery embedding setup: {err:#}"
+            "failed to resolve naturalLanguage embedding setup: {err:#}"
         ))
     })?;
     let query_embedding = provider
         .embed(trimmed_query, EmbeddingInputType::Query)
-        .map_err(|err| backend_error(format!("failed to embed semanticQuery: {err:#}")))?;
+        .map_err(|err| backend_error(format!("failed to embed naturalLanguage: {err:#}")))?;
     if query_embedding.is_empty() {
         return Err(backend_error(
-            "semanticQuery embedding provider returned an empty vector",
+            "naturalLanguage embedding provider returned an empty vector",
         ));
     }
     if query_embedding.len() != query_setup.dimension {
         return Err(bad_user_input_error(format!(
-            "`semanticQuery` embedding dimension {} did not match the configured setup dimension {}",
+            "`naturalLanguage` embedding dimension {} did not match the configured setup dimension {}",
             query_embedding.len(),
             query_setup.dimension
         )));
@@ -100,13 +100,13 @@ pub(crate) async fn select_semantic_artefacts(
 
     let repo_root = context.repo_root_for_scope(scope).map_err(|err| {
         backend_error(format!(
-            "failed to resolve repository root for semanticQuery selection: {err:#}"
+            "failed to resolve repository root for naturalLanguage selection: {err:#}"
         ))
     })?;
     let relational_store =
         DefaultRelationalStore::open_local_for_repo_root(&repo_root).map_err(|err| {
             backend_error(format!(
-                "failed to open relational store for semanticQuery selection: {err:#}"
+                "failed to open relational store for naturalLanguage selection: {err:#}"
             ))
         })?;
     let relational = relational_store.to_local_inner();
@@ -116,14 +116,14 @@ pub(crate) async fn select_semantic_artefacts(
             .await
             .map_err(|err| {
                 backend_error(format!(
-                    "failed to load active embedding setup for semanticQuery selection: {err:#}"
+                    "failed to load active embedding setup for naturalLanguage selection: {err:#}"
                 ))
             })?;
     if let Some(active_setup) = active_setup
         && active_setup.setup != query_setup
     {
         return Err(bad_user_input_error(format!(
-            "`semanticQuery` embeddings were prepared for {} but the active inference profile resolved to {}",
+            "`naturalLanguage` embeddings were prepared for {} but the active inference profile resolved to {}",
             describe_setup(&active_setup.setup),
             describe_setup(&query_setup)
         )));
@@ -133,7 +133,7 @@ pub(crate) async fn select_semantic_artefacts(
         .await
         .map_err(|err| {
             backend_error(format!(
-                "failed to load candidate artefacts for semanticQuery selection: {err:#}"
+                "failed to load candidate artefacts for naturalLanguage selection: {err:#}"
             ))
         })?;
     let compatible_candidates =
@@ -215,7 +215,7 @@ fn compatible_candidates_for_setup(
         && let Some(mismatched_setup) = mismatched_setup
     {
         return Err(format!(
-            "`semanticQuery` embeddings were prepared for {} but the active inference profile resolved to {}",
+            "`naturalLanguage` embeddings were prepared for {} but the active inference profile resolved to {}",
             describe_setup(&mismatched_setup),
             describe_setup(query_setup)
         ));
@@ -567,7 +567,7 @@ mod tests {
 
         let err = compatible_candidates_for_setup(vec![mismatched], &query_setup)
             .expect_err("mismatched setup should fail");
-        assert!(err.contains("`semanticQuery` embeddings were prepared for"));
+        assert!(err.contains("`naturalLanguage` embeddings were prepared for"));
         assert!(err.contains("provider `bitloops_embeddings_ipc`"));
         assert!(err.contains("provider `provider-a`"));
     }

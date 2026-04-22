@@ -1954,7 +1954,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_repo_scope()
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "render in page ts" }) {
+              selectArtefacts(by: { naturalLanguage: "render in page ts" }) {
                 count
                 artefacts {
                   path
@@ -1996,7 +1996,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_in_project_scop
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "caller in caller ts" }) {
+              selectArtefacts(by: { naturalLanguage: "caller in caller ts" }) {
                 count
                 artefacts {
                   score
@@ -2045,7 +2045,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_n
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "caller in caller ts" }) {
+              selectArtefacts(by: { naturalLanguage: "caller in caller ts" }) {
                 count
                 artefacts {
                   path
@@ -2087,7 +2087,7 @@ async fn slim_select_artefacts_resolves_semantic_query_selection_from_identity_p
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "render in page ts" }) {
+              selectArtefacts(by: { naturalLanguage: "render in page ts" }) {
                 count
                 artefacts {
                   path
@@ -2242,7 +2242,7 @@ async fn slim_select_artefacts_semantic_query_drives_summary_and_deps_and_tests(
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "caller in caller ts" }) {
+              selectArtefacts(by: { naturalLanguage: "caller in caller ts" }) {
                 count
                 summary
                 deps {
@@ -2305,7 +2305,7 @@ async fn slim_select_artefacts_semantic_query_returns_empty_when_no_match_is_clo
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { semanticQuery: "unrelated zeta quaternion" }) {
+              selectArtefacts(by: { naturalLanguage: "unrelated zeta quaternion" }) {
                 count
                 artefacts {
                   path

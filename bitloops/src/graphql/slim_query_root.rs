@@ -580,8 +580,9 @@ impl SlimQueryRoot {
                 let artefacts = select_fuzzy_named_artefacts(&fuzzy_name, artefacts);
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
-            ArtefactSelectorMode::SemanticQuery(semantic_query) => {
-                let artefacts = select_semantic_artefacts(context, &scope, &semantic_query).await?;
+            ArtefactSelectorMode::NaturalLanguage(natural_language) => {
+                let artefacts =
+                    select_semantic_artefacts(context, &scope, &natural_language).await?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
