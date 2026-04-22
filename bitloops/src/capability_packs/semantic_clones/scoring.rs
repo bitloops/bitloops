@@ -347,28 +347,32 @@ fn build_symbol_clone_edges_for_sources(
                         target_indices.insert(global_idx);
                     }
                 }
+            } else if let Some(group_member_indices) = group_indices.get(&group_key) {
+                insert_group_members(&mut target_indices, group_member_indices, source_idx);
             }
-            if let Some(summary_group_key) = summary_candidate_group_key(source)
-                && let Some(group_ann_index) = summary_group_ann_indexes.get(&summary_group_key)
-                && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
-            {
-                let ann_local = group_ann_index
-                    .index
-                    .nearest(*source_local_idx, options.ann_neighbors.saturating_add(1));
-                for local_idx in ann_local {
-                    if let Some(global_idx) = group_ann_index.global_indices.get(local_idx).copied()
-                        && global_idx != source_idx
-                    {
-                        target_indices.insert(global_idx);
+            if let Some(summary_group_key) = summary_candidate_group_key(source) {
+                if let Some(group_ann_index) = summary_group_ann_indexes.get(&summary_group_key)
+                    && let Some(source_local_idx) = group_ann_index.local_by_global.get(&source_idx)
+                {
+                    let ann_local = group_ann_index
+                        .index
+                        .nearest(*source_local_idx, options.ann_neighbors.saturating_add(1));
+                    for local_idx in ann_local {
+                        if let Some(global_idx) =
+                            group_ann_index.global_indices.get(local_idx).copied()
+                            && global_idx != source_idx
+                        {
+                            target_indices.insert(global_idx);
+                        }
                     }
+                } else if let Some(group_member_indices) =
+                    summary_group_indices.get(&summary_group_key)
+                {
+                    insert_group_members(&mut target_indices, group_member_indices, source_idx);
                 }
             }
         } else if let Some(group_member_indices) = group_indices.get(&group_key) {
-            for global_idx in group_member_indices {
-                if *global_idx != source_idx {
-                    target_indices.insert(*global_idx);
-                }
-            }
+            insert_group_members(&mut target_indices, group_member_indices, source_idx);
         }
 
         // Exact-duplicate recall: always include deterministic duplicate-bucket peers.
@@ -413,6 +417,18 @@ fn build_symbol_clone_edges_for_sources(
     }
 }
 
+fn insert_group_members(
+    target_indices: &mut HashSet<usize>,
+    group_member_indices: &[usize],
+    source_idx: usize,
+) {
+    for global_idx in group_member_indices {
+        if *global_idx != source_idx {
+            target_indices.insert(*global_idx);
+        }
+    }
+}
+
 fn build_group_ann_indexes<F>(
     candidates: &[&SymbolCloneCandidateInput],
     group_indices: &HashMap<CandidateGroupKey, Vec<usize>>,
@@ -441,6 +457,9 @@ where
         if indexed_global_indices.len() < 2 {
             continue;
         }
+        if !embeddings_have_variance(&vectors) {
+            continue;
+        }
 
         let index = HnswLikeIndex::build(&vectors);
         let local_by_global = indexed_global_indices
@@ -458,6 +477,25 @@ where
         );
     }
     out
+}
+
+fn embeddings_have_variance(vectors: &[Vec<f32>]) -> bool {
+    let Some(first) = vectors.first() else {
+        return false;
+    };
+
+    vectors
+        .iter()
+        .skip(1)
+        .any(|vector| !embeddings_match(first, vector))
+}
+
+fn embeddings_match(left: &[f32], right: &[f32]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(left, right)| (*left - *right).abs() <= f32::EPSILON)
 }
 
 fn build_duplicate_buckets(

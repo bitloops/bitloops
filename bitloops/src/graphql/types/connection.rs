@@ -46,7 +46,7 @@ impl CommitConnection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
 pub struct ArtefactEdge {
     pub node: Artefact,
     pub cursor: String,
@@ -59,7 +59,7 @@ impl ArtefactEdge {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
 pub struct ArtefactConnection {
     pub edges: Vec<ArtefactEdge>,
     pub page_info: PageInfo,

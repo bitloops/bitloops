@@ -62,6 +62,7 @@ pub(crate) fn list_events(
         right
             .event_time
             .cmp(&left.event_time)
+            .then_with(|| right.sequence_number.cmp(&left.sequence_number))
             .then_with(|| right.event_id.cmp(&left.event_id))
     });
     Ok(events)
@@ -90,6 +91,7 @@ pub(crate) fn load_session_detail(
     raw_events.sort_by(|left, right| {
         left.event_time
             .cmp(&right.event_time)
+            .then_with(|| left.sequence_number.cmp(&right.sequence_number))
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     Ok(Some(InteractionSessionDetail {
@@ -109,6 +111,7 @@ pub(crate) fn compute_kpis(
     let mut agents = HashSet::new();
     let mut checkpoint_ids = HashSet::new();
     let mut tool_use_ids = HashSet::new();
+    let mut subagent_run_ids = HashSet::new();
     let mut totals = TokenUsageMetadata::default();
 
     for session in &sessions {
@@ -129,7 +132,10 @@ pub(crate) fn compute_kpis(
             checkpoint_ids.insert(checkpoint_id.clone());
         }
         for tool_use in &session.tool_uses {
-            tool_use_ids.insert(tool_use.tool_use_id.clone());
+            tool_use_ids.insert(tool_use.tool_invocation_id.clone());
+        }
+        for subagent_run in &session.subagent_runs {
+            subagent_run_ids.insert(subagent_run.subagent_run_id.clone());
         }
         if let Some(token_usage) = session.token_usage.as_ref() {
             totals.input_tokens += token_usage.input_tokens;
@@ -151,6 +157,7 @@ pub(crate) fn compute_kpis(
         total_turns: turns.len(),
         total_checkpoints: checkpoint_ids.len(),
         total_tool_uses: tool_use_ids.len(),
+        total_subagent_runs: subagent_run_ids.len(),
         total_actors: actors.len(),
         total_agents: agents.len(),
         input_tokens: totals.input_tokens,

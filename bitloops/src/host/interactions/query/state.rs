@@ -10,7 +10,9 @@ use crate::host::checkpoints::lifecycle::interaction::resolve_interaction_spool;
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::interactions::db_store::SqliteInteractionSpool;
 use crate::host::interactions::store::InteractionSpool;
-use crate::host::interactions::types::{InteractionEvent, InteractionToolUse, InteractionTurn};
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionSubagentRun, InteractionToolInvocation, InteractionTurn,
+};
 use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 
 const MAX_INTERACTION_ROWS: usize = 1_000_000;
@@ -43,6 +45,7 @@ pub(super) fn load_state(repo_root: &Path) -> Result<InteractionQueryState> {
     }
     let events = spool.list_events(&Default::default(), MAX_INTERACTION_ROWS)?;
     let tool_uses = load_tool_uses(&spool)?;
+    let subagent_runs = load_subagent_runs(&spool)?;
     let checkpoint_links = load_checkpoint_links(repo_root, &repo_id)?;
 
     let mut session_summaries = HashMap::new();
@@ -58,6 +61,9 @@ pub(super) fn load_state(repo_root: &Path) -> Result<InteractionQueryState> {
         tool_use.session_id.clone()
     });
     let tool_uses_by_turn = group_tool_uses(tool_uses, |tool_use| tool_use.turn_id.clone());
+    let subagent_runs_by_session =
+        group_subagent_runs(subagent_runs.iter().cloned(), |run| run.session_id.clone());
+    let subagent_runs_by_turn = group_subagent_runs(subagent_runs, |run| run.turn_id.clone());
 
     for session in sessions {
         let session_turns = turns_by_session
@@ -65,6 +71,10 @@ pub(super) fn load_state(repo_root: &Path) -> Result<InteractionQueryState> {
             .cloned()
             .unwrap_or_default();
         let session_tool_uses = tool_uses_by_session
+            .get(&session.session_id)
+            .cloned()
+            .unwrap_or_default();
+        let session_subagent_runs = subagent_runs_by_session
             .get(&session.session_id)
             .cloned()
             .unwrap_or_default();
@@ -99,6 +109,7 @@ pub(super) fn load_state(repo_root: &Path) -> Result<InteractionQueryState> {
                     .flat_map(|turn| turn.files_modified.iter().cloned()),
             ),
             tool_uses: session_tool_uses,
+            subagent_runs: session_subagent_runs,
             linked_checkpoints,
             latest_commit_author,
         };
@@ -118,6 +129,10 @@ pub(super) fn load_state(repo_root: &Path) -> Result<InteractionQueryState> {
                     .get(&turn.turn_id)
                     .cloned()
                     .unwrap_or_default(),
+                subagent_runs: subagent_runs_by_turn
+                    .get(&turn.turn_id)
+                    .cloned()
+                    .unwrap_or_default(),
                 linked_checkpoints,
                 latest_commit_author,
             };
@@ -134,32 +149,89 @@ pub(super) fn load_state(repo_root: &Path) -> Result<InteractionQueryState> {
     })
 }
 
-fn load_tool_uses(spool: &SqliteInteractionSpool) -> Result<Vec<InteractionToolUse>> {
+fn load_tool_uses(spool: &SqliteInteractionSpool) -> Result<Vec<InteractionToolInvocation>> {
     spool.with_connection(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT tool_use_id, repo_id, session_id, turn_id, tool_kind, task_description,
-                    subagent_id, transcript_path, started_at, ended_at, updated_at
-             FROM interaction_tool_uses
+            "SELECT tool_invocation_id, repo_id, session_id, turn_id, tool_use_id, tool_name,
+                    source, input_summary, output_summary, command, command_binary, command_argv,
+                    transcript_path, started_at, ended_at, started_sequence_number,
+                    ended_sequence_number, updated_at
+             FROM interaction_tool_invocations
              WHERE repo_id = ?1
-             ORDER BY COALESCE(ended_at, started_at, updated_at) DESC, tool_use_id DESC",
+             ORDER BY COALESCE(started_sequence_number, ended_sequence_number, 0) DESC,
+                      COALESCE(ended_at, started_at, updated_at) DESC,
+                      tool_invocation_id DESC",
         )?;
         let rows = stmt.query_map(rusqlite::params![spool.repo_id()], |row| {
-            Ok(InteractionToolUse {
-                tool_use_id: row.get(0)?,
+            let command_argv_raw: String = row.get(11)?;
+            let command_argv =
+                serde_json::from_str::<Vec<String>>(&command_argv_raw).map_err(|err| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        11,
+                        rusqlite::types::Type::Text,
+                        Box::new(err),
+                    )
+                })?;
+            Ok(InteractionToolInvocation {
+                tool_invocation_id: row.get(0)?,
                 repo_id: row.get(1)?,
                 session_id: row.get(2)?,
                 turn_id: row.get(3)?,
-                tool_kind: row.get(4)?,
-                task_description: row.get(5)?,
-                subagent_id: row.get(6)?,
-                transcript_path: row.get(7)?,
-                started_at: row.get(8)?,
-                ended_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                tool_use_id: row.get(4)?,
+                tool_name: row.get(5)?,
+                source: row.get(6)?,
+                input_summary: row.get(7)?,
+                output_summary: row.get(8)?,
+                command: row.get(9)?,
+                command_binary: row.get(10)?,
+                command_argv,
+                transcript_path: row.get(12)?,
+                started_at: row.get(13)?,
+                ended_at: row.get(14)?,
+                started_sequence_number: row.get(15)?,
+                ended_sequence_number: row.get(16)?,
+                updated_at: row.get(17)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .context("reading interaction tool uses")
+    })
+}
+
+fn load_subagent_runs(spool: &SqliteInteractionSpool) -> Result<Vec<InteractionSubagentRun>> {
+    spool.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT subagent_run_id, repo_id, session_id, turn_id, tool_use_id, subagent_id,
+                    subagent_type, task_description, source, transcript_path, child_session_id,
+                    started_at, ended_at, started_sequence_number, ended_sequence_number, updated_at
+             FROM interaction_subagent_runs
+             WHERE repo_id = ?1
+             ORDER BY COALESCE(started_sequence_number, ended_sequence_number, 0) DESC,
+                      COALESCE(ended_at, started_at, updated_at) DESC,
+                      subagent_run_id DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![spool.repo_id()], |row| {
+            Ok(InteractionSubagentRun {
+                subagent_run_id: row.get(0)?,
+                repo_id: row.get(1)?,
+                session_id: row.get(2)?,
+                turn_id: row.get(3)?,
+                tool_use_id: row.get(4)?,
+                subagent_id: row.get(5)?,
+                subagent_type: row.get(6)?,
+                task_description: row.get(7)?,
+                source: row.get(8)?,
+                transcript_path: row.get(9)?,
+                child_session_id: row.get(10)?,
+                started_at: row.get(11)?,
+                ended_at: row.get(12)?,
+                started_sequence_number: row.get(13)?,
+                ended_sequence_number: row.get(14)?,
+                updated_at: row.get(15)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("reading interaction subagent runs")
     })
 }
 
@@ -211,10 +283,10 @@ fn load_checkpoint_links(
     })
 }
 
-fn group_tool_uses<I, F>(tool_uses: I, key_fn: F) -> HashMap<String, Vec<InteractionToolUse>>
+fn group_tool_uses<I, F>(tool_uses: I, key_fn: F) -> HashMap<String, Vec<InteractionToolInvocation>>
 where
-    I: IntoIterator<Item = InteractionToolUse>,
-    F: Fn(&InteractionToolUse) -> String,
+    I: IntoIterator<Item = InteractionToolInvocation>,
+    F: Fn(&InteractionToolInvocation) -> String,
 {
     tool_uses
         .into_iter()
@@ -222,6 +294,25 @@ where
             let key = key_fn(&tool_use);
             if !key.trim().is_empty() {
                 map.entry(key).or_default().push(tool_use);
+            }
+            map
+        })
+}
+
+fn group_subagent_runs<I, F>(
+    subagent_runs: I,
+    key_fn: F,
+) -> HashMap<String, Vec<InteractionSubagentRun>>
+where
+    I: IntoIterator<Item = InteractionSubagentRun>,
+    F: Fn(&InteractionSubagentRun) -> String,
+{
+    subagent_runs
+        .into_iter()
+        .fold(HashMap::new(), |mut map, run| {
+            let key = key_fn(&run);
+            if !key.trim().is_empty() {
+                map.entry(key).or_default().push(run);
             }
             map
         })

@@ -1698,6 +1698,34 @@ fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
 }
 
 #[test]
+fn candidate_symbol_fqns_prefer_nested_exact_file_matches_over_index_fallback() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().to_path_buf();
+    fs::create_dir_all(repo_dir.join("src").join("render")).expect("create render dir");
+    fs::write(repo_dir.join("src").join("index.ts"), "export {};\n").expect("write src/index.ts");
+    fs::write(
+        repo_dir
+            .join("src")
+            .join("render")
+            .join("render-invoice.ts"),
+        "export function renderInvoice(): string { return 'ok'; }\n",
+    )
+    .expect("write nested render file");
+
+    let world = QatWorld {
+        repo_dir: Some(repo_dir),
+        ..QatWorld::default()
+    };
+
+    let candidates = candidate_symbol_fqns(&world, "renderInvoice");
+
+    assert_eq!(
+        candidates.first().map(String::as_str),
+        Some("src/render/render-invoice.ts::renderInvoice")
+    );
+}
+
+#[test]
 fn extract_clone_summary_accepts_devql_summary_rows() {
     let value = serde_json::json!([
         {

@@ -150,11 +150,13 @@ Notes:
 
 ### `bitloops uninstall`
 
-Removes Bitloops-managed artefacts from your machine and, for hook targets, from known repositories.
+Removes Bitloops-managed artefacts from your machine and, for repo-local targets, from known repositories or Bitloops projects.
 
 ```bash
 bitloops uninstall --full
 bitloops uninstall --agent-hooks --git-hooks
+bitloops uninstall --repo-config
+bitloops uninstall --repo-config --only-current-project
 bitloops uninstall --agent-hooks --git-hooks --only-current-project
 bitloops uninstall --config --data --caching
 ```
@@ -169,16 +171,19 @@ Key flags:
 | `--data`                 | Remove global data and repo-local `.bitloops/` data                       |
 | `--caching`              | Remove the global cache directory                                         |
 | `--config`               | Remove the global config directory and TLS artefacts                      |
-| `--agent-hooks`          | Remove supported agent hooks                                              |
+| `--agent-hooks`          | Remove supported agent hooks plus Bitloops-managed repo-local agent guidance |
+| `--repo-config`          | Remove repo-local `.bitloops.toml`, `.bitloops.local.toml`, and the managed policy exclude entry |
 | `--git-hooks`            | Remove Bitloops git hooks                                                 |
 | `--shell`                | Remove managed shell completion integration                               |
-| `--only-current-project` | Limit hook removal to the current repository                              |
+| `--only-current-project` | Limit repo-local uninstall targets to the current repository or project   |
 | `--force`                | Skip confirmation                                                         |
 
 Notes:
 
 - No flags opens an interactive multi-select picker when running in a TTY.
 - In non-interactive environments, you must pass explicit flags.
+- `--agent-hooks` removes Bitloops-managed repo-local agent guidance such as `SKILL.md` files and clears the matching managed skill-path exclude entries.
+- `--repo-config` removes repo-local `.bitloops.toml` and `.bitloops.local.toml` files and clears the managed `.bitloops.local.toml` entry that `init` adds to `.git/info/exclude`.
 - `disable` is a capture toggle. Use `uninstall` for hook removal or machine-wide cleanup.
 - See [Uninstalling Bitloops](./uninstall.md) for target-by-target behaviour and caveats.
 

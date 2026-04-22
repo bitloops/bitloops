@@ -301,9 +301,9 @@ impl SqliteInteractionSpool {
         conn.execute(
             "INSERT OR IGNORE INTO interaction_events (
                 event_id, session_id, turn_id, repo_id, branch, actor_id, actor_name,
-                actor_email, actor_source, event_type, event_time, agent_type, model,
-                tool_use_id, tool_kind, task_description, subagent_id, payload
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                actor_email, actor_source, event_type, event_time, source, sequence_number,
+                agent_type, model, tool_use_id, tool_kind, task_description, subagent_id, payload
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             rusqlite::params![
                 event.event_id,
                 event.session_id,
@@ -316,6 +316,8 @@ impl SqliteInteractionSpool {
                 event.actor_source,
                 event.event_type.as_str(),
                 event.event_time,
+                event.source,
+                event.sequence_number,
                 event.agent_type,
                 event.model,
                 event.tool_use_id,
@@ -681,15 +683,15 @@ impl InteractionSpool for SqliteInteractionSpool {
         self.sqlite.with_connection(|conn| {
             let mut sql = String::from(
                 "SELECT event_id, session_id, turn_id, repo_id, branch, actor_id, actor_name,
-                        actor_email, actor_source, event_type, event_time, agent_type, model,
-                        tool_use_id, tool_kind, task_description, subagent_id, payload
+                        actor_email, actor_source, event_type, event_time, source, sequence_number,
+                        agent_type, model, tool_use_id, tool_kind, task_description, subagent_id, payload
                  FROM interaction_events
                  WHERE repo_id = ?1",
             );
             let mut values: Vec<Box<dyn rusqlite::types::ToSql>> =
                 vec![Box::new(self.repo_id.clone())];
             append_event_filter_sql(&mut sql, &mut values, filter);
-            sql.push_str(" ORDER BY event_time DESC, event_id DESC");
+            sql.push_str(" ORDER BY event_time DESC, sequence_number DESC, event_id DESC");
             sql.push_str(&format!(" LIMIT {limit}"));
 
             let params: Vec<&dyn rusqlite::types::ToSql> =

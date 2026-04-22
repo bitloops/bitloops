@@ -108,7 +108,7 @@ pub struct ArtefactCopyLineage {
     pub(crate) scope: ResolverScope,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
 #[graphql(complex)]
 pub struct Artefact {
     pub id: ID,
@@ -129,6 +129,7 @@ pub struct Artefact {
     pub content_hash: Option<String>,
     pub blob_sha: String,
     pub created_at: DateTimeScalar,
+    pub score: Option<f64>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
@@ -140,6 +141,11 @@ impl Artefact {
 
     pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    pub(crate) fn with_score(mut self, score: f64) -> Self {
+        self.score = Some(score);
         self
     }
 }

@@ -285,7 +285,7 @@ fn rank_semantic_candidates(
         .into_iter()
         .filter(|candidate| seen_artefact_ids.insert(candidate.artefact.id.to_string()))
         .take(result_limit)
-        .map(|candidate| candidate.artefact)
+        .map(|candidate| candidate.artefact.with_score(candidate.score as f64))
         .collect()
 }
 
@@ -335,6 +335,7 @@ fn artefact_from_value(row: &Value) -> Result<Artefact> {
         content_hash: optional_string_field(row, "content_hash"),
         blob_sha: string_field(row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(row, "created_at")?.as_str())?,
+        score: None,
         scope: ResolverScope::default(),
     })
 }
@@ -485,6 +486,7 @@ mod tests {
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-21T09:00:00Z")
                 .expect("valid timestamp"),
+            score: None,
             scope: ResolverScope::default(),
         }
     }
