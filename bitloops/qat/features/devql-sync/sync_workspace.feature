@@ -349,7 +349,7 @@ Feature: DevQL sync workspace reconciliation
     And DevQL sync summary shows 0 removed in bitloops
     And DevQL sync summary shows unchanged greater than 0 in bitloops
 
-  @devql @sync @sync_init_sync_true_incremental
+  @devql @sync @sync_init_sync_true_incremental @develop_gate
   Scenario: Watcher-driven materialization after init --sync=true
     Given I run CleanStart for flow "SyncInitSyncTrueIncremental"
     And I enable watcher autostart in bitloops

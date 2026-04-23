@@ -44,11 +44,11 @@ Exactly one selector mode must be used.
 
 This usually resolves to `0..1` logical artefacts, but callers should treat the result as a set.
 
-### By `fuzzyName`
+### By `search`
 
 ```graphql
 {
-  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+  selectArtefacts(by: { search: "payLater()" }) {
     count
     artefacts {
       path
@@ -58,7 +58,12 @@ This usually resolves to `0..1` logical artefacts, but callers should treat the 
 }
 ```
 
-This searches current artefacts in scope by normalized symbol name, including typo-tolerant matches such as `payLater()` or `payLatr()`. v1 returns up to 10 best-first matches and does not expose scores in the API.
+`search` runs two internal lanes and returns one flat artefact list:
+
+- up to 5 fuzzy symbol-name matches, including typo-tolerant requests such as `payLater()` or `payLatr()`
+- up to 5 embedding-backed conceptual matches across identity, code, and summary representations
+
+Fuzzy hits are returned first, embedding-only hits follow, weak matches are dropped, and `score` remains optional debug output rather than part of the default contract.
 
 ### By `path` and `lines`
 
@@ -96,9 +101,9 @@ This resolves all current artefacts in the file.
 
 ## Validation Rules
 
-- `symbolFqn` cannot be combined with `fuzzyName`, `path`, or `lines`
-- `fuzzyName` cannot be combined with `symbolFqn`, `path`, or `lines`
-- `fuzzyName` must be non-empty
+- `symbolFqn` cannot be combined with `search`, `path`, or `lines`
+- `search` cannot be combined with `symbolFqn`, `path`, or `lines`
+- `search` must be non-empty
 - `lines` requires `path`
 - empty selectors are rejected
 - selector paths are resolved relative to the slim request scope, including project-scoped slim requests
@@ -244,14 +249,22 @@ This is the normal escalation path:
 
 ## Agent Hook Guidance
 
-When Bitloops-managed integrations are installed for supported agents, Bitloops injects a short DevQL reminder at the supported bootstrap and pre-turn surfaces. This currently includes Claude Code, Codex, Gemini CLI, Copilot CLI, Cursor, and OpenCode via its repo-local plugin path. That reminder follows the same workflow documented here:
+Bitloops now treats the DevQL hook as skill-gated. When the Bitloops-managed `using-devql` skill is enabled for an agent, Bitloops installs the repo-local DevQL surface and emits direct startup guidance for that surface. When the skill is disabled, Bitloops emits no DevQL guidance at all.
+
+The current enforcement contract is:
+
+- Claude Code and Codex regain targeted prompt-time reinforcement in addition to the repo-local surface
+- Cursor remains session-start plus rule-based
+- other supported agents follow the same repo-local surface contract when their skill is enabled
+
+The guidance follows the same workflow documented here:
 
 1. Start with `selectArtefacts(by: ...) { summary }`
 2. Read stage `schema` only when the summary says a drill-down is worth it
 3. Query `items(first: ...)` on the relevant stage for typed rows
 4. Use `bitloops devql schema` or `bitloops devql schema --global` when the full SDL is needed
 
-The injected reminder is guidance only. It does not execute DevQL automatically or attach live query results to the turn.
+This guidance is guidance only. It does not execute DevQL automatically or attach live query results to the turn.
 
 ## Category Summaries
 
@@ -301,7 +314,7 @@ The DevQL DSL supports `selectArtefacts(...)` with flat selector args:
 
 ```text
 selectArtefacts(symbol_fqn:"rust-app/src/main.rs::main")->checkpoints()
-selectArtefacts(fuzzy_name:"payLater()")->checkpoints()
+selectArtefacts(search:"payLater()")->checkpoints()
 selectArtefacts(path:"rust-app/src/main.rs",lines:6..10)->deps()
 selectArtefacts(path:"rust-app/src/main.rs")->tests(min_confidence:0.8)
 ```

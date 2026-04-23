@@ -1,6 +1,7 @@
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 
 pub(crate) const INIT_SYNC_SECTION_TITLE: &str = "Sync";
@@ -28,6 +29,7 @@ pub(crate) fn workplane_pool_label(pool_name: &str) -> &'static str {
 pub(crate) fn mailbox_label(mailbox_name: &str) -> &'static str {
     match mailbox_name {
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => "Indexing source code",
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => "Indexing symbol identity",
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => "Indexing generated summaries",
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => "Generating summaries",
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => "Refreshing clone matches",
@@ -51,6 +53,7 @@ pub(crate) fn lane_activity_label(detail: &str) -> &'static str {
         "ingest" => "Ingesting commit history",
         "follow_up_sync" => "Running a follow-up sync",
         "code_embeddings" => "Creating code embeddings",
+        "identity_embeddings" | "locator_embeddings" => "Creating identity embeddings",
         "summary_embeddings" => "Creating summary embeddings",
         "summaries" => "Generating summaries",
         "embeddings_bootstrap" => "Preparing the embeddings runtime",

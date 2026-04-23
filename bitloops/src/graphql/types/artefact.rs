@@ -11,8 +11,7 @@ use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
     CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
     DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
-    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    DepsSummary, DepsSummaryFilterInput, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
@@ -108,7 +107,7 @@ pub struct ArtefactCopyLineage {
     pub(crate) scope: ResolverScope,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
 #[graphql(complex)]
 pub struct Artefact {
     pub id: ID,
@@ -129,6 +128,7 @@ pub struct Artefact {
     pub content_hash: Option<String>,
     pub blob_sha: String,
     pub created_at: DateTimeScalar,
+    pub score: Option<f64>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
@@ -140,6 +140,11 @@ impl Artefact {
 
     pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    pub(crate) fn with_score(mut self, score: f64) -> Self {
+        self.score = Some(score);
         self
     }
 }
@@ -438,6 +443,8 @@ impl Artefact {
         )
     }
 
+    // Temporarily hidden from the typed GraphQL surface until coverage is refreshed.
+    /*
     async fn coverage(
         &self,
         ctx: &Context<'_>,
@@ -459,6 +466,7 @@ impl Artefact {
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
     }
+    */
 
     async fn copy_lineage(&self, ctx: &Context<'_>) -> Result<Vec<ArtefactCopyLineage>> {
         ctx.data_unchecked::<DevqlGraphqlContext>()

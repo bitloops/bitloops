@@ -29,7 +29,7 @@ flowchart TD
         CheckpointProjection["Committed checkpoint projection"]
     end
 
-    Handoff["DevQL task handoff"]
+    Handoff["Repo-local DevQL producer spool"]
 
     AgentHooks --> Dispatcher
     GitHooks --> Dispatcher
@@ -45,11 +45,11 @@ flowchart TD
     Strategy --> InteractionRepo
     Spool --> InteractionRepo
     Strategy --> CheckpointProjection
-    Strategy -. post_commit / post_merge / post_checkout .-> Handoff
+    Strategy -. post_commit / post_merge / post_checkout / pre_push .-> Handoff
 ```
 
 ## Notes
 
 - Agent-native hook payloads are normalized into one shared lifecycle before checkpoint logic runs.
 - The checkpoint strategy is where temporary snapshots, task checkpoints, and commit-linked checkpoint consolidation happen.
-- `post_commit` and related Git lifecycle events can hand work off to DevQL, but that handoff is downstream of capture rather than the capture flow itself.
+- `post_commit` and related Git lifecycle events can hand work off to DevQL through the repo-local producer spool, but that handoff is downstream of capture rather than the capture flow itself.

@@ -324,6 +324,9 @@ fn build_fixture_embedding_provider(
                 semantic_embeddings::EmbeddingRepresentationKind::Code => {
                     code_embeddings_by_artefact_id
                 }
+                semantic_embeddings::EmbeddingRepresentationKind::Identity => {
+                    code_embeddings_by_artefact_id
+                }
                 semantic_embeddings::EmbeddingRepresentationKind::Summary => {
                     summary_embeddings_by_artefact_id
                 }

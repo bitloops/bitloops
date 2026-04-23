@@ -1,7 +1,9 @@
 use anyhow::{Result, anyhow, bail};
+use regex::Regex;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fmt;
+use std::sync::OnceLock;
 
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureInput, render_dependency_context,
@@ -30,6 +32,8 @@ pub enum EmbeddingRepresentationKind {
     #[serde(alias = "baseline", alias = "enriched")]
     Code,
     Summary,
+    #[serde(alias = "locator")]
+    Identity,
 }
 
 impl fmt::Display for EmbeddingRepresentationKind {
@@ -37,6 +41,7 @@ impl fmt::Display for EmbeddingRepresentationKind {
         match self {
             Self::Code => write!(f, "code"),
             Self::Summary => write!(f, "summary"),
+            Self::Identity => write!(f, "identity"),
         }
     }
 }
@@ -46,6 +51,7 @@ impl EmbeddingRepresentationKind {
         match self {
             Self::Code => &["code", "baseline", "enriched"],
             Self::Summary => &["summary"],
+            Self::Identity => &["identity", "locator"],
         }
     }
 }
@@ -180,6 +186,7 @@ pub fn build_symbol_embedding_text(input: &SymbolEmbeddingInput) -> String {
     match input.representation_kind {
         EmbeddingRepresentationKind::Code => build_code_embedding_text(input),
         EmbeddingRepresentationKind::Summary => build_summary_embedding_text(input),
+        EmbeddingRepresentationKind::Identity => build_identity_embedding_text(input),
     }
 }
 
@@ -223,6 +230,16 @@ pub fn build_symbol_embedding_input_hash(
                 map.insert(
                     "summary".to_string(),
                     json!(normalize_whitespace(&input.summary)),
+                );
+            }
+            EmbeddingRepresentationKind::Identity => {
+                map.insert(
+                    "path".to_string(),
+                    json!(normalize_identity_path(&input.path)),
+                );
+                map.insert(
+                    "container".to_string(),
+                    json!(identity_container_raw(input)),
                 );
             }
         }
@@ -330,6 +347,29 @@ summary: {summary}",
     )
 }
 
+fn build_identity_embedding_text(input: &SymbolEmbeddingInput) -> String {
+    let container = identity_container_raw(input);
+    let path = normalize_identity_path(&input.path);
+    format!(
+        "kind: {kind}\n\
+language: {language}\n\
+name: {name}\n\
+name_terms: {name_terms}\n\
+container: {container}\n\
+container_terms: {container_terms}\n\
+path: {path}\n\
+path_terms: {path_terms}",
+        kind = input.canonical_kind,
+        language = input.language,
+        name = input.name,
+        name_terms = normalize_identity_terms(&input.name),
+        container = container,
+        container_terms = normalize_identity_terms(&container),
+        path = path,
+        path_terms = normalize_identity_path_terms(&path),
+    )
+}
+
 fn truncate_chars(input: String, max_chars: usize) -> String {
     if input.chars().count() <= max_chars {
         input
@@ -340,6 +380,114 @@ fn truncate_chars(input: String, max_chars: usize) -> String {
 
 fn normalize_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn normalize_identity_path(path: &str) -> String {
+    let mut normalized = path.trim().replace('\\', "/");
+    while normalized.starts_with("./") {
+        normalized = normalized[2..].to_string();
+    }
+    normalized.trim_start_matches('/').to_string()
+}
+
+fn normalize_identity_terms(input: &str) -> String {
+    split_identity_tokens(input).join(" ")
+}
+
+fn normalize_identity_path_terms(path: &str) -> String {
+    let mut tokens = split_identity_tokens(path);
+    strip_trailing_identity_path_suffix(&mut tokens);
+    tokens.join(" ")
+}
+
+fn identity_container_raw(input: &SymbolEmbeddingInput) -> String {
+    let normalized_path = normalize_identity_path(&input.path);
+    let mut segments = input
+        .symbol_fqn
+        .trim()
+        .replace('\\', "/")
+        .split("::")
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if segments
+        .first()
+        .is_some_and(|segment| normalize_identity_path(segment) == normalized_path)
+    {
+        segments.remove(0);
+    }
+    if !segments.is_empty() {
+        segments.pop();
+    }
+    segments.join("::")
+}
+
+fn split_identity_tokens(input: &str) -> Vec<String> {
+    let regex = identity_identifier_regex();
+    let mut out = Vec::new();
+    for capture in regex.find_iter(input) {
+        let raw = capture.as_str();
+        for chunk in raw.split('_') {
+            for piece in split_identity_camel_case_word(chunk) {
+                let lowered = piece.to_ascii_lowercase();
+                if lowered.is_empty() {
+                    continue;
+                }
+                out.push(lowered);
+            }
+        }
+    }
+    out
+}
+
+fn strip_trailing_identity_path_suffix(tokens: &mut Vec<String>) {
+    let should_strip = tokens.last().is_some_and(|token| {
+        let len = token.len();
+        (1..=4).contains(&len) && token.chars().all(|ch| ch.is_ascii_lowercase())
+    });
+    if should_strip {
+        tokens.pop();
+    }
+}
+
+fn identity_identifier_regex() -> &'static Regex {
+    static IDENTIFIER_REGEX: OnceLock<Regex> = OnceLock::new();
+    IDENTIFIER_REGEX.get_or_init(|| Regex::new(r"[A-Za-z_][A-Za-z0-9_]*").expect("valid regex"))
+}
+
+fn split_identity_camel_case_word(input: &str) -> Vec<String> {
+    if input.is_empty() {
+        return Vec::new();
+    }
+
+    let chars = input.chars().collect::<Vec<_>>();
+    let mut pieces = Vec::new();
+    let mut current = String::new();
+
+    for (idx, ch) in chars.iter().enumerate() {
+        if !current.is_empty() {
+            let prev = chars[idx - 1];
+            let next = chars.get(idx + 1).copied().unwrap_or('\0');
+            let boundary = (prev.is_ascii_lowercase() && ch.is_ascii_uppercase())
+                || (prev.is_ascii_alphabetic() && ch.is_ascii_digit())
+                || (prev.is_ascii_digit() && ch.is_ascii_alphabetic())
+                || (prev.is_ascii_uppercase()
+                    && ch.is_ascii_uppercase()
+                    && next.is_ascii_lowercase());
+            if boundary {
+                pieces.push(current.clone());
+                current.clear();
+            }
+        }
+        current.push(*ch);
+    }
+
+    if !current.is_empty() {
+        pieces.push(current);
+    }
+
+    pieces
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -620,11 +768,46 @@ mod tests {
     }
 
     #[test]
+    fn identity_embedding_text_includes_normalized_name_container_and_path() {
+        let mut input = sample_input();
+        input.representation_kind = EmbeddingRepresentationKind::Identity;
+        input.path = "src/models/user_profile.rs".to_string();
+        input.symbol_fqn = "src/models/user_profile.rs::UserProfile::displayName".to_string();
+        input.name = "displayName".to_string();
+
+        let text = build_symbol_embedding_text(&input);
+        assert!(text.contains("name: displayName"));
+        assert!(text.contains("name_terms: display name"));
+        assert!(text.contains("container: UserProfile"));
+        assert!(text.contains("container_terms: user profile"));
+        assert!(text.contains("path: src/models/user_profile.rs"));
+        assert!(text.contains("path_terms: src models user profile"));
+        assert!(!text.contains("body:"));
+        assert!(!text.contains("summary:"));
+        assert!(!text.contains("dependencies:"));
+    }
+
+    #[test]
     fn symbol_embedding_hash_changes_when_dependencies_change() {
         let provider = MockEmbeddingProvider;
         let base = sample_input();
         let mut changed = base.clone();
         changed.dependency_signals = vec!["calls:user_repo::save".to_string()];
+
+        assert_ne!(
+            build_symbol_embedding_input_hash(&base, &provider),
+            build_symbol_embedding_input_hash(&changed, &provider)
+        );
+    }
+
+    #[test]
+    fn identity_embedding_hash_changes_when_path_or_container_changes() {
+        let provider = MockEmbeddingProvider;
+        let mut base = sample_input();
+        base.representation_kind = EmbeddingRepresentationKind::Identity;
+        let mut changed = base.clone();
+        changed.path = "src/renamed/user.ts".to_string();
+        changed.symbol_fqn = "src/renamed/user.ts::AccountUser::normalizeEmail".to_string();
 
         assert_ne!(
             build_symbol_embedding_input_hash(&base, &provider),
@@ -694,9 +877,15 @@ mod tests {
             .expect("baseline alias");
         let enriched = serde_json::from_str::<EmbeddingRepresentationKind>("\"enriched\"")
             .expect("enriched alias");
+        let identity = serde_json::from_str::<EmbeddingRepresentationKind>("\"identity\"")
+            .expect("identity representation");
+        let locator =
+            serde_json::from_str::<EmbeddingRepresentationKind>("\"locator\"").expect("alias");
 
         assert_eq!(baseline, EmbeddingRepresentationKind::Code);
         assert_eq!(enriched, EmbeddingRepresentationKind::Code);
+        assert_eq!(identity, EmbeddingRepresentationKind::Identity);
+        assert_eq!(locator, EmbeddingRepresentationKind::Identity);
     }
 
     #[test]

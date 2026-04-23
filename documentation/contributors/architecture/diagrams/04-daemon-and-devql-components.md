@@ -10,22 +10,29 @@ flowchart TD
         Router["HTTP router"]
         Slim["/devql"]
         Global["/devql/global"]
+        Runtime["/devql/runtime"]
         Dashboard["/devql/dashboard"]
+    end
+
+    subgraph Inputs["Repo-local inputs"]
+        Spool["Producer spool"]
     end
 
     subgraph Core["Daemon core"]
         Bootstrap["Daemon runtime bootstrap"]
-        Queue["Task queue"]
-        Sync["Sync coordinator"]
-        Consumers["Current-state consumers"]
+        Tasks["DevQL task coordinator"]
+        Consumers["Current-state consumer coordinator"]
+        Enrichment["Enrichment coordinator + workplane"]
+        Init["Init runtime coordinator"]
     end
 
     subgraph Host["Host-owned runtime"]
+        GraphqlCtx["DevQL GraphQL context"]
         CapabilityHost["DevqlCapabilityHost"]
         ExtensionHost["CoreExtensionHost"]
         Languages["Language services"]
         Connectors["Connector registry"]
-        Inference["Inference + embeddings gateways"]
+        Inference["Inference gateways"]
     end
 
     subgraph Packs["Built-in capability packs"]
@@ -35,20 +42,39 @@ flowchart TD
     end
 
     subgraph Storage["Storage"]
+        RuntimeState["Daemon / repo runtime SQLite"]
         Current["Current-state relational model"]
         History["Historical / event / blob state"]
     end
 
     Bootstrap --> Router
-    Bootstrap --> Queue
+    Bootstrap --> Tasks
+    Bootstrap --> Consumers
+    Bootstrap --> Enrichment
+    Bootstrap --> Init
 
     Router --> Slim
     Router --> Global
+    Router --> Runtime
     Router --> Dashboard
 
-    Slim --> CapabilityHost
-    Global --> CapabilityHost
-    Dashboard --> CapabilityHost
+    Slim --> GraphqlCtx
+    Global --> GraphqlCtx
+    GraphqlCtx --> CapabilityHost
+    Runtime --> Init
+    Dashboard --> RuntimeState
+    Dashboard --> Current
+    Dashboard --> History
+
+    Spool --> Tasks
+    Init --> Tasks
+    Tasks --> Init
+    Tasks --> CapabilityHost
+    Tasks --> RuntimeState
+    Tasks --> Current
+    Tasks --> History
+    Tasks --> Consumers
+    Tasks --> Enrichment
 
     CapabilityHost --> ExtensionHost
     CapabilityHost --> Languages
@@ -59,19 +85,15 @@ flowchart TD
     CapabilityHost --> Current
     CapabilityHost --> History
 
-    Queue --> Sync
-    Sync --> Current
-    Sync --> History
-    Sync --> Consumers
-
     Consumers --> Tests
     Consumers --> Clones
-    Consumers --> Inference
+    Enrichment --> Inference
 ```
 
 ## Notes
 
-- The GraphQL surfaces are distinct product interfaces, even though they share the same daemon runtime.
-- The daemon owns task execution and async follow-up work.
-- The host owns capability execution, language resolution, connector access, and storage access beneath the GraphQL contract.
-- Sync and post-sync consumers are part of the daemon runtime, not the capture plane.
+- The daemon now exposes four distinct GraphQL surfaces: `/devql`, `/devql/global`, `/devql/runtime`, and `/devql/dashboard`.
+- The DevQL task coordinator is the main async entrypoint for sync, ingest, bootstrap, and producer-spool work.
+- Current-state consumer execution, enrichment, and init/runtime orchestration are separate daemon coordinators rather than one generic sync queue.
+- `/devql/runtime` and `/devql/dashboard` are operational surfaces alongside the DevQL query surfaces; they are not just aliases for capability-host execution.
+- The host still owns capability execution, language resolution, connector access, and storage access beneath the DevQL GraphQL contract.

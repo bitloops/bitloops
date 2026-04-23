@@ -3298,6 +3298,138 @@ pub fn assert_devql_artefacts_query_returns_results(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectArtefactsSearchObservation {
+    count: usize,
+    symbols: Vec<String>,
+}
+
+fn build_select_artefacts_search_query(search: &str) -> String {
+    format!(
+        r#"query {{
+  selectArtefacts(by: {{ search: "{}" }}) {{
+    count
+    artefacts {{
+      path
+      symbolFqn
+    }}
+  }}
+}}"#,
+        escape_devql_string(search)
+    )
+}
+
+fn extract_select_artefacts_search_observation(
+    value: &serde_json::Value,
+) -> Result<SelectArtefactsSearchObservation> {
+    let select_artefacts = value
+        .get("selectArtefacts")
+        .ok_or_else(|| anyhow!("expected selectArtefacts payload in GraphQL response"))?;
+    let artefacts = select_artefacts
+        .get("artefacts")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected selectArtefacts.artefacts array in GraphQL response"))?;
+    let count = select_artefacts
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(artefacts.len());
+    let symbols = artefacts
+        .iter()
+        .filter_map(|artefact| {
+            artefact
+                .get("symbolFqn")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+        })
+        .collect::<Vec<_>>();
+
+    Ok(SelectArtefactsSearchObservation { count, symbols })
+}
+
+fn observe_select_artefacts_search(
+    world: &mut QatWorld,
+    search: &str,
+) -> Result<SelectArtefactsSearchObservation> {
+    let query = build_select_artefacts_search_query(search);
+    let value = run_devql_graphql_query(world, &query)?;
+    extract_select_artefacts_search_observation(&value)
+}
+
+pub fn assert_devql_select_artefacts_search_returns_at_least(
+    world: &mut QatWorld,
+    repo_name: &str,
+    search: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!(
+            "DevQL selectArtefacts search for `{search}` to return at least {min_count} results"
+        ),
+        || observe_select_artefacts_search(world, search),
+        |observation| observation.count >= min_count,
+        |observation| {
+            format!(
+                "count={}; symbols=[{}]",
+                observation.count,
+                observation.symbols.join(", ")
+            )
+        },
+    )?;
+    world.last_query_result_count = Some(observation.count);
+    ensure!(
+        observation.count >= min_count,
+        "expected DevQL selectArtefacts search for `{search}` to return at least {min_count} results, got {} with symbols [{}]",
+        observation.count,
+        observation.symbols.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_devql_select_artefacts_search_returns_symbol(
+    world: &mut QatWorld,
+    repo_name: &str,
+    search: &str,
+    expected_symbol: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!(
+            "DevQL selectArtefacts search for `{search}` to return symbol `{expected_symbol}`"
+        ),
+        || observe_select_artefacts_search(world, search),
+        |observation| {
+            observation
+                .symbols
+                .iter()
+                .any(|symbol| symbol == expected_symbol)
+        },
+        |observation| {
+            format!(
+                "count={}; symbols=[{}]",
+                observation.count,
+                observation.symbols.join(", ")
+            )
+        },
+    )?;
+    world.last_query_result_count = Some(observation.count);
+    ensure!(
+        observation
+            .symbols
+            .iter()
+            .any(|symbol| symbol == expected_symbol),
+        "expected DevQL selectArtefacts search for `{search}` to include `{expected_symbol}`, got count={} with symbols [{}]",
+        observation.count,
+        observation.symbols.join(", ")
+    );
+    Ok(())
+}
+
 fn checkpoint_agent_candidates(agent: &str) -> Vec<String> {
     let mut candidates = vec![agent.to_string()];
     if agent == "claude" {

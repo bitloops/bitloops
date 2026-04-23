@@ -1683,7 +1683,7 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() {
+async fn slim_select_artefacts_search_prefers_fuzzy_hits_in_project_scope() {
     let repo = seed_graphql_monorepo_repo();
     let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
 
@@ -1691,7 +1691,7 @@ async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() 
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { fuzzyName: "targte()" }) {
+              selectArtefacts(by: { search: "targte()" }) {
                 count
                 artefacts {
                   path
@@ -1944,6 +1944,269 @@ async fn slim_select_artefacts_file_rejects_entries_field() {
 }
 
 #[tokio::test]
+async fn slim_select_artefacts_search_resolves_embedding_hits_in_repo_scope() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "render in page ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/web/src/page.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_embedding_hits_in_project_scope() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+                artefacts {
+                  score
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    let score = artefacts[0]["score"].as_f64().expect("semantic score");
+    assert!(
+        score >= 0.72,
+        "expected semantic score above cutoff, got {score}"
+    );
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_identity_name_and_path_terms() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_identity_path_terms() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "render in page ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/web/src/page.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "build response payload" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 2);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+    assert_eq!(artefacts[1]["path"], "packages/api/src/target.ts");
+    assert_eq!(
+        artefacts[1]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_dedupes_overlapping_fuzzy_and_embedding_hits() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
 async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_items() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     seed_graphql_clone_data(repo.path());
@@ -2041,6 +2304,120 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     assert_eq!(
         deps_items[1]["toSymbolRef"],
         "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
+    let repo = seed_graphql_monorepo_repo_with_duckdb_events();
+    seed_graphql_clone_data(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    seed_graphql_test_harness_stage_data(
+        repo.path(),
+        &commit_sha,
+        &[(
+            "sym::api-caller",
+            "artefact::api-caller",
+            "packages/api/src/caller.ts",
+            "caller delegates to target",
+        )],
+    );
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+                summary
+                deps {
+                  items(first: 10) {
+                    edgeKind
+                    toSymbolRef
+                  }
+                }
+                tests {
+                  summary
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["selectedArtefactCount"],
+        1
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["deps"]["summary"]["totalCount"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["tests"]["summary"]["matchedArtefactCount"],
+        1
+    );
+    let deps_items = json["selectArtefacts"]["deps"]["items"]
+        .as_array()
+        .expect("dependency items array");
+    assert_eq!(deps_items.len(), 2);
+    assert_eq!(
+        deps_items[0]["toSymbolRef"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        deps_items[1]["toSymbolRef"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "unrelated zeta quaternion" }) {
+                count
+                artefacts {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 0);
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"]
+            .as_array()
+            .expect("artefacts array")
+            .len(),
+        0
     );
 }
 

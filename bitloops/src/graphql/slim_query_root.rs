@@ -1,9 +1,11 @@
 use async_graphql::{Context, Object, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use std::collections::HashSet;
 
 use crate::graphql::fuzzy_artefact_name::select_fuzzy_named_artefacts;
 use crate::graphql::pack_adapter::StageResolverAdapter;
+use crate::graphql::semantic_artefact_query::select_semantic_artefacts;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_user_input_error};
 
 use super::types::artefact_selection::ArtefactSelectorMode;
@@ -18,11 +20,35 @@ use super::types::{
     InteractionTurnEdge, InteractionTurnSearchHitObject, KnowledgeItemConnection,
     KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
     TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
 pub struct SlimQueryRoot;
+
+async fn select_search_artefacts(
+    context: &DevqlGraphqlContext,
+    scope: &crate::graphql::ResolverScope,
+    search: &str,
+) -> Result<Vec<Artefact>> {
+    let fuzzy_candidates = context
+        .list_artefacts(None, None, scope)
+        .await
+        .map_err(|err| {
+            backend_error(format!(
+                "failed to resolve selected artefacts by search: {err:#}"
+            ))
+        })?;
+    let fuzzy_hits = select_fuzzy_named_artefacts(search, fuzzy_candidates);
+    let embedding_hits = select_semantic_artefacts(context, scope, search).await?;
+
+    let mut seen_artefact_ids = HashSet::new();
+    Ok(fuzzy_hits
+        .into_iter()
+        .chain(embedding_hits)
+        .filter(|artefact| seen_artefact_ids.insert(artefact.id.to_string()))
+        .collect())
+}
 
 #[Object]
 impl SlimQueryRoot {
@@ -566,17 +592,8 @@ impl SlimQueryRoot {
                     })?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
-            ArtefactSelectorMode::FuzzyName(fuzzy_name) => {
-                let artefacts =
-                    context
-                        .list_artefacts(None, None, &scope)
-                        .await
-                        .map_err(|err| {
-                            backend_error(format!(
-                                "failed to resolve selected artefacts by fuzzyName: {err:#}"
-                            ))
-                        })?;
-                let artefacts = select_fuzzy_named_artefacts(&fuzzy_name, artefacts);
+            ArtefactSelectorMode::Search(search) => {
+                let artefacts = select_search_artefacts(context, &scope, &search).await?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
@@ -806,6 +823,8 @@ impl SlimQueryRoot {
         )
     }
 
+    // Temporarily hidden from the typed GraphQL surface until coverage is refreshed.
+    /*
     async fn coverage(
         &self,
         ctx: &Context<'_>,
@@ -838,6 +857,7 @@ impl SlimQueryRoot {
                 .map_err(|err| map_stage_adapter_error("coverage", err))?,
         )
     }
+    */
 
     #[graphql(name = "testsSummary")]
     async fn tests_summary(&self, ctx: &Context<'_>) -> Result<TestHarnessCommitSummary> {

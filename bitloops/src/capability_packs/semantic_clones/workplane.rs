@@ -14,19 +14,21 @@ use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use super::runtime_config::embedding_slot_for_representation;
 use super::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 
-pub const SEMANTIC_CLONES_EMBEDDING_PIPELINE_MAILBOXES: [&str; 3] = [
+pub const SEMANTIC_CLONES_EMBEDDING_PIPELINE_MAILBOXES: [&str; 4] = [
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
 ];
 
-pub const SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES: [&str; 4] = [
+pub const SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES: [&str; 5] = [
     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
 ];
@@ -111,6 +113,7 @@ pub fn activate_selected_pipeline_mailboxes(
     }
     if code_embeddings_active {
         mailboxes.push(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX);
+        mailboxes.push(SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX);
     }
     if summary_embeddings_active {
         mailboxes.push(SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX);
@@ -240,6 +243,7 @@ pub fn payload_work_item_count(payload: &serde_json::Value, mailbox_name: &str) 
 pub fn payload_representation_kind(mailbox_name: &str) -> Option<EmbeddingRepresentationKind> {
     match mailbox_name {
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => Some(EmbeddingRepresentationKind::Code),
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => Some(EmbeddingRepresentationKind::Identity),
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => Some(EmbeddingRepresentationKind::Summary),
         _ => None,
     }
@@ -342,5 +346,13 @@ mod tests {
         );
 
         assert_ne!(left, right);
+    }
+
+    #[test]
+    fn identity_embedding_mailbox_maps_to_identity_representation() {
+        assert_eq!(
+            payload_representation_kind(SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX),
+            Some(EmbeddingRepresentationKind::Identity)
+        );
     }
 }

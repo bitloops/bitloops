@@ -4,7 +4,8 @@ use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
     REPO_BACKFILL_MAILBOX_CHUNK_SIZE, SemanticClonesMailboxPayload, repo_backfill_chunk_dedupe_key,
@@ -64,6 +65,7 @@ pub(crate) fn enqueue_workplane_embedding_jobs(
 ) -> Result<()> {
     let mailbox_name = match representation_kind {
         EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        EmbeddingRepresentationKind::Identity => SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
         EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     };
     let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
@@ -110,6 +112,7 @@ pub(crate) fn enqueue_workplane_embedding_repo_backfill_job(
     let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
     let mailbox_name = match representation_kind {
         EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        EmbeddingRepresentationKind::Identity => SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
         EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     };
     let use_chunk_dedupe_keys = artefact_ids.len() > REPO_BACKFILL_MAILBOX_CHUNK_SIZE;

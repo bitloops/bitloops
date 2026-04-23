@@ -178,7 +178,7 @@ When you need detail rows, query the stage directly and use `items(first: ...)`:
 Selector rules:
 
 - `symbolFqn` selects by logical artefact identity
-- `fuzzyName` selects current artefacts by normalized symbol name, including typo-tolerant matches
+- `search` blends typo-tolerant fuzzy symbol lookup with embedding-backed conceptual lookup
 - `path` selects all current artefacts in that file
 - `path` plus `lines` selects all current artefacts overlapping that range
 

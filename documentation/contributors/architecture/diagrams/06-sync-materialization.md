@@ -8,33 +8,38 @@ Use this when the question is "how does repo state become current-state DevQL da
 sequenceDiagram
     participant Watcher as "__devql-watcher"
     participant CLI as "Manual CLI trigger"
-    participant Capture as "Capture handoff"
-    participant Queue as "Daemon task queue"
-    participant Sync as "Sync coordinator"
+    participant Capture as "Capture-side Git follow-up"
+    participant Spool as "Repo-local producer spool"
+    participant Tasks as "Daemon task coordinator"
+    participant Sync as "Sync / refresh execution"
     participant Current as "Current-state relational model"
     participant History as "Historical / event / blob state"
-    participant Consumers as "Current-state consumers"
-    participant Enrich as "Enrichment workers"
+    participant Consumers as "Current-state consumer coordinator"
+    participant Enrich as "Enrichment coordinator"
     participant Models as "Inference / embeddings runtimes"
 
     alt watcher-driven
-        Watcher->>Queue: enqueue sync task
+        Watcher->>Spool: queue changed-path sync job
     else manual CLI
-        CLI->>Queue: enqueue sync / ingest / repair / validate task
+        CLI->>Tasks: enqueue sync / ingest / repair / validate task
     else capture-triggered
-        Capture->>Queue: enqueue post_commit / post_merge / post_checkout sync
+        Capture->>Spool: queue post_commit / post_merge / post_checkout follow-up
     end
 
-    Queue->>Sync: run next task
+    Spool->>Tasks: daemon claims pending producer jobs
+    Tasks->>Sync: run sync or refresh work
     Sync->>Current: materialize current-state projections
-    Sync->>History: persist historical and blob state as needed
-    Sync->>Consumers: publish current-state generation
-    Consumers->>Enrich: reconcile derived state
-    Enrich->>Models: request summaries or embeddings when enabled
+    Sync->>History: persist historical / event / blob state as needed
+    opt current-state generation advanced
+        Sync->>Consumers: enqueue current-state consumer runs
+        Consumers->>Enrich: reconcile derived state and workplane jobs
+        Enrich->>Models: request summaries or embeddings when enabled
+    end
 ```
 
 ## Notes
 
 - Sync is a daemon-owned materialization pipeline.
-- Sync can be triggered by the watcher, by explicit CLI commands, or by a handoff from capture-side Git lifecycle events.
-- Post-sync consumers and enrichment are separate stages after sync succeeds.
+- Watcher-driven and capture-triggered follow-up work lands in the repo-local producer spool before the daemon claims it.
+- Explicit CLI commands enqueue daemon tasks directly, while producer-spool jobs are drained by the same daemon task coordinator.
+- Current-state consumers and enrichment are downstream stages after current-state generation advances.

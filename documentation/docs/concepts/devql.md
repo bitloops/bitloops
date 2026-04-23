@@ -62,7 +62,8 @@ The slim, repo-scoped GraphQL surface also exposes a selection-oriented entry po
 `selectArtefacts(by: ...)` resolves a current set of `0..n` artefacts and then lets you query analyses over that same set. Supported selectors are:
 
 - `symbolFqn`
-- `fuzzyName`
+- `search`
+- `search`
 - `path`
 - `path` plus `lines`
 

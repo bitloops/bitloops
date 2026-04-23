@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::{
     DevqlTaskKind, DevqlTaskRecord, DevqlTaskSource, DevqlTaskStatus, EmbeddingsBootstrapTaskSpec,
@@ -187,6 +188,9 @@ fn summary_lane_classification_only_includes_summary_refresh_mailbox() {
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
     ));
     assert!(!is_summary_mailbox(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX));
+    assert!(!is_summary_mailbox(
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+    ));
     assert!(!is_summary_mailbox(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX));
 }
 
@@ -274,6 +278,13 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
              repo_id, init_session_id, representation_kind, status, item_kind, payload_json
+         ) VALUES (?1, ?2, 'identity', 'pending', 'artefact', NULL)",
+        ("repo-1", "init-session-1"),
+    )
+    .expect("insert identity embedding inbox row");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
          ) VALUES (?1, ?2, 'summary', 'leased', 'artefact', NULL)",
         ("repo-1", "init-session-1"),
     )
@@ -299,10 +310,10 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
 
     assert_eq!(stats.summary_refresh_jobs.counts.pending, 1);
     assert_eq!(stats.summary_refresh_jobs.counts.running, 0);
-    assert_eq!(stats.code_embedding_jobs.counts.pending, 1);
+    assert_eq!(stats.code_embedding_jobs.counts.pending, 2);
     assert_eq!(stats.summary_embedding_jobs.counts.running, 1);
     assert_eq!(stats.summary_jobs.pending, 1);
-    assert_eq!(stats.embedding_jobs.pending, 1);
+    assert_eq!(stats.embedding_jobs.pending, 2);
     assert_eq!(stats.embedding_jobs.running, 1);
 }
 

@@ -678,6 +678,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r#"^DevQL selectArtefacts search for \"([^\"]+)\" returns symbol \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_select_artefacts_search_returns_symbol),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL selectArtefacts search for \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
+            step_fn(then_devql_select_artefacts_search_returns_at_least),
+        )
+        .then(
+            None,
             regex(r#"^DevQL checkpoints query returns results for \"([^\"]+)\" in (\S+)$"#),
             step_fn(then_devql_checkpoints_returns_results),
         )

@@ -61,6 +61,7 @@ pub use sync::{
 };
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
+#[allow(unused_imports)]
 pub use test_harness::{
     TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
 };

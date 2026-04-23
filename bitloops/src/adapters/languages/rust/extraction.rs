@@ -5,7 +5,8 @@ use regex::Regex;
 
 use super::canonical::{RUST_CANONICAL_MAPPINGS, RUST_SUPPORTED_LANGUAGE_KINDS};
 use crate::host::language_adapter::{
-    LanguageArtefact, LanguageKind, RustKind, is_supported_language_kind, resolve_canonical_kind,
+    LanguageArtefact, LanguageKind, RustKind, is_supported_language_kind,
+    normalize_artefact_signature, resolve_canonical_kind,
 };
 
 // Rust artefact extraction via tree-sitter.
@@ -52,13 +53,12 @@ pub(crate) fn collect_rust_nodes_recursive(
     let end_line = node.end_position().row as i32 + 1;
     let start_byte = node.start_byte() as i32;
     let end_byte = node.end_byte() as i32;
-    let signature = node
-        .utf8_text(content.as_bytes())
-        .ok()
-        .and_then(|s| s.lines().next())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let signature = normalize_artefact_signature(
+        node.utf8_text(content.as_bytes())
+            .ok()
+            .and_then(|s| s.lines().next())
+            .unwrap_or(""),
+    );
 
     let push = |out: &mut Vec<LanguageArtefact>,
                 seen: &mut HashSet<(LanguageKind, String, i32)>,

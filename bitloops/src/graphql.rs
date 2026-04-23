@@ -6,6 +6,7 @@ mod mutation_root;
 mod pack_adapter;
 mod query_root;
 mod scope;
+mod semantic_artefact_query;
 mod slim_query_root;
 mod slim_subscription_root;
 mod subscription_root;

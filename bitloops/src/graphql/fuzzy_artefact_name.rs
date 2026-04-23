@@ -4,7 +4,9 @@ use std::collections::BTreeSet;
 use super::types::Artefact;
 
 const DEFAULT_MIN_SCORE: f32 = 0.6;
-const DEFAULT_RESULT_LIMIT: usize = 10;
+const DEFAULT_RESULT_LIMIT: usize = 5;
+const SINGLE_TOKEN_OVERLAP_SCORE_CAP: f32 = 0.58;
+const SHORT_QUERY_SCORE_CAP: f32 = 0.57;
 
 #[derive(Debug, Clone)]
 struct RankedArtefact {
@@ -37,7 +39,10 @@ pub(crate) fn select_fuzzy_named_artefacts(query: &str, artefacts: Vec<Artefact>
             .then_with(|| left.artefact.id.as_str().cmp(right.artefact.id.as_str()))
     });
     ranked.truncate(DEFAULT_RESULT_LIMIT);
-    ranked.into_iter().map(|match_| match_.artefact).collect()
+    ranked
+        .into_iter()
+        .map(|candidate| candidate.artefact.with_score(candidate.score as f64))
+        .collect()
 }
 
 fn candidate_name_from_artefact(artefact: &Artefact) -> Option<String> {
@@ -73,23 +78,56 @@ fn fuzzy_name_score(query: &str, candidate: &str) -> f32 {
         return 1.0;
     }
 
-    let prefix_score: f32 = if candidate.starts_with(query) || query.starts_with(candidate) {
+    let query_token_list = query_tokens(query);
+    let candidate_tokens = query_tokens(candidate);
+    let prefix_score: f32 = if candidate.starts_with(query) {
         0.92
+    } else if query.starts_with(candidate) {
+        0.78
     } else {
         0.0
     };
     let contains_score: f32 = if candidate.contains(query) || query.contains(candidate) {
-        0.84
+        if query_token_list.len() == 1
+            && candidate_tokens.len() > 1
+            && !candidate.starts_with(query)
+        {
+            0.56
+        } else {
+            0.84
+        }
     } else {
         0.0
     };
     let edit_score = levenshtein_similarity(query, candidate);
-    let token_score = jaccard_similarity(&query_tokens(query), &query_tokens(candidate));
-
-    prefix_score
+    let token_score = jaccard_similarity(&query_token_list, &candidate_tokens);
+    let token_coverage = query_token_coverage(&query_token_list, &candidate_tokens);
+    let mut score = prefix_score
         .max(contains_score)
         .max(edit_score)
-        .max((edit_score * 0.75) + (token_score * 0.25))
+        .max((edit_score * 0.7) + (token_score * 0.15) + (token_coverage * 0.15));
+
+    if query_token_list.len() == 1
+        && candidate_tokens.len() > 1
+        && prefix_score < 0.9
+        && edit_score < 0.82
+    {
+        score = score.min(SINGLE_TOKEN_OVERLAP_SCORE_CAP);
+    }
+
+    let candidate_extra_tokens = candidate_tokens
+        .len()
+        .saturating_sub(query_token_list.len());
+    if query_token_list.len() <= 2
+        && candidate_extra_tokens >= 2
+        && token_coverage < 1.0
+        && prefix_score < 0.9
+        && edit_score < 0.8
+    {
+        score = score.min(SHORT_QUERY_SCORE_CAP);
+    }
+
+    score
 }
 
 fn query_tokens(value: &str) -> Vec<&str> {
@@ -117,6 +155,22 @@ fn jaccard_similarity(left: &[&str], right: &[&str]) -> f32 {
     } else {
         shared as f32 / union as f32
     }
+}
+
+fn query_token_coverage(query_tokens: &[&str], candidate_tokens: &[&str]) -> f32 {
+    if query_tokens.is_empty() {
+        return 0.0;
+    }
+
+    let candidate_tokens = candidate_tokens.iter().copied().collect::<BTreeSet<_>>();
+    let shared = query_tokens
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|token| candidate_tokens.contains(token))
+        .count();
+    shared as f32 / query_tokens.len() as f32
 }
 
 fn levenshtein_similarity(left: &str, right: &str) -> f32 {
@@ -254,6 +308,7 @@ mod tests {
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-20T09:00:00Z")
                 .expect("valid timestamp"),
+            score: None,
             scope: ResolverScope::default(),
         }
     }
@@ -309,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn fuzzy_name_selection_caps_results_at_ten() {
+    fn fuzzy_name_selection_caps_results_at_five() {
         let artefacts = (0..12)
             .map(|index| {
                 sample_artefact(
@@ -322,7 +377,39 @@ mod tests {
 
         let selected = select_fuzzy_named_artefacts("payLater()", artefacts);
 
-        assert_eq!(selected.len(), 10);
+        assert_eq!(selected.len(), 5);
+    }
+
+    #[test]
+    fn fuzzy_name_selection_rejects_single_token_overlap_without_prefix_support() {
+        let selected = select_fuzzy_named_artefacts(
+            "target",
+            vec![sample_artefact(
+                "payload-builder",
+                "src/payload-builder.ts",
+                "src/payload-builder.ts::buildTargetPayload",
+            )],
+        );
+
+        assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn fuzzy_name_selection_keeps_prefix_matches_for_longer_identifiers() {
+        let selected = select_fuzzy_named_artefacts(
+            "target",
+            vec![sample_artefact(
+                "target-builder",
+                "src/target-builder.ts",
+                "src/target-builder.ts::targetPayloadBuilder",
+            )],
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            selected[0].symbol_fqn.as_deref(),
+            Some("src/target-builder.ts::targetPayloadBuilder")
+        );
     }
 
     #[test]
