@@ -47,8 +47,14 @@ pub struct TestHarnessTestsExpandHint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Interface)]
-#[graphql(field(name = "intent", ty = "String"))]
-#[graphql(field(name = "template", ty = "String"))]
+#[allow(
+    clippy::duplicated_attributes,
+    reason = "async-graphql Interface derives require one field(... ty = ...) entry per interface field"
+)]
+#[graphql(
+    field(name = "intent", ty = "String"),
+    field(name = "template", ty = "String")
+)]
 pub enum ExpandHint {
     TestHarnessTestsExpandHint(TestHarnessTestsExpandHint),
 }

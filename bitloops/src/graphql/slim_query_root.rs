@@ -593,7 +593,7 @@ impl SlimQueryRoot {
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Search(search) => {
-                let artefacts = select_search_artefacts(context, &scope, &search).await?;
+                let artefacts = select_search_artefacts(context, &scope, search).await?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
