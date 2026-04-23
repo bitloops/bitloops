@@ -12,18 +12,24 @@ use super::types::{
 use crate::adapters::agents::claude_code::agent::ClaudeCodeAgent;
 use crate::adapters::agents::claude_code::hook_output as claude_hook_output;
 use crate::adapters::agents::claude_code::hooks as claude_hooks;
+use crate::adapters::agents::claude_code::skills as claude_skills;
 use crate::adapters::agents::codex::agent::CodexAgent;
 use crate::adapters::agents::codex::hook_output as codex_hook_output;
 use crate::adapters::agents::codex::hooks as codex_hooks;
+use crate::adapters::agents::codex::skills as codex_skills;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::copilot::hook_output as copilot_hook_output;
 use crate::adapters::agents::copilot::hooks as copilot_hooks;
+use crate::adapters::agents::copilot::skills as copilot_skills;
 use crate::adapters::agents::cursor::agent::CursorAgent;
 use crate::adapters::agents::cursor::hook_output as cursor_hook_output;
 use crate::adapters::agents::cursor::hooks as cursor_hooks;
+use crate::adapters::agents::cursor::rules as cursor_rules;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::gemini::hook_output as gemini_hook_output;
+use crate::adapters::agents::gemini::skills as gemini_skills;
 use crate::adapters::agents::open_code::agent::OpenCodeAgent;
+use crate::adapters::agents::open_code::skills as open_code_skills;
 
 const PROTOCOL_FAMILY_JSONL_CLI: &str = "jsonl-cli";
 const PROTOCOL_FAMILY_JSON_EVENT: &str = "json-event";
@@ -148,6 +154,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 )
             },
             claude_hooks::uninstall_hooks,
+            |repo_root| claude_skills::repo_skill_path(repo_root).is_file(),
+            claude_skills::install_repo_skill,
+            claude_skills::uninstall_repo_skill,
             |_session_id| "claude".to_string(),
             Some(claude_hook_output::render_hook_output),
         ),
@@ -159,7 +168,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 aliases: &["copilot", "copilot-cli", "github-copilot"],
                 is_default: false,
                 // Copilot can receive shared session-start bootstrap output when the repo-local
-                // DevQL skill exists, but the host no longer inlines the skill body or turn-time
+                // DevQL guidance surface exists, but the host no longer inlines the skill body or turn-time
                 // query suggestions. Keep the advertised capability surface conservative until
                 // end-to-end model visibility is proven.
                 capabilities: ANALYTICS_CAPABILITIES,
@@ -191,6 +200,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 )
             },
             copilot_hooks::uninstall_hooks_at,
+            |repo_root| copilot_skills::repo_skill_path(repo_root).is_file(),
+            copilot_skills::install_repo_skill,
+            copilot_skills::uninstall_repo_skill,
             |session_id| {
                 if session_id.trim().is_empty() {
                     "copilot".to_string()
@@ -236,6 +248,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 )
             },
             codex_hooks::uninstall_hooks_at,
+            |repo_root| codex_skills::repo_skill_path(repo_root).is_file(),
+            codex_skills::install_repo_skill,
+            codex_skills::uninstall_repo_skill,
             |session_id| {
                 if session_id.trim().is_empty() {
                     "codex".to_string()
@@ -285,6 +300,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 )
             },
             cursor_hooks::uninstall_hooks_at,
+            |repo_root| cursor_rules::repo_rule_path(repo_root).is_file(),
+            cursor_rules::install_repo_rule,
+            cursor_rules::uninstall_repo_rule,
             |_session_id| "Open this project in Cursor to continue the session.".to_string(),
             Some(cursor_hook_output::render_hook_output),
         ),
@@ -324,6 +342,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 )
             },
             |repo_root| GeminiCliAgent.uninstall_hooks_at(repo_root),
+            |repo_root| gemini_skills::repo_skill_path(repo_root).is_file(),
+            gemini_skills::install_repo_skill,
+            gemini_skills::uninstall_repo_skill,
             |_session_id| "gemini".to_string(),
             Some(gemini_hook_output::render_hook_output),
         ),
@@ -363,6 +384,9 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 )
             },
             |repo_root| OpenCodeAgent.uninstall_hooks_at(repo_root),
+            |repo_root| open_code_skills::repo_skill_path(repo_root).is_file(),
+            open_code_skills::install_repo_skill,
+            open_code_skills::uninstall_repo_skill,
             |session_id| {
                 if session_id.trim().is_empty() {
                     "opencode".to_string()
@@ -371,7 +395,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 }
             },
             // OpenCode injects its own presence-only bootstrap through the repo-local plugin when
-            // the repo-local DevQL skill exists. The stdout prompt-augmentation transport remains
+            // the repo-local DevQL guidance surface exists. The stdout prompt-augmentation transport remains
             // disabled here because OpenCode still does not surface Bitloops hook stdout back
             // into the model.
             None,

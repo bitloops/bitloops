@@ -13,6 +13,7 @@ use crate::cli::inference::with_summary_generation_configured_hook;
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, with_global_graphql_executor_hook,
 };
+use crate::cli::terminal_picker::with_multi_select_hook;
 use crate::cli::{Cli, Commands};
 use crate::config::default_daemon_config_path;
 use crate::config::settings::{SETTINGS_DIR, save_settings, settings_local_path, settings_path};
@@ -58,6 +59,31 @@ fn run_enable_command(args: EnableArgs) -> Result<()> {
         .build()
         .expect("tokio runtime");
     runtime.block_on(run(args))
+}
+
+fn default_enable_args() -> EnableArgs {
+    EnableArgs {
+        local: false,
+        project: false,
+        force: false,
+        agent: None,
+        capture: true,
+        devql_guidance: false,
+        telemetry: None,
+        no_telemetry: false,
+        install_embeddings: false,
+        embeddings_runtime: None,
+        embeddings_gateway_url: None,
+        embeddings_api_key_env: None,
+    }
+}
+
+fn default_disable_args() -> DisableArgs {
+    DisableArgs {
+        project: false,
+        capture: false,
+        devql_guidance: false,
+    }
 }
 
 fn test_runtime() -> tokio::runtime::Runtime {
@@ -435,7 +461,7 @@ enabled = true
 }
 
 #[test]
-fn run_disable_removes_installed_hooks_without_editing_policy() {
+fn run_disable_capture_keeps_installed_hooks_without_editing_agent_policy() {
     with_isolated_daemon_config(|| {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
@@ -467,7 +493,12 @@ enabled = true
             "sanity check git command should still work"
         );
         assert!(git_hooks::is_git_hook_installed(dir.path()));
-        assert!(!codex_hooks::are_hooks_installed_at(dir.path()));
+        assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+        assert!(
+            dir.path()
+                .join(".agents/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
         assert!(dir.path().join(".codex/config.toml").exists());
 
         let content = fs::read_to_string(settings_path(dir.path())).unwrap();
@@ -477,7 +508,7 @@ enabled = true
 }
 
 #[test]
-fn run_disable_removes_selected_agent_surfaces_and_preserves_git_hooks() {
+fn run_disable_devql_guidance_removes_selected_agent_prompt_surfaces_and_preserves_hooks() {
     with_isolated_daemon_config(|| {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
@@ -496,9 +527,18 @@ supported = ["codex"]
         crate::adapters::agents::codex::hooks::install_hooks_at(dir.path(), false, false).unwrap();
 
         let mut out = Vec::new();
-        run_disable(dir.path(), &mut out, false).unwrap();
+        run_disable_with_args(
+            dir.path(),
+            &mut out,
+            &DisableArgs {
+                project: false,
+                capture: false,
+                devql_guidance: true,
+            },
+        )
+        .unwrap();
 
-        assert!(!crate::adapters::agents::codex::hooks::are_hooks_installed_at(dir.path()));
+        assert!(crate::adapters::agents::codex::hooks::are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
                 .join(".agents/skills/bitloops/using-devql/SKILL.md")
@@ -507,13 +547,15 @@ supported = ["codex"]
         assert!(git_hooks::is_git_hook_installed(dir.path()));
 
         let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
-        assert!(policy.contains("enabled = false"));
+        assert!(policy.contains("enabled = true"));
         assert!(policy.contains("supported = [\"codex\"]"));
+        assert!(policy.contains("devql_guidance_enabled = false"));
     });
 }
 
 #[test]
-fn run_disable_removes_multiple_selected_agent_surfaces_and_preserves_git_hooks() {
+fn run_disable_devql_guidance_removes_multiple_selected_agent_prompt_surfaces_and_preserves_hooks()
+{
     with_isolated_daemon_config(|| {
         let dir = tempfile::tempdir().unwrap();
         setup_git_repo(&dir);
@@ -535,15 +577,24 @@ supported = ["cursor", "gemini"]
             .unwrap();
 
         let mut out = Vec::new();
-        run_disable(dir.path(), &mut out, false).unwrap();
+        run_disable_with_args(
+            dir.path(),
+            &mut out,
+            &DisableArgs {
+                project: false,
+                capture: false,
+                devql_guidance: true,
+            },
+        )
+        .unwrap();
 
-        assert!(!crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
+        assert!(crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
                 .join(".cursor/rules/bitloops-using-devql.mdc")
                 .exists()
         );
-        assert!(!GeminiCliAgent.are_hooks_installed_at(dir.path()));
+        assert!(GeminiCliAgent.are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
                 .join(".gemini/skills/bitloops/using-devql/SKILL.md")
@@ -553,8 +604,56 @@ supported = ["cursor", "gemini"]
         assert!(git_hooks::is_git_hook_installed(dir.path()));
 
         let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
-        assert!(policy.contains("enabled = false"));
+        assert!(policy.contains("enabled = true"));
         assert!(policy.contains("supported = [\"cursor\", \"gemini\"]"));
+        assert!(policy.contains("devql_guidance_enabled = false"));
+    });
+}
+
+#[test]
+fn run_disable_capture_and_devql_guidance_updates_both_targets() {
+    with_isolated_daemon_config(|| {
+        let dir = tempfile::tempdir().unwrap();
+        setup_git_repo(&dir);
+        setup_settings(
+            &dir,
+            r#"
+[capture]
+strategy = "manual-commit"
+enabled = true
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = true
+"#,
+        );
+        git_hooks::install_git_hooks(dir.path(), false).unwrap();
+        codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path()).unwrap();
+
+        let mut out = Vec::new();
+        run_disable_with_args(
+            dir.path(),
+            &mut out,
+            &DisableArgs {
+                project: false,
+                capture: true,
+                devql_guidance: true,
+            },
+        )
+        .unwrap();
+
+        assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+        assert!(git_hooks::is_git_hook_installed(dir.path()));
+        assert!(
+            !dir.path()
+                .join(".agents/skills/bitloops/using-devql/SKILL.md")
+                .exists()
+        );
+
+        let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
+        assert!(policy.contains("enabled = false"));
+        assert!(policy.contains("devql_guidance_enabled = false"));
     });
 }
 
@@ -630,8 +729,8 @@ enabled = false
             "should print disabled message: {output}"
         );
         assert!(
-            output.contains("bitloops enable"),
-            "should mention 'bitloops enable': {output}"
+            output.contains("bitloops enable --capture"),
+            "should mention 'bitloops enable --capture': {output}"
         );
     });
 }
@@ -1252,6 +1351,48 @@ fn enable_args_support_install_embeddings_flag() {
 }
 
 #[test]
+fn enable_args_support_target_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "enable", "--capture", "--devql-guidance"])
+        .expect("enable target flags should parse");
+    let Some(Commands::Enable(args)) = parsed.command else {
+        panic!("expected enable command");
+    };
+
+    assert!(args.capture);
+    assert!(args.devql_guidance);
+}
+
+#[test]
+fn disable_args_support_target_flags() {
+    let parsed = Cli::try_parse_from(["bitloops", "disable", "--capture", "--devql-guidance"])
+        .expect("disable target flags should parse");
+    let Some(Commands::Disable(args)) = parsed.command else {
+        panic!("expected disable command");
+    };
+
+    assert!(args.capture);
+    assert!(args.devql_guidance);
+}
+
+#[test]
+fn enable_args_reject_legacy_devql_skill_flag() {
+    let err = match Cli::try_parse_from(["bitloops", "enable", "--devql-skill"]) {
+        Ok(_) => panic!("legacy enable flag should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
+#[test]
+fn disable_args_reject_legacy_devql_skill_flag() {
+    let err = match Cli::try_parse_from(["bitloops", "disable", "--devql-skill"]) {
+        Ok(_) => panic!("legacy disable flag should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
+#[test]
 fn enable_prompts_for_embeddings_and_defaults_to_yes() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     setup_git_repo(&repo);
@@ -1304,14 +1445,18 @@ supported = ["claude-code"]
                                             project: false,
                                             force: false,
                                             agent: None,
+                                            capture: true,
+                                            devql_guidance: false,
                                             telemetry: None,
                                             no_telemetry: false,
                                             install_embeddings: false,
-                                            embeddings_runtime:
+                                            embeddings_runtime: Some(
                                                 crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            ),
                                             embeddings_gateway_url: None,
-                                            embeddings_api_key_env:
+                                            embeddings_api_key_env: Some(
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                            ),
                                         },
                                         &mut out,
                                         &mut input,
@@ -1383,14 +1528,18 @@ supported = ["claude-code"]
                                     project: false,
                                     force: false,
                                     agent: None,
+                                    capture: true,
+                                    devql_guidance: false,
                                     telemetry: None,
                                     no_telemetry: false,
                                     install_embeddings: true,
-                                    embeddings_runtime:
+                                    embeddings_runtime: Some(
                                         crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                    ),
                                     embeddings_gateway_url: None,
-                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
-                                        .to_string(),
+                                    embeddings_api_key_env: Some(
+                                        "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                    ),
                                 },
                                 &mut out,
                                 &mut input,
@@ -1470,14 +1619,18 @@ model = "text-embedding-3-large"
                                 project: false,
                                 force: false,
                                 agent: None,
+                                capture: true,
+                                devql_guidance: false,
                                 telemetry: None,
                                 no_telemetry: false,
                                 install_embeddings: false,
-                                embeddings_runtime:
+                                embeddings_runtime: Some(
                                     crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                ),
                                 embeddings_gateway_url: None,
-                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
-                                    .to_string(),
+                                embeddings_api_key_env: Some(
+                                    "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                ),
                             },
                             &mut out,
                             &mut input,
@@ -1502,12 +1655,14 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
             project: false,
             force: false,
             agent: None,
+            capture: true,
+            devql_guidance: false,
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
-            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
-            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
         })
         .unwrap_err();
 
@@ -1536,12 +1691,14 @@ enabled = false
             project: false,
             force: false,
             agent: None,
+            capture: true,
+            devql_guidance: false,
             telemetry: Some(false),
             no_telemetry: false,
             install_embeddings: false,
-            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
-            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
         })
         .unwrap_err();
 
@@ -1577,12 +1734,14 @@ supported = ["cursor", "gemini"]
                     project: false,
                     force: false,
                     agent: None,
+                    capture: true,
+                    devql_guidance: false,
                     telemetry: Some(false),
                     no_telemetry: false,
                     install_embeddings: false,
-                    embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                     embeddings_gateway_url: None,
-                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
                 },
                 &mut out,
                 &mut input,
@@ -1607,6 +1766,436 @@ supported = ["cursor", "gemini"]
 }
 
 #[test]
+fn run_enable_capture_respects_disabled_devql_guidance_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = false
+
+[agents]
+supported = ["codex", "cursor"]
+devql_guidance_enabled = false
+"#,
+    );
+
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
+        run_enable_command(default_enable_args()).expect("enable should succeed");
+    });
+
+    let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
+    assert!(policy.contains("enabled = true"));
+    assert!(policy.contains("devql_guidance_enabled = false"));
+    assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+    assert!(crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
+    assert!(
+        !dir.path()
+            .join(".agents/skills/bitloops/using-devql/SKILL.md")
+            .exists()
+    );
+    assert!(
+        !dir.path()
+            .join(".cursor/rules/bitloops-using-devql.mdc")
+            .exists()
+    );
+}
+
+#[test]
+fn run_enable_devql_guidance_installs_prompt_surfaces_without_enabling_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = false
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = false
+"#,
+    );
+
+    with_repo_cwd(dir.path(), || {
+        let mut args = default_enable_args();
+        args.capture = false;
+        args.devql_guidance = true;
+        run_enable_command(args).expect("skill-only enable should succeed");
+    });
+
+    let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
+    assert!(policy.contains("enabled = false"));
+    assert!(policy.contains("devql_guidance_enabled = true"));
+    assert!(
+        dir.path()
+            .join(".agents/skills/bitloops/using-devql/SKILL.md")
+            .exists()
+    );
+    assert!(!codex_hooks::are_hooks_installed_at(dir.path()));
+    assert!(!git_hooks::is_git_hook_installed(dir.path()));
+}
+
+#[test]
+fn run_enable_capture_and_devql_guidance_updates_both_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = false
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = false
+"#,
+    );
+
+    with_ready_daemon_and_repo_cwd(dir.path(), || {
+        let mut args = default_enable_args();
+        args.devql_guidance = true;
+        args.telemetry = Some(false);
+        run_enable_command(args).expect("enable both targets should succeed");
+    });
+
+    let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
+    assert!(policy.contains("enabled = true"));
+    assert!(policy.contains("devql_guidance_enabled = true"));
+    assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+    assert!(git_hooks::is_git_hook_installed(dir.path()));
+    assert!(
+        dir.path()
+            .join(".agents/skills/bitloops/using-devql/SKILL.md")
+            .exists()
+    );
+}
+
+#[test]
+fn run_enable_rejects_embeddings_flags_without_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = false
+
+[agents]
+supported = ["codex"]
+"#,
+    );
+
+    with_repo_cwd(dir.path(), || {
+        let mut args = default_enable_args();
+        args.capture = false;
+        args.devql_guidance = true;
+        args.install_embeddings = true;
+        args.embeddings_runtime = Some(crate::cli::embeddings::EmbeddingsRuntime::Platform);
+        args.embeddings_api_key_env = Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string());
+
+        let err =
+            run_enable_command(args).expect_err("skill-only enable should reject embeddings flags");
+        assert!(format!("{err:#}").contains("require `--capture`"));
+    });
+}
+
+#[test]
+fn run_enable_without_flags_requires_interactive_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = false
+
+[agents]
+supported = ["codex"]
+"#,
+    );
+
+    with_repo_cwd(dir.path(), || {
+        let mut args = default_enable_args();
+        args.capture = false;
+        let err = run_enable_command(args).expect_err("enable should require targets");
+        assert_eq!(err.to_string(), ENABLE_NO_FLAGS_ERROR);
+    });
+}
+
+#[test]
+fn run_disable_without_flags_requires_interactive_selection() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = true
+
+[agents]
+supported = ["codex"]
+"#,
+    );
+
+    with_repo_cwd(dir.path(), || {
+        let err = run_disable_with_args(dir.path(), &mut Vec::new(), &default_disable_args())
+            .expect_err("disable should require targets");
+        assert_eq!(err.to_string(), DISABLE_NO_FLAGS_ERROR);
+    });
+}
+
+#[test]
+fn run_disable_picker_cancel_leaves_policy_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = true
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = true
+"#,
+    );
+
+    let mut out = Vec::new();
+    with_multi_select_hook(
+        |_options, _cursor| Err(anyhow::anyhow!("cancelled by user")),
+        || {
+            run_disable_with_args(dir.path(), &mut out, &default_disable_args())
+                .expect("disable cancel should not fail");
+        },
+    );
+
+    let rendered = String::from_utf8(out).unwrap();
+    assert!(rendered.contains("Disable cancelled."));
+
+    let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
+    assert!(policy.contains("enabled = true"));
+    assert!(policy.contains("devql_guidance_enabled = true"));
+}
+
+#[test]
+fn run_disable_picker_empty_submit_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = true
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = true
+"#,
+    );
+
+    with_multi_select_hook(
+        |_options, _cursor| Ok(vec![]),
+        || {
+            let err = run_disable_with_args(dir.path(), &mut Vec::new(), &default_disable_args())
+                .expect_err("disable empty submit should fail");
+            assert_eq!(err.to_string(), "no disable targets selected");
+        },
+    );
+
+    let policy = std::fs::read_to_string(settings_path(dir.path())).unwrap();
+    assert!(policy.contains("enabled = true"));
+    assert!(policy.contains("devql_guidance_enabled = true"));
+}
+
+#[test]
+fn enable_picker_preselects_current_target_state() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = true
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = false
+"#,
+    );
+
+    with_repo_cwd(dir.path(), || {
+        let mut args = default_enable_args();
+        args.capture = false;
+        let mut out = Vec::new();
+        let mut input = Cursor::new("");
+        with_multi_select_hook(
+            |options, _cursor| {
+                assert!(options[0].selected, "capture should be preselected");
+                assert!(
+                    !options[1].selected,
+                    "devql skill should not be preselected"
+                );
+                Ok(vec![0])
+            },
+            || {
+                let runtime = test_runtime();
+                runtime
+                    .block_on(run_with_io(args, &mut out, &mut input))
+                    .expect("picker-driven enable should succeed");
+            },
+        );
+    });
+}
+
+#[test]
+fn disable_and_reenable_devql_guidance_toggles_augmentation_for_claude_and_codex() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    setup_settings(
+        &dir,
+        r#"
+[capture]
+strategy = "manual-commit"
+enabled = true
+
+[agents]
+supported = ["claude-code", "codex"]
+devql_guidance_enabled = true
+"#,
+    );
+    claude_hooks::install_hooks(dir.path(), false).unwrap();
+    codex_hooks::install_hooks_at(dir.path(), false, false).unwrap();
+    crate::adapters::agents::claude_code::skills::install_repo_skill(dir.path()).unwrap();
+    crate::adapters::agents::codex::skills::install_repo_skill(dir.path()).unwrap();
+
+    let repo_understanding_prompt = "Explain tracked.txt:1";
+
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+        )
+        .is_some()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CODEX,
+        )
+        .is_some()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            repo_understanding_prompt,
+        )
+        .is_some()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            repo_understanding_prompt,
+        )
+        .is_some()
+    );
+
+    run_disable_with_args(
+        dir.path(),
+        &mut Vec::new(),
+        &DisableArgs {
+            project: false,
+            capture: false,
+            devql_guidance: true,
+        },
+    )
+    .unwrap();
+
+    assert!(claude_hooks::are_hooks_installed(dir.path()));
+    assert!(codex_hooks::are_hooks_installed_at(dir.path()));
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+        )
+        .is_none()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CODEX,
+        )
+        .is_none()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            repo_understanding_prompt,
+        )
+        .is_none()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            repo_understanding_prompt,
+        )
+        .is_none()
+    );
+
+    with_repo_cwd(dir.path(), || {
+        let mut args = default_enable_args();
+        args.capture = false;
+        args.devql_guidance = true;
+        run_enable_command(args).expect("re-enable devql skill should succeed");
+    });
+
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+        )
+        .is_some()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CODEX,
+        )
+        .is_some()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
+            repo_understanding_prompt,
+        )
+        .is_some()
+    );
+    assert!(
+        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
+            dir.path(),
+            crate::adapters::agents::AGENT_NAME_CODEX,
+            repo_understanding_prompt,
+        )
+        .is_some()
+    );
+}
+
+#[test]
 fn run_enable_with_legacy_agent_flag_returns_guidance_error() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
@@ -1616,12 +2205,14 @@ fn run_enable_with_legacy_agent_flag_returns_guidance_error() {
             project: false,
             force: false,
             agent: Some("cursor".to_string()),
+            capture: true,
+            devql_guidance: false,
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
-            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
-            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
         })
         .unwrap_err();
 
@@ -1727,12 +2318,14 @@ fn enable_does_not_create_shared_repo_policy_file() {
             project: false,
             force: false,
             agent: None,
+            capture: true,
+            devql_guidance: false,
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
-            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
-            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -1752,12 +2345,14 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
             project: false,
             force: false,
             agent: None,
+            capture: true,
+            devql_guidance: false,
             telemetry: None,
             no_telemetry: false,
             install_embeddings: false,
-            embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+            embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
-            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -1795,12 +2390,14 @@ supported = ["claude-code"]
                 project: false,
                 force: false,
                 agent: None,
+                capture: true,
+                devql_guidance: false,
                 telemetry: None,
                 no_telemetry: false,
                 install_embeddings: false,
-                embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 embeddings_gateway_url: None,
-                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
             })
             .unwrap_err();
 
@@ -1849,12 +2446,14 @@ supported = ["claude-code"]
                         project: false,
                         force: false,
                         agent: None,
+                        capture: true,
+                        devql_guidance: false,
                         telemetry: Some(false),
                         no_telemetry: false,
                         install_embeddings: false,
-                        embeddings_runtime: crate::cli::embeddings::EmbeddingsRuntime::Local,
+                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         embeddings_gateway_url: None,
-                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                        embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
                     })
                     .expect("enable should succeed");
 

@@ -385,6 +385,64 @@ fn test_build_condensed_transcript_user_prompts() {
     assert_eq!(entries[0].content, "Hello, please help me with this task");
 }
 
+// CLI-761a
+#[test]
+fn test_build_condensed_transcript_strips_bitloops_bootstrap_from_claude_user_prompt() {
+    let lines = vec![user_line(
+        "user-1",
+        Value::String(
+            "<EXTREMELY_IMPORTANT>\n\
+This repo has DevQL.\n\
+For code understanding, repo exploration, architecture questions, symbol lookup, path/line resolution, and callers/usages/imports/tests/dependencies, use DevQL first before broad repo search or directory crawling.\n\
+Start with the most specific selector available: `path`, `path + lines`, `symbolFqn`, `fuzzyName`, or a distilled `semanticQuery`.\n\
+Fall back to targeted repo search only if DevQL returns no useful artefacts or rows.\n\
+Detailed repo-local DevQL guidance is installed at `.opencode/skills/bitloops/using-devql/SKILL.md`.\n\
+</EXTREMELY_IMPORTANT>\n\
+\n\
+Please fix the parser".to_string(),
+        ),
+    )];
+
+    let entries = build_condensed_transcript(&lines);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].content, "Please fix the parser");
+}
+
+// CLI-761b
+#[test]
+fn test_build_condensed_transcript_from_bytes_open_code_strips_bitloops_bootstrap_prefix() {
+    let jsonl = "{\"id\":\"msg-1\",\"role\":\"user\",\"content\":\"<EXTREMELY_IMPORTANT>\\nBitloops has installed DevQL guidance for this repo at `.opencode/skills/bitloops/using-devql/SKILL.md`.\\nUse that repo-local skill for DevQL-specific instructions.\\n</EXTREMELY_IMPORTANT>\\n\\nPlease fix the parser\",\"time\":{\"created\":1708300000}}\n";
+    let entries = build_condensed_transcript_from_bytes(jsonl.as_bytes(), AgentType::OpenCode)
+        .expect("unexpected error");
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].entry_type, EntryType::User);
+    assert_eq!(entries[0].content, "Please fix the parser");
+}
+
+// CLI-761c
+#[test]
+fn test_build_condensed_transcript_preserves_non_bitloops_extremely_important_block() {
+    let lines = vec![user_line(
+        "user-1",
+        Value::String(
+            "<EXTREMELY_IMPORTANT>\n\
+Please be careful with destructive operations.\n\
+</EXTREMELY_IMPORTANT>\n\
+\n\
+Please fix the parser"
+                .to_string(),
+        ),
+    )];
+
+    let entries = build_condensed_transcript(&lines);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].content,
+        "<EXTREMELY_IMPORTANT>\nPlease be careful with destructive operations.\n</EXTREMELY_IMPORTANT>\n\nPlease fix the parser"
+    );
+}
+
 // CLI-762
 #[test]
 fn test_build_condensed_transcript_assistant_responses() {

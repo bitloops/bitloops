@@ -100,6 +100,10 @@ fn uninstall_noop(_: &Path) -> Result<()> {
     Ok(())
 }
 
+fn install_prompt_surface_noop(_: &Path) -> Result<bool> {
+    Ok(false)
+}
+
 fn resume_alpha(session_id: &str) -> String {
     if session_id.trim().is_empty() {
         "alpha".to_string()
@@ -211,6 +215,9 @@ pub(super) fn make_registration_with_package(
         callbacks.detect_project_presence,
         callbacks.hooks_installed,
         install_noop,
+        uninstall_noop,
+        callbacks.hooks_installed,
+        install_prompt_surface_noop,
         uninstall_noop,
         callbacks.format_resume_command,
         None,

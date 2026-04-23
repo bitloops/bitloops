@@ -9,6 +9,10 @@ pub fn installed_prompt_surface_relative_path(
     repo_root: &Path,
     agent_name: &str,
 ) -> Option<&'static str> {
+    if !crate::config::settings::devql_guidance_enabled_or_false(repo_root) {
+        return None;
+    }
+
     match agent_name {
         AGENT_NAME_CLAUDE_CODE => {
             crate::adapters::agents::claude_code::skills::repo_skill_path(repo_root)
@@ -44,6 +48,10 @@ pub fn installed_prompt_surface_relative_path(
 mod tests {
     use super::*;
 
+    fn write_repo_policy(dir: &tempfile::TempDir, body: &str) {
+        std::fs::write(dir.path().join(".bitloops.toml"), body).expect("write repo policy");
+    }
+
     #[test]
     fn installed_prompt_surface_relative_path_is_none_when_surface_is_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -57,12 +65,40 @@ mod tests {
     #[test]
     fn installed_prompt_surface_relative_path_returns_codex_skill_path_when_installed() {
         let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = true
+"#,
+        );
         crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
             .expect("install codex repo skill");
 
         assert_eq!(
             installed_prompt_surface_relative_path(dir.path(), AGENT_NAME_CODEX),
             Some(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
+        );
+    }
+
+    #[test]
+    fn installed_prompt_surface_relative_path_is_none_when_policy_disables_guidance() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = false
+"#,
+        );
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
+
+        assert_eq!(
+            installed_prompt_surface_relative_path(dir.path(), AGENT_NAME_CODEX),
+            None
         );
     }
 }

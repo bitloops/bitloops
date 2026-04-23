@@ -402,6 +402,12 @@ fn enable_action(
     if args.force {
         flags.push("force");
     }
+    if args.capture {
+        flags.push("capture");
+    }
+    if args.devql_guidance {
+        flags.push("devql_guidance");
+    }
     if args.telemetry.is_some() {
         flags.push("telemetry");
     }
@@ -421,6 +427,12 @@ fn disable_action(args: &DisableArgs) -> crate::telemetry::analytics::ActionDesc
     let mut flags = Vec::new();
     if args.project {
         flags.push("project");
+    }
+    if args.capture {
+        flags.push("capture");
+    }
+    if args.devql_guidance {
+        flags.push("devql_guidance");
     }
     insert_flags(&mut props, flags);
     new_action("bitloops disable", props)
