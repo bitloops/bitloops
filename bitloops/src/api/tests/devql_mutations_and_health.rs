@@ -2407,7 +2407,7 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     );
     assert_eq!(
         json["selectArtefacts"]["overview"]["dependencies"]["expandHint"]["template"],
-        "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'"
+        "bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 20) { edgeKind toSymbolRef } } } }'"
     );
     assert_eq!(
         json["selectArtefacts"]["overview"]["tests"]["overview"]["matchedArtefactCount"],
@@ -2579,7 +2579,7 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
     );
     assert_eq!(
         json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["template"],
-        "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'"
+        "bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 20) { edgeKind toSymbolRef } } } }'"
     );
     assert_eq!(
         json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["parameters"],
