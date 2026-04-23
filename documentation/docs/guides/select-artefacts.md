@@ -120,7 +120,7 @@ type ArtefactSelection {
   artefacts(first: Int! = 20): [Artefact!]!
   checkpoints(agent: String, since: DateTime): CheckpointStageResult!
   clones(relationKind: String, minScore: Float): CloneStageResult!
-  deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
+  dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
   tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 }
 ```
@@ -167,19 +167,29 @@ Representative shape:
     },
     "schema": "type ArtefactSelection { ... }"
   },
-  "deps": {
+  "dependencies": {
     "summary": {
-      "selectedArtefactCount": 2,
-      "totalCount": 2,
-      "incomingCount": 0,
-      "outgoingCount": 2,
-      "kindCounts": {
-        "imports": 0,
-        "calls": 2,
-        "references": 0,
-        "extends": 0,
-        "implements": 0,
-        "exports": 0
+      "dependencies": {
+        "selectedArtefact": 2,
+        "total": 2,
+        "incoming": 0,
+        "outgoing": 2,
+        "kindCounts": {
+          "calls": 2,
+          "exports": 0,
+          "extends": 0,
+          "implements": 0,
+          "imports": 0,
+          "references": 0
+        }
+      }
+    },
+    "expandHint": {
+      "intent": "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.",
+      "template": "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'",
+      "parameters": {
+        "direction": ["IN", "OUT"],
+        "kind": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
       }
     },
     "schema": "type ArtefactSelection { ... }"
@@ -205,6 +215,8 @@ Notes:
 - `schema` is `null` when that stage has no results
 - `schema` is included in the aggregate response so an agent can discover the drill-down surface without re-querying first
 - `tests.summary.expandHint` is always included when tests summary is requested and points to the concrete `coveringTests` drill-down query
+- `summary.dependencies.expandHint` maps the dependency buckets back to concrete `dependencies(direction:..., kind:...)` follow-up queries
+- `summary.dependencies.expandHint` is omitted when no dependencies match the selected artefacts
 
 ## Stage Results
 
@@ -224,13 +236,32 @@ The other stage result types follow the same pattern:
 - `DependencyStageResult`
 - `TestsStageResult`
 
+`DependencyStageResult` also exposes a typed `expandHint` field:
+
+```graphql
+type DependencyStageResult {
+  summary: JSON!
+  expandHint: DependencyExpandHint
+  schema: String
+  items(first: Int! = 20): [DependencyEdge!]!
+}
+```
+
 Use them like this:
 
 ```graphql
 {
   selectArtefacts(by: { path: "rust-app/src/main.rs" }) {
-    deps {
+    dependencies {
       summary
+      expandHint {
+        intent
+        template
+        parameters {
+          direction
+          kind
+        }
+      }
       schema
       items(first: 10) {
         id
@@ -246,8 +277,9 @@ This is the normal escalation path:
 
 1. Ask for `summary`
 2. Decide which category matters
-3. Read `schema` only if needed
-4. Query `items(first: ...)` for typed detail rows
+3. For `dependencies`, use the typed stage field `expandHint`, or the aggregate `summary.dependencies.expandHint` when you are still in summary-only mode
+4. Read `schema` only if needed
+5. Query `items(first: ...)` for typed detail rows
 
 ## Agent Hook Guidance
 
@@ -276,8 +308,8 @@ Current category coverage:
 |---|---|---|
 | `checkpoints` | Count, latest timestamp, participating agents | `Checkpoint` |
 | `clones` | Total count, grouped relation kinds, max score | `Clone` |
-| `deps` | Unique edge counts, direction counts, edge-kind counts | `DependencyEdge` |
 | `tests` | Matched artefact count, total covering tests, drill-down hint | `TestHarnessTestsResult` |
+| `dependencies` | Nested counts plus a default drill-down hint for `direction` / `kind` follow-up queries | `DependencyEdge` |
 
 ## Stage Arguments
 
@@ -293,10 +325,10 @@ checkpoints(agent: String, since: DateTime)
 clones(relationKind: String, minScore: Float)
 ```
 
-### `deps`
+### `dependencies`
 
 ```graphql
-deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = false)
+dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = false)
 ```
 
 Defaults for selection stages:
@@ -327,6 +359,7 @@ Current DSL limitations:
 - supports one explicit terminal stage at a time
 - defaults to selecting `summary`
 - `->select(summary,schema)` is supported for the chosen stage
+- the DSL stage name remains `deps()`, but it compiles to the raw GraphQL `dependencies(...)` field on `selectArtefacts`
 - aggregate `selectArtefacts { summary }` is not yet available through the DSL
 
 ## Recommended Agent Flow

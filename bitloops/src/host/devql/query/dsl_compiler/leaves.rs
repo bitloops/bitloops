@@ -75,7 +75,11 @@ fn compile_select_artefacts_leaf(
     } else if parsed.has_clones_stage {
         GraphqlField::new("clones", compile_selection_clones_args(parsed), selections)
     } else if parsed.has_deps_stage {
-        GraphqlField::new("deps", compile_selection_deps_args(parsed), selections)
+        GraphqlField::new(
+            "dependencies",
+            compile_selection_deps_args(parsed),
+            selections,
+        )
     } else if let Some(RegisteredStageKind::Tests(stage)) = registered_stage {
         GraphqlField::new("tests", compile_selection_tests_args(stage), selections)
     } else {

@@ -1872,7 +1872,7 @@ async fn slim_select_artefacts_directory_rejects_summary_and_stage_fields() {
         ("summary", "summary"),
         ("checkpoints", "checkpoints { summary }"),
         ("clones", "clones { summary }"),
-        ("deps", "deps { summary }"),
+        ("dependencies", "dependencies { summary }"),
         ("tests", "tests { summary }"),
     ] {
         let response = schema
@@ -2269,7 +2269,16 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
               selectArtefacts(by: { path: "src/caller.ts", lines: { start: 4, end: 6 } }) {
                 count
                 summary
-                deps {
+                dependencies {
+                  summary
+                  expandHint {
+                    intent
+                    template
+                    parameters {
+                      direction
+                      kind
+                    }
+                  }
                   schema
                   items(first: 5) {
                     id
@@ -2307,9 +2316,19 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         json["selectArtefacts"]["summary"]["clones"]["summary"]["totalCount"],
         2
     );
+    let aggregate_deps_summary = &json["selectArtefacts"]["summary"]["dependencies"]["summary"];
+    assert_eq!(aggregate_deps_summary["dependencies"]["total"], 2);
     assert_eq!(
-        json["selectArtefacts"]["summary"]["deps"]["summary"]["totalCount"],
+        aggregate_deps_summary["dependencies"]["selectedArtefact"],
         2
+    );
+    assert_eq!(
+        aggregate_deps_summary["dependencies"]["kindCounts"]["exports"],
+        0
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["dependencies"]["expandHint"]["template"],
+        "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'"
     );
     assert_eq!(
         json["selectArtefacts"]["summary"]["tests"]["summary"]["matchedArtefactCount"],
@@ -2318,7 +2337,7 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     let aggregate_tests_summary = &json["selectArtefacts"]["summary"]["tests"]["summary"];
     assert_compact_tests_stage_summary(aggregate_tests_summary);
     assert_tests_expand_hint(&aggregate_tests_summary["expandHint"]);
-    let aggregate_deps_schema = json["selectArtefacts"]["summary"]["deps"]["schema"]
+    let aggregate_deps_schema = json["selectArtefacts"]["summary"]["dependencies"]["schema"]
         .as_str()
         .expect("aggregate dependency schema string");
     assert!(
@@ -2326,14 +2345,37 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         "expected aggregate summary to surface dependency items(...), got {aggregate_deps_schema}"
     );
 
-    let deps_schema = json["selectArtefacts"]["deps"]["schema"]
+    let stage_deps_summary = &json["selectArtefacts"]["dependencies"]["summary"];
+    assert_eq!(stage_deps_summary["dependencies"]["incoming"], 0);
+    assert_eq!(stage_deps_summary["dependencies"]["outgoing"], 2);
+    assert!(
+        stage_deps_summary["expandHint"].is_null(),
+        "dependency summary JSON should no longer embed expandHint: {stage_deps_summary:#}"
+    );
+    assert_eq!(
+        stage_deps_summary,
+        &json["selectArtefacts"]["summary"]["dependencies"]["summary"]
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["expandHint"]["template"],
+        json["selectArtefacts"]["summary"]["dependencies"]["expandHint"]["template"]
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["direction"][0],
+        "IN"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["kind"][0],
+        "CALLS"
+    );
+    let deps_schema = json["selectArtefacts"]["dependencies"]["schema"]
         .as_str()
         .expect("dependency schema string");
     assert!(
         deps_schema.contains("items(first: Int! = 20): [DependencyEdge!]!"),
         "expected dependency schema to expose items(...), got {deps_schema}"
     );
-    let deps_items = json["selectArtefacts"]["deps"]["items"]
+    let deps_items = json["selectArtefacts"]["dependencies"]["items"]
         .as_array()
         .expect("dependency items array");
     assert_eq!(deps_items.len(), 2);
@@ -2375,7 +2417,14 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
               selectArtefacts(by: { search: "caller in caller ts" }) {
                 count
                 summary
-                deps {
+                dependencies {
+                  summary
+                  expandHint {
+                    parameters {
+                      direction
+                      kind
+                    }
+                  }
                   items(first: 10) {
                     edgeKind
                     toSymbolRef
@@ -2411,8 +2460,20 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
         1
     );
     assert_eq!(
-        json["selectArtefacts"]["summary"]["deps"]["summary"]["totalCount"],
+        json["selectArtefacts"]["summary"]["dependencies"]["summary"]["dependencies"]["total"],
         2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["summary"]["dependencies"]["total"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["direction"][0],
+        "IN"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["summary"]["expandHint"],
+        serde_json::Value::Null
     );
     assert_eq!(
         json["selectArtefacts"]["tests"]["summary"]["matchedArtefactCount"],
@@ -2424,7 +2485,7 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
     assert_tests_expand_hint(
         &json["selectArtefacts"]["tests"]["items"][0]["summary"]["expandHint"],
     );
-    let deps_items = json["selectArtefacts"]["deps"]["items"]
+    let deps_items = json["selectArtefacts"]["dependencies"]["items"]
         .as_array()
         .expect("dependency items array");
     assert_eq!(deps_items.len(), 2);
@@ -2486,7 +2547,7 @@ async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() {
+async fn slim_select_artefacts_dependencies_include_unresolved_false_true_and_default() {
     let repo = seed_graphql_rust_select_artefacts_repo();
     let schema = slim_schema_for_repo(repo.path());
 
@@ -2495,7 +2556,7 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
             r#"
             {
               selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
-                deps(includeUnresolved: false) {
+                dependencies(includeUnresolved: false) {
                   items(first: 10) {
                     edgeKind
                     toSymbolRef
@@ -2519,9 +2580,9 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
         .data
         .into_json()
         .expect("graphql data (false) to json");
-    let items_false = json_false["selectArtefacts"]["deps"]["items"]
+    let items_false = json_false["selectArtefacts"]["dependencies"]["items"]
         .as_array()
-        .expect("deps false items array");
+        .expect("dependencies false items array");
     assert_eq!(items_false.len(), 1);
     assert_eq!(items_false[0]["edgeKind"], "REFERENCES");
     assert_eq!(
@@ -2534,7 +2595,7 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
             r#"
             {
               selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
-                deps(includeUnresolved: true) {
+                dependencies(includeUnresolved: true) {
                   items(first: 10) {
                     edgeKind
                     toSymbolRef
@@ -2558,9 +2619,9 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
         .data
         .into_json()
         .expect("graphql data (true) to json");
-    let items_true = json_true["selectArtefacts"]["deps"]["items"]
+    let items_true = json_true["selectArtefacts"]["dependencies"]["items"]
         .as_array()
-        .expect("deps true items array");
+        .expect("dependencies true items array");
     assert_eq!(items_true.len(), 3);
     assert!(
         items_true
@@ -2582,7 +2643,7 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
             r#"
             {
               selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
-                deps {
+                dependencies {
                   items(first: 10) {
                     edgeKind
                     toSymbolRef
@@ -2606,9 +2667,9 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
         .data
         .into_json()
         .expect("graphql data (default) to json");
-    let items_default = json_default["selectArtefacts"]["deps"]["items"]
+    let items_default = json_default["selectArtefacts"]["dependencies"]["items"]
         .as_array()
-        .expect("deps default items array");
+        .expect("dependencies default items array");
 
     assert_eq!(items_default.len(), items_true.len());
     assert_eq!(

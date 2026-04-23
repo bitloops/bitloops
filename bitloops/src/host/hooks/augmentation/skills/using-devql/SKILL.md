@@ -48,9 +48,10 @@ search or file reads.
 1. Select the target with `symbolFqn`, `search`, `path`, or `path + lines`.
    Use `search` when the request is conceptual or when the symbol name may be approximate.
 2. Apply the `Prime Directive` summary rules to decide whether to start with `summary` or resolve concrete artefacts first.
-3. Rerun with `artefacts(first: ...)` or the relevant stage `items(first: ...)` only after `summary` or selector resolution tells you where to drill in.
-4. Return the concrete rows. Summaries guide drill-down; they do not replace concrete rows.
-5. If DevQL returns nothing useful, fall back to targeted repo search or file reads.
+3. When `dependencies` is the relevant stage, read the typed `dependencies.expandHint` field first when it is present and use it to choose the `direction` / `kind` follow-up query that matches the requested flow. If you only queried aggregate `summary`, use `summary.dependencies.expandHint`.
+4. Rerun with `artefacts(first: ...)` or the relevant stage `items(first: ...)` only after `summary` or selector resolution tells you where to drill in.
+5. Return the concrete rows. Summaries guide drill-down; they do not replace concrete rows.
+6. If DevQL returns nothing useful, fall back to targeted repo search or file reads.
 
 ## Selector Routing
 
@@ -64,7 +65,7 @@ search or file reads.
 - Do not pass the whole conversational prompt into `search` when it contains extra wrapper text such as `can you help`, `fix this`, or `help me understand the codebase`.
 - Distill semantic lookup into a short intent phrase instead of removing stopwords mechanically. Preserve meaningful qualifiers and drop conversational filler.
 - For mixed prompts, try structured lookup first and use `search` as a fallback or supplement when the artefact clue is weak.
-- After semantic/conceptual `search` resolves concrete artefacts/files, always follow with `summary` before drilling into `clones`, `deps`, `tests`, or `checkpoints`.
+- After semantic/conceptual `search` resolves concrete artefacts/files, always follow with `summary` before drilling into `clones`, `dependencies`, `tests`, or `checkpoints`.
 
 Examples:
 
@@ -104,11 +105,14 @@ bitloops devql query '{ selectArtefacts(by: { search: "<natural-language request
 # After search resolves concrete files/artefacts, follow with summary
 bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-file-path>" }) { summary } }'
 
+# Read the dependency summary and use the typed expandHint field to choose the right dependencies(...) drill-down
+bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { dependencies { summary expandHint { intent template parameters { direction kind } } } } }'
+
 # Concrete callers/usages/imports once the symbol is known
-bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { items(first: 50) { edgeKind startLine endLine fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'
+bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { dependencies(kind: CALLS, direction: IN, includeUnresolved: true) { items(first: 50) { edgeKind startLine endLine fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'
 
 # Discover the exact row fields for the chosen stage
-bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { schema } } }'
+bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { dependencies(kind: CALLS, direction: IN, includeUnresolved: true) { schema } } }'
 
 # Concrete tests that directly target the selected artefact
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { tests { summary items(first: 20) { artefact { name filePath startLine endLine } coveringTests { testName suiteName filePath startLine endLine } } } } }'

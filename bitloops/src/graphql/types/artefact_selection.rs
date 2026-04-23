@@ -185,6 +185,7 @@ struct CloneStageData {
 #[derive(Debug, Clone)]
 struct DependencyStageData {
     summary: Value,
+    expand_hint: Option<DependencyExpandHint>,
     schema: Option<String>,
     items: Vec<DependencyEdge>,
 }
@@ -218,9 +219,24 @@ pub struct CloneStageResult {
 #[graphql(complex)]
 pub struct DependencyStageResult {
     pub summary: JsonScalar,
+    #[graphql(name = "expandHint")]
+    pub expand_hint: Option<DependencyExpandHint>,
     pub schema: Option<String>,
     #[graphql(skip)]
     pub(crate) items: Vec<DependencyEdge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct DependencyExpandHintParameters {
+    pub direction: Vec<DepsDirection>,
+    pub kind: Vec<EdgeKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct DependencyExpandHint {
+    pub intent: String,
+    pub template: String,
+    pub parameters: DependencyExpandHintParameters,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -256,6 +272,7 @@ impl From<DependencyStageData> for DependencyStageResult {
     fn from(data: DependencyStageData) -> Self {
         Self {
             summary: Json(data.summary),
+            expand_hint: data.expand_hint,
             schema: data.schema,
             items: data.items,
         }
@@ -333,14 +350,15 @@ impl ArtefactSelection {
             .into())
     }
 
-    async fn deps(
+    #[graphql(name = "dependencies")]
+    async fn dependencies(
         &self,
         ctx: &Context<'_>,
         kind: Option<EdgeKind>,
         #[graphql(default_with = "DepsDirection::Both")] direction: DepsDirection,
         #[graphql(name = "includeUnresolved", default = true)] include_unresolved: bool,
     ) -> Result<DependencyStageResult> {
-        self.ensure_artefact_selection("deps")?;
+        self.ensure_artefact_selection("dependencies")?;
         Ok(self
             .resolve_dependency_stage_data(ctx, kind, direction, include_unresolved)
             .await?
@@ -501,6 +519,7 @@ impl ArtefactSelection {
                 &outgoing_edges,
                 self.artefacts.len(),
             ),
+            expand_hint: build_dependency_expand_hint(items.len()),
             schema: (!items.is_empty()).then(|| DEPENDENCY_STAGE_SCHEMA.to_string()),
             items,
         })
@@ -690,18 +709,38 @@ fn build_dependency_summary(
     }
 
     json!({
-        "selectedArtefactCount": selected_artefact_count,
-        "totalCount": unique_by_id.len(),
-        "incomingCount": incoming.len(),
-        "outgoingCount": outgoing.len(),
-        "kindCounts": {
-            "imports": kind_counts.get("imports").copied().unwrap_or(0),
-            "calls": kind_counts.get("calls").copied().unwrap_or(0),
-            "references": kind_counts.get("references").copied().unwrap_or(0),
-            "extends": kind_counts.get("extends").copied().unwrap_or(0),
-            "implements": kind_counts.get("implements").copied().unwrap_or(0),
-            "exports": kind_counts.get("exports").copied().unwrap_or(0),
+        "dependencies": {
+            "selectedArtefact": selected_artefact_count,
+            "total": unique_by_id.len(),
+            "incoming": incoming.len(),
+            "outgoing": outgoing.len(),
+            "kindCounts": {
+                "calls": kind_counts.get("calls").copied().unwrap_or(0),
+                "exports": kind_counts.get("exports").copied().unwrap_or(0),
+                "extends": kind_counts.get("extends").copied().unwrap_or(0),
+                "implements": kind_counts.get("implements").copied().unwrap_or(0),
+                "imports": kind_counts.get("imports").copied().unwrap_or(0),
+                "references": kind_counts.get("references").copied().unwrap_or(0),
+            }
         }
+    })
+}
+
+fn build_dependency_expand_hint(dependency_count: usize) -> Option<DependencyExpandHint> {
+    (dependency_count > 0).then(|| DependencyExpandHint {
+        intent: "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.".to_string(),
+        template: "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'".to_string(),
+        parameters: DependencyExpandHintParameters {
+            direction: vec![DepsDirection::In, DepsDirection::Out],
+            kind: vec![
+                EdgeKind::Calls,
+                EdgeKind::Exports,
+                EdgeKind::Extends,
+                EdgeKind::Implements,
+                EdgeKind::Imports,
+                EdgeKind::References,
+            ],
+        },
     })
 }
 
@@ -728,17 +767,54 @@ fn build_selection_summary(
 ) -> Value {
     json!({
         "selectedArtefactCount": selected_artefact_count,
-        "checkpoints": selection_stage_entry(&checkpoints.summary, checkpoints.schema.as_deref()),
-        "clones": selection_stage_entry(&clones.summary, clones.schema.as_deref()),
-        "deps": selection_stage_entry(&deps.summary, deps.schema.as_deref()),
-        "tests": selection_stage_entry(&tests.summary, tests.schema.as_deref()),
+        "checkpoints": selection_stage_entry(&checkpoints.summary, None, checkpoints.schema.as_deref()),
+        "clones": selection_stage_entry(&clones.summary, None, clones.schema.as_deref()),
+        "dependencies": selection_stage_entry(
+            &deps.summary,
+            deps.expand_hint.as_ref(),
+            deps.schema.as_deref(),
+        ),
+        "tests": selection_stage_entry(&tests.summary, None, tests.schema.as_deref()),
     })
 }
 
-fn selection_stage_entry(summary: &Value, schema: Option<&str>) -> Value {
+fn selection_stage_entry(
+    summary: &Value,
+    expand_hint: Option<&DependencyExpandHint>,
+    schema: Option<&str>,
+) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("summary".to_string(), summary.clone());
+    if let Some(expand_hint) = expand_hint {
+        entry.insert(
+            "expandHint".to_string(),
+            dependency_expand_hint_to_value(expand_hint),
+        );
+    }
+    entry.insert("schema".to_string(), json!(schema));
+    Value::Object(entry)
+}
+
+fn dependency_expand_hint_to_value(expand_hint: &DependencyExpandHint) -> Value {
     json!({
-        "summary": summary,
-        "schema": schema,
+        "intent": expand_hint.intent.as_str(),
+        "template": expand_hint.template.as_str(),
+        "parameters": {
+            "direction": expand_hint
+                .parameters
+                .direction
+                .iter()
+                .copied()
+                .map(deps_direction_name)
+                .collect::<Vec<_>>(),
+            "kind": expand_hint
+                .parameters
+                .kind
+                .iter()
+                .copied()
+                .map(edge_kind_graphql_name)
+                .collect::<Vec<_>>(),
+        }
     })
 }
 
@@ -771,6 +847,25 @@ fn edge_kind_name(kind: EdgeKind) -> &'static str {
         EdgeKind::Extends => "extends",
         EdgeKind::Implements => "implements",
         EdgeKind::Exports => "exports",
+    }
+}
+
+fn edge_kind_graphql_name(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::Imports => "IMPORTS",
+        EdgeKind::Calls => "CALLS",
+        EdgeKind::References => "REFERENCES",
+        EdgeKind::Extends => "EXTENDS",
+        EdgeKind::Implements => "IMPLEMENTS",
+        EdgeKind::Exports => "EXPORTS",
+    }
+}
+
+fn deps_direction_name(direction: DepsDirection) -> &'static str {
+    match direction {
+        DepsDirection::Out => "OUT",
+        DepsDirection::In => "IN",
+        DepsDirection::Both => "BOTH",
     }
 }
 
@@ -831,13 +926,25 @@ type Clone {
 }"#;
 
 const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
+  dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 }
 
 type DependencyStageResult {
   summary: JSON!
+  expandHint: DependencyExpandHint
   schema: String
   items(first: Int! = 20): [DependencyEdge!]!
+}
+
+type DependencyExpandHint {
+  intent: String!
+  template: String!
+  parameters: DependencyExpandHintParameters!
+}
+
+type DependencyExpandHintParameters {
+  direction: [DepsDirection!]!
+  kind: [EdgeKind!]!
 }
 
 type DependencyEdge {
