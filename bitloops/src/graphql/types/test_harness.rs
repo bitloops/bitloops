@@ -1,4 +1,4 @@
-use async_graphql::SimpleObject;
+use async_graphql::{Interface, SimpleObject};
 use serde::Deserialize;
 
 use crate::capability_packs::test_harness::types::{
@@ -44,6 +44,13 @@ pub struct TestHarnessCoveringTest {
 pub struct TestHarnessTestsExpandHint {
     pub intent: String,
     pub template: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Interface)]
+#[graphql(field(name = "intent", ty = "String"))]
+#[graphql(field(name = "template", ty = "String"))]
+pub enum ExpandHint {
+    TestHarnessTestsExpandHint(TestHarnessTestsExpandHint),
 }
 
 impl Default for TestHarnessTestsExpandHint {

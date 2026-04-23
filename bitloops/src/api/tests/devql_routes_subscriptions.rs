@@ -497,6 +497,33 @@ fn checked_in_slim_schema_file_matches_runtime_sdl() {
     assert_eq!(actual, expected);
 }
 
+#[test]
+fn tests_expand_hint_implements_base_expand_hint_interface() {
+    for sdl in [
+        crate::graphql::schema_sdl(),
+        crate::graphql::slim_schema_sdl(),
+    ] {
+        assert!(
+            sdl.contains("interface ExpandHint {\n\tintent: String!\n\ttemplate: String!\n}"),
+            "expected base ExpandHint interface in SDL:\n{sdl}"
+        );
+        assert!(
+            sdl.contains(
+                "type TestHarnessTestsExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n}",
+            ),
+            "expected tests expand hint to implement ExpandHint:\n{sdl}"
+        );
+        assert!(
+            sdl.contains("expandHint: TestHarnessTestsExpandHint!"),
+            "expected tests summary to keep its concrete expandHint field type:\n{sdl}"
+        );
+        assert!(
+            !sdl.contains("type DependencyExpandHint implements ExpandHint"),
+            "dependency expand hint should not implement ExpandHint yet:\n{sdl}"
+        );
+    }
+}
+
 fn graphql_parent_depth_limit_query(parent_depth: usize) -> String {
     let mut query = String::from(
         r#"{ repo(name: "demo") { file(path: "src/caller.ts") { artefacts(first: 1) { edges { node {"#,

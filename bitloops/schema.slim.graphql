@@ -442,6 +442,11 @@ type EnqueueTaskResult {
 	merged: Boolean!
 }
 
+interface ExpandHint {
+	intent: String!
+	template: String!
+}
+
 type FileContext {
 	path: String!
 	language: String
@@ -1143,7 +1148,7 @@ type TestHarnessLastRun {
 	commitSha: String!
 }
 
-type TestHarnessTestsExpandHint {
+type TestHarnessTestsExpandHint implements ExpandHint {
 	intent: String!
 	template: String!
 }
