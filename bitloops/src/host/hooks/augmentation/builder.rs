@@ -53,7 +53,7 @@ mod tests {
     }
 
     #[test]
-    fn session_start_guidance_includes_direct_devql_first_instructions_when_skill_exists() {
+    fn session_start_guidance_includes_search_overview_and_response_hint_guidance() {
         let dir = tempfile::tempdir().expect("tempdir");
         write_repo_policy(
             &dir,
@@ -86,9 +86,12 @@ enabled = true
         );
         assert!(augmentation.additional_context.contains("path"));
         assert!(augmentation.additional_context.contains("symbolFqn"));
-        assert!(augmentation.additional_context.contains("fuzzyName"));
-        assert!(augmentation.additional_context.contains("naturalLanguage"));
-        assert!(augmentation.additional_context.contains("semanticQuery"));
+        assert!(augmentation.additional_context.contains("search"));
+        assert!(augmentation.additional_context.contains("overview"));
+        assert!(augmentation.additional_context.contains("expandHint"));
+        assert!(!augmentation.additional_context.contains("fuzzyName"));
+        assert!(!augmentation.additional_context.contains("naturalLanguage"));
+        assert!(!augmentation.additional_context.contains("semanticQuery"));
         assert!(
             augmentation
                 .additional_context
@@ -201,7 +204,12 @@ enabled = true
                 .contains("when it is available in this session")
         );
         assert!(augmentation.additional_context.contains("path + lines"));
-        assert!(augmentation.additional_context.contains("naturalLanguage"));
+        assert!(augmentation.additional_context.contains("search"));
+        assert!(augmentation.additional_context.contains("overview"));
+        assert!(augmentation.additional_context.contains("expandHint"));
+        assert!(!augmentation.additional_context.contains("fuzzyName"));
+        assert!(!augmentation.additional_context.contains("naturalLanguage"));
+        assert!(!augmentation.additional_context.contains("semanticQuery"));
         assert!(
             augmentation
                 .additional_context
@@ -232,7 +240,12 @@ enabled = true
                 .additional_context
                 .contains("repo-aware request")
         );
-        assert!(augmentation.additional_context.contains("naturalLanguage"));
+        assert!(augmentation.additional_context.contains("search"));
+        assert!(augmentation.additional_context.contains("overview"));
+        assert!(augmentation.additional_context.contains("expandHint"));
+        assert!(!augmentation.additional_context.contains("fuzzyName"));
+        assert!(!augmentation.additional_context.contains("naturalLanguage"));
+        assert!(!augmentation.additional_context.contains("semanticQuery"));
     }
 
     #[test]

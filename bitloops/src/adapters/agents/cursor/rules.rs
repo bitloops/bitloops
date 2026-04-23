@@ -17,7 +17,7 @@ fn cursor_rule_content() -> String {
     let body = using_devql_skill_body().trim();
     format!(
         "---\n\
-description: When DevQL is available in the current session, use it first for repo-understanding questions and fall back to targeted repo search or file reads when needed.\n\
+description: When DevQL is available in the current session, use it first for repo-understanding questions by resolving with `search` or an exact selector and then asking for `overview` before fallback search.\n\
 alwaysApply: true\n\
 ---\n\n\
 {body}\n"
@@ -56,8 +56,14 @@ mod tests {
         assert!(content.contains("alwaysApply: true"));
         assert!(content.contains("repo-understanding questions"));
         assert!(content.contains("When DevQL is available in the current"));
+        assert!(content.contains("search"));
+        assert!(content.contains("overview"));
+        assert!(content.contains("expandHint"));
         assert!(content.contains("bitloops devql query"));
         assert!(content.contains("fall back to targeted repo search or file reads"));
+        assert!(!content.contains("fuzzyName"));
+        assert!(!content.contains("naturalLanguage"));
+        assert!(!content.contains("semanticQuery"));
     }
 
     #[test]
