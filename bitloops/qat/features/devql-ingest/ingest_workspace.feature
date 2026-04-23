@@ -13,7 +13,6 @@ Feature: DevQL ingest workspace history coverage
     And I run InitCommit for bitloops
     And I create 2 ingest commits in bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     Then all reachable SHAs are completed in commit_ingest_ledger in bitloops
@@ -26,7 +25,6 @@ Feature: DevQL ingest workspace history coverage
     And I run InitCommit for bitloops
     And I create 2 ingest commits in bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
@@ -43,7 +41,6 @@ Feature: DevQL ingest workspace history coverage
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
@@ -60,7 +57,6 @@ Feature: DevQL ingest workspace history coverage
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
@@ -79,7 +75,6 @@ Feature: DevQL ingest workspace history coverage
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
@@ -98,7 +93,6 @@ Feature: DevQL ingest workspace history coverage
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
@@ -117,7 +111,6 @@ Feature: DevQL ingest workspace history coverage
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I snapshot ingest DB state in bitloops
@@ -136,7 +129,6 @@ Feature: DevQL ingest workspace history coverage
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I create 2 ingest commits in bitloops
@@ -159,7 +151,6 @@ Feature: DevQL ingest workspace history coverage
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
     And I create 2 ingest commits in bitloops
@@ -183,7 +174,6 @@ Feature: DevQL ingest workspace history coverage
     And I run InitCommit for bitloops
     And I create 2 ingest commits in bitloops
     And I run bitloops init --agent claude --sync=false --ingest=true --backfill=1 in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops
 
@@ -195,7 +185,6 @@ Feature: DevQL ingest workspace history coverage
     And I run InitCommit for bitloops
     And I create 2 ingest commits in bitloops
     And I run bitloops init --agent claude --sync=false --ingest=true --backfill=1 in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops
     And I enqueue DevQL ingest task with status in bitloops
@@ -209,7 +198,6 @@ Feature: DevQL ingest workspace history coverage
     And I run InitCommit for bitloops
     And I create 3 ingest commits in bitloops
     And I run bitloops init --agent claude --sync=false --ingest=true --backfill=2 in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     Then only latest 2 reachable SHAs are completed in commit_ingest_ledger in bitloops
     And I enqueue DevQL ingest task with status in bitloops
@@ -223,7 +211,6 @@ Feature: DevQL ingest workspace history coverage
     And I run InitCommit for bitloops
     And I create 2 ingest commits in bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with backfill 1 and status in bitloops
     Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops
@@ -236,7 +223,6 @@ Feature: DevQL ingest workspace history coverage
     And I run InitCommit for bitloops
     And I create 2 ingest commits in bitloops
     And I run bitloops init --agent claude --sync=false in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with backfill 1 and status in bitloops
     Then only latest 1 reachable SHAs are completed in commit_ingest_ledger in bitloops

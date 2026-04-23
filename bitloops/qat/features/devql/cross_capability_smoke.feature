@@ -12,7 +12,6 @@ Feature: Cross-capability deterministic smoke
     And I add semantic clone fixtures in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
-    And I run EnableCLI for bitloops
     And I configure semantic clones with fake embeddings runtime in bitloops
     And I run DevQL init in bitloops
     And DevQL pack health for semantic clones is ready in bitloops
