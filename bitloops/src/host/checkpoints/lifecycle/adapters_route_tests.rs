@@ -96,12 +96,18 @@ fn install_devql_prompt_surface_for_agent(repo_root: &std::path::Path, agent_nam
 fn assert_direct_session_start_context(context: &str, surface_path: &str) {
     assert!(context.contains("<EXTREMELY_IMPORTANT>"));
     assert!(context.contains("This repo has DevQL guidance available"));
-    assert!(context.contains("when it is available in this session"));
+    assert!(context.contains("use DevQL first for repo-aware understanding questions"));
+    assert!(context.contains("search"));
+    assert!(context.contains("overview"));
+    assert!(context.contains("expandHint"));
     assert!(context.contains("\"what does this repo do\""));
     assert!(context.contains("fall back to targeted repo search or file reads"));
     assert!(context.contains(surface_path));
     assert!(!context.contains("# Using DevQL"));
     assert!(!context.contains("bitloops devql query '{"));
+    assert!(!context.contains("fuzzyName"));
+    assert!(!context.contains("naturalLanguage"));
+    assert!(!context.contains("semanticQuery"));
 }
 
 fn codex_response_item_line(role: &str, kind: &str, text: &str) -> String {
