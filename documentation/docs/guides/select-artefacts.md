@@ -9,8 +9,8 @@ title: selectArtefacts
 It lets you:
 
 - select a current set of artefacts once
-- ask for one aggregate `summary` across all supported categories
-- drill into one category only when that summary suggests it is worth the tokens
+- ask for one aggregate `overview` across all supported categories
+- drill into one category only when that overview suggests it is worth the tokens
 
 This is the intended shape for tool-using agents.
 
@@ -21,7 +21,7 @@ This is the intended shape for tool-using agents.
 - Raw GraphQL: supported
 - Slim `/devql` SDL and Explorer: supported
 - DevQL DSL compiler: supported for one explicit terminal stage at a time
-- DevQL DSL aggregate `selectArtefacts(...)->summary()`: not supported yet
+- DevQL DSL aggregate `selectArtefacts(...)->overview()`: not supported yet
 - Global/full GraphQL surface: not supported
 
 ## Selector Modes
@@ -116,7 +116,7 @@ This resolves all current artefacts in the file.
 ```graphql
 type ArtefactSelection {
   count: Int!
-  summary: JSON!
+  overview: JSON!
   artefacts(first: Int! = 20): [Artefact!]!
   checkpoints(agent: String, since: DateTime): CheckpointStageResult!
   dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
@@ -129,17 +129,17 @@ Use:
 
 - `count` to know how many artefacts matched
 - `artefacts(...)` when you want to inspect the matched set itself
-- `summary` when you want one compact answer across all supported categories
+- `overview` when you want one compact answer across all supported categories
 - stage fields when you want one category in more detail
 
-## Aggregate `summary`
+## Aggregate `overview`
 
-The selection-level `summary` field returns a JSON object with one entry per supported category.
+The selection-level `overview` field returns a JSON object with one entry per supported category.
 
 ```graphql
 {
   selectArtefacts(by: { path: "rust-app/src/main.rs", lines: { start: 6, end: 10 } }) {
-    summary
+    overview
   }
 }
 ```
@@ -150,7 +150,7 @@ Representative shape:
 {
   "selectedArtefactCount": 2,
   "checkpoints": {
-    "summary": {
+    "overview": {
       "totalCount": 0,
       "latestAt": null,
       "agents": []
@@ -158,7 +158,7 @@ Representative shape:
     "schema": null
   },
   "codeMatches": {
-    "summary": {
+    "overview": {
       "counts": {
         "total": 2,
         "similar_implementation": 2
@@ -183,7 +183,7 @@ Representative shape:
     "schema": "type ArtefactSelection { ... }"
   },
   "dependencies": {
-    "summary": {
+    "overview": {
       "dependencies": {
         "selectedArtefact": 2,
         "total": 2,
@@ -210,13 +210,13 @@ Representative shape:
     "schema": "type ArtefactSelection { ... }"
   },
   "tests": {
-    "summary": {
+    "overview": {
       "selectedArtefactCount": 2,
       "matchedArtefactCount": 2,
       "totalCoveringTests": 2,
       "expandHint": {
         "intent": "Inspect concrete covering tests for selected artefacts",
-        "template": "bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { tests { summary items(first: 20) { coveringTests { testName suiteName filePath startLine endLine } } } } }'"
+        "template": "bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { tests { overview items(first: 20) { coveringTests { testName suiteName filePath startLine endLine } } } } }'"
       }
     },
     "schema": "type ArtefactSelection { ... }"
@@ -226,13 +226,13 @@ Representative shape:
 
 Notes:
 
-- `summary` is stage-owned JSON, not stringified JSON
+- `overview` is stage-owned JSON, not stringified JSON
 - `schema` is `null` when that stage has no results
 - `schema` is included in the aggregate response so an agent can discover the drill-down surface without re-querying first
-- `tests.summary.expandHint` is always included when tests summary is requested and points to the concrete `coveringTests` drill-down query
-- `summary.dependencies.expandHint` maps the dependency buckets back to concrete `dependencies(direction:..., kind:...)` follow-up queries
-- `summary.dependencies.expandHint` is omitted when no dependencies match the selected artefacts
-- `codeMatches` summaries always include `counts.total`
+- `tests.overview.expandHint` is always included when tests overview is requested and points to the concrete `coveringTests` drill-down query
+- `overview.dependencies.expandHint` maps the dependency buckets back to concrete `dependencies(direction:..., kind:...)` follow-up queries
+- `overview.dependencies.expandHint` is omitted when no dependencies match the selected artefacts
+- `codeMatches` overviews always include `counts.total`
 - `expandHint` is omitted when `counts.total` is `0`
 
 ## Stage Results
@@ -241,7 +241,7 @@ Each category field returns a typed stage result object.
 
 ```graphql
 type CheckpointStageResult {
-  summary: JSON!
+  overview: JSON!
   schema: String
   items(first: Int! = 20): [Checkpoint!]!
 }
@@ -257,7 +257,7 @@ The other stage result types follow the same pattern:
 
 ```graphql
 type DependencyStageResult {
-  summary: JSON!
+  overview: JSON!
   expandHint: DependencyExpandHint
   schema: String
   items(first: Int! = 20): [DependencyEdge!]!
@@ -270,7 +270,7 @@ Use them like this:
 {
   selectArtefacts(by: { path: "rust-app/src/main.rs" }) {
     dependencies {
-      summary
+      overview
       expandHint {
         intent
         template
@@ -292,9 +292,9 @@ Use them like this:
 
 This is the normal escalation path:
 
-1. Ask for `summary`
+1. Ask for `overview`
 2. Decide which category matters
-3. For `dependencies`, use the typed stage field `expandHint`, or the aggregate `summary.dependencies.expandHint` when you are still in summary-only mode
+3. For `dependencies`, use the typed stage field `expandHint`, or the aggregate `overview.dependencies.expandHint` when you are still in overview-only mode
 4. Read `schema` only if needed
 5. Query `items(first: ...)` for typed detail rows
 
@@ -310,18 +310,18 @@ The current enforcement contract is:
 
 The guidance follows the same workflow documented here:
 
-1. Start with `selectArtefacts(by: ...) { summary }`
-2. Read stage `schema` only when the summary says a drill-down is worth it
+1. Start with `selectArtefacts(by: ...) { overview }`
+2. Read stage `schema` only when the overview says a drill-down is worth it
 3. Query `items(first: ...)` on the relevant stage for typed rows
 4. Use `bitloops devql schema` or `bitloops devql schema --global` when the full SDL is needed
 
 This guidance is guidance only. It does not execute DevQL automatically or attach live query results to the turn.
 
-## Category Summaries
+## Category Overviews
 
 Current category coverage:
 
-| Category | Summary intent | Detail type |
+| Category | Overview intent | Detail type |
 |---|---|---|
 | `checkpoints` | Count, latest timestamp, participating agents | `Checkpoint` |
 | `codeMatches` | Total count, grouped relation kinds, max score | `Clone` |
@@ -374,17 +374,17 @@ Current DSL limitations:
 
 - compiles only against the slim endpoint
 - supports one explicit terminal stage at a time
-- defaults to selecting `summary`
-- `->select(summary,schema)` is supported for the chosen stage
+- defaults to selecting `overview`
+- `->select(overview,schema)` is supported for the chosen stage
 - the DSL stage name remains `deps()`, but it compiles to the raw GraphQL `dependencies(...)` field on `selectArtefacts`
-- aggregate `selectArtefacts { summary }` is not yet available through the DSL
+- aggregate `selectArtefacts { overview }` is not yet available through the DSL
 
 ## Recommended Agent Flow
 
 For tool-using agents, the lowest-error pattern is:
 
 1. Resolve the artefact set with `selectArtefacts(by: ...)`
-2. Ask for aggregate `summary`
+2. Ask for aggregate `overview`
 3. Choose the category worth expanding
 4. Query that category’s `items(first: ...)`
 

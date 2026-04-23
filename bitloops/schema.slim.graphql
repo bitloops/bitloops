@@ -81,7 +81,7 @@ input ArtefactFilterInput {
 
 type ArtefactSelection {
 	count: Int!
-	summary: JSON!
+	overview: JSON!
 	artefacts(first: Int! = 20): [Artefact!]!
 	entries(first: Int! = 20): [DirectoryEntry!]!
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
@@ -211,7 +211,7 @@ type CheckpointFileRelation {
 }
 
 type CheckpointStageResult {
-	summary: JSON!
+	overview: JSON!
 	schema: String
 	items(first: Int! = 20): [Checkpoint!]!
 }
@@ -252,7 +252,7 @@ type CloneEdge {
 }
 
 type CloneStageResult {
-	summary: JSON!
+	overview: JSON!
 	schema: String
 	items(first: Int! = 20): [Clone!]!
 }
@@ -335,7 +335,7 @@ type DependencyExpandHintParameters {
 }
 
 type DependencyStageResult {
-	summary: JSON!
+	overview: JSON!
 	expandHint: DependencyExpandHint
 	schema: String
 	items(first: Int! = 20): [DependencyEdge!]!
@@ -1163,7 +1163,7 @@ type TestHarnessTestsSummary {
 }
 
 type TestsStageResult {
-	summary: JSON!
+	overview: JSON!
 	schema: String
 	items(first: Int! = 20): [TestHarnessTestsResult!]!
 }

@@ -581,7 +581,7 @@ fn parse_devql_pipeline_supports_select_artefacts_symbol_selector() {
 }
 
 #[test]
-fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
+fn compile_slim_select_artefacts_checkpoints_defaults_to_overview() {
     let parsed =
         parse_devql_query(r#"selectArtefacts(path:"src/main.rs",lines:20..25)->checkpoints()"#)
             .expect("query parses");
@@ -594,7 +594,7 @@ fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
         r#"query {
   selectArtefacts(by: { path: "src/main.rs", lines: { start: 20, end: 25 } }) {
     checkpoints {
-      summary
+      overview
     }
   }
 }"#
@@ -614,7 +614,7 @@ fn compile_slim_select_artefacts_search_selector() {
         r#"query {
   selectArtefacts(by: { search: "payLater()" }) {
     checkpoints {
-      summary
+      overview
     }
   }
 }"#
@@ -657,7 +657,7 @@ fn compile_slim_select_artefacts_rejects_symbol_fqn_mixed_with_lines() {
 #[test]
 fn compile_slim_select_artefacts_deps_supports_schema_projection() {
     let parsed = parse_devql_query(
-        r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->deps()->select(summary,schema)"#,
+        r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->deps()->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -669,7 +669,7 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
         r#"query {
   selectArtefacts(by: { symbolFqn: "src/main.rs::main" }) {
     dependencies(includeUnresolved: true) {
-      summary
+      overview
       schema
     }
   }
@@ -680,7 +680,7 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
 #[test]
 fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector() {
     let parsed = parse_devql_query(
-        r#"deps(direction:"in",include_unresolved:true)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+        r#"deps(direction:"in",include_unresolved:true)->selectArtefacts(path:"src/main.rs")->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -692,7 +692,7 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
     dependencies(direction: IN, includeUnresolved: true) {
-      summary
+      overview
       schema
     }
   }
@@ -703,7 +703,7 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
 #[test]
 fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
     let parsed = parse_devql_query(
-        r#"deps(direction:"in",include_unresolved:false)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+        r#"deps(direction:"in",include_unresolved:false)->selectArtefacts(path:"src/main.rs")->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -715,7 +715,7 @@ fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
     dependencies(direction: IN, includeUnresolved: false) {
-      summary
+      overview
       schema
     }
   }
@@ -726,7 +726,7 @@ fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
 #[test]
 fn compile_slim_select_artefacts_clones_stage_emits_code_matches_field() {
     let parsed = parse_devql_query(
-        r#"selectArtefacts(path:"src/main.rs")->clones(relation_kind:"similar_implementation",min_score:0.8)->select(summary,schema)"#,
+        r#"selectArtefacts(path:"src/main.rs")->clones(relation_kind:"similar_implementation",min_score:0.8)->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -738,7 +738,7 @@ fn compile_slim_select_artefacts_clones_stage_emits_code_matches_field() {
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
     codeMatches(relationKind: "similar_implementation", minScore: 0.8) {
-      summary
+      overview
       schema
     }
   }
@@ -749,7 +749,7 @@ fn compile_slim_select_artefacts_clones_stage_emits_code_matches_field() {
 #[test]
 fn compile_slim_select_artefacts_tests_maps_stage_arguments() {
     let parsed = parse_devql_query(
-        r#"selectArtefacts(path:"src/main.rs")->tests(min_confidence:0.8,linkage_source:"coverage")->select(summary,schema)"#,
+        r#"selectArtefacts(path:"src/main.rs")->tests(min_confidence:0.8,linkage_source:"coverage")->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -761,7 +761,7 @@ fn compile_slim_select_artefacts_tests_maps_stage_arguments() {
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
     tests(minConfidence: 0.8, linkageSource: "coverage") {
-      summary
+      overview
       schema
     }
   }

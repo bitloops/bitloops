@@ -3,12 +3,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint_json;
 use crate::capability_packs::semantic_clones::scoring::{
     RELATION_KIND_DIVERGED_IMPLEMENTATION, RELATION_KIND_EXACT_DUPLICATE,
     RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
     RELATION_KIND_WEAK_CLONE_CANDIDATE,
 };
+use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint_json;
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
@@ -205,6 +205,7 @@ struct TestsStageData {
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct CheckpointStageResult {
+    #[graphql(name = "overview")]
     pub summary: JsonScalar,
     pub schema: Option<String>,
     #[graphql(skip)]
@@ -214,6 +215,7 @@ pub struct CheckpointStageResult {
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct CloneStageResult {
+    #[graphql(name = "overview")]
     pub summary: JsonScalar,
     pub schema: Option<String>,
     #[graphql(skip)]
@@ -223,6 +225,7 @@ pub struct CloneStageResult {
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct DependencyStageResult {
+    #[graphql(name = "overview")]
     pub summary: JsonScalar,
     #[graphql(name = "expandHint")]
     pub expand_hint: Option<DependencyExpandHint>,
@@ -247,6 +250,7 @@ pub struct DependencyExpandHint {
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct TestsStageResult {
+    #[graphql(name = "overview")]
     pub summary: JsonScalar,
     pub schema: Option<String>,
     #[graphql(skip)]
@@ -296,8 +300,9 @@ impl From<TestsStageData> for TestsStageResult {
 
 #[ComplexObject]
 impl ArtefactSelection {
+    #[graphql(name = "overview")]
     async fn summary(&self, ctx: &Context<'_>) -> Result<JsonScalar> {
-        self.ensure_artefact_selection("summary")?;
+        self.ensure_artefact_selection("overview")?;
         let checkpoints = self.resolve_checkpoint_stage_data(ctx, None, None).await?;
         let clones = self.resolve_clone_stage_data(ctx, None).await?;
         let deps = self
@@ -805,7 +810,7 @@ fn selection_stage_entry(
     schema: Option<&str>,
 ) -> Value {
     let mut entry = serde_json::Map::new();
-    entry.insert("summary".to_string(), summary.clone());
+    entry.insert("overview".to_string(), summary.clone());
     if let Some(expand_hint) = expand_hint {
         entry.insert(
             "expandHint".to_string(),
@@ -906,7 +911,7 @@ const CHECKPOINT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 }
 
 type CheckpointStageResult {
-  summary: JSON!
+  overview: JSON!
   schema: String
   items(first: Int! = 20): [Checkpoint!]!
 }
@@ -930,7 +935,7 @@ const CLONE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 }
 
 type CloneStageResult {
-  summary: JSON!
+  overview: JSON!
   schema: String
   items(first: Int! = 20): [Clone!]!
 }
@@ -951,7 +956,7 @@ const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 }
 
 type DependencyStageResult {
-  summary: JSON!
+  overview: JSON!
   expandHint: DependencyExpandHint
   schema: String
   items(first: Int! = 20): [DependencyEdge!]!
@@ -986,7 +991,7 @@ const TESTS_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
 }
 
 type TestsStageResult {
-  summary: JSON!
+  overview: JSON!
   schema: String
   items(first: Int! = 20): [TestHarnessTestsResult!]!
 }

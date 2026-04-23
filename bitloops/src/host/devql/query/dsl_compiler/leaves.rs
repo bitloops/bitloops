@@ -276,7 +276,7 @@ fn compile_artefacts_leaf(
 
 fn selection_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSelection>> {
     let fields = if select_fields.is_empty() {
-        vec!["summary".to_string()]
+        vec!["overview".to_string()]
     } else {
         select_fields.to_vec()
     };
@@ -284,10 +284,10 @@ fn selection_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSel
     let mut selections = Vec::new();
     for field in fields {
         match field.as_str() {
-            "summary" => selections.push(GraphqlSelection::scalar("summary")),
+            "overview" | "summary" => selections.push(GraphqlSelection::scalar("overview")),
             "schema" => selections.push(GraphqlSelection::scalar("schema")),
             other => bail!(
-                "selectArtefacts(...) only supports select(summary), select(schema), or selecting both summary and schema; unsupported field `{other}`"
+                "selectArtefacts(...) only supports select(overview), select(schema), or selecting both overview and schema; unsupported field `{other}`"
             ),
         }
     }
