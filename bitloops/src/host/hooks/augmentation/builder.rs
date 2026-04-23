@@ -20,20 +20,77 @@ pub fn build_devql_session_start_augmentation(
 }
 
 pub fn build_devql_hook_augmentation(
-    _repo_root: &Path,
-    _agent_name: &str,
-    _prompt: &str,
+    repo_root: &Path,
+    agent_name: &str,
+    prompt: &str,
 ) -> Option<HookAugmentation> {
-    None
+    let surface_path = installed_prompt_surface_relative_path(repo_root, agent_name)?;
+    if !agent_supports_turn_guidance(agent_name) || !prompt_warrants_devql(prompt) {
+        return None;
+    }
+
+    Some(HookAugmentation {
+        additional_context: format!(
+            "Use DevQL first for this repo-aware request. Prefer `path`, `path + lines`, `symbolFqn`, `fuzzyName`, or a distilled `semanticQuery` before broad repo search. Detailed repo-local DevQL guidance: `{surface_path}`."
+        ),
+        targeted: true,
+    })
 }
 
 fn session_bootstrap_text(surface_path: &str) -> String {
     format!(
         "<EXTREMELY_IMPORTANT>\n\
-Bitloops has installed DevQL guidance for this repo at `{surface_path}`.\n\
-Use that repo-local guidance surface for DevQL-specific instructions.\n\
+This repo has DevQL.\n\
+For code understanding, repo exploration, architecture questions, symbol lookup, path/line resolution, and callers/usages/imports/tests/dependencies, use DevQL first before broad repo search or directory crawling.\n\
+Start with the most specific selector available: `path`, `path + lines`, `symbolFqn`, `fuzzyName`, or a distilled `semanticQuery`.\n\
+Fall back to targeted repo search only if DevQL returns no useful artefacts or rows.\n\
+Detailed repo-local DevQL guidance is installed at `{surface_path}`.\n\
 </EXTREMELY_IMPORTANT>"
     )
+}
+
+fn agent_supports_turn_guidance(agent_name: &str) -> bool {
+    matches!(
+        agent_name,
+        crate::adapters::agents::AGENT_NAME_CLAUDE_CODE | crate::adapters::agents::AGENT_NAME_CODEX
+    )
+}
+
+fn prompt_warrants_devql(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    let repo_understanding_terms = [
+        "understand",
+        "explain",
+        "architecture",
+        "where is",
+        "find",
+        "inspect",
+        "caller",
+        "usage",
+        "import",
+        "dependency",
+        "test covering",
+    ];
+    let execution_terms = [
+        "fix ",
+        "implement ",
+        "edit ",
+        "write ",
+        "run ",
+        "build ",
+        "test ",
+        "format ",
+    ];
+    let looks_like_code_reference = prompt.contains('/')
+        || prompt.contains("::")
+        || prompt.contains('`')
+        || prompt.contains(':');
+    let looks_like_edit_or_execution = execution_terms.iter().any(|needle| lower.contains(needle));
+    let looks_like_repo_understanding = repo_understanding_terms
+        .iter()
+        .any(|needle| lower.contains(needle));
+
+    (looks_like_code_reference || looks_like_repo_understanding) && !looks_like_edit_or_execution
 }
 
 #[cfg(test)]
@@ -42,7 +99,7 @@ mod tests {
     use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
 
     #[test]
-    fn session_start_guidance_mentions_skill_path_without_inlining_skill_body() {
+    fn session_start_guidance_includes_direct_devql_first_instructions_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
         crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
             .expect("install codex repo skill");
@@ -59,20 +116,28 @@ mod tests {
         assert!(
             augmentation
                 .additional_context
+                .contains("This repo has DevQL")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("use DevQL first before broad repo search or directory crawling")
+        );
+        assert!(augmentation.additional_context.contains("path"));
+        assert!(augmentation.additional_context.contains("symbolFqn"));
+        assert!(augmentation.additional_context.contains("fuzzyName"));
+        assert!(augmentation.additional_context.contains("semanticQuery"));
+        assert!(
+            augmentation
+                .additional_context
                 .contains(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
         );
+        assert!(!augmentation.additional_context.contains("# Using DevQL"));
         assert!(
             !augmentation
                 .additional_context
-                .contains("name: using-devql")
+                .contains("bitloops devql query '{")
         );
-        assert!(
-            !augmentation
-                .additional_context
-                .contains("bitloops devql query")
-        );
-        assert!(!augmentation.additional_context.contains("fuzzyName"));
-        assert!(!augmentation.additional_context.contains("tracked.txt"));
     }
 
     #[test]
@@ -116,12 +181,31 @@ mod tests {
     }
 
     #[test]
-    fn turn_guidance_is_absent_even_for_targeted_prompt() {
+    fn turn_guidance_is_present_for_repo_understanding_prompt_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("tracked.txt"), "one\n").expect("write tracked file");
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
+
+        let augmentation = build_devql_hook_augmentation(
+            dir.path(),
+            AGENT_NAME_CODEX,
+            "Help me understand src/payments/invoice.ts:42",
+        )
+        .expect("augmentation");
+
+        assert!(augmentation.targeted);
+        assert!(augmentation.additional_context.contains("Use DevQL first"));
+        assert!(augmentation.additional_context.contains("path + lines"));
+    }
+
+    #[test]
+    fn turn_guidance_is_absent_for_non_repo_understanding_prompt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
 
         assert_eq!(
-            build_devql_hook_augmentation(dir.path(), AGENT_NAME_CODEX, "Explain tracked.txt:1"),
+            build_devql_hook_augmentation(dir.path(), AGENT_NAME_CODEX, "Run cargo fmt"),
             None
         );
     }

@@ -1757,6 +1757,80 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
 }
 
 #[test]
+fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_session_guidance() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                install_default_daemon: false,
+                force: true,
+                disable_bitloops_skill: false,
+                agent: vec![AGENT_CODEX.to_string()],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let repo_skill = repo
+            .path()
+            .join(".agents/skills/bitloops/using-devql/SKILL.md");
+        assert!(repo.path().join(".codex/hooks.json").exists());
+        assert!(
+            repo_skill.exists(),
+            "expected repo-local Codex DevQL skill to be installed at {}",
+            repo_skill.display()
+        );
+
+        let state_dir = repo.path().join(".route-test-state");
+        let state_dir_str = state_dir.to_string_lossy().to_string();
+        let outcome = with_process_state(
+            Some(repo.path()),
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_dir_str.as_str()),
+            )],
+            || {
+                crate::test_support::git_fixtures::ensure_test_store_backends(repo.path());
+                crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle(
+                    repo.path(),
+                    AGENT_CODEX,
+                    crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START,
+                    &json!({
+                        "session_id": "codex-session-start",
+                        "transcript_path": "",
+                        "model": "gpt-5.4"
+                    })
+                    .to_string(),
+                )
+            },
+        )
+        .expect("codex session-start route");
+        let stdout = outcome.stdout.expect("stdout");
+        assert!(stdout.contains("This repo has DevQL"));
+        assert!(stdout.contains("use DevQL first"));
+        assert!(stdout.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
+    });
+}
+
+#[test]
 fn run_init_with_invalid_explicit_agent_errors() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");

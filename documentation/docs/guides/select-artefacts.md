@@ -249,14 +249,22 @@ This is the normal escalation path:
 
 ## Agent Hook Guidance
 
-When Bitloops-managed integrations are installed for supported agents, Bitloops injects a short DevQL reminder at the supported bootstrap and pre-turn surfaces. This currently includes Claude Code, Codex, Gemini CLI, Copilot CLI, Cursor, and OpenCode via its repo-local plugin path. That reminder follows the same workflow documented here:
+Bitloops now treats the DevQL hook as skill-gated. When the Bitloops-managed `using-devql` skill is enabled for an agent, Bitloops installs the repo-local DevQL surface and emits direct startup guidance for that surface. When the skill is disabled, Bitloops emits no DevQL guidance at all.
+
+The current enforcement contract is:
+
+- Claude Code and Codex regain targeted prompt-time reinforcement in addition to the repo-local surface
+- Cursor remains session-start plus rule-based
+- other supported agents follow the same repo-local surface contract when their skill is enabled
+
+The guidance follows the same workflow documented here:
 
 1. Start with `selectArtefacts(by: ...) { summary }`
 2. Read stage `schema` only when the summary says a drill-down is worth it
 3. Query `items(first: ...)` on the relevant stage for typed rows
 4. Use `bitloops devql schema` or `bitloops devql schema --global` when the full SDL is needed
 
-The injected reminder is guidance only. It does not execute DevQL automatically or attach live query results to the turn.
+This guidance is guidance only. It does not execute DevQL automatically or attach live query results to the turn.
 
 ## Category Summaries
 

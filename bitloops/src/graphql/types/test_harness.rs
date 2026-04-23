@@ -51,6 +51,7 @@ pub struct TestHarnessTestsResult {
     pub summary: TestHarnessTestsSummary,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
 pub struct TestHarnessCoverageBranch {
     pub line: i32,
@@ -60,6 +61,7 @@ pub struct TestHarnessCoverageBranch {
     pub hit_count: i32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
 pub struct TestHarnessCoverage {
     pub coverage_source: String,
@@ -71,6 +73,7 @@ pub struct TestHarnessCoverage {
     pub branches: Vec<TestHarnessCoverageBranch>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
 pub struct TestHarnessCoverageSummary {
     pub uncovered_line_count: i32,
@@ -78,6 +81,7 @@ pub struct TestHarnessCoverageSummary {
     pub diagnostic_count: i32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
 pub struct TestHarnessCoverageResult {
     pub artefact: TestHarnessArtefactRef,
