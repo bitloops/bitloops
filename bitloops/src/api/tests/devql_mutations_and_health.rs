@@ -2275,14 +2275,9 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
                     intent
                     template
                     parameters {
-                      direction {
-                        intent
-                        supportedValues
-                      }
-                      kind {
-                        intent
-                        supportedValues
-                      }
+                      name
+                      intent
+                      supportedValues
                     }
                   }
                   schema
@@ -2298,10 +2293,9 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
                     intent
                     template
                     parameters {
-                      kind {
-                        intent
-                        supportedValues
-                      }
+                      name
+                      intent
+                      supportedValues
                     }
                   }
                 }
@@ -2356,20 +2350,18 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         r#"bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'"#
     );
     assert_eq!(
-        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["expandHint"]["parameters"]
-            ["kind"]["intent"],
-        "Choose which relation kind to inspect"
-    );
-    assert_eq!(
-        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["expandHint"]["parameters"]
-            ["kind"]["supportedValues"],
-        json!([
-            "exact_duplicate",
-            "similar_implementation",
-            "shared_logic_candidate",
-            "diverged_implementation",
-            "weak_clone_candidate"
-        ])
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["expandHint"]["parameters"],
+        json!([{
+            "name": "kind",
+            "intent": "Choose which relation kind to inspect",
+            "supportedValues": [
+                "exact_duplicate",
+                "similar_implementation",
+                "shared_logic_candidate",
+                "diverged_implementation",
+                "weak_clone_candidate"
+            ]
+        }])
     );
     assert_eq!(
         json["selectArtefacts"]["codeMatches"]["overview"]["counts"]["total"],
@@ -2392,18 +2384,18 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         r#"bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'"#
     );
     assert_eq!(
-        json["selectArtefacts"]["codeMatches"]["expandHint"]["parameters"]["kind"]["intent"],
-        "Choose which relation kind to inspect"
-    );
-    assert_eq!(
-        json["selectArtefacts"]["codeMatches"]["expandHint"]["parameters"]["kind"]["supportedValues"],
-        json!([
-            "exact_duplicate",
-            "similar_implementation",
-            "shared_logic_candidate",
-            "diverged_implementation",
-            "weak_clone_candidate"
-        ])
+        json["selectArtefacts"]["codeMatches"]["expandHint"]["parameters"],
+        json!([{
+            "name": "kind",
+            "intent": "Choose which relation kind to inspect",
+            "supportedValues": [
+                "exact_duplicate",
+                "similar_implementation",
+                "shared_logic_candidate",
+                "diverged_implementation",
+                "weak_clone_candidate"
+            ]
+        }])
     );
     assert_eq!(
         aggregate_deps_overview["dependencies"]["selectedArtefact"],
@@ -2452,26 +2444,18 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         json["selectArtefacts"]["overview"]["dependencies"]["expandHint"]["template"]
     );
     assert_eq!(
-        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["direction"]["intent"],
-        "Choose dependency flow relative to the selected artefacts"
-    );
-    assert_eq!(
-        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["direction"]["supportedValues"],
-        json!(["IN", "OUT"])
-    );
-    assert_eq!(
-        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["kind"]["intent"],
-        "Choose dependency relationship type"
-    );
-    assert_eq!(
-        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["kind"]["supportedValues"],
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"],
         json!([
-            "CALLS",
-            "EXPORTS",
-            "EXTENDS",
-            "IMPLEMENTS",
-            "IMPORTS",
-            "REFERENCES"
+            {
+                "name": "direction",
+                "intent": "Choose dependency flow relative to the selected artefacts",
+                "supportedValues": ["IN", "OUT"]
+            },
+            {
+                "name": "kind",
+                "intent": "Choose dependency relationship type",
+                "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+            }
         ])
     );
     let deps_schema = json["selectArtefacts"]["dependencies"]["schema"]
@@ -2527,14 +2511,9 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
                   overview
                   expandHint {
                     parameters {
-                      direction {
-                        intent
-                        supportedValues
-                      }
-                      kind {
-                        intent
-                        supportedValues
-                      }
+                      name
+                      intent
+                      supportedValues
                     }
                   }
                   items(first: 10) {
@@ -2580,8 +2559,19 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
         2
     );
     assert_eq!(
-        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]["direction"]["supportedValues"],
-        json!(["IN", "OUT"])
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"],
+        json!([
+            {
+                "name": "direction",
+                "intent": "Choose dependency flow relative to the selected artefacts",
+                "supportedValues": ["IN", "OUT"]
+            },
+            {
+                "name": "kind",
+                "intent": "Choose dependency relationship type",
+                "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+            }
+        ])
     );
     assert_eq!(
         json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["intent"],
@@ -2639,10 +2629,9 @@ async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
                     intent
                     template
                     parameters {
-                      kind {
-                        intent
-                        supportedValues
-                      }
+                      name
+                      intent
+                      supportedValues
                     }
                   }
                 }

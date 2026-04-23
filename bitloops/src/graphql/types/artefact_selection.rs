@@ -227,15 +227,12 @@ pub struct CloneStageResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
-pub struct CloneExpandHintParameters {
-    pub kind: ExpandHintParameter,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[graphql(complex)]
 pub struct CloneExpandHint {
     pub intent: String,
     pub template: String,
-    pub parameters: CloneExpandHintParameters,
+    #[graphql(skip)]
+    pub parameters: Vec<ExpandHintParameter>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -251,16 +248,12 @@ pub struct DependencyStageResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
-pub struct DependencyExpandHintParameters {
-    pub direction: ExpandHintParameter,
-    pub kind: ExpandHintParameter,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[graphql(complex)]
 pub struct DependencyExpandHint {
     pub intent: String,
     pub template: String,
-    pub parameters: DependencyExpandHintParameters,
+    #[graphql(skip)]
+    pub parameters: Vec<ExpandHintParameter>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -312,6 +305,20 @@ impl From<TestsStageData> for TestsStageResult {
             schema: data.schema,
             items: data.items,
         }
+    }
+}
+
+#[ComplexObject]
+impl CloneExpandHint {
+    pub async fn parameters(&self) -> &[ExpandHintParameter] {
+        &self.parameters
+    }
+}
+
+#[ComplexObject]
+impl DependencyExpandHint {
+    pub async fn parameters(&self) -> &[ExpandHintParameter] {
+        &self.parameters
     }
 }
 
@@ -727,18 +734,17 @@ fn build_clone_expand_hint(match_count: usize) -> Option<CloneExpandHint> {
     (match_count > 0).then(|| CloneExpandHint {
         intent: "Inspect code matches".to_string(),
         template: "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'".to_string(),
-        parameters: CloneExpandHintParameters {
-            kind: ExpandHintParameter {
-                intent: "Choose which relation kind to inspect".to_string(),
-                supported_values: vec![
-                    RELATION_KIND_EXACT_DUPLICATE.to_string(),
-                    RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string(),
-                    RELATION_KIND_SHARED_LOGIC_CANDIDATE.to_string(),
-                    RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string(),
-                    RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string(),
-                ],
-            },
-        },
+        parameters: vec![ExpandHintParameter {
+            name: "kind".to_string(),
+            intent: "Choose which relation kind to inspect".to_string(),
+            supported_values: vec![
+                RELATION_KIND_EXACT_DUPLICATE.to_string(),
+                RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string(),
+                RELATION_KIND_SHARED_LOGIC_CANDIDATE.to_string(),
+                RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string(),
+                RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string(),
+            ],
+        }],
     })
 }
 
@@ -791,15 +797,17 @@ fn build_dependency_expand_hint(dependency_count: usize) -> Option<DependencyExp
     (dependency_count > 0).then(|| DependencyExpandHint {
         intent: "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.".to_string(),
         template: "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'".to_string(),
-        parameters: DependencyExpandHintParameters {
-            direction: ExpandHintParameter {
+        parameters: vec![
+            ExpandHintParameter {
+                name: "direction".to_string(),
                 intent: "Choose dependency flow relative to the selected artefacts".to_string(),
                 supported_values: vec![
                     deps_direction_name(DepsDirection::In).to_string(),
                     deps_direction_name(DepsDirection::Out).to_string(),
                 ],
             },
-            kind: ExpandHintParameter {
+            ExpandHintParameter {
+                name: "kind".to_string(),
                 intent: "Choose dependency relationship type".to_string(),
                 supported_values: vec![
                     edge_kind_graphql_name(EdgeKind::Calls).to_string(),
@@ -810,7 +818,7 @@ fn build_dependency_expand_hint(dependency_count: usize) -> Option<DependencyExp
                     edge_kind_graphql_name(EdgeKind::References).to_string(),
                 ],
             },
-        },
+        ],
     })
 }
 
@@ -869,10 +877,11 @@ fn dependency_expand_hint_to_value(expand_hint: &DependencyExpandHint) -> Value 
     json!({
         "intent": expand_hint.intent.as_str(),
         "template": expand_hint.template.as_str(),
-        "parameters": {
-            "direction": expand_hint_parameter_to_value(&expand_hint.parameters.direction),
-            "kind": expand_hint_parameter_to_value(&expand_hint.parameters.kind),
-        }
+        "parameters": expand_hint
+            .parameters
+            .iter()
+            .map(expand_hint_parameter_to_value)
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -880,14 +889,17 @@ fn clone_expand_hint_to_value(expand_hint: &CloneExpandHint) -> Value {
     json!({
         "intent": expand_hint.intent.as_str(),
         "template": expand_hint.template.as_str(),
-        "parameters": {
-            "kind": expand_hint_parameter_to_value(&expand_hint.parameters.kind),
-        }
+        "parameters": expand_hint
+            .parameters
+            .iter()
+            .map(expand_hint_parameter_to_value)
+            .collect::<Vec<_>>(),
     })
 }
 
 fn expand_hint_parameter_to_value(parameter: &ExpandHintParameter) -> Value {
     json!({
+        "name": parameter.name.as_str(),
         "intent": parameter.intent.as_str(),
         "supportedValues": parameter.supported_values,
     })
@@ -993,12 +1005,11 @@ type CloneStageResult {
 interface ExpandHint {
   intent: String!
   template: String!
-  parameters: ExpandHintParameters
+  parameters: [ExpandHintParameter!]!
 }
 
-union ExpandHintParameters = CloneExpandHintParameters | DependencyExpandHintParameters
-
 type ExpandHintParameter {
+  name: String!
   intent: String!
   supportedValues: [String!]!
 }
@@ -1006,11 +1017,7 @@ type ExpandHintParameter {
 type CloneExpandHint implements ExpandHint {
   intent: String!
   template: String!
-  parameters: CloneExpandHintParameters!
-}
-
-type CloneExpandHintParameters {
-  kind: ExpandHintParameter!
+  parameters: [ExpandHintParameter!]!
 }
 
 type Clone {
@@ -1038,10 +1045,11 @@ type DependencyStageResult {
 interface ExpandHint {
   intent: String!
   template: String!
-  parameters: DependencyExpandHintParameters
+  parameters: [ExpandHintParameter!]!
 }
 
 type ExpandHintParameter {
+  name: String!
   intent: String!
   supportedValues: [String!]!
 }
@@ -1049,12 +1057,7 @@ type ExpandHintParameter {
 type DependencyExpandHint implements ExpandHint {
   intent: String!
   template: String!
-  parameters: DependencyExpandHintParameters!
-}
-
-type DependencyExpandHintParameters {
-  direction: ExpandHintParameter!
-  kind: ExpandHintParameter!
+  parameters: [ExpandHintParameter!]!
 }
 
 type DependencyEdge {

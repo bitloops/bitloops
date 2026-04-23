@@ -5,7 +5,7 @@ use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_TESTS_EXPAND_HINT_INTENT, TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE,
 };
 
-use super::ExpandHintParameters;
+use super::ExpandHintParameter;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
 pub struct TestHarnessArtefactRef {
@@ -60,8 +60,8 @@ impl Default for TestHarnessTestsExpandHint {
 
 #[ComplexObject]
 impl TestHarnessTestsExpandHint {
-    pub async fn parameters(&self) -> Option<ExpandHintParameters> {
-        None
+    pub async fn parameters(&self) -> &[ExpandHintParameter] {
+        &[]
     }
 }
 

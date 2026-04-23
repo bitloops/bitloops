@@ -234,18 +234,17 @@ fn build_clone_expand_hint_matches_contract_when_matches_exist() {
         Some(CloneExpandHint {
             intent: "Inspect code matches".to_string(),
             template: "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'".to_string(),
-            parameters: CloneExpandHintParameters {
-                kind: ExpandHintParameter {
-                    intent: "Choose which relation kind to inspect".to_string(),
-                    supported_values: vec![
-                        RELATION_KIND_EXACT_DUPLICATE.to_string(),
-                        RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string(),
-                        RELATION_KIND_SHARED_LOGIC_CANDIDATE.to_string(),
-                        RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string(),
-                        RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string(),
-                    ],
-                },
-            },
+            parameters: vec![ExpandHintParameter {
+                name: "kind".to_string(),
+                intent: "Choose which relation kind to inspect".to_string(),
+                supported_values: vec![
+                    RELATION_KIND_EXACT_DUPLICATE.to_string(),
+                    RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string(),
+                    RELATION_KIND_SHARED_LOGIC_CANDIDATE.to_string(),
+                    RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string(),
+                    RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string(),
+                ],
+            }],
         })
     );
 }
@@ -262,13 +261,15 @@ fn build_dependency_expand_hint_matches_contract_when_dependencies_exist() {
         Some(DependencyExpandHint {
             intent: "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.".to_string(),
             template: "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'".to_string(),
-            parameters: DependencyExpandHintParameters {
-                direction: ExpandHintParameter {
+            parameters: vec![
+                ExpandHintParameter {
+                    name: "direction".to_string(),
                     intent: "Choose dependency flow relative to the selected artefacts"
                         .to_string(),
                     supported_values: vec!["IN".to_string(), "OUT".to_string()],
                 },
-                kind: ExpandHintParameter {
+                ExpandHintParameter {
+                    name: "kind".to_string(),
                     intent: "Choose dependency relationship type".to_string(),
                     supported_values: vec![
                         "CALLS".to_string(),
@@ -279,7 +280,7 @@ fn build_dependency_expand_hint_matches_contract_when_dependencies_exist() {
                         "REFERENCES".to_string(),
                     ],
                 },
-            },
+            ],
         })
     );
 }

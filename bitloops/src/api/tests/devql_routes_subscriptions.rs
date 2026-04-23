@@ -505,13 +505,13 @@ fn tests_expand_hint_implements_base_expand_hint_interface() {
     for sdl in [&schema_sdl, &slim_sdl] {
         assert!(
             sdl.contains(
-                "interface ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: ExpandHintParameters\n}",
+                "interface ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
             ),
             "expected base ExpandHint interface in SDL:\n{sdl}"
         );
         assert!(
             sdl.contains(
-                "type TestHarnessTestsExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: ExpandHintParameters\n}",
+                "type TestHarnessTestsExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
             ),
             "expected tests expand hint to implement ExpandHint:\n{sdl}"
         );
@@ -521,13 +521,7 @@ fn tests_expand_hint_implements_base_expand_hint_interface() {
         );
         assert!(
             sdl.contains(
-                "union ExpandHintParameters = CloneExpandHintParameters | DependencyExpandHintParameters",
-            ),
-            "expected shared ExpandHintParameters union in SDL:\n{sdl}"
-        );
-        assert!(
-            sdl.contains(
-                "type ExpandHintParameter {\n\tintent: String!\n\tsupportedValues: [String!]!\n}",
+                "type ExpandHintParameter {\n\tname: String!\n\tintent: String!\n\tsupportedValues: [String!]!\n}",
             ),
             "expected ExpandHintParameter type in SDL:\n{sdl}"
         );
@@ -547,13 +541,9 @@ fn tests_expand_hint_implements_base_expand_hint_interface() {
 
     assert!(
         slim_sdl.contains(
-            "type CloneExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: CloneExpandHintParameters!\n}",
+            "type CloneExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
         ),
         "expected slim SDL to expose CloneExpandHint implementing ExpandHint:\n{slim_sdl}"
-    );
-    assert!(
-        slim_sdl.contains("type CloneExpandHintParameters {\n\tkind: ExpandHintParameter!\n}"),
-        "expected slim SDL to expose CloneExpandHintParameters:\n{slim_sdl}"
     );
     assert!(
         slim_sdl.contains("expandHint: CloneExpandHint"),
@@ -561,15 +551,9 @@ fn tests_expand_hint_implements_base_expand_hint_interface() {
     );
     assert!(
         slim_sdl.contains(
-            "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: DependencyExpandHintParameters!\n}",
+            "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
         ),
         "expected slim SDL to expose DependencyExpandHint implementing ExpandHint:\n{slim_sdl}"
-    );
-    assert!(
-        slim_sdl.contains(
-            "type DependencyExpandHintParameters {\n\tdirection: ExpandHintParameter!\n\tkind: ExpandHintParameter!\n}",
-        ),
-        "expected slim SDL to expose structured DependencyExpandHintParameters:\n{slim_sdl}"
     );
 }
 

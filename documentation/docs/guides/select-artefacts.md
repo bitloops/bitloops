@@ -166,8 +166,9 @@ Representative shape:
       "expandHint": {
         "intent": "Inspect code matches",
         "template": "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'",
-        "parameters": {
-          "kind": {
+        "parameters": [
+          {
+            "name": "kind",
             "intent": "Choose which relation kind to inspect",
             "supportedValues": [
               "exact_duplicate",
@@ -177,14 +178,15 @@ Representative shape:
               "weak_clone_candidate"
             ]
           }
-        }
+        ]
       }
     },
     "expandHint": {
       "intent": "Inspect code matches",
       "template": "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'",
-      "parameters": {
-        "kind": {
+      "parameters": [
+        {
+          "name": "kind",
           "intent": "Choose which relation kind to inspect",
           "supportedValues": [
             "exact_duplicate",
@@ -194,7 +196,7 @@ Representative shape:
             "weak_clone_candidate"
           ]
         }
-      }
+      ]
     },
     "schema": "type ArtefactSelection { ... }"
   },
@@ -218,16 +220,18 @@ Representative shape:
     "expandHint": {
       "intent": "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.",
       "template": "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'",
-      "parameters": {
-        "direction": {
+      "parameters": [
+        {
+          "name": "direction",
           "intent": "Choose dependency flow relative to the selected artefacts",
           "supportedValues": ["IN", "OUT"]
         },
-        "kind": {
+        {
+          "name": "kind",
           "intent": "Choose dependency relationship type",
           "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
         }
-      }
+      ]
     },
     "schema": "type ArtefactSelection { ... }"
   },
@@ -304,10 +308,9 @@ Use them like this:
         intent
         template
         parameters {
-          kind {
-            intent
-            supportedValues
-          }
+          name
+          intent
+          supportedValues
         }
       }
       items(first: 10) {
@@ -321,14 +324,9 @@ Use them like this:
         intent
         template
         parameters {
-          direction {
-            intent
-            supportedValues
-          }
-          kind {
-            intent
-            supportedValues
-          }
+          name
+          intent
+          supportedValues
         }
       }
       schema
