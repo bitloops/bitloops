@@ -1,10 +1,11 @@
 use super::adapters::route_hook_command_to_lifecycle;
 use super::adapters::{
-    CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, CLAUDE_HOOK_SESSION_END,
-    CLAUDE_HOOK_SESSION_START, CLAUDE_HOOK_STOP, CLAUDE_HOOK_USER_PROMPT_SUBMIT,
-    CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP,
-    CODEX_HOOK_USER_PROMPT_SUBMIT, COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_SESSION_END,
-    COPILOT_HOOK_SESSION_START, COPILOT_HOOK_SUBAGENT_STOP, COPILOT_HOOK_USER_PROMPT_SUBMITTED,
+    CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_POST_TOOL_USE, CLAUDE_HOOK_PRE_TASK,
+    CLAUDE_HOOK_PRE_TOOL_USE, CLAUDE_HOOK_SESSION_END, CLAUDE_HOOK_SESSION_START, CLAUDE_HOOK_STOP,
+    CLAUDE_HOOK_USER_PROMPT_SUBMIT, CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE,
+    CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP, CODEX_HOOK_USER_PROMPT_SUBMIT,
+    COPILOT_HOOK_AGENT_STOP, COPILOT_HOOK_SESSION_END, COPILOT_HOOK_SESSION_START,
+    COPILOT_HOOK_SUBAGENT_STOP, COPILOT_HOOK_USER_PROMPT_SUBMITTED,
     CURSOR_HOOK_BEFORE_SUBMIT_PROMPT, CURSOR_HOOK_PRE_COMPACT, CURSOR_HOOK_SESSION_END,
     CURSOR_HOOK_SESSION_START, CURSOR_HOOK_STOP, CURSOR_HOOK_SUBAGENT_START,
     CURSOR_HOOK_SUBAGENT_STOP, GEMINI_HOOK_AFTER_AGENT, GEMINI_HOOK_AFTER_MODEL,
@@ -23,7 +24,8 @@ use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, PrePromptState, SessionIdPolicy,
     UNKNOWN_SESSION_ID, apply_session_id_policy, create_context_file, dispatch_lifecycle_event,
     handle_lifecycle_compaction, handle_lifecycle_session_end, handle_lifecycle_session_start,
-    handle_lifecycle_subagent_end, handle_lifecycle_subagent_start, handle_lifecycle_turn_end,
+    handle_lifecycle_subagent_end, handle_lifecycle_subagent_start,
+    handle_lifecycle_tool_invocation, handle_lifecycle_tool_result, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
 use crate::adapters::agents::AGENT_NAME_CODEX;
@@ -53,6 +55,7 @@ fn sample_event(event_type: LifecycleEventType) -> LifecycleEvent {
         tool_name: String::new(),
         tool_use_id: String::from("toolu_123"),
         tool_input: None,
+        tool_response: None,
         subagent_id: String::from("subagent-1"),
         model: String::new(),
         finalize_open_turn: false,
@@ -993,6 +996,53 @@ fn test_parse_hook_event_post_todo_maps_todo_checkpoint_claude() {
 }
 
 #[test]
+fn test_parse_hook_event_pre_tool_use_maps_live_tool_invocation_claude() {
+    let adapter = ClaudeCodeLifecycleAdapter;
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"claude-tools","transcript_path":"/tmp/claude-tools.jsonl","tool_name":"Bash","tool_use_id":"toolu_bash_1","tool_input":{"command":"git status --short"}}"#,
+    );
+
+    let event = adapter
+        .parse_hook_event(CLAUDE_HOOK_PRE_TOOL_USE, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(
+        Some(LifecycleEventType::ToolInvocationObserved),
+        event.event_type
+    );
+    assert_eq!("claude-tools", event.session_id);
+    assert_eq!("Bash", event.tool_name);
+    assert_eq!("toolu_bash_1", event.tool_use_id);
+    assert_eq!(
+        Some(serde_json::json!({"command":"git status --short"})),
+        event.tool_input
+    );
+}
+
+#[test]
+fn test_parse_hook_event_post_tool_use_maps_live_tool_result_claude() {
+    let adapter = ClaudeCodeLifecycleAdapter;
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"claude-tools","transcript_path":"/tmp/claude-tools.jsonl","tool_name":"Bash","tool_use_id":"toolu_bash_1","tool_input":{"command":"git status --short"},"tool_response":"clean"}"#,
+    );
+
+    let event = adapter
+        .parse_hook_event(CLAUDE_HOOK_POST_TOOL_USE, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(
+        Some(LifecycleEventType::ToolResultObserved),
+        event.event_type
+    );
+    assert_eq!("claude-tools", event.session_id);
+    assert_eq!("Bash", event.tool_name);
+    assert_eq!("toolu_bash_1", event.tool_use_id);
+    assert_eq!(Some(serde_json::json!("clean")), event.tool_response);
+}
+
+#[test]
 fn test_parse_hook_event_unknown_hook_returns_nil_claude() {
     let adapter = ClaudeCodeLifecycleAdapter;
     let mut stdin =
@@ -1070,6 +1120,18 @@ fn test_parse_hook_event_all_hook_types_claude() {
             Some(LifecycleEventType::SubagentEnd),
             false,
             r#"{"session_id":"s6","transcript_path":"/t","tool_use_id":"t2","tool_input":{},"tool_response":{}}"#,
+        ),
+        (
+            CLAUDE_HOOK_PRE_TOOL_USE,
+            Some(LifecycleEventType::ToolInvocationObserved),
+            false,
+            r#"{"session_id":"s6b","transcript_path":"/t","tool_name":"Bash","tool_use_id":"tool-6b","tool_input":{"command":"git status"}}"#,
+        ),
+        (
+            CLAUDE_HOOK_POST_TOOL_USE,
+            Some(LifecycleEventType::ToolResultObserved),
+            false,
+            r#"{"session_id":"s6c","transcript_path":"/t","tool_name":"Bash","tool_use_id":"tool-6c","tool_input":{"command":"git status"},"tool_response":"clean"}"#,
         ),
         (
             CLAUDE_HOOK_POST_TODO,
@@ -1666,27 +1728,46 @@ fn test_parse_hook_event_turn_start_codex() {
 }
 
 #[test]
-fn test_parse_hook_event_pre_tool_use_codex_returns_none() {
+fn test_parse_hook_event_pre_tool_use_codex_maps_live_tool_invocation_event() {
     let adapter = CodexLifecycleAdapter;
     let mut stdin = Cursor::new(
         r#"{"session_id":"codex-session-ptu","transcript_path":"/tmp/codex-ptu.jsonl","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"git status"}}"#,
     );
     let event = adapter
         .parse_hook_event(CODEX_HOOK_PRE_TOOL_USE, &mut stdin)
-        .expect("parse");
-    assert!(event.is_none());
+        .expect("parse")
+        .expect("event");
+    assert_eq!(
+        event.event_type,
+        Some(LifecycleEventType::ToolInvocationObserved)
+    );
+    assert_eq!(event.session_id, "codex-session-ptu");
+    assert_eq!(event.session_ref, "/tmp/codex-ptu.jsonl");
+    assert_eq!(event.tool_name, "Bash");
+    assert_eq!(event.tool_use_id, "toolu_1");
+    assert_eq!(
+        event.tool_input,
+        Some(serde_json::json!({"command":"git status"}))
+    );
 }
 
 #[test]
-fn test_parse_hook_event_post_tool_use_codex_returns_none() {
+fn test_parse_hook_event_post_tool_use_codex_maps_live_tool_result_event() {
     let adapter = CodexLifecycleAdapter;
     let mut stdin = Cursor::new(
         r#"{"session_id":"codex-session-post","transcript_path":"/tmp/codex-post.jsonl","tool_name":"Bash","tool_use_id":"toolu_2","tool_input":{"command":"git status"},"tool_response":"clean"}"#,
     );
     let event = adapter
         .parse_hook_event(CODEX_HOOK_POST_TOOL_USE, &mut stdin)
-        .expect("parse");
-    assert!(event.is_none());
+        .expect("parse")
+        .expect("event");
+    assert_eq!(
+        event.event_type,
+        Some(LifecycleEventType::ToolResultObserved)
+    );
+    assert_eq!(event.tool_name, "Bash");
+    assert_eq!(event.tool_use_id, "toolu_2");
+    assert_eq!(event.tool_response, Some(serde_json::json!("clean")));
 }
 
 #[test]
@@ -1886,5 +1967,100 @@ fn test_subagent_end_handler_clears_marker_and_updates_session_without_repo_chan
             .unwrap()
             .expect("session should exist");
         assert!(state.last_interaction_time.is_some());
+    });
+}
+
+#[test]
+fn test_tool_invocation_handler_records_live_hook_event() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "session-123".to_string(),
+                phase: SessionPhase::Active,
+                turn_id: "turn-123".to_string(),
+                transcript_path: "/tmp/codex-live.jsonl".to_string(),
+                agent_type: AGENT_NAME_CODEX.to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let adapter = CodexLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::ToolInvocationObserved);
+        event.session_id = "session-123".to_string();
+        event.session_ref = "/tmp/codex-live.jsonl".to_string();
+        event.tool_name = "Bash".to_string();
+        event.tool_use_id = "toolu_live_1".to_string();
+        event.tool_input = Some(serde_json::json!({"command":"rg tool src"}));
+        event.model = "gpt-5.4".to_string();
+
+        handle_lifecycle_tool_invocation(&adapter, &event)
+            .expect("tool invocation should be spooled");
+
+        let conn = open_events_duckdb(dir.path());
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT event_type, tool_use_id, tool_kind, task_description \
+                 FROM interaction_events \
+                 WHERE session_id = 'session-123' AND tool_use_id = 'toolu_live_1' \
+                 ORDER BY event_time DESC, event_id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read live hook tool invocation event");
+        assert_eq!(row.0, "tool_invocation_observed");
+        assert_eq!(row.1, "toolu_live_1");
+        assert_eq!(row.2, "Bash");
+        assert_eq!(row.3, "rg tool src");
+    });
+}
+
+#[test]
+fn test_tool_result_handler_records_live_hook_event() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: "session-123".to_string(),
+                phase: SessionPhase::Active,
+                turn_id: "turn-123".to_string(),
+                transcript_path: "/tmp/codex-live.jsonl".to_string(),
+                agent_type: AGENT_NAME_CODEX.to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let adapter = CodexLifecycleAdapter;
+        let mut event = sample_event(LifecycleEventType::ToolResultObserved);
+        event.session_id = "session-123".to_string();
+        event.session_ref = "/tmp/codex-live.jsonl".to_string();
+        event.tool_name = "Bash".to_string();
+        event.tool_use_id = "toolu_live_2".to_string();
+        event.tool_response = Some(serde_json::json!("clean"));
+        event.model = "gpt-5.4".to_string();
+
+        handle_lifecycle_tool_result(&adapter, &event).expect("tool result should be spooled");
+
+        let conn = open_events_duckdb(dir.path());
+        let row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT event_type, tool_use_id, tool_kind, task_description \
+                 FROM interaction_events \
+                 WHERE session_id = 'session-123' AND tool_use_id = 'toolu_live_2' \
+                 ORDER BY event_time DESC, event_id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("read live hook tool result event");
+        assert_eq!(row.0, "tool_result_observed");
+        assert_eq!(row.1, "toolu_live_2");
+        assert_eq!(row.2, "Bash");
+        assert_eq!(row.3, "clean");
     });
 }

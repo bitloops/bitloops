@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -32,11 +32,11 @@ pub(crate) struct DerivedToolEventContext<'a> {
 }
 
 #[derive(Debug, Clone, Default)]
-struct DerivedToolInput {
-    summary: String,
-    command: String,
-    command_binary: String,
-    command_argv: Vec<String>,
+pub(crate) struct DerivedToolInput {
+    pub(crate) summary: String,
+    pub(crate) command: String,
+    pub(crate) command_binary: String,
+    pub(crate) command_argv: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -59,6 +59,42 @@ struct ToolResultBlock {
     tool_use_id: String,
     #[serde(default)]
     content: Value,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CodexEventMessage {
+    #[serde(rename = "type", default)]
+    record_type: String,
+    #[serde(default)]
+    payload: CodexEventPayload,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct CodexEventPayload {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    call_id: String,
+    #[serde(default)]
+    arguments: String,
+    #[serde(default)]
+    output: String,
+    #[serde(default)]
+    command: Value,
+    #[serde(default)]
+    aggregated_output: String,
+    #[serde(default)]
+    stdout: String,
+    #[serde(default)]
+    stderr: String,
+    #[serde(default)]
+    formatted_output: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    exit_code: i64,
 }
 
 pub(crate) fn derive_tool_events_from_transcript_fragment(
@@ -226,6 +262,8 @@ pub(crate) fn derive_tool_events_from_transcript_fragment(
         }
     }
 
+    derive_codex_exec_command_events(ctx, transcript_fragment, sequence_number, &mut events);
+
     Ok(events)
 }
 
@@ -238,7 +276,7 @@ pub(crate) fn transcript_derived_turn_end_sequence(events: &[InteractionEvent]) 
         + 1
 }
 
-fn derive_tool_input(tool_name: &str, input: &Value) -> DerivedToolInput {
+pub(crate) fn derive_tool_input(tool_name: &str, input: &Value) -> DerivedToolInput {
     let command = value_string_field(input, &["command"]);
     let command_argv = parse_shell_words(&command);
     let command_binary = command_argv
@@ -314,7 +352,7 @@ fn value_string_field(value: &Value, keys: &[&str]) -> String {
     String::new()
 }
 
-fn summarise_tool_result(content: &Value) -> String {
+pub(crate) fn summarise_tool_result(content: &Value) -> String {
     match content {
         Value::String(text) => truncate_summary(normalise_text(text)),
         Value::Array(items) => {
@@ -347,6 +385,282 @@ fn summarise_tool_result(content: &Value) -> String {
 
 fn looks_like_subagent_result(output_summary: &str) -> bool {
     output_summary.contains("agentId:")
+}
+
+fn derive_codex_exec_command_events(
+    ctx: &DerivedToolEventContext<'_>,
+    transcript_fragment: &str,
+    mut sequence_number: i64,
+    events: &mut Vec<InteractionEvent>,
+) {
+    let mut pending_exec_commands = HashMap::<String, DerivedToolInput>::new();
+    let mut handled_exec_commands = HashSet::<String>::new();
+
+    for raw_line in transcript_fragment.lines() {
+        if raw_line.trim().is_empty() {
+            continue;
+        }
+
+        let Ok(record) = serde_json::from_str::<CodexEventMessage>(raw_line) else {
+            continue;
+        };
+        match record.record_type.as_str() {
+            "response_item"
+                if record.payload.kind == "function_call"
+                    && record.payload.name == "exec_command" =>
+            {
+                let tool_use_id = record.payload.call_id.trim();
+                if tool_use_id.is_empty() {
+                    continue;
+                }
+
+                let command = codex_exec_command_string_from_arguments(&record.payload.arguments);
+                if command.is_empty() {
+                    continue;
+                }
+
+                let tool_input = serde_json::json!({ "command": command });
+                let input = derive_tool_input("Bash", &tool_input);
+                pending_exec_commands.insert(tool_use_id.to_string(), input.clone());
+                append_codex_exec_command_invocation(
+                    ctx,
+                    tool_use_id,
+                    &input,
+                    sequence_number,
+                    events,
+                );
+                sequence_number += 1;
+            }
+            "response_item" if record.payload.kind == "function_call_output" => {
+                let tool_use_id = record.payload.call_id.trim();
+                let Some(_input) = pending_exec_commands.get(tool_use_id) else {
+                    continue;
+                };
+                let output_summary = summarise_tool_result(&Value::String(
+                    codex_exec_command_output_from_function_call_output(&record.payload.output),
+                ));
+                append_codex_exec_command_result(
+                    ctx,
+                    tool_use_id,
+                    &output_summary,
+                    sequence_number,
+                    events,
+                );
+                sequence_number += 1;
+                let _ = pending_exec_commands.remove(tool_use_id);
+                handled_exec_commands.insert(tool_use_id.to_string());
+            }
+            "event_msg" if record.payload.kind == "exec_command_end" => {
+                let tool_use_id = record.payload.call_id.trim();
+                if tool_use_id.is_empty()
+                    || pending_exec_commands.contains_key(tool_use_id)
+                    || handled_exec_commands.contains(tool_use_id)
+                {
+                    continue;
+                }
+
+                let command = codex_exec_command_string(&record.payload.command);
+                if command.is_empty() {
+                    continue;
+                }
+
+                let tool_input = serde_json::json!({ "command": command });
+                let input = derive_tool_input("Bash", &tool_input);
+                let output_summary = summarise_tool_result(&Value::String(
+                    codex_exec_command_output_summary(&record.payload),
+                ));
+
+                append_codex_exec_command_invocation(
+                    ctx,
+                    tool_use_id,
+                    &input,
+                    sequence_number,
+                    events,
+                );
+                sequence_number += 1;
+                append_codex_exec_command_result(
+                    ctx,
+                    tool_use_id,
+                    &output_summary,
+                    sequence_number,
+                    events,
+                );
+                sequence_number += 1;
+                handled_exec_commands.insert(tool_use_id.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn append_codex_exec_command_invocation(
+    ctx: &DerivedToolEventContext<'_>,
+    tool_use_id: &str,
+    input: &DerivedToolInput,
+    sequence_number: i64,
+    events: &mut Vec<InteractionEvent>,
+) {
+    let tool_input = serde_json::json!({ "command": input.command });
+    events.push(InteractionEvent {
+        event_id: transcript_derived_event_id(
+            ctx.turn_id,
+            "tool-invocation",
+            sequence_number,
+            tool_use_id,
+        ),
+        session_id: ctx.session_id.to_string(),
+        turn_id: Some(ctx.turn_id.to_string()),
+        repo_id: ctx.repo_id.to_string(),
+        branch: ctx.branch.to_string(),
+        actor_id: ctx.actor_id.to_string(),
+        actor_name: ctx.actor_name.to_string(),
+        actor_email: ctx.actor_email.to_string(),
+        actor_source: ctx.actor_source.to_string(),
+        event_type: InteractionEventType::ToolInvocationObserved,
+        event_time: ctx.event_time.to_string(),
+        source: INTERACTION_SOURCE_TRANSCRIPT_DERIVATION.to_string(),
+        sequence_number,
+        agent_type: ctx.agent_type.to_string(),
+        model: ctx.model.to_string(),
+        tool_use_id: tool_use_id.to_string(),
+        tool_kind: "Bash".to_string(),
+        task_description: input.summary.clone(),
+        subagent_id: String::new(),
+        payload: serde_json::json!({
+            "source": INTERACTION_SOURCE_TRANSCRIPT_DERIVATION,
+            "sequence_number": sequence_number,
+            "tool_name": "Bash",
+            "tool_input": tool_input,
+            "input_summary": input.summary,
+            "command": input.command,
+            "command_binary": input.command_binary,
+            "command_argv": input.command_argv,
+            "transcript_path": ctx.transcript_path,
+        }),
+    });
+}
+
+fn append_codex_exec_command_result(
+    ctx: &DerivedToolEventContext<'_>,
+    tool_use_id: &str,
+    output_summary: &str,
+    sequence_number: i64,
+    events: &mut Vec<InteractionEvent>,
+) {
+    events.push(InteractionEvent {
+        event_id: transcript_derived_event_id(
+            ctx.turn_id,
+            "tool-result",
+            sequence_number,
+            tool_use_id,
+        ),
+        session_id: ctx.session_id.to_string(),
+        turn_id: Some(ctx.turn_id.to_string()),
+        repo_id: ctx.repo_id.to_string(),
+        branch: ctx.branch.to_string(),
+        actor_id: ctx.actor_id.to_string(),
+        actor_name: ctx.actor_name.to_string(),
+        actor_email: ctx.actor_email.to_string(),
+        actor_source: ctx.actor_source.to_string(),
+        event_type: InteractionEventType::ToolResultObserved,
+        event_time: ctx.event_time.to_string(),
+        source: INTERACTION_SOURCE_TRANSCRIPT_DERIVATION.to_string(),
+        sequence_number,
+        agent_type: ctx.agent_type.to_string(),
+        model: ctx.model.to_string(),
+        tool_use_id: tool_use_id.to_string(),
+        tool_kind: "Bash".to_string(),
+        task_description: output_summary.to_string(),
+        subagent_id: String::new(),
+        payload: serde_json::json!({
+            "source": INTERACTION_SOURCE_TRANSCRIPT_DERIVATION,
+            "sequence_number": sequence_number,
+            "tool_name": "Bash",
+            "output_summary": output_summary,
+            "transcript_path": ctx.transcript_path,
+        }),
+    });
+}
+
+fn codex_exec_command_string_from_arguments(arguments: &str) -> String {
+    let Ok(arguments) = serde_json::from_str::<Value>(arguments) else {
+        return String::new();
+    };
+    first_non_empty_value(&arguments, &["cmd", "command"])
+}
+
+fn codex_exec_command_output_from_function_call_output(output: &str) -> String {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Some((_, content)) = trimmed.rsplit_once("\nOutput:\n") {
+        return content.trim().to_string();
+    }
+    if let Some((_, content)) = trimmed.rsplit_once("Output:\n") {
+        return content.trim().to_string();
+    }
+    trimmed.to_string()
+}
+
+fn codex_exec_command_string(command: &Value) -> String {
+    match command {
+        Value::String(text) => text.trim().to_string(),
+        Value::Array(items) => {
+            let argv = items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if argv.is_empty() {
+                return String::new();
+            }
+
+            if argv.len() >= 3
+                && matches!(
+                    command_binary_name(&argv[0]).as_str(),
+                    "sh" | "bash" | "zsh" | "fish"
+                )
+                && matches!(argv[1].as_str(), "-c" | "-lc")
+            {
+                return argv[2].clone();
+            }
+
+            argv.join(" ")
+        }
+        _ => String::new(),
+    }
+}
+
+fn codex_exec_command_output_summary(payload: &CodexEventPayload) -> String {
+    for candidate in [
+        payload.aggregated_output.as_str(),
+        payload.formatted_output.as_str(),
+        payload.stderr.as_str(),
+        payload.stdout.as_str(),
+    ] {
+        if !candidate.trim().is_empty() {
+            return candidate.trim().to_string();
+        }
+    }
+
+    if !payload.status.trim().is_empty() && payload.exit_code != 0 {
+        return format!(
+            "status: {}, exit_code: {}",
+            payload.status.trim(),
+            payload.exit_code
+        );
+    }
+    if !payload.status.trim().is_empty() {
+        return payload.status.trim().to_string();
+    }
+    if payload.exit_code != 0 {
+        return format!("exit_code: {}", payload.exit_code);
+    }
+
+    String::new()
 }
 
 fn transcript_derived_event_id(
@@ -551,5 +865,121 @@ mod tests {
     fn shell_word_parser_handles_basic_quoting() {
         let argv = parse_shell_words(r#"rg "tool events" src/host"#);
         assert_eq!(argv, vec!["rg", "tool events", "src/host"]);
+    }
+
+    #[test]
+    fn derives_codex_exec_command_events_from_event_msg_transcript_fragment() {
+        let fragment = concat!(
+            "{\"timestamp\":\"2026-04-22T13:05:44.610Z\",\"type\":\"event_msg\",\"payload\":",
+            "{\"type\":\"exec_command_end\",\"call_id\":\"call_u5mNwNUlD5uFD65canwRQbto\",",
+            "\"command\":[\"/bin/zsh\",\"-lc\",\"git log -1 --date=iso-strict --format='%H%n%cd%n%cn%n%s'\"],",
+            "\"aggregated_output\":\"06fe1f9aa7f98eb98e973df6d916703552ab7ce0\\n2026-04-17T23:49:07+03:00\\nVasilis Danias\\nUpdate bitloops-platform-embeddings.\\n\",",
+            "\"exit_code\":0,\"status\":\"completed\"}}\n"
+        );
+
+        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+            .expect("derive Codex transcript tool events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].event_type,
+            InteractionEventType::ToolInvocationObserved
+        );
+        assert_eq!(events[0].tool_use_id, "call_u5mNwNUlD5uFD65canwRQbto");
+        assert_eq!(events[0].tool_kind, "Bash");
+        assert_eq!(
+            events[0].task_description,
+            "git log -1 --date=iso-strict --format='%H%n%cd%n%cn%n%s'"
+        );
+        assert_eq!(events[0].payload["command_binary"].as_str(), Some("git"));
+        assert_eq!(events[0].sequence_number, 1);
+        assert_eq!(
+            events[1].event_type,
+            InteractionEventType::ToolResultObserved
+        );
+        assert_eq!(events[1].tool_use_id, "call_u5mNwNUlD5uFD65canwRQbto");
+        assert_eq!(events[1].tool_kind, "Bash");
+        assert!(
+            events[1]
+                .task_description
+                .contains("06fe1f9aa7f98eb98e973df6d916703552ab7ce0"),
+            "result summary should include the command output"
+        );
+        assert_eq!(events[1].sequence_number, 2);
+        assert_eq!(transcript_derived_turn_end_sequence(&events), 3);
+    }
+
+    #[test]
+    fn derives_codex_exec_command_events_after_ordinary_tools_with_unique_sequences() {
+        let fragment = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/lib.rs\"}}",
+            "]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"read file\"}",
+            "]}}\n",
+            "{\"timestamp\":\"2026-04-22T14:41:58.589Z\",\"type\":\"response_item\",\"payload\":",
+            "{\"type\":\"function_call\",\"name\":\"exec_command\",",
+            "\"arguments\":\"{\\\"cmd\\\":\\\"git status --short\\\"}\",",
+            "\"call_id\":\"call_status\"}}\n",
+            "{\"timestamp\":\"2026-04-22T14:41:58.678Z\",\"type\":\"response_item\",\"payload\":",
+            "{\"type\":\"function_call_output\",\"call_id\":\"call_status\",",
+            "\"output\":\"Output:\\n M src/lib.rs\\n\"}}\n"
+        );
+
+        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+            .expect("derive mixed transcript tool events");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].tool_use_id, "toolu_1");
+        assert_eq!(events[0].sequence_number, 1);
+        assert_eq!(events[1].tool_use_id, "toolu_1");
+        assert_eq!(events[1].sequence_number, 2);
+        assert_eq!(events[2].tool_use_id, "call_status");
+        assert_eq!(events[2].sequence_number, 3);
+        assert_eq!(events[3].tool_use_id, "call_status");
+        assert_eq!(events[3].sequence_number, 4);
+        assert_eq!(transcript_derived_turn_end_sequence(&events), 5);
+    }
+
+    #[test]
+    fn derives_codex_exec_command_events_from_response_item_transcript_fragment() {
+        let fragment = concat!(
+            "{\"timestamp\":\"2026-04-22T14:41:58.589Z\",\"type\":\"response_item\",\"payload\":",
+            "{\"type\":\"function_call\",\"name\":\"exec_command\",",
+            "\"arguments\":\"{\\\"cmd\\\":\\\"git log -1 --date=iso-strict --format='%H%n%cd%n%cn%n%s'\\\",\\\"shell\\\":\\\"bash\\\",\\\"login\\\":false}\",",
+            "\"call_id\":\"call_nigk0HhtHOw611keZb2CvHU5\"}}\n",
+            "{\"timestamp\":\"2026-04-22T14:41:58.678Z\",\"type\":\"response_item\",\"payload\":",
+            "{\"type\":\"function_call_output\",\"call_id\":\"call_nigk0HhtHOw611keZb2CvHU5\",",
+            "\"output\":\"Chunk ID: b48ae5\\nWall time: 0.0000 seconds\\nProcess exited with code 0\\nOriginal token count: 62\\nOutput:\\n06fe1f9aa7f98eb98e973df6d916703552ab7ce0\\n2026-04-17T23:49:07+03:00\\nVasilis Danias\\nUpdate bitloops-platform-embeddings.\\n\"}}\n"
+        );
+
+        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+            .expect("derive Codex response-item transcript tool events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0].event_type,
+            InteractionEventType::ToolInvocationObserved
+        );
+        assert_eq!(events[0].tool_use_id, "call_nigk0HhtHOw611keZb2CvHU5");
+        assert_eq!(events[0].tool_kind, "Bash");
+        assert_eq!(
+            events[0].task_description,
+            "git log -1 --date=iso-strict --format='%H%n%cd%n%cn%n%s'"
+        );
+        assert_eq!(events[0].payload["command_binary"].as_str(), Some("git"));
+        assert_eq!(events[0].sequence_number, 1);
+        assert_eq!(
+            events[1].event_type,
+            InteractionEventType::ToolResultObserved
+        );
+        assert_eq!(events[1].tool_use_id, "call_nigk0HhtHOw611keZb2CvHU5");
+        assert_eq!(events[1].tool_kind, "Bash");
+        assert!(
+            events[1]
+                .task_description
+                .contains("06fe1f9aa7f98eb98e973df6d916703552ab7ce0"),
+            "result summary should include the command output"
+        );
+        assert_eq!(events[1].sequence_number, 2);
+        assert_eq!(transcript_derived_turn_end_sequence(&events), 3);
     }
 }

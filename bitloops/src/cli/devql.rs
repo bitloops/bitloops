@@ -8,8 +8,9 @@ use crate::devql_transport::{
     SlimCliRepoScope, discover_slim_cli_repo_scope, is_repo_root_discovery_error,
 };
 use crate::host::devql::{
-    CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode, ParsedDevqlQuery,
-    SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document, format_query_output,
+    AnalyticsRepoScope, CheckpointFileSnapshotBackfillOptions, DevqlConfig, GraphqlCompileMode,
+    ParsedDevqlQuery, SyncSummary, compile_devql_to_graphql_with_mode, compile_query_document,
+    execute_analytics_sql, format_analytics_sql_result_table, format_query_output,
     parse_devql_query, run_capability_packs_report, run_checkpoint_file_snapshot_backfill,
     use_raw_graphql_mode,
 };
@@ -24,18 +25,19 @@ mod tests;
 
 pub use crate::host::devql::run_connection_status;
 pub use args::{
-    DevqlArgs, DevqlCheckpointFileSnapshotsArgs, DevqlCommand, DevqlConnectionStatusArgs,
-    DevqlInitArgs, DevqlKnowledgeAddArgs, DevqlKnowledgeArgs, DevqlKnowledgeAssociateArgs,
-    DevqlKnowledgeCommand, DevqlKnowledgeRefArgs, DevqlPacksArgs, DevqlProjectionArgs,
-    DevqlProjectionCommand, DevqlQueryArgs, DevqlSchemaArgs, DevqlTaskCancelArgs,
-    DevqlTaskEnqueueArgs, DevqlTaskKindArg, DevqlTaskListArgs, DevqlTaskPauseArgs,
-    DevqlTaskResumeArgs, DevqlTaskStatusArg, DevqlTaskStatusArgs, DevqlTaskWatchArgs,
-    DevqlTasksArgs, DevqlTasksCommand, DevqlTestHarnessArgs, DevqlTestHarnessCommand,
-    DevqlTestHarnessIngestCoverageArgs, DevqlTestHarnessIngestCoverageBatchArgs,
-    DevqlTestHarnessIngestResultsArgs, DevqlTestHarnessIngestTestsArgs,
+    DevqlAnalyticsArgs, DevqlAnalyticsCommand, DevqlAnalyticsSqlArgs, DevqlArgs,
+    DevqlCheckpointFileSnapshotsArgs, DevqlCommand, DevqlConnectionStatusArgs, DevqlInitArgs,
+    DevqlKnowledgeAddArgs, DevqlKnowledgeArgs, DevqlKnowledgeAssociateArgs, DevqlKnowledgeCommand,
+    DevqlKnowledgeRefArgs, DevqlPacksArgs, DevqlProjectionArgs, DevqlProjectionCommand,
+    DevqlQueryArgs, DevqlSchemaArgs, DevqlTaskCancelArgs, DevqlTaskEnqueueArgs, DevqlTaskKindArg,
+    DevqlTaskListArgs, DevqlTaskPauseArgs, DevqlTaskResumeArgs, DevqlTaskStatusArg,
+    DevqlTaskStatusArgs, DevqlTaskWatchArgs, DevqlTasksArgs, DevqlTasksCommand,
+    DevqlTestHarnessArgs, DevqlTestHarnessCommand, DevqlTestHarnessIngestCoverageArgs,
+    DevqlTestHarnessIngestCoverageBatchArgs, DevqlTestHarnessIngestResultsArgs,
+    DevqlTestHarnessIngestTestsArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql tasks enqueue`, `bitloops devql tasks watch`, `bitloops devql tasks status`, `bitloops devql tasks list`, `bitloops devql tasks pause`, `bitloops devql tasks resume`, `bitloops devql tasks cancel`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql analytics sql`, `bitloops devql tasks enqueue`, `bitloops devql tasks watch`, `bitloops devql tasks status`, `bitloops devql tasks list`, `bitloops devql tasks pause`, `bitloops devql tasks resume`, `bitloops devql tasks cancel`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
 const SCHEMA_SCOPE_REQUIRED_MESSAGE: &str = "`bitloops devql schema` requires a Git repository scope. Run it from within a repository or use `bitloops devql schema --global`.";
 
 fn format_schema_sdl_output(args: &DevqlSchemaArgs, sdl: &str) -> String {
@@ -244,6 +246,28 @@ where
 
     match command {
         DevqlCommand::Init(_) => graphql::run_init_via_graphql(&scope).await,
+        DevqlCommand::Analytics(args) => match args.command {
+            DevqlAnalyticsCommand::Sql(sql) => {
+                let scope = if sql.all_repos {
+                    AnalyticsRepoScope::AllKnown
+                } else if sql.repos.is_empty() {
+                    AnalyticsRepoScope::CurrentRepo
+                } else {
+                    AnalyticsRepoScope::Explicit(sql.repos.clone())
+                };
+                let result = execute_analytics_sql(&cfg, scope, &sql.query).await?;
+                if sql.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&result)
+                            .context("serialising analytics SQL result to JSON")?
+                    );
+                } else {
+                    println!("{}", format_analytics_sql_result_table(&result));
+                }
+                Ok(())
+            }
+        },
         DevqlCommand::Tasks(args) => run_tasks_command(&scope, args).await,
         DevqlCommand::Projection(args) => match args.command {
             DevqlProjectionCommand::CheckpointFileSnapshots(backfill) => {

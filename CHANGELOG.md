@@ -6,9 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **Daemon-wide DuckDB analytics SQL query layer for Bitloops data**: added `bitloops devql analytics sql "<query>"` plus the dashboard GraphQL `analyticsSql(...)` field, both backed by a per-daemon DuckDB analytics cache. The new analytics surface exposes curated `analytics.*` views and broader `analytics_raw.*` mirrors across repository, current-state, and interaction data, supports current-repo, explicit multi-repo, and all-repo scopes, and derives `interaction_tool_invocations`, `interaction_subagent_runs`, and `shell_commands` consistently from raw interaction events across local DuckDB and remote ClickHouse backends.
+
 ### Fixed
 
 - **`bitloops init --sync=true` no longer waits on unselected semantic enrichment lanes before completing**: init session status now filters queued summary-refresh, code-embedding, and summary-embedding work down to the lanes actually selected for that session. This fixes sync-only runs getting stuck on "Waiting for queued enrichment work to finish" when repo-level semantic summary refresh remained active in the background
+- **Codex live tool hooks now persist ordinary tool invocations before turn end**: Codex `pre-tool-use` and `post-tool-use` hooks now emit live `tool_invocation_observed` and `tool_result_observed` interaction events instead of being parsed and dropped. This restores `analytics.interaction_tool_invocations` and related dashboard and DevQL analytics for active Codex sessions, while still keeping `Task` hooks mapped to subagent lifecycle rather than generic tool usage.
 - **DevQL hook enforcement is now skill-gated by the installed repo-local surface**: enabling the Bitloops-managed `using-devql` skill now installs the repo-local DevQL surface and emits direct startup guidance, disabling the skill emits no DevQL guidance, Claude Code and Codex regain targeted prompt-time reinforcement, and Cursor stays on session-start plus rule-based guidance.
 
 ### Changed

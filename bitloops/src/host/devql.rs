@@ -29,6 +29,8 @@ use crate::host::extension_host::{
 use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
 use crate::utils::terminal::print_db_status_table;
 
+#[path = "devql/analytics.rs"]
+pub(crate) mod analytics;
 #[path = "devql/artefact_sql.rs"]
 pub(crate) mod artefact_sql;
 #[path = "devql/checkpoint_file_snapshots.rs"]
@@ -58,6 +60,9 @@ mod sqlite_write_actor;
 pub(crate) mod sync;
 mod types;
 
+pub(crate) use self::analytics::{
+    AnalyticsRepoScope, execute_analytics_sql, format_analytics_sql_result_table,
+};
 pub(crate) use self::classification::{
     AnalysisMode, FileRole, ProjectAwareClassifier, ProjectContext, ResolvedFileClassification,
     TextIndexMode,

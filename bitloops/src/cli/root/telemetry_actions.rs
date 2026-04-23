@@ -532,6 +532,21 @@ fn devql_action(
         crate::cli::devql::DevqlCommand::Init(_) => {
             Some(new_action("bitloops devql init", HashMap::new()))
         }
+        crate::cli::devql::DevqlCommand::Analytics(args) => match &args.command {
+            crate::cli::devql::DevqlAnalyticsCommand::Sql(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.all_repos {
+                    flags.push("all_repos");
+                }
+                if args.json {
+                    flags.push("json");
+                }
+                insert_flags(&mut props, flags);
+                insert_count_property(&mut props, "repo_count", args.repos.len());
+                Some(new_action("bitloops devql analytics sql", props))
+            }
+        },
         crate::cli::devql::DevqlCommand::Tasks(args) => devql_tasks_action(args),
         crate::cli::devql::DevqlCommand::Projection(args) => match &args.command {
             crate::cli::devql::DevqlProjectionCommand::CheckpointFileSnapshots(args) => {

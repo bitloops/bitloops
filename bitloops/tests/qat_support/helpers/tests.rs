@@ -220,6 +220,15 @@ fn error_chain_contains_not_found_ignores_other_io_errors() {
 }
 
 #[test]
+fn text_has_database_locked_error_detects_sqlite_lock_messages() {
+    assert!(text_has_database_locked_error(
+        "configuring SQLite pragmas: database is locked"
+    ));
+    assert!(text_has_database_locked_error("DATABASE IS LOCKED"));
+    assert!(!text_has_database_locked_error("connection refused"));
+}
+
+#[test]
 fn build_init_bitloops_args_defaults_to_sync_false_when_unspecified() {
     let args = build_init_bitloops_args("claude-code", false, None);
     assert_eq!(

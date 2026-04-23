@@ -1,3 +1,4 @@
+mod analytics;
 mod bundle;
 mod checkpoint;
 mod graphql;
@@ -5,6 +6,7 @@ mod interaction;
 mod queries;
 mod repository;
 
+pub(super) use analytics::load_dashboard_analytics_sql;
 pub(super) use bundle::{check_dashboard_bundle_version, fetch_dashboard_bundle};
 pub(super) use checkpoint::load_dashboard_checkpoint;
 pub(super) use interaction::{

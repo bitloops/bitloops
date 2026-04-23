@@ -360,7 +360,10 @@ pub(crate) async fn duckdb_query_rows_path(path: &Path, sql: &str) -> Result<Vec
                 db_path.display()
             );
         }
-        let conn = duckdb::Connection::open(&db_path)
+        let conn = duckdb::Connection::open_with_flags(
+            &db_path,
+            duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly)?,
+        )
             .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
         let mut stmt = conn.prepare(&query).context("preparing DuckDB query")?;
         let mut rows = stmt.query([]).context("executing DuckDB query")?;
@@ -620,6 +623,7 @@ pub(crate) fn glob_to_sql_like(glob: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
 
     #[test]
     fn sqlite_exec_batch_transactional_path_rolls_back_on_failure() -> Result<()> {
@@ -711,5 +715,48 @@ mod tests {
     #[test]
     fn sql_like_with_escape_quotes_apostrophes() {
         assert_eq!(sql_like_with_escape("p", "a'b"), "p LIKE 'a''b' ESCAPE '!'");
+    }
+
+    #[test]
+    fn duckdb_query_rows_path_can_read_while_writer_holds_lock() -> Result<()> {
+        let tmp = tempfile::TempDir::new().context("creating temp dir")?;
+        let duckdb_path = tmp.path().join("events.duckdb");
+        let writer = duckdb::Connection::open(&duckdb_path).context("opening writer duckdb")?;
+        writer
+            .execute_batch(
+                "CREATE TABLE checkpoint_events(value INTEGER); \
+                 INSERT INTO checkpoint_events(value) VALUES (1), (2);",
+            )
+            .context("seeding writer duckdb")?;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating tokio runtime")?;
+        let rows = runtime
+            .block_on(duckdb_query_rows_path(
+                &duckdb_path,
+                "SELECT value FROM checkpoint_events ORDER BY value",
+            ))
+            .context("querying duckdb while writer is open")?;
+
+        assert_eq!(
+            rows,
+            vec![
+                Value::Object(
+                    [("value".to_string(), Value::from(1))]
+                        .into_iter()
+                        .collect()
+                ),
+                Value::Object(
+                    [("value".to_string(), Value::from(2))]
+                        .into_iter()
+                        .collect()
+                ),
+            ]
+        );
+
+        drop(writer);
+        Ok(())
     }
 }
