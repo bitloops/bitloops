@@ -12,6 +12,9 @@ use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
+use super::artefact_selection_schema::{
+    CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA, DEPENDENCY_STAGE_SCHEMA, TESTS_STAGE_SCHEMA,
+};
 use super::{
     Artefact, Checkpoint, CloneSummary, ClonesFilterInput, DateTimeScalar, DependencyEdge,
     DepsDirection, EdgeKind, JsonScalar, LineRangeInput, TestHarnessTestsResult,
@@ -905,102 +908,6 @@ fn take_stage_items<T: Clone>(items: &[T], first: i32) -> Result<Vec<T>> {
     }
     Ok(items.iter().take(first as usize).cloned().collect())
 }
-
-const CHECKPOINT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  checkpoints(agent: String, since: DateTime): CheckpointStageResult!
-}
-
-type CheckpointStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [Checkpoint!]!
-}
-
-type Checkpoint {
-  id: ID!
-  sessionId: String!
-  commitSha: String
-  branch: String
-  agent: String
-  eventTime: DateTime!
-  strategy: String
-  filesTouched: [String!]!
-  payload: JSON
-  commit: Commit
-  fileRelations: [CheckpointFileRelation!]!
-}"#;
-
-const CLONE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  codeMatches(relationKind: String, minScore: Float): CloneStageResult!
-}
-
-type CloneStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [Clone!]!
-}
-
-type Clone {
-  id: ID!
-  sourceArtefactId: ID!
-  targetArtefactId: ID!
-  relationKind: String!
-  score: Float!
-  metadata: JSON
-  sourceArtefact: Artefact!
-  targetArtefact: Artefact!
-}"#;
-
-const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
-}
-
-type DependencyStageResult {
-  overview: JSON!
-  expandHint: DependencyExpandHint
-  schema: String
-  items(first: Int! = 20): [DependencyEdge!]!
-}
-
-type DependencyExpandHint {
-  intent: String!
-  template: String!
-  parameters: DependencyExpandHintParameters!
-}
-
-type DependencyExpandHintParameters {
-  direction: [DepsDirection!]!
-  kind: [EdgeKind!]!
-}
-
-type DependencyEdge {
-  id: ID!
-  edgeKind: EdgeKind!
-  fromArtefactId: ID!
-  toArtefactId: ID
-  toSymbolRef: String
-  startLine: Int
-  endLine: Int
-  metadata: JSON
-  fromArtefact: Artefact!
-  toArtefact: Artefact
-}"#;
-
-const TESTS_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  tests(minConfidence: Float, linkageSource: String): TestsStageResult!
-}
-
-type TestsStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [TestHarnessTestsResult!]!
-}
-
-type TestHarnessTestsResult {
-  artefact: TestHarnessArtefactRef!
-  coveringTests: [TestHarnessCoveringTest!]!
-  summary: TestHarnessTestsSummary!
-}"#;
 
 #[cfg(test)]
 #[path = "artefact_selection_tests.rs"]
