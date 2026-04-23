@@ -1,4 +1,14 @@
-use super::*;
+use crate::capability_packs::semantic_clones::scoring::{
+    RELATION_KIND_DIVERGED_IMPLEMENTATION, RELATION_KIND_EXACT_DUPLICATE,
+    RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
+    RELATION_KIND_WEAK_CLONE_CANDIDATE,
+};
+use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineRangeInput};
+
+use super::support::{
+    build_clone_expand_hint, build_dependency_expand_hint, build_dependency_summary,
+};
+use super::{ArtefactSelectorInput, ArtefactSelectorMode, CloneExpandHint, DependencyExpandHint};
 
 fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> DependencyEdge {
     DependencyEdge {
@@ -189,16 +199,18 @@ fn build_dependency_summary_embeds_expand_hint_when_present() {
             "expandHint": {
                 "intent": "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.",
                 "template": "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'",
-                "parameters": {
-                    "direction": {
+                "parameters": [
+                    {
+                        "name": "direction",
                         "intent": "Choose dependency flow relative to the selected artefacts",
                         "supportedValues": ["IN", "OUT"]
                     },
-                    "kind": {
+                    {
+                        "name": "kind",
                         "intent": "Choose dependency relationship type",
                         "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
                     }
-                }
+                ]
             }
         })
     );

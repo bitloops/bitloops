@@ -674,8 +674,9 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
         intent
         template
         parameters {
-          direction
-          kind
+          name
+          intent
+          supportedValues
         }
       }
       schema
@@ -705,8 +706,9 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
         intent
         template
         parameters {
-          direction
-          kind
+          name
+          intent
+          supportedValues
         }
       }
       schema
@@ -732,6 +734,15 @@ fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
   selectArtefacts(by: { path: "src/main.rs" }) {
     dependencies(direction: IN, includeUnresolved: false) {
       overview
+      expandHint {
+        intent
+        template
+        parameters {
+          name
+          intent
+          supportedValues
+        }
+      }
       schema
     }
   }

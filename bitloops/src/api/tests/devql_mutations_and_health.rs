@@ -2432,8 +2432,8 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         json["selectArtefacts"]["dependencies"]["expandHint"]["template"]
     );
     assert_eq!(
-        stage_deps_overview["expandHint"]["parameters"]["direction"][0],
-        "IN"
+        stage_deps_overview["expandHint"]["parameters"],
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]
     );
     assert_eq!(
         stage_deps_overview,

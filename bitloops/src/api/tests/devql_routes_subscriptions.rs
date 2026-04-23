@@ -527,7 +527,7 @@ fn tests_expand_hint_implements_base_expand_hint_interface() {
         );
         assert!(
             sdl.contains(
-                "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: DependencyExpandHintParameters!\n}",
+                "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
             ),
             "expected dependency expand hint to implement ExpandHint:\n{sdl}"
         );

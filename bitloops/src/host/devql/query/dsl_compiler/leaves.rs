@@ -320,8 +320,9 @@ fn dependency_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSe
                                 "parameters",
                                 Vec::new(),
                                 vec![
-                                    GraphqlSelection::scalar("direction"),
-                                    GraphqlSelection::scalar("kind"),
+                                    GraphqlSelection::scalar("name"),
+                                    GraphqlSelection::scalar("intent"),
+                                    GraphqlSelection::scalar("supportedValues"),
                                 ],
                             )
                             .into(),

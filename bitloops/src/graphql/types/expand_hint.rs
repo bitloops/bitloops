@@ -11,11 +11,17 @@ pub struct ExpandHintParameter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Interface)]
-#[graphql(field(name = "intent", ty = "String"))]
-#[graphql(field(name = "template", ty = "String"))]
-#[graphql(field(name = "parameters", ty = "Vec<ExpandHintParameter>"))]
+#[allow(
+    clippy::duplicated_attributes,
+    reason = "async-graphql Interface derives require one field(... ty = ...) entry per interface field"
+)]
+#[graphql(
+    field(name = "intent", ty = "String"),
+    field(name = "template", ty = "String"),
+    field(name = "parameters", ty = "Vec<ExpandHintParameter>")
+)]
 pub enum ExpandHint {
-    TestHarnessTestsExpandHint(TestHarnessTestsExpandHint),
-    CloneExpandHint(CloneExpandHint),
-    DependencyExpandHint(DependencyExpandHint),
+    Tests(TestHarnessTestsExpandHint),
+    Clone(CloneExpandHint),
+    Dependency(DependencyExpandHint),
 }
