@@ -85,7 +85,7 @@ type ArtefactSelection {
 	artefacts(first: Int! = 20): [Artefact!]!
 	entries(first: Int! = 20): [DirectoryEntry!]!
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
-	clones(relationKind: String, minScore: Float): CloneStageResult!
+	codeMatches(relationKind: String, minScore: Float): CloneStageResult!
 	dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 }

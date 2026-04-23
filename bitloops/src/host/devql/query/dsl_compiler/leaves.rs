@@ -73,7 +73,11 @@ fn compile_select_artefacts_leaf(
             selections,
         )
     } else if parsed.has_clones_stage {
-        GraphqlField::new("clones", compile_selection_clones_args(parsed), selections)
+        GraphqlField::new(
+            "codeMatches",
+            compile_selection_clones_args(parsed),
+            selections,
+        )
     } else if parsed.has_deps_stage {
         GraphqlField::new(
             "dependencies",

@@ -4,6 +4,11 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint_json;
+use crate::capability_packs::semantic_clones::scoring::{
+    RELATION_KIND_DIVERGED_IMPLEMENTATION, RELATION_KIND_EXACT_DUPLICATE,
+    RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
+    RELATION_KIND_WEAK_CLONE_CANDIDATE,
+};
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
@@ -332,13 +337,14 @@ impl ArtefactSelection {
             .into())
     }
 
+    #[graphql(name = "codeMatches")]
     async fn clones(
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "relationKind")] relation_kind: Option<String>,
         #[graphql(name = "minScore")] min_score: Option<f64>,
     ) -> Result<CloneStageResult> {
-        self.ensure_artefact_selection("clones")?;
+        self.ensure_artefact_selection("codeMatches")?;
         let filter = ClonesFilterInput {
             relation_kind,
             min_score,
@@ -671,24 +677,39 @@ fn build_checkpoint_summary(checkpoints: &[Checkpoint]) -> Value {
 
 fn build_clone_summary(clones: &[super::SemanticClone]) -> Value {
     let summary = CloneSummary::from_clones(clones);
-    let max_score = clones
+    let mut counts = summary
+        .groups
         .iter()
-        .map(|clone| clone.score)
-        .max_by(|left, right| left.total_cmp(right));
-    json!({
-        "totalCount": summary.total_count,
-        "groups": summary
-            .groups
-            .iter()
-            .map(|group| {
-                json!({
-                    "relationKind": group.relation_kind,
-                    "count": group.count,
-                })
-            })
-            .collect::<Vec<_>>(),
-        "maxScore": max_score,
-    })
+        .map(|group| (group.relation_kind.clone(), json!(group.count)))
+        .collect::<serde_json::Map<String, Value>>();
+    counts.insert("total".to_string(), json!(summary.total_count));
+
+    let mut payload = serde_json::Map::new();
+    payload.insert("counts".to_string(), Value::Object(counts));
+
+    if summary.total_count > 0 {
+        payload.insert(
+            "expandHint".to_string(),
+            json!({
+                "intent": "Inspect code matches",
+                "template": "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'",
+                "parameters": {
+                    "kind": {
+                        "intent": "Choose which relation kind to inspect",
+                        "supportedValues": [
+                            RELATION_KIND_EXACT_DUPLICATE,
+                            RELATION_KIND_SIMILAR_IMPLEMENTATION,
+                            RELATION_KIND_SHARED_LOGIC_CANDIDATE,
+                            RELATION_KIND_DIVERGED_IMPLEMENTATION,
+                            RELATION_KIND_WEAK_CLONE_CANDIDATE
+                        ],
+                    }
+                }
+            }),
+        );
+    }
+
+    Value::Object(payload)
 }
 
 fn build_dependency_summary(
@@ -768,7 +789,7 @@ fn build_selection_summary(
     json!({
         "selectedArtefactCount": selected_artefact_count,
         "checkpoints": selection_stage_entry(&checkpoints.summary, None, checkpoints.schema.as_deref()),
-        "clones": selection_stage_entry(&clones.summary, None, clones.schema.as_deref()),
+        "codeMatches": selection_stage_entry(&clones.summary, None, clones.schema.as_deref()),
         "dependencies": selection_stage_entry(
             &deps.summary,
             deps.expand_hint.as_ref(),
@@ -905,7 +926,7 @@ type Checkpoint {
 }"#;
 
 const CLONE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  clones(relationKind: String, minScore: Float): CloneStageResult!
+  codeMatches(relationKind: String, minScore: Float): CloneStageResult!
 }
 
 type CloneStageResult {

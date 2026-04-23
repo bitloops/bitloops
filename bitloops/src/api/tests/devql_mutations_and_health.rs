@@ -1871,7 +1871,7 @@ async fn slim_select_artefacts_directory_rejects_summary_and_stage_fields() {
     for (field_name, selection) in [
         ("summary", "summary"),
         ("checkpoints", "checkpoints { summary }"),
-        ("clones", "clones { summary }"),
+        ("codeMatches", "codeMatches { summary }"),
         ("dependencies", "dependencies { summary }"),
         ("tests", "tests { summary }"),
     ] {
@@ -2286,6 +2286,9 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
                     toSymbolRef
                   }
                 }
+                codeMatches {
+                  summary
+                }
               }
             }
             "#,
@@ -2313,11 +2316,57 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         "expected empty checkpoint schema in aggregate summary: {json:#}"
     );
     assert_eq!(
-        json["selectArtefacts"]["summary"]["clones"]["summary"]["totalCount"],
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["counts"]["total"],
         2
     );
     let aggregate_deps_summary = &json["selectArtefacts"]["summary"]["dependencies"]["summary"];
     assert_eq!(aggregate_deps_summary["dependencies"]["total"], 2);
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["counts"]["similar_implementation"],
+        2
+    );
+    assert!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["counts"]
+            .get("contextual_neighbor")
+            .is_none(),
+        "expected compact clone summary counts to omit absent relation kinds from this selection: {json:#}"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["expandHint"]["intent"],
+        "Inspect code matches"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["expandHint"]["template"],
+        r#"bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'"#
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["expandHint"]["parameters"]["kind"]
+            ["intent"],
+        "Choose which relation kind to inspect"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["expandHint"]["parameters"]["kind"]
+            ["supportedValues"],
+        json!([
+            "exact_duplicate",
+            "similar_implementation",
+            "shared_logic_candidate",
+            "diverged_implementation",
+            "weak_clone_candidate"
+        ])
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["summary"]["counts"]["total"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["summary"]["counts"]["similar_implementation"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["summary"]["expandHint"]["template"],
+        r#"bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'"#
+    );
     assert_eq!(
         aggregate_deps_summary["dependencies"]["selectedArtefact"],
         2
@@ -2513,6 +2562,9 @@ async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
               selectArtefacts(by: { search: "unrelated zeta quaternion" }) {
                 count
                 summary
+                codeMatches {
+                  summary
+                }
                 artefacts {
                   path
                 }
@@ -2530,6 +2582,26 @@ async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
 
     let json = response.data.into_json().expect("graphql data to json");
     assert_eq!(json["selectArtefacts"]["count"], 0);
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]["counts"],
+        json!({ "total": 0 })
+    );
+    assert!(
+        json["selectArtefacts"]["summary"]["codeMatches"]["summary"]
+            .get("expandHint")
+            .is_none(),
+        "expected aggregate codeMatches summary to omit expandHint when there are no counts: {json:#}"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["summary"]["counts"],
+        json!({ "total": 0 })
+    );
+    assert!(
+        json["selectArtefacts"]["codeMatches"]["summary"]
+            .get("expandHint")
+            .is_none(),
+        "expected codeMatches stage summary to omit expandHint when there are no counts: {json:#}"
+    );
     assert_eq!(
         json["selectArtefacts"]["artefacts"]
             .as_array()

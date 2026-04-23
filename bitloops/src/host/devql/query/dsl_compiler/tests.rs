@@ -724,6 +724,29 @@ fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_clones_stage_emits_code_matches_field() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/main.rs")->clones(relation_kind:"similar_implementation",min_score:0.8)->select(summary,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs" }) {
+    codeMatches(relationKind: "similar_implementation", minScore: 0.8) {
+      summary
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_tests_maps_stage_arguments() {
     let parsed = parse_devql_query(
         r#"selectArtefacts(path:"src/main.rs")->tests(min_confidence:0.8,linkage_source:"coverage")->select(summary,schema)"#,

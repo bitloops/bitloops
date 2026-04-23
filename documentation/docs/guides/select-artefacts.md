@@ -119,8 +119,8 @@ type ArtefactSelection {
   summary: JSON!
   artefacts(first: Int! = 20): [Artefact!]!
   checkpoints(agent: String, since: DateTime): CheckpointStageResult!
-  clones(relationKind: String, minScore: Float): CloneStageResult!
   dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
+  codeMatches(relationKind: String, minScore: Float): CloneStageResult!
   tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 }
 ```
@@ -157,13 +157,28 @@ Representative shape:
     },
     "schema": null
   },
-  "clones": {
+  "codeMatches": {
     "summary": {
-      "totalCount": 2,
-      "groups": [
-        { "relationKind": "similar_implementation", "count": 2 }
-      ],
-      "maxScore": 0.93
+      "counts": {
+        "total": 2,
+        "similar_implementation": 2
+      },
+      "expandHint": {
+        "intent": "Inspect code matches",
+        "template": "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'",
+        "parameters": {
+          "kind": {
+            "intent": "Choose which relation kind to inspect",
+            "supportedValues": [
+              "exact_duplicate",
+              "similar_implementation",
+              "shared_logic_candidate",
+              "diverged_implementation",
+              "weak_clone_candidate"
+            ]
+          }
+        }
+      }
     },
     "schema": "type ArtefactSelection { ... }"
   },
@@ -217,6 +232,8 @@ Notes:
 - `tests.summary.expandHint` is always included when tests summary is requested and points to the concrete `coveringTests` drill-down query
 - `summary.dependencies.expandHint` maps the dependency buckets back to concrete `dependencies(direction:..., kind:...)` follow-up queries
 - `summary.dependencies.expandHint` is omitted when no dependencies match the selected artefacts
+- `codeMatches` summaries always include `counts.total`
+- `expandHint` is omitted when `counts.total` is `0`
 
 ## Stage Results
 
@@ -307,7 +324,7 @@ Current category coverage:
 | Category | Summary intent | Detail type |
 |---|---|---|
 | `checkpoints` | Count, latest timestamp, participating agents | `Checkpoint` |
-| `clones` | Total count, grouped relation kinds, max score | `Clone` |
+| `codeMatches` | Total count, grouped relation kinds, max score | `Clone` |
 | `tests` | Matched artefact count, total covering tests, drill-down hint | `TestHarnessTestsResult` |
 | `dependencies` | Nested counts plus a default drill-down hint for `direction` / `kind` follow-up queries | `DependencyEdge` |
 
@@ -319,10 +336,10 @@ Current category coverage:
 checkpoints(agent: String, since: DateTime)
 ```
 
-### `clones`
+### `codeMatches`
 
 ```graphql
-clones(relationKind: String, minScore: Float)
+codeMatches(relationKind: String, minScore: Float)
 ```
 
 ### `dependencies`
