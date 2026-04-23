@@ -802,11 +802,6 @@ fn build_init_bitloops_args_with_options(
     args
 }
 
-pub fn run_enable_cli_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    run_enable(world, &["enable"], "bitloops enable")
-}
-
 pub fn run_bitloops_enable_with_flags(
     world: &mut QatWorld,
     repo_name: &str,
@@ -825,9 +820,16 @@ fn run_enable(world: &mut QatWorld, args: &[&str], label: &str) -> Result<()> {
     ensure_success(&output, label)
 }
 
-pub fn run_bitloops_disable(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+pub fn run_bitloops_disable_with_flags(
+    world: &mut QatWorld,
+    repo_name: &str,
+    flags: &[&str],
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_bitloops_success(world, &["disable"], "bitloops disable")
+    let mut args = vec!["disable"];
+    args.extend_from_slice(flags);
+    let label = format!("bitloops {}", args.join(" "));
+    run_bitloops_success(world, &args, &label)
 }
 
 pub fn run_bitloops_uninstall_full(world: &mut QatWorld, repo_name: &str) -> Result<()> {

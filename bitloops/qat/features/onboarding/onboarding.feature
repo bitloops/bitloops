@@ -25,7 +25,7 @@ Feature: Activation and Onboarding
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
         And   I run bitloops init --agent claude-code --sync=false in bitloops
-        And   I run bitloops enable in bitloops
+        And   I run bitloops enable --capture in bitloops
         Then  the repo-local .bitloops.local.toml exists in bitloops
 
 
@@ -87,8 +87,7 @@ Feature: Activation and Onboarding
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
         And   I run bitloops init --agent claude-code --sync=false in bitloops
-        And   I run bitloops enable in bitloops
-        And   I run bitloops disable in bitloops
+        And   I run bitloops disable --capture --devql-guidance in bitloops
         Then  bitloops status shows disabled in bitloops
         And   agent hooks are removed for the claude-code agent in bitloops
         And   git post-commit hook exists in bitloops
@@ -99,7 +98,6 @@ Feature: Activation and Onboarding
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
         And   I run bitloops init --agent claude-code --sync=false in bitloops
-        And   I run bitloops enable in bitloops
         Then  git hooks exist for the claude-code agent in bitloops
         Given I run bitloops uninstall hooks in bitloops
         Then  agent hooks are removed for the claude-code agent in bitloops
@@ -110,7 +108,6 @@ Feature: Activation and Onboarding
         And   I start the daemon in bitloops
         And   I run InitCommit for bitloops
         And   I run bitloops init --agent claude-code --sync=false in bitloops
-        And   I run bitloops enable in bitloops
         Then  git hooks exist for the claude-code agent in bitloops
         Given I run bitloops uninstall full in bitloops
         Then  agent hooks are removed for the claude-code agent in bitloops

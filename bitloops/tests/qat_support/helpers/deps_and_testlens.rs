@@ -176,14 +176,14 @@ fn build_deps_graphql_query(
 ) -> Result<String> {
     let escaped_symbol = escape_devql_string(symbol_fqn);
     let field = match direction {
-        "out" => "outgoingDeps",
-        "in" => "incomingDeps",
-        "both" => "depsBoth: outgoingDeps",
+        "out" => "outgoingDependencies",
+        "in" => "incomingDependencies",
+        "both" => "depsBoth: outgoingDependencies",
         other => bail!("unsupported deps direction `{other}`"),
     };
     let connection = if direction == "both" {
         format!(
-            "incomingDeps(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}\n          {field}(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}"
+            "incomingDependencies(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}\n          {field}(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}"
         )
     } else {
         format!("{field}(filter: {{ kind: CALLS }}, first: 50) {{ totalCount }}")
@@ -239,18 +239,18 @@ fn count_deps_for_symbol(
     let count = match (direction, node) {
         (_, None) => 0,
         ("out", Some(node)) => node
-            .get("outgoingDeps")
+            .get("outgoingDependencies")
             .and_then(|deps| deps.get("totalCount"))
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0) as usize,
         ("in", Some(node)) => node
-            .get("incomingDeps")
+            .get("incomingDependencies")
             .and_then(|deps| deps.get("totalCount"))
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0) as usize,
         ("both", Some(node)) => {
             let incoming = node
-                .get("incomingDeps")
+                .get("incomingDependencies")
                 .and_then(|deps| deps.get("totalCount"))
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);

@@ -13,7 +13,6 @@ Feature: Agent checkpoint capture flow
   Scenario: Supported agent can complete bootstrap and create the first checkpoint
     Given I run InitCommit for bitloops
     And   I run bitloops init --agent claude-code in bitloops
-    And   I run bitloops enable in bitloops
     And   I ask claude-code to "Add a subtract function to src/lib.rs that subtracts two i32 numbers and returns the result, and add a test for it" in bitloops
     When  I committed today in bitloops
     Then  checkpoint mapping exists in bitloops
@@ -23,7 +22,6 @@ Feature: Agent checkpoint capture flow
   Scenario: Agent interaction exists before the first checkpoint is committed
     Given I run InitCommit for bitloops
     And   I run bitloops init --agent claude-code in bitloops
-    And   I run bitloops enable in bitloops
     And   I ask claude-code to "Add a subtract function to src/lib.rs that subtracts two i32 numbers and add a test for it" in bitloops
     Then  claude-code interaction exists before commit in bitloops
     When  I committed today in bitloops
@@ -34,7 +32,6 @@ Feature: Agent checkpoint capture flow
   Scenario: Single agent checkpoint progression stays ordered across multiple commits
     Given I run InitCommit for bitloops
     And   I run bitloops init --agent claude-code in bitloops
-    And   I run bitloops enable in bitloops
     And   I ask claude-code to "Add a subtract function to src/lib.rs that subtracts two i32 numbers and add a test for it" in bitloops
     When  I committed today in bitloops
     And   I ask claude-code to "Add a divide function to src/lib.rs that divides two i32 numbers and add a test for it" in bitloops
@@ -47,7 +44,6 @@ Feature: Agent checkpoint capture flow
   Scenario: Single agent checkpoint timeline stays coherent across yesterday and today
     Given I ran InitCommit yesterday for bitloops
     And   I run bitloops init --agent claude-code in bitloops
-    And   I run bitloops enable in bitloops
     And   I ask claude-code to "Add a subtract function to src/lib.rs that subtracts two i32 numbers and add a test for it" in bitloops
     When  I committed yesterday in bitloops
     And   I ask claude-code to "Add a divide function to src/lib.rs that divides two i32 numbers and add a test for it" in bitloops
@@ -60,7 +56,6 @@ Feature: Agent checkpoint capture flow
   Scenario: Multiple agents can interleave checkpoint activity without breaking history order
     Given I run InitCommit for bitloops
     And   I run bitloops init with agents claude-code and cursor in bitloops
-    And   I run bitloops enable in bitloops
     Then  git hooks exist for the claude-code agent in bitloops
     And   git hooks exist for the cursor agent in bitloops
     Given I ask claude-code to "Add a subtract function to src/lib.rs that subtracts two i32 numbers and add a test for it" in bitloops

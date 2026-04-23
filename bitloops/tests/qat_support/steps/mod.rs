@@ -75,18 +75,13 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run EnableCLI for (\S+)$"),
-            step_fn(given_enable_cli),
+            regex(r"^I run bitloops enable --capture in (\S+)$"),
+            step_fn(given_enable_capture),
         )
         .given(
             None,
-            regex(r"^I run bitloops enable in (\S+)$"),
-            step_fn(given_enable),
-        )
-        .given(
-            None,
-            regex(r"^I run bitloops disable in (\S+)$"),
-            step_fn(given_disable),
+            regex(r"^I run bitloops disable --capture --devql-guidance in (\S+)$"),
+            step_fn(given_disable_capture_and_devql_guidance),
         )
         .given(
             None,
