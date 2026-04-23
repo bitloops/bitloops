@@ -4,7 +4,7 @@ Feature: DevQL query BDD scenarios
   Scenario: S4 Reverse dependency query
     When devql parses the query:
       """
-      repo("temp2")->artefacts(kind:"function")->deps(kind:"calls",direction:"in",include_unresolved:false)->limit(10)
+      repo("temp2")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"in",include_unresolved:false)->limit(10)
       """
     And devql builds the deps SQL
     Then the generated SQL contains:
@@ -16,7 +16,7 @@ Feature: DevQL query BDD scenarios
   Scenario: S5 Bidirectional dependency query
     When devql parses the query:
       """
-      repo("temp2")->artefacts(kind:"function")->deps(kind:"exports",direction:"both")->limit(10)
+      repo("temp2")->artefacts(kind:"function")->dependencies(kind:"exports",direction:"both")->limit(10)
       """
     And devql builds the deps SQL
     Then the generated SQL contains:

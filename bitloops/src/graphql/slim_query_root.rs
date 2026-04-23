@@ -645,6 +645,7 @@ impl SlimQueryRoot {
         Ok(selection)
     }
 
+    #[graphql(name = "dependencies")]
     async fn deps(
         &self,
         ctx: &Context<'_>,

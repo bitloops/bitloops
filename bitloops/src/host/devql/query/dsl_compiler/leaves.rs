@@ -90,7 +90,7 @@ fn compile_select_artefacts_leaf(
             selection_stage_selections(&parsed.select_fields)?,
         )
     } else {
-        bail!("selectArtefacts(...) requires checkpoints(), clones(), deps(), or tests()");
+        bail!("selectArtefacts(...) requires checkpoints(), clones(), dependencies(), or tests()");
     };
 
     Ok(GraphqlField::new(
@@ -110,7 +110,7 @@ pub(super) fn compile_project_stage_leaf(
         }
         RegisteredStageKind::DepsSummary(_) => {
             bail!(
-                "summary(deps:true, ...) is not a project-level registered stage in the GraphQL compiler"
+                "summary(dependencies:true, ...) is not a project-level registered stage in the GraphQL compiler"
             )
         }
         RegisteredStageKind::Tests(stage) => Ok(GraphqlField::new(
@@ -157,7 +157,7 @@ fn compile_telemetry_leaf(parsed: &ParsedDevqlQuery) -> Result<GraphqlField> {
 
 fn compile_deps_leaf(parsed: &ParsedDevqlQuery) -> Result<GraphqlField> {
     Ok(connection_field(
-        "deps",
+        "dependencies",
         compile_deps_args(parsed, parsed.has_limit_stage.then_some(parsed.limit)),
         scalar_selections_for_leaf(SelectableLeaf::DependencyEdge, &parsed.select_fields)?,
     ))
@@ -250,7 +250,7 @@ fn compile_artefacts_leaf(
             }
             RegisteredStageKind::DepsSummary(spec) => node_selections.push(
                 GraphqlField::new(
-                    "depsSummary",
+                    "dependenciesSummary",
                     compile_deps_summary_args(spec),
                     deps_summary_selections(),
                 )

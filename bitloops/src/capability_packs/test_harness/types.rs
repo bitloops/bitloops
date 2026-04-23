@@ -12,7 +12,7 @@ pub const TEST_HARNESS_COVERAGE_INGESTER_ID: &str = "test_harness.coverage";
 pub const TEST_HARNESS_CLASSIFICATION_INGESTER_ID: &str = "test_harness.classification";
 pub const TEST_HARNESS_TESTS_EXPAND_HINT_INTENT: &str =
     "Inspect concrete covering tests for selected artefacts";
-pub const TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE: &str = "bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { tests { summary items(first: 20) { coveringTests { testName suiteName filePath startLine endLine } } } } }'";
+pub const TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE: &str = "bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { tests { overview items(first: 20) { coveringTests { testName suiteName filePath startLine endLine } } } } }'";
 
 pub fn test_harness_tests_expand_hint_json() -> Value {
     json!({

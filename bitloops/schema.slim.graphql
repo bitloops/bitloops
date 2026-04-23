@@ -39,9 +39,9 @@ type Artefact {
 	score: Float
 	parent: Artefact
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
-	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
-	incomingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
-	depsSummary(filter: DepsSummaryFilterInput): DepsSummary!
+	outgoingDependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	incomingDependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	dependenciesSummary(filter: DependenciesSummaryFilterInput): DependenciesSummary!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
@@ -86,7 +86,7 @@ type ArtefactSelection {
 	entries(first: Int! = 20): [DirectoryEntry!]!
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
 	codeMatches(relationKind: String, minScore: Float): CloneStageResult!
-	dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
+	dependencies(kind: EdgeKind, direction: DependenciesDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 }
 
@@ -305,6 +305,40 @@ type CommitEdge {
 
 scalar DateTime
 
+enum DependenciesDirection {
+	OUT
+	IN
+	BOTH
+}
+
+input DependenciesFilterInput {
+	kind: EdgeKind
+	direction: DependenciesDirection! = OUT
+	includeUnresolved: Boolean! = true
+}
+
+type DependenciesSummary {
+	totalCount: Int!
+	incomingCount: Int!
+	outgoingCount: Int!
+	kindCounts: DependenciesSummaryKindCounts!
+}
+
+input DependenciesSummaryFilterInput {
+	kind: EdgeKind
+	direction: DependenciesDirection
+	unresolved: Boolean! = false
+}
+
+type DependenciesSummaryKindCounts {
+	imports: Int!
+	calls: Int!
+	references: Int!
+	extends: Int!
+	implements: Int!
+	exports: Int!
+}
+
 type DependencyConnectionEdge {
 	node: DependencyEdge!
 	cursor: String!
@@ -341,40 +375,6 @@ type DependencyStageResult {
 	expandHint: DependencyExpandHint
 	schema: String
 	items(first: Int! = 20): [DependencyEdge!]!
-}
-
-enum DepsDirection {
-	OUT
-	IN
-	BOTH
-}
-
-input DepsFilterInput {
-	kind: EdgeKind
-	direction: DepsDirection! = OUT
-	includeUnresolved: Boolean! = true
-}
-
-type DepsSummary {
-	totalCount: Int!
-	incomingCount: Int!
-	outgoingCount: Int!
-	kindCounts: DepsSummaryKindCounts!
-}
-
-input DepsSummaryFilterInput {
-	kind: EdgeKind
-	direction: DepsDirection
-	unresolved: Boolean! = false
-}
-
-type DepsSummaryKindCounts {
-	imports: Int!
-	calls: Int!
-	references: Int!
-	extends: Int!
-	implements: Int!
-	exports: Int!
 }
 
 type DirectoryEntry {
@@ -461,7 +461,7 @@ type FileContext {
 	language: String
 	blobSha: String
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
-	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 }
 
@@ -855,7 +855,7 @@ type Project {
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
-	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
@@ -902,7 +902,7 @@ type SlimQueryRoot {
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!
-	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!

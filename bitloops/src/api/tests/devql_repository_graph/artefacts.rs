@@ -641,7 +641,7 @@ async fn devql_dependency_queries_resolve_direction_and_unresolved_targets() {
             {
               repo(name: "demo") {
                 file(path: "src/caller.ts") {
-                  deps(filter: { direction: BOTH, includeUnresolved: true }) {
+                  dependencies(filter: { direction: BOTH, includeUnresolved: true }) {
                     totalCount
                     edges {
                       node {
@@ -662,7 +662,7 @@ async fn devql_dependency_queries_resolve_direction_and_unresolved_targets() {
                     edges {
                       node {
                         symbolFqn
-                        outgoingDeps(filter: { includeUnresolved: true }) {
+                        outgoingDependencies(filter: { includeUnresolved: true }) {
                           totalCount
                           edges {
                             node {
@@ -679,7 +679,7 @@ async fn devql_dependency_queries_resolve_direction_and_unresolved_targets() {
                 artefacts(filter: { symbolFqn: "src/target.ts::target" }) {
                   edges {
                     node {
-                      incomingDeps {
+                      incomingDependencies {
                         totalCount
                         edges {
                           node {
@@ -706,41 +706,41 @@ async fn devql_dependency_queries_resolve_direction_and_unresolved_targets() {
     );
 
     let json = response.data.into_json().expect("graphql data to json");
-    assert_eq!(json["repo"]["file"]["deps"]["totalCount"], 2);
+    assert_eq!(json["repo"]["file"]["dependencies"]["totalCount"], 2);
     assert_eq!(
-        json["repo"]["file"]["deps"]["edges"][0]["node"]["edgeKind"],
+        json["repo"]["file"]["dependencies"]["edges"][0]["node"]["edgeKind"],
         "CALLS"
     );
     assert_eq!(
-        json["repo"]["file"]["deps"]["edges"][0]["node"]["fromArtefact"]["symbolFqn"],
+        json["repo"]["file"]["dependencies"]["edges"][0]["node"]["fromArtefact"]["symbolFqn"],
         "src/caller.ts::caller"
     );
     assert_eq!(
-        json["repo"]["file"]["deps"]["edges"][0]["node"]["toArtefact"]["symbolFqn"],
+        json["repo"]["file"]["dependencies"]["edges"][0]["node"]["toArtefact"]["symbolFqn"],
         "src/target.ts::target"
     );
     assert_eq!(
-        json["repo"]["file"]["deps"]["edges"][1]["node"]["toArtefactId"],
+        json["repo"]["file"]["dependencies"]["edges"][1]["node"]["toArtefactId"],
         serde_json::Value::Null
     );
     assert_eq!(
-        json["repo"]["file"]["deps"]["edges"][1]["node"]["toSymbolRef"],
+        json["repo"]["file"]["dependencies"]["edges"][1]["node"]["toSymbolRef"],
         "src/missing.ts::missing"
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["totalCount"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["outgoingDeps"]["totalCount"],
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["outgoingDependencies"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["artefacts"]["edges"][0]["node"]["incomingDeps"]["totalCount"],
+        json["repo"]["artefacts"]["edges"][0]["node"]["incomingDependencies"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["artefacts"]["edges"][0]["node"]["incomingDeps"]["edges"][0]["node"]["fromArtefact"]
+        json["repo"]["artefacts"]["edges"][0]["node"]["incomingDependencies"]["edges"][0]["node"]["fromArtefact"]
             ["symbolFqn"],
         "src/caller.ts::caller"
     );
@@ -765,7 +765,7 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
                     edges {
                       node {
                         symbolFqn
-                        depsSummary {
+                        dependenciesSummary {
                           totalCount
                           incomingCount
                           outgoingCount
@@ -778,12 +778,12 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
                             exports
                           }
                         }
-                        outOnly: depsSummary(filter: { direction: OUT }) {
+                        outOnly: dependenciesSummary(filter: { direction: OUT }) {
                           totalCount
                           incomingCount
                           outgoingCount
                         }
-                        includeUnresolved: depsSummary(filter: { unresolved: true }) {
+                        includeUnresolved: dependenciesSummary(filter: { unresolved: true }) {
                           totalCount
                           incomingCount
                           outgoingCount
@@ -791,12 +791,12 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
                             calls
                           }
                         }
-                        resolvedOnly: depsSummary(filter: { unresolved: false }) {
+                        resolvedOnly: dependenciesSummary(filter: { unresolved: false }) {
                           totalCount
                           incomingCount
                           outgoingCount
                         }
-                        importsOnly: depsSummary(filter: { kind: IMPORTS }) {
+                        importsOnly: dependenciesSummary(filter: { kind: IMPORTS }) {
                           totalCount
                           incomingCount
                           outgoingCount
@@ -809,7 +809,7 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
                     edges {
                       node {
                         symbolFqn
-                        depsSummary {
+                        dependenciesSummary {
                           totalCount
                           outgoingCount
                         }
@@ -820,7 +820,7 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
                 artefacts(filter: { symbolFqn: "src/target.ts::target" }) {
                   edges {
                     node {
-                      inOnly: depsSummary(filter: { direction: IN }) {
+                      inOnly: dependenciesSummary(filter: { direction: IN }) {
                         totalCount
                         incomingCount
                         outgoingCount
@@ -851,11 +851,11 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
         "src/caller.ts::caller"
     );
     assert_eq!(
-        json["repo"]["file"]["lineScoped"]["edges"][0]["node"]["depsSummary"]["totalCount"],
+        json["repo"]["file"]["lineScoped"]["edges"][0]["node"]["dependenciesSummary"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["file"]["lineScoped"]["edges"][0]["node"]["depsSummary"]["outgoingCount"],
+        json["repo"]["file"]["lineScoped"]["edges"][0]["node"]["dependenciesSummary"]["outgoingCount"],
         1
     );
 
@@ -864,23 +864,25 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
         "src/caller.ts::caller"
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["totalCount"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["dependenciesSummary"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["incomingCount"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["dependenciesSummary"]["incomingCount"],
         0
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["outgoingCount"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["dependenciesSummary"]["outgoingCount"],
         1
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["kindCounts"]["calls"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["dependenciesSummary"]["kindCounts"]
+            ["calls"],
         1
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["depsSummary"]["kindCounts"]["imports"],
+        json["repo"]["file"]["artefacts"]["edges"][0]["node"]["dependenciesSummary"]["kindCounts"]
+            ["imports"],
         0
     );
     assert_eq!(
@@ -901,7 +903,7 @@ async fn devql_dependency_summary_queries_resolve_direction_unresolved_kind_and_
         "src/caller.ts::helper"
     );
     assert_eq!(
-        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["depsSummary"]["totalCount"],
+        json["repo"]["file"]["artefacts"]["edges"][1]["node"]["dependenciesSummary"]["totalCount"],
         0
     );
     assert_eq!(

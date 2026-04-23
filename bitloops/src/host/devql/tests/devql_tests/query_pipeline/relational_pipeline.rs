@@ -375,7 +375,7 @@ async fn execute_relational_pipeline_reads_deps_from_sqlite_relational_store() {
     .expect("insert deps edge");
 
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"out")->limit(10)"#,
     )
     .expect("parse query");
     let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
@@ -569,7 +569,7 @@ async fn execute_relational_pipeline_reads_commit_asof_deps_from_historical_tabl
     .expect("insert historical new edge");
 
     let parsed = parse_devql_query(
-        r#"repo("temp2")->asOf(commit:"commit-old")->file("src/caller.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#,
+        r#"repo("temp2")->asOf(commit:"commit-old")->file("src/caller.ts")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"out")->limit(10)"#,
     )
     .expect("parse query");
     let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
@@ -895,7 +895,7 @@ async fn execute_relational_pipeline_scopes_commit_asof_deps_by_path_when_blob_i
     .expect("insert edge-b");
 
     let parsed = parse_devql_query(&format!(
-        r#"asOf(commit:"{commit_sha}")->file("src/shared-a.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#
+        r#"asOf(commit:"{commit_sha}")->file("src/shared-a.ts")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"out")->limit(10)"#
     ))
     .expect("parse query");
     let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
@@ -1001,7 +1001,7 @@ async fn execute_relational_pipeline_reads_save_revision_asof_deps_from_current_
     .expect("insert temporary edge");
 
     let parsed = parse_devql_query(
-        r#"repo("temp2")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->deps(kind:"calls",direction:"out")->limit(10)"#,
+        r#"repo("temp2")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"out")->limit(10)"#,
     )
     .expect("parse query");
     let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)
@@ -1157,7 +1157,7 @@ async fn execute_relational_pipeline_reads_inbound_deps_for_blast_radius_queries
     .expect("insert edge caller B -> target");
 
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(symbol_fqn:"src/target.ts::target")->deps(kind:"calls",direction:"in")->limit(10)"#,
+        r#"repo("temp2")->artefacts(symbol_fqn:"src/target.ts::target")->dependencies(kind:"calls",direction:"in")->limit(10)"#,
     )
     .expect("parse query");
     let rows = execute_relational_pipeline(&cfg, &events_cfg, &parsed, &relational)

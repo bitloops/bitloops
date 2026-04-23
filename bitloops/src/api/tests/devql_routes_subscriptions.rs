@@ -725,7 +725,7 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
                 }
               }
             }
-            deps(filter: { direction: OUT }, first: 10) {
+            dependencies(filter: { direction: OUT }, first: 10) {
               totalCount
               edges {
                 node {
@@ -750,7 +750,7 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
               }
             }
           }
-          deps(filter: { direction: OUT }, first: 10) {
+          dependencies(filter: { direction: OUT }, first: 10) {
             totalCount
             edges {
               node {
@@ -801,7 +801,7 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
     assert_eq!(payload["data"]["file"]["language"], "typescript");
     assert_eq!(payload["data"]["file"]["blobSha"], "blob-caller");
     assert_eq!(payload["data"]["file"]["artefacts"]["totalCount"], 2);
-    assert_eq!(payload["data"]["file"]["deps"]["totalCount"], 2);
+    assert_eq!(payload["data"]["file"]["dependencies"]["totalCount"], 2);
     assert_eq!(payload["data"]["files"].as_array().map(Vec::len), Some(3));
     assert_eq!(payload["data"]["artefacts"]["totalCount"], 4);
     assert_eq!(
@@ -812,8 +812,8 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
         payload["data"]["artefacts"]["pageInfo"]["hasPreviousPage"],
         false
     );
-    assert_eq!(payload["data"]["deps"]["totalCount"], 0);
-    assert_eq!(payload["data"]["deps"]["edges"], json!([]));
+    assert_eq!(payload["data"]["dependencies"]["totalCount"], 0);
+    assert_eq!(payload["data"]["dependencies"]["edges"], json!([]));
 }
 
 #[tokio::test]

@@ -129,6 +129,7 @@ impl Project {
         ))
     }
 
+    #[graphql(name = "dependencies")]
     async fn deps(
         &self,
         ctx: &Context<'_>,
