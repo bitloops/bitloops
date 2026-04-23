@@ -245,7 +245,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
         }
 
         if let Some(inner) = stage
-            .strip_prefix("deps(")
+            .strip_prefix("dependencies(")
             .and_then(|s| s.strip_suffix(')'))
         {
             let args = parse_named_args(inner)?;
@@ -253,7 +253,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             if let Some(kind) = args.get("kind") {
                 parsed.deps.kind = Some(DepsKind::from_str(kind).ok_or_else(|| {
                     anyhow!(
-                        "deps(kind:...) must be one of: {}",
+                        "dependencies(kind:...) must be one of: {}",
                         DepsKind::all_names().join(", ")
                     )
                 })?);
@@ -261,7 +261,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             if let Some(direction) = args.get("direction") {
                 parsed.deps.direction = DepsDirection::from_str(direction).ok_or_else(|| {
                     anyhow!(
-                        "deps(direction:...) must be one of: {}",
+                        "dependencies(direction:...) must be one of: {}",
                         DepsDirection::all_names().join(", ")
                     )
                 })?;
@@ -275,7 +275,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             continue;
         }
 
-        if stage == "deps()" {
+        if stage == "dependencies()" {
             parsed.has_deps_stage = true;
             continue;
         }

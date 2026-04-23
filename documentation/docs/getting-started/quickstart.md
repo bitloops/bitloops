@@ -151,20 +151,28 @@ bitloops checkpoints status --detailed
 
 ```bash
 bitloops disable
+bitloops disable --devql-guidance
 bitloops enable
+bitloops enable --capture
+bitloops enable --devql-guidance
+bitloops enable --capture --devql-guidance
 bitloops enable --install-embeddings
 bitloops daemon enable --install-embeddings
 ```
 
-These commands edit the nearest discovered project policy and leave installed hooks in place. `bitloops daemon enable` is an alias to the same implementation.
+With no target flags in an interactive terminal, `bitloops enable` and `bitloops disable` open a picker for `Capture` and `DevQL Guidance`. In non-interactive mode you must pass explicit target flags.
+
+`--capture` toggles `[capture].enabled` and leaves installed hooks in place. `--devql-guidance` toggles the managed repo-local DevQL guidance surface without changing capture state. `bitloops daemon enable` is an alias to the same implementation.
 
 Use `--install-embeddings` when you want Bitloops to add the default local embeddings profile to the effective daemon config and run the existing runtime warm/bootstrap path. When that path targets the default local runtime, Bitloops installs the managed standalone `bitloops-local-embeddings` binary automatically. In an interactive terminal, plain `bitloops enable` offers that setup automatically with a default-yes `[Y/n]` prompt when embeddings are not already configured.
+
+Embeddings flags require `--capture`. Guidance-only enable does not prompt for telemetry or embeddings setup unless you pass an explicit telemetry flag.
 
 If telemetry consent is unresolved for an existing daemon config, interactive `bitloops enable` can ask again before it edits project policy.
 
 ## Remove Bitloops Later
 
-Use `bitloops disable` when you want hooks and watchers to stay installed but stop capturing.
+Use `bitloops disable --capture` when you want hooks and watchers to stay installed but stop capturing.
 
 Use `bitloops uninstall` when you want to remove Bitloops-managed machine artefacts as well:
 

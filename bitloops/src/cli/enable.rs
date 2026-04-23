@@ -1,5 +1,6 @@
 //! `bitloops enable` / `bitloops disable` command implementation.
 
+use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -21,7 +22,11 @@ use crate::cli::inference::{
     platform_summary_gateway_url_override, prompt_summary_setup_selection,
     summary_generation_configured,
 };
+use crate::cli::root::DisableArgs;
 use crate::cli::telemetry_consent;
+use crate::cli::terminal_picker::{
+    MultiSelectOption, can_use_terminal_picker, prompt_multi_select,
+};
 #[cfg(test)]
 use crate::config::REPO_POLICY_FILE_NAME;
 #[cfg(test)]
@@ -29,7 +34,10 @@ use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
 use crate::config::discover_repo_policy;
 #[cfg(test)]
 use crate::config::settings::BitloopsSettings;
-use crate::config::settings::{self, SETTINGS_DIR, load_settings, set_capture_enabled};
+use crate::config::settings::{
+    self, SETTINGS_DIR, devql_guidance_enabled_from_policy, load_settings, set_capture_enabled,
+    set_devql_guidance_enabled,
+};
 #[cfg(test)]
 use crate::config::settings::{settings_local_path, settings_path};
 use crate::host::checkpoints::session::create_session_backend_or_local;
@@ -53,6 +61,14 @@ pub struct EnableArgs {
     #[arg(long, hide = true)]
     pub agent: Option<String>,
 
+    /// Enable capture for this Bitloops project.
+    #[arg(long, default_value_t = false)]
+    pub capture: bool,
+
+    /// Enable the repo-local DevQL guidance surface for configured agents.
+    #[arg(long = "devql-guidance", default_value_t = false)]
+    pub devql_guidance: bool,
+
     /// Enable anonymous telemetry for this CLI version.
     #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
     pub telemetry: Option<bool>,
@@ -69,17 +85,55 @@ pub struct EnableArgs {
     #[arg(long, default_value_t = false)]
     pub install_embeddings: bool,
 
-    /// Select which managed embeddings runtime to configure when `--install-embeddings` is used.
-    #[arg(long, value_enum, default_value_t = EmbeddingsRuntime::Local)]
-    pub embeddings_runtime: EmbeddingsRuntime,
+    /// Select which managed embeddings runtime to configure when embeddings are installed.
+    #[arg(long, value_enum)]
+    pub embeddings_runtime: Option<EmbeddingsRuntime>,
 
     /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
     #[arg(long)]
     pub embeddings_gateway_url: Option<String>,
 
     /// Environment variable that contains the platform gateway bearer token.
-    #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
-    pub embeddings_api_key_env: String,
+    #[arg(long)]
+    pub embeddings_api_key_env: Option<String>,
+}
+
+const ENABLE_NO_FLAGS_ERROR: &str = "`bitloops enable` without flags requires an interactive terminal; pass explicit flags such as `--capture` or `--devql-guidance`";
+const DISABLE_NO_FLAGS_ERROR: &str = "`bitloops disable` without flags requires an interactive terminal; pass explicit flags such as `--capture` or `--devql-guidance`";
+const DEFAULT_EMBEDDINGS_API_KEY_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_TOKEN";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ToggleTarget {
+    Capture,
+    DevqlGuidance,
+}
+
+impl ToggleTarget {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Capture => "Capture",
+            Self::DevqlGuidance => "DevQL Guidance",
+        }
+    }
+
+    fn details(self) -> Vec<String> {
+        match self {
+            Self::Capture => vec![
+                "Turns repository capture on or off while keeping managed hooks installed."
+                    .to_string(),
+            ],
+            Self::DevqlGuidance => vec![
+                "Controls the repo-local DevQL guidance surface used by Bitloops hook augmentation."
+                    .to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ToggleState {
+    capture_enabled: bool,
+    devql_guidance_enabled: bool,
 }
 
 /// Finds the git repository root by walking up from `start`.
@@ -159,6 +213,142 @@ fn determine_settings_target(
     }
 }
 
+fn requested_targets_from_enable_args(args: &EnableArgs) -> BTreeSet<ToggleTarget> {
+    let mut targets = BTreeSet::new();
+    if args.capture {
+        targets.insert(ToggleTarget::Capture);
+    }
+    if args.devql_guidance {
+        targets.insert(ToggleTarget::DevqlGuidance);
+    }
+    targets
+}
+
+fn requested_targets_from_disable_args(args: &DisableArgs) -> BTreeSet<ToggleTarget> {
+    let mut targets = BTreeSet::new();
+    if args.capture {
+        targets.insert(ToggleTarget::Capture);
+    }
+    if args.devql_guidance {
+        targets.insert(ToggleTarget::DevqlGuidance);
+    }
+    targets
+}
+
+fn map_selected_target_indexes(selected_indexes: Vec<usize>) -> BTreeSet<ToggleTarget> {
+    selected_indexes
+        .into_iter()
+        .filter_map(|index| match index {
+            0 => Some(ToggleTarget::Capture),
+            1 => Some(ToggleTarget::DevqlGuidance),
+            _ => None,
+        })
+        .collect()
+}
+
+fn prompt_enable_targets(
+    out: &mut dyn Write,
+    state: ToggleState,
+) -> Result<Option<BTreeSet<ToggleTarget>>> {
+    let options = vec![
+        MultiSelectOption::new(
+            ToggleTarget::Capture.label(),
+            ToggleTarget::Capture.details(),
+            state.capture_enabled,
+        ),
+        MultiSelectOption::new(
+            ToggleTarget::DevqlGuidance.label(),
+            ToggleTarget::DevqlGuidance.details(),
+            state.devql_guidance_enabled,
+        ),
+    ];
+
+    match prompt_multi_select(
+        out,
+        "Select what to enable:",
+        &["Press enter to apply the current selection.".to_string()],
+        &options,
+        &["x toggle • ↑/↓ move • enter submit • ctrl+a all".to_string()],
+    ) {
+        Ok(selected_indexes) => Ok(Some(map_selected_target_indexes(selected_indexes))),
+        Err(err) if err.to_string() == "cancelled by user" => Ok(None),
+        Err(err) if err.to_string() == "no options selected" => Ok(Some(BTreeSet::new())),
+        Err(err) => Err(err),
+    }
+}
+
+fn prompt_disable_targets(out: &mut dyn Write) -> Result<Option<BTreeSet<ToggleTarget>>> {
+    let options = vec![
+        MultiSelectOption::new(
+            ToggleTarget::Capture.label(),
+            ToggleTarget::Capture.details(),
+            false,
+        ),
+        MultiSelectOption::new(
+            ToggleTarget::DevqlGuidance.label(),
+            ToggleTarget::DevqlGuidance.details(),
+            false,
+        ),
+    ];
+
+    match prompt_multi_select(
+        out,
+        "Select what to disable:",
+        &["Use space to select, enter to confirm.".to_string()],
+        &options,
+        &["x toggle • ↑/↓ move • enter submit • ctrl+a all".to_string()],
+    ) {
+        Ok(selected_indexes) => {
+            let selected_targets = map_selected_target_indexes(selected_indexes);
+            if selected_targets.is_empty() {
+                bail!("no disable targets selected");
+            }
+            Ok(Some(selected_targets))
+        }
+        Err(err) if err.to_string() == "cancelled by user" => Ok(None),
+        Err(err) if err.to_string() == "no options selected" => {
+            bail!("no disable targets selected")
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn collect_enable_targets(
+    args: &EnableArgs,
+    state: ToggleState,
+    out: &mut dyn Write,
+) -> Result<Option<BTreeSet<ToggleTarget>>> {
+    let requested = requested_targets_from_enable_args(args);
+    if !requested.is_empty() {
+        return Ok(Some(requested));
+    }
+    if !can_use_terminal_picker() {
+        bail!(ENABLE_NO_FLAGS_ERROR);
+    }
+    prompt_enable_targets(out, state)
+}
+
+fn collect_disable_targets(
+    args: &DisableArgs,
+    out: &mut dyn Write,
+) -> Result<Option<BTreeSet<ToggleTarget>>> {
+    let requested = requested_targets_from_disable_args(args);
+    if !requested.is_empty() {
+        return Ok(Some(requested));
+    }
+    if !can_use_terminal_picker() {
+        bail!(DISABLE_NO_FLAGS_ERROR);
+    }
+    prompt_disable_targets(out)
+}
+
+fn enable_uses_embeddings_flags(args: &EnableArgs) -> bool {
+    args.install_embeddings
+        || args.embeddings_runtime.is_some()
+        || args.embeddings_gateway_url.is_some()
+        || args.embeddings_api_key_env.is_some()
+}
+
 /// Main handler for `bitloops enable`.
 pub async fn run(args: EnableArgs) -> Result<()> {
     if args.local && args.project {
@@ -185,17 +375,6 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
 
     let cwd = env::current_dir().context("getting current directory")?;
     let git_root = find_repo_root(&cwd)?;
-    let telemetry_choice =
-        telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
-
-    telemetry_consent::ensure_default_daemon_running().await?;
-    telemetry_consent::ensure_existing_config_telemetry_consent(
-        cwd.as_path(),
-        telemetry_choice,
-        out,
-        input,
-    )
-    .await?;
 
     if args.local || args.project {
         eprintln!(
@@ -205,6 +384,40 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
     }
 
     let policy = discover_repo_policy(&cwd)?;
+    let current_state = ToggleState {
+        capture_enabled: load_settings(&cwd).unwrap_or_default().enabled,
+        devql_guidance_enabled: devql_guidance_enabled_from_policy(&policy)?,
+    };
+    let Some(targets) = collect_enable_targets(&args, current_state, out)? else {
+        writeln!(out, "Enable cancelled.")?;
+        return Ok(());
+    };
+    if targets.is_empty() {
+        writeln!(out, "No enable targets selected; nothing to do.")?;
+        return Ok(());
+    }
+
+    let capture_selected = targets.contains(&ToggleTarget::Capture);
+    let devql_guidance_selected = targets.contains(&ToggleTarget::DevqlGuidance);
+    if enable_uses_embeddings_flags(&args) && !capture_selected {
+        bail!(
+            "`--install-embeddings`, `--embeddings-runtime`, `--embeddings-gateway-url`, and `--embeddings-api-key-env` require `--capture`"
+        );
+    }
+
+    let telemetry_choice =
+        telemetry_consent::telemetry_flag_choice(args.telemetry, args.no_telemetry);
+    if (capture_selected && !current_state.capture_enabled) || telemetry_choice.is_some() {
+        telemetry_consent::ensure_default_daemon_running().await?;
+        telemetry_consent::ensure_existing_config_telemetry_consent(
+            cwd.as_path(),
+            telemetry_choice,
+            out,
+            input,
+        )
+        .await?;
+    }
+
     let project_root = policy
         .root
         .clone()
@@ -216,29 +429,64 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
         .context("resolving editable Bitloops project config")?;
     let selected_agents = crate::cli::agent_surfaces::configured_agents_or_bail(&cwd)?;
     let settings = load_settings(&cwd).unwrap_or_default();
-    let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
-        &git_root,
-        settings.local_dev,
-    )?;
-    if git_count > 0 {
-        writeln!(out, "Installed {git_count} git hook(s).")?;
+
+    let final_devql_guidance_enabled =
+        devql_guidance_selected || current_state.devql_guidance_enabled;
+
+    if capture_selected {
+        let git_count = crate::adapters::agents::claude_code::git_hooks::install_git_hooks(
+            &git_root,
+            settings.local_dev,
+        )?;
+        if git_count > 0 {
+            writeln!(out, "Installed {git_count} git hook(s).")?;
+        }
+        crate::cli::agent_surfaces::reconcile_project_agent_surfaces_with_options(
+            &project_root,
+            &selected_agents,
+            settings.local_dev,
+            args.force,
+            crate::cli::agent_surfaces::ReconcileProjectAgentSurfacesOptions {
+                install_bitloops_skill: final_devql_guidance_enabled,
+            },
+            out,
+        )?;
+        set_capture_enabled(&target_path, true)?;
+        reconcile_repo_watcher(&git_root);
+
+        writeln!(out, "Bitloops enabled in this project! :)")?;
+        writeln!(out, "Strategy: {}.", settings.strategy)?;
+        writeln!(out, "Updated project config: {}", target_path.display())?;
     }
-    crate::cli::agent_surfaces::reconcile_project_agent_surfaces(
-        &project_root,
-        &selected_agents,
-        settings.local_dev,
-        args.force,
-        out,
-    )?;
-    set_capture_enabled(&target_path, true)?;
-    reconcile_repo_watcher(&git_root);
 
-    writeln!(out, "Bitloops enabled in this project! :)")?;
-    writeln!(out, "Strategy: {}.", settings.strategy)?;
-    writeln!(out, "Updated project config: {}", target_path.display())?;
+    if devql_guidance_selected {
+        set_devql_guidance_enabled(&target_path, true)?;
+        if !capture_selected {
+            crate::cli::agent_surfaces::install_project_prompt_surfaces(
+                &project_root,
+                &selected_agents,
+                out,
+            )?;
+            writeln!(
+                out,
+                "DevQL guidance enabled in this project ({})",
+                target_path.display()
+            )?;
+        }
+    }
 
-    if should_install_embeddings(&cwd, args.install_embeddings, out, input)? {
-        match args.embeddings_runtime {
+    let embeddings_runtime = args.embeddings_runtime.unwrap_or(EmbeddingsRuntime::Local);
+    let embeddings_api_key_env = args
+        .embeddings_api_key_env
+        .as_deref()
+        .unwrap_or(DEFAULT_EMBEDDINGS_API_KEY_ENV);
+    let capture_was_disabled = !current_state.capture_enabled;
+
+    if capture_selected
+        && (capture_was_disabled || args.install_embeddings)
+        && should_install_embeddings(&cwd, args.install_embeddings, out, input)?
+    {
+        match embeddings_runtime {
             EmbeddingsRuntime::Local => {
                 activate_embedding_pipeline_mailboxes(&git_root, "enable")
                     .context("activating semantic clones embedding mailboxes for enable")?;
@@ -277,12 +525,16 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
                 for line in install_or_configure_platform_embeddings(
                     &cwd,
                     gateway_url.as_deref(),
-                    &args.embeddings_api_key_env,
+                    embeddings_api_key_env,
                 )? {
                     writeln!(out, "{line}")?;
                 }
             }
         }
+    }
+
+    if !capture_selected || !capture_was_disabled {
+        return Ok(());
     }
 
     match choose_summary_setup(&cwd, out, input).await? {
@@ -382,10 +634,21 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
 
 // ── internal helpers used by tests ──────────────────────────────────────────
 
-/// Sets `enabled = false` and writes to the appropriate file.
-pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool) -> Result<()> {
-    let _ = use_project_settings;
+pub fn run_disable_with_args(start: &Path, out: &mut dyn Write, args: &DisableArgs) -> Result<()> {
+    if args.project {
+        eprintln!(
+            "Note: `--project` is deprecated and ignored. \
+`bitloops disable` updates the nearest discovered project policy file."
+        );
+    }
+
     let policy = discover_repo_policy(start)?;
+    let Some(targets) = collect_disable_targets(args, out)? else {
+        writeln!(out, "Disable cancelled.")?;
+        return Ok(());
+    };
+    let capture_selected = targets.contains(&ToggleTarget::Capture);
+    let devql_guidance_selected = targets.contains(&ToggleTarget::DevqlGuidance);
     let project_root = policy
         .root
         .clone()
@@ -395,21 +658,45 @@ pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool
         .clone()
         .or(policy.shared_path.clone())
         .context("resolving editable Bitloops project config")?;
-    let configured_agents = crate::config::settings::supported_agents(start)?;
-    set_capture_enabled(&target_path, false)?;
-    crate::cli::agent_surfaces::cleanup_project_agent_surfaces(
-        &project_root,
-        &configured_agents,
-        out,
-    )?;
-    let repo_root = find_repo_root(start)?;
-    reconcile_repo_watcher(&repo_root);
-    writeln!(
-        out,
-        "Bitloops capture is now disabled for this project ({})",
-        target_path.display()
-    )?;
+    if capture_selected {
+        set_capture_enabled(&target_path, false)?;
+        let repo_root = find_repo_root(start)?;
+        reconcile_repo_watcher(&repo_root);
+        writeln!(
+            out,
+            "Bitloops capture is now disabled for this project ({})",
+            target_path.display()
+        )?;
+    }
+    if devql_guidance_selected {
+        let configured_agents = crate::config::settings::supported_agents(start)?;
+        set_devql_guidance_enabled(&target_path, false)?;
+        crate::cli::agent_surfaces::remove_project_prompt_surfaces(
+            &project_root,
+            &configured_agents,
+            out,
+        )?;
+        writeln!(
+            out,
+            "DevQL guidance is now disabled for this project ({})",
+            target_path.display()
+        )?;
+    }
     Ok(())
+}
+
+/// Sets `enabled = false` in the nearest project policy. This helper preserves
+/// the historical capture-only behavior used by older tests.
+pub fn run_disable(start: &Path, out: &mut dyn Write, use_project_settings: bool) -> Result<()> {
+    run_disable_with_args(
+        start,
+        out,
+        &DisableArgs {
+            project: use_project_settings,
+            capture: true,
+            devql_guidance: false,
+        },
+    )
 }
 
 /// Returns `true` (is disabled) and prints a message when Bitloops is disabled.
@@ -420,7 +707,7 @@ pub fn check_disabled_guard(start: &Path, out: &mut dyn Write) -> bool {
         Ok(false) => {
             let _ = writeln!(
                 out,
-                "Bitloops is disabled. Run `bitloops enable` to re-enable."
+                "Bitloops is disabled. Run `bitloops enable --capture` to re-enable capture."
             );
             true
         }

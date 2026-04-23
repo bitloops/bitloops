@@ -75,10 +75,13 @@ Notes:
 
 ### `bitloops enable`
 
-Enables capture in the nearest discovered project policy.
+Enables capture and/or the repo-local DevQL guidance surface in the nearest discovered project policy.
 
 ```bash
 bitloops enable
+bitloops enable --capture
+bitloops enable --devql-guidance
+bitloops enable --capture --devql-guidance
 bitloops enable --install-embeddings
 bitloops enable --install-embeddings --embeddings-runtime platform --embeddings-gateway-url https://gateway.example/v1/embeddings
 bitloops daemon enable
@@ -88,12 +91,17 @@ bitloops daemon enable --install-embeddings
 Notes:
 
 - `enable` edits the nearest discovered `.bitloops.local.toml` or `.bitloops.toml` in place.
-- `enable` only toggles `[capture].enabled = true`.
-- Installed hooks stay in place and resume capturing without reinstallation.
+- With no target flags in an interactive terminal, `enable` opens a multi-select picker for `Capture` and `DevQL Guidance`.
+- In non-interactive mode, you must pass at least one target flag: `--capture`, `--devql-guidance`, or both.
+- `--capture` sets `[capture].enabled = true`, reconciles git and agent hooks, and keeps prompt surfaces aligned with the current DevQL Guidance policy.
+- `--devql-guidance` sets `[agents].devql_guidance_enabled = true` and installs the repo-local DevQL guidance surface for each configured agent without changing capture state.
+- Targets that are already enabled are preselected in the interactive picker. Deselecting a preselected target leaves it unchanged; use `bitloops disable` to turn targets off.
 - `bitloops daemon enable` is an alias to the same implementation and keeps the same telemetry and repo-policy behaviour.
+- `--install-embeddings`, `--embeddings-runtime`, `--embeddings-gateway-url`, and `--embeddings-api-key-env` require `--capture`.
 - `--install-embeddings` is an explicit non-interactive opt-in to configure embeddings in the effective daemon config and then run the existing runtime warm/bootstrap path. When the selected runtime is the default local Bitloops-managed runtime, Bitloops also installs or updates the standalone `bitloops-local-embeddings` binary automatically.
 - Add `--embeddings-runtime platform` when you want `enable` to install and configure the hosted gateway runtime instead. Add `--embeddings-gateway-url <https://.../v1/embeddings>` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default endpoint. `--embeddings-api-key-env` overrides the bearer-token environment variable name.
 - In an interactive terminal, when `--install-embeddings` is absent and embeddings are not already configured, `enable` asks whether to install embeddings and includes them in sync. The prompt defaults to `Yes` with `[Y/n]`; blank input, `y`, and `yes` all opt in.
+- Guidance-only `enable --devql-guidance` does not prompt for telemetry or embeddings setup unless you pass an explicit telemetry flag.
 - If an active embedding profile already exists, `enable` skips daemon-config mutation. Active `bitloops_embeddings_ipc` profiles still use the existing warm/bootstrap path; hosted or other non-local profiles are treated as already enabled and do not trigger local runtime bootstrap.
 - Embeddings setup targets the effective daemon config in this order: `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`, the nearest repo `config.toml`, then the default global config.
 - If no project config is found before the enclosing `.git` root, Bitloops tells you to run `bitloops init`.
@@ -104,16 +112,22 @@ Notes:
 
 ### `bitloops disable`
 
-Disables capture in the nearest discovered project policy.
+Disables capture and/or the repo-local DevQL guidance surface in the nearest discovered project policy.
 
 ```bash
 bitloops disable
+bitloops disable --capture
+bitloops disable --devql-guidance
+bitloops disable --capture --devql-guidance
 ```
 
 Notes:
 
-- `disable` only toggles `[capture].enabled = false`.
-- Hooks and watchers remain installed and become no-ops while capture is disabled.
+- With no target flags in an interactive terminal, `disable` opens a multi-select picker for `Capture` and `DevQL Guidance`.
+- In non-interactive mode, you must pass at least one target flag: `--capture`, `--devql-guidance`, or both.
+- `--capture` sets `[capture].enabled = false`. Hooks stay installed and become no-ops while capture is disabled.
+- `--devql-guidance` sets `[agents].devql_guidance_enabled = false` and removes only the repo-local DevQL guidance surfaces for configured agents. Hooks stay installed.
+- Disabling DevQL Guidance makes Bitloops hook augmentation silent about DevQL, exactly like a repo where the managed guidance surface was never installed.
 - Use `bitloops uninstall --agent-hooks --git-hooks` if you want to remove hooks themselves.
 
 ## Authentication

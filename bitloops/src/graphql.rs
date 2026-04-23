@@ -33,6 +33,7 @@ use self::query_root::QueryRoot;
 use self::slim_query_root::SlimQueryRoot;
 use self::slim_subscription_root::SlimSubscriptionRoot;
 use self::subscription_root::SubscriptionRoot;
+use self::types::ExpandHint;
 use anyhow::{Result, anyhow};
 use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, GraphQLPlaygroundConfig, playground_source};
 use async_graphql::{Pos, Request, Response, Schema, ServerError, Variables};
@@ -67,6 +68,7 @@ pub(crate) fn build_schema(context: DevqlGraphqlContext) -> DevqlSchema {
 pub(crate) fn build_global_schema(context: DevqlGraphqlContext) -> DevqlSchema {
     Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(context)
+        .register_output_type::<ExpandHint>()
         .limit_depth(MAX_DEVQL_QUERY_DEPTH)
         .limit_complexity(MAX_DEVQL_QUERY_COMPLEXITY)
         .extension(LoaderRegistryExtension)
@@ -75,6 +77,7 @@ pub(crate) fn build_global_schema(context: DevqlGraphqlContext) -> DevqlSchema {
 
 pub(crate) fn build_global_schema_template() -> DevqlSchema {
     Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
+        .register_output_type::<ExpandHint>()
         .limit_depth(MAX_DEVQL_QUERY_DEPTH)
         .limit_complexity(MAX_DEVQL_QUERY_COMPLEXITY)
         .extension(LoaderRegistryExtension)
@@ -84,6 +87,7 @@ pub(crate) fn build_global_schema_template() -> DevqlSchema {
 pub(crate) fn build_slim_schema(context: DevqlGraphqlContext) -> SlimDevqlSchema {
     Schema::build(SlimQueryRoot, MutationRoot, SlimSubscriptionRoot)
         .data(context)
+        .register_output_type::<ExpandHint>()
         .limit_depth(MAX_DEVQL_QUERY_DEPTH)
         .limit_complexity(MAX_DEVQL_QUERY_COMPLEXITY)
         .extension(LoaderRegistryExtension)
@@ -92,6 +96,7 @@ pub(crate) fn build_slim_schema(context: DevqlGraphqlContext) -> SlimDevqlSchema
 
 pub(crate) fn build_slim_schema_template() -> SlimDevqlSchema {
     Schema::build(SlimQueryRoot, MutationRoot, SlimSubscriptionRoot)
+        .register_output_type::<ExpandHint>()
         .limit_depth(MAX_DEVQL_QUERY_DEPTH)
         .limit_complexity(MAX_DEVQL_QUERY_COMPLEXITY)
         .extension(LoaderRegistryExtension)

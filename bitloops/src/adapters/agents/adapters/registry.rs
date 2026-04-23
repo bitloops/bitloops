@@ -457,6 +457,20 @@ impl AgentAdapterRegistry {
             .collect()
     }
 
+    pub fn installed_prompt_surfaces(&self, repo_root: &Path) -> Vec<String> {
+        self.ordered_ids
+            .iter()
+            .filter_map(|id| {
+                let registration = self.registrations.get(id)?;
+                if registration.is_prompt_surface_installed(repo_root) {
+                    Some(registration.descriptor().id.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn install_agent_hooks(
         &self,
         repo_root: &Path,
@@ -479,6 +493,31 @@ impl AgentAdapterRegistry {
     pub fn are_agent_hooks_installed(&self, repo_root: &Path, value: &str) -> Result<bool> {
         let registration = self.resolve(value)?;
         Ok(registration.are_hooks_installed(repo_root))
+    }
+
+    pub fn install_agent_prompt_surface(
+        &self,
+        repo_root: &Path,
+        value: &str,
+    ) -> Result<(&'static str, bool)> {
+        let registration = self.resolve(value)?;
+        let installed = registration.install_prompt_surface(repo_root)?;
+        Ok((registration.descriptor().display_name, installed))
+    }
+
+    pub fn uninstall_agent_prompt_surface(
+        &self,
+        repo_root: &Path,
+        value: &str,
+    ) -> Result<&'static str> {
+        let registration = self.resolve(value)?;
+        registration.uninstall_prompt_surface(repo_root)?;
+        Ok(registration.descriptor().display_name)
+    }
+
+    pub fn is_agent_prompt_surface_installed(&self, repo_root: &Path, value: &str) -> Result<bool> {
+        let registration = self.resolve(value)?;
+        Ok(registration.is_prompt_surface_installed(repo_root))
     }
 
     pub fn format_resume_command(&self, value: &str, session_id: &str) -> Result<String> {

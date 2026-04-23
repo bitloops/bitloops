@@ -278,6 +278,11 @@ Configured relational, events, and blob stores still come from the daemon config
 
 `bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, and installing hooks.
 
+`bitloops enable` and `bitloops disable` now operate on two repo-scoped targets:
+
+- `Capture`, which toggles `[capture].enabled`
+- `DevQL Guidance`, which toggles `[agents].devql_guidance_enabled` and the managed repo-local DevQL guidance surfaces
+
 Interactive `bitloops init` can also ask whether you want to install the default local embeddings setup when embeddings are still unconfigured, whether you want to queue an initial DevQL current-state sync after hook setup, and whether you want to run initial commit-history ingest. Use `--sync=true|false` and `--ingest=true|false` when you want to make those choices explicit; non-interactive runs require those flags.
 
 When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Non-interactive init requires the choice to be explicit with `--embeddings-runtime local`, `--embeddings-runtime platform`, or `--no-embeddings`. If you choose the local runtime, any managed `bitloops-local-embeddings` download still happens afterwards when init also runs sync or ingest.
@@ -351,6 +356,7 @@ strategy = "manual-commit"
 
 [agents]
 supported = ["claude-code"]
+devql_guidance_enabled = true
 ```
 
 Example local override layered on top of a shared project file:
@@ -361,7 +367,17 @@ enabled = false
 
 [watch]
 watch_debounce_ms = 1500
+
+[agents]
+devql_guidance_enabled = false
 ```
+
+Notes:
+
+- `devql_guidance_enabled` defaults to `true` when the key is omitted.
+- `bitloops init --disable-devql-guidance` writes `devql_guidance_enabled = false` and skips installing repo-local DevQL guidance surfaces.
+- `bitloops enable --devql-guidance` reinstalls those repo-local DevQL guidance surfaces without changing capture state.
+- `bitloops disable --devql-guidance` removes those repo-local DevQL guidance surfaces without changing capture state.
 
 ### Scope Exclusions
 

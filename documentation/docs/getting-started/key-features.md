@@ -38,4 +38,4 @@ By default Bitloops separates paths by intent:
 
 ## Agent And Hook Integration
 
-`bitloops init` installs git hooks and the selected agent hooks for the current project. `bitloops enable` and `bitloops disable` then toggle capture on top of that installed hook setup. `bitloops uninstall` handles wider cleanup across global directories, services, binaries, shell integration, and known repositories.
+`bitloops init` installs git hooks and the selected agent hooks for the current project. `bitloops enable` and `bitloops disable` then let you toggle `Capture` and `DevQL Guidance` on top of that installed hook setup. `bitloops uninstall` handles wider cleanup across global directories, services, binaries, shell integration, and known repositories.

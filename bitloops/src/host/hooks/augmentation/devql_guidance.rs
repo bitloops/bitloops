@@ -1,57 +1,67 @@
-use std::path::Path;
-
-use super::prompt_target::extract_primary_prompt_target;
-
-pub fn build_turn_guidance(repo_root: &Path, prompt: &str) -> String {
-    if let Some(target) = extract_primary_prompt_target(repo_root, prompt) {
-        if let (Some(start), Some(end)) = (target.start_line, target.end_line) {
-            return format!(
-                "<EXTREMELY_IMPORTANT>\n\
-Use DevQL first for this request.\n\
-\n\
-Suggested command:\n\
-```bash\n\
-bitloops devql query '{{ selectArtefacts(by: {{ path: \"{}\", lines: {{ start: {}, end: {} }} }}) {{ summary }} }}'\n\
-```\n\
-\n\
-Run this before broad repo search.\n\
-</EXTREMELY_IMPORTANT>",
-                target.path, start, end
-            );
-        }
-
-        return format!(
-            "<EXTREMELY_IMPORTANT>\n\
-Use DevQL first for this request.\n\
-\n\
-Suggested command:\n\
-```bash\n\
-bitloops devql query '{{ selectArtefacts(by: {{ path: \"{}\" }}) {{ summary }} }}'\n\
-```\n\
-\n\
-Run this before broad repo search.\n\
-</EXTREMELY_IMPORTANT>",
-            target.path
-        );
-    }
-
-    String::from(
+pub fn build_session_bootstrap(surface_path: &str) -> String {
+    format!(
         "<EXTREMELY_IMPORTANT>\n\
-Use DevQL first for code understanding in this repo.\n\
-\n\
-Quick-start commands:\n\
-```bash\n\
-bitloops devql query '{ selectArtefacts(by: { path: \"<repo-relative-path>\" }) { summary } }'\n\
-bitloops devql query '{ selectArtefacts(by: { search: \"payLatr()\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
-bitloops devql query '{ selectArtefacts(by: { search: \"build invoice pdf\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
-bitloops devql query '{ selectArtefacts(by: { search: \"<natural-language request or approx symbol>\" }) { artefacts(first: 10) { path symbolFqn } } }'\n\
-bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { summary } }'\n\
-bitloops devql schema --global\n\
-```\n\
-\n\
-Run DevQL before broad repo search.\n\
-</EXTREMELY_IMPORTANT>",
+This repo has DevQL guidance available.\n\
+The repo-local DevQL-capable guidance surface is installed at `{surface_path}`.\n\
+When DevQL is available in this session, use DevQL first for repo-aware understanding questions.\n\
+That includes questions about architecture, symbol lookup, path/line resolution, callers/usages/imports/tests/dependencies, and \"what does this repo do\".\n\
+Start with the most specific selector available: `path`, `path + lines`, `symbolFqn`, or `search`.\n\
+Use `search` for approximate or conceptual lookup, then use `overview` once the selection is concrete.\n\
+When DevQL returns a follow-up hint such as `expandHint`, use that hint to choose the next query.\n\
+If DevQL is unavailable in this session or returns no useful artefacts, fall back to targeted repo search or file reads.\n\
+Read the repo-local guidance at `{surface_path}` for the full workflow.\n\
+</EXTREMELY_IMPORTANT>"
     )
+}
+
+pub fn build_turn_guidance(surface_path: &str) -> String {
+    format!(
+        "Use DevQL first for this repo-aware request when it is available in this session. \
+This applies even to repo-overview questions like \"what does this repo do?\". \
+Prefer `path`, `path + lines`, or `symbolFqn` when the target is exact, and `search` when it is approximate or conceptual. \
+Once the selection is concrete, use `overview` before broader repo search. \
+If the response includes `expandHint`, use it to drive the next query. \
+If DevQL is unavailable or returns no useful artefacts, fall back to targeted repo search or file reads. \
+Read `{surface_path}` before broad search."
+    )
+}
+
+pub fn prompt_warrants_devql(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    let repo_understanding_terms = [
+        "what does this repo do",
+        "understand",
+        "explain",
+        "architecture",
+        "where is",
+        "find",
+        "inspect",
+        "caller",
+        "usage",
+        "import",
+        "dependency",
+        "test covering",
+    ];
+    let execution_terms = [
+        "fix ",
+        "implement ",
+        "edit ",
+        "write ",
+        "run ",
+        "build ",
+        "test ",
+        "format ",
+    ];
+    let looks_like_code_reference = prompt.contains('/')
+        || prompt.contains("::")
+        || prompt.contains('`')
+        || prompt.contains(':');
+    let looks_like_edit_or_execution = execution_terms.iter().any(|needle| lower.contains(needle));
+    let looks_like_repo_understanding = repo_understanding_terms
+        .iter()
+        .any(|needle| lower.contains(needle));
+
+    (looks_like_code_reference || looks_like_repo_understanding) && !looks_like_edit_or_execution
 }
 
 #[cfg(test)]
@@ -59,38 +69,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn build_turn_guidance_emits_line_scoped_command_for_targeted_prompt() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let file = dir.path().join("tracked.txt");
-        std::fs::write(&file, "one\n").expect("write tracked file");
+    fn build_session_bootstrap_mentions_search_overview_and_response_hints() {
+        let text = build_session_bootstrap(".opencode/skills/bitloops/using-devql/SKILL.md");
 
-        let guidance = build_turn_guidance(dir.path(), "Explain tracked.txt:1");
-
-        assert!(guidance.contains("Use DevQL first for this request."));
-        assert!(guidance.contains("tracked.txt"));
-        assert!(guidance.contains("start: 1"));
-        assert!(guidance.contains("end: 1"));
-        assert!(!guidance.contains("<repo-relative-path>"));
+        assert!(text.contains("This repo has DevQL guidance available."));
+        assert!(text.contains("DevQL-capable guidance surface"));
+        assert!(text.contains("When DevQL is available in this session"));
+        assert!(text.contains("search"));
+        assert!(text.contains("overview"));
+        assert!(text.contains("expandHint"));
+        assert!(text.contains("fall back to targeted repo search or file reads"));
+        assert!(!text.contains("fuzzyName"));
+        assert!(!text.contains("naturalLanguage"));
+        assert!(!text.contains("semanticQuery"));
     }
 
     #[test]
-    fn build_turn_guidance_includes_fuzzy_lookup_in_generic_guidance() {
-        let dir = tempfile::tempdir().expect("tempdir");
+    fn build_turn_guidance_mentions_search_overview_and_skill_path() {
+        let guidance = build_turn_guidance(".claude/skills/bitloops/using-devql/SKILL.md");
 
-        let guidance = build_turn_guidance(dir.path(), "Help me find payLatr()");
-
+        assert!(guidance.contains("when it is available in this session"));
+        assert!(guidance.contains("what does this repo do?"));
+        assert!(guidance.contains("path + lines"));
         assert!(guidance.contains("search"));
-        assert!(guidance.contains("<natural-language request or approx symbol>"));
-        assert!(guidance.contains("payLatr()"));
+        assert!(guidance.contains("overview"));
+        assert!(guidance.contains("expandHint"));
+        assert!(guidance.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
+        assert!(guidance.contains("fall back to targeted repo search or file reads"));
+        assert!(!guidance.contains("fuzzyName"));
+        assert!(!guidance.contains("naturalLanguage"));
+        assert!(!guidance.contains("semanticQuery"));
     }
 
     #[test]
-    fn build_turn_guidance_includes_semantic_lookup_in_generic_guidance() {
-        let dir = tempfile::tempdir().expect("tempdir");
-
-        let guidance = build_turn_guidance(dir.path(), "Find the code that builds invoice PDFs");
-
-        assert!(guidance.contains("search"));
-        assert!(guidance.contains("build invoice pdf"));
+    fn prompt_warrants_devql_accepts_repo_overview_prompts_and_rejects_execution_prompts() {
+        assert!(prompt_warrants_devql("What does this repo do?"));
+        assert!(prompt_warrants_devql(
+            "Help me understand src/payments/invoice.ts:42"
+        ));
+        assert!(!prompt_warrants_devql("Run cargo fmt"));
+        assert!(!prompt_warrants_devql("Implement payment retry handling"));
     }
 }

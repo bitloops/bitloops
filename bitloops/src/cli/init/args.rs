@@ -17,10 +17,10 @@ pub struct InitArgs {
     #[arg(long, short = 'f')]
     pub force: bool,
 
-    /// Do not install the repo-local Bitloops DevQL skill or rule; when disabled,
+    /// Do not install the repo-local DevQL guidance surface; when disabled,
     /// Bitloops also suppresses DevQL session-start bootstrap messaging.
-    #[arg(long, default_value_t = false)]
-    pub disable_bitloops_skill: bool,
+    #[arg(long = "disable-devql-guidance", default_value_t = false)]
+    pub disable_devql_guidance: bool,
 
     /// Target specific agent setups (repeatable).
     #[arg(long = "agent", value_name = "AGENT")]

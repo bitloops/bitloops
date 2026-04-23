@@ -576,10 +576,10 @@ impl SlimQueryRoot {
         let scope = context.slim_root_scope();
         let selector = by.selection_mode()?;
 
-        let selection = match selector {
+        let selection = match &selector {
             ArtefactSelectorMode::SymbolFqn(symbol_fqn) => {
                 let filter = ArtefactFilterInput {
-                    symbol_fqn: Some(symbol_fqn),
+                    symbol_fqn: Some(symbol_fqn.clone()),
                     ..Default::default()
                 };
                 let artefacts = context
@@ -593,12 +593,12 @@ impl SlimQueryRoot {
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Search(search) => {
-                let artefacts = select_search_artefacts(context, &scope, &search).await?;
+                let artefacts = select_search_artefacts(context, &scope, search).await?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
                 let normalized = context
-                    .resolve_scope_path(&scope, &path, false)
+                    .resolve_scope_path(&scope, path, false)
                     .map_err(bad_user_input_error)?;
                 let metadata = context
                     .repo_root_for_scope(&scope)
@@ -625,8 +625,8 @@ impl SlimQueryRoot {
                         })?;
                     ArtefactSelection::from_directory_entries(directory_entries, scope)
                 } else {
-                    let filter = lines.map(|lines| ArtefactFilterInput {
-                        lines: Some(lines),
+                    let filter = lines.as_ref().map(|lines| ArtefactFilterInput {
+                        lines: Some(lines.clone()),
                         ..Default::default()
                     });
                     let artefacts = context
@@ -645,6 +645,7 @@ impl SlimQueryRoot {
         Ok(selection)
     }
 
+    #[graphql(name = "dependencies")]
     async fn deps(
         &self,
         ctx: &Context<'_>,

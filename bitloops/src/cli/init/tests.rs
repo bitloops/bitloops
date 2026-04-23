@@ -209,7 +209,7 @@ fn render_install_default_daemon_handoff_with_mkcert(
                                     InitArgs {
                                         install_default_daemon: true,
                                         force: false,
-                                        disable_bitloops_skill: false,
+                                        disable_devql_guidance: false,
                                         agent: vec![DEFAULT_AGENT.to_string()],
                                         telemetry: Some(false),
                                         no_telemetry: false,
@@ -813,7 +813,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![DEFAULT_AGENT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -847,7 +847,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             .join(".claude/skills/bitloops/using-devql/SKILL.md");
         assert!(
             repo_skill.exists(),
-            "expected repo-local DevQL skill to be installed at {}",
+            "expected repo-local DevQL Guidance to be installed at {}",
             repo_skill.display()
         );
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
@@ -869,7 +869,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
     with_temp_app_dirs(&app_dirs, false, true, || {
         let mut out = Vec::new();
         let select = |_choices: &[String],
-                      _enable_bitloops_skill: bool|
+                      _enable_devql_guidance: bool|
          -> std::result::Result<InitAgentSelection, String> {
             panic!("selector should not run when --agent is provided")
         };
@@ -878,7 +878,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![
                     "Cursor".to_string(),
                     AGENT_CURSOR.to_string(),
@@ -936,7 +936,7 @@ keep = true
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -990,7 +990,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -1055,7 +1055,7 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
                     InitArgs {
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1117,7 +1117,7 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
                     InitArgs {
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1178,7 +1178,7 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
                     InitArgs {
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1222,7 +1222,7 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
     setup_git_repo(&repo);
     let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
     let select_fn = |_available: &[String],
-                     _enable_bitloops_skill: bool|
+                     _enable_devql_guidance: bool|
      -> std::result::Result<InitAgentSelection, String> {
         Err("selector refused to choose an agent".to_string())
     };
@@ -1242,7 +1242,7 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
                     InitArgs {
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1294,7 +1294,7 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -1344,7 +1344,7 @@ fn run_init_rewrites_existing_daemon_binding() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -1402,7 +1402,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_CURSOR.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1456,7 +1456,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                     InitArgs {
                         install_default_daemon: false,
                         force: true,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: vec![AGENT_CODEX.to_string()],
                         telemetry: None,
                         no_telemetry: false,
@@ -1510,7 +1510,7 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                 InitArgs {
                     install_default_daemon: false,
                     force: true,
-                    disable_bitloops_skill: false,
+                    disable_devql_guidance: false,
                     agent: vec![AGENT_GEMINI.to_string()],
                     telemetry: None,
                     no_telemetry: false,
@@ -1558,7 +1558,7 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_NAME_COPILOT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1603,7 +1603,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_NAME_OPEN_CODE.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1637,7 +1637,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
 }
 
 #[test]
-fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfaces() {
+fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfaces() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
@@ -1648,7 +1648,7 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: true,
+                disable_devql_guidance: true,
                 agent: vec![
                     AGENT_CLAUDE_CODE.to_string(),
                     AGENT_CODEX.to_string(),
@@ -1719,6 +1719,9 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
                 .join(".opencode/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let local_policy =
+            std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME)).unwrap();
+        assert!(local_policy.contains("devql_guidance_enabled = false"));
 
         let state_dir = repo.path().join(".route-test-state");
         let state_dir_str = state_dir.to_string_lossy().to_string();
@@ -1746,7 +1749,7 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
         .expect("codex session-start route");
         assert!(
             outcome.stdout.is_none(),
-            "disable-bitloops-skill should suppress session-start stdout when the repo-local skill is absent"
+            "disable-devql-guidance should suppress session-start stdout when the repo-local guidance surface is absent"
         );
 
         let plugin = std::fs::read_to_string(repo.path().join(".opencode/plugins/bitloops.ts"))
@@ -1768,7 +1771,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
             InitArgs {
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_CODEX.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1795,7 +1798,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
         assert!(repo.path().join(".codex/hooks.json").exists());
         assert!(
             repo_skill.exists(),
-            "expected repo-local Codex DevQL skill to be installed at {}",
+            "expected repo-local Codex DevQL Guidance to be installed at {}",
             repo_skill.display()
         );
 
@@ -1842,7 +1845,7 @@ fn run_init_with_invalid_explicit_agent_errors() {
             InitArgs {
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_CURSOR.to_string(), "not-a-real-agent".to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1881,7 +1884,7 @@ fn detect_or_select_agent_no_detection_no_tty_falls_back_to_default() {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, true, None).unwrap();
             assert_eq!(selected.agents, vec![DEFAULT_AGENT.to_string()]);
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1911,7 +1914,7 @@ fn detect_or_select_agent_prefers_local_supported_agents_over_shared_and_detecte
                 selected.agents,
                 vec![AGENT_CODEX.to_string(), AGENT_GEMINI.to_string()]
             );
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1936,7 +1939,7 @@ fn detect_or_select_agent_prefers_shared_supported_agents_over_detected_agents()
                 selected.agents,
                 vec![AGENT_CURSOR.to_string(), AGENT_GEMINI.to_string()]
             );
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1977,7 +1980,7 @@ fn detect_or_select_agent_agent_detected() {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, true, None).unwrap();
             assert_eq!(selected.agents, vec![AGENT_CLAUDE_CODE.to_string()]);
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1989,11 +1992,11 @@ fn detect_or_select_agent_single_detected_with_tty_uses_selector() {
     std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
 
     let select = |_available: &[String],
-                  enable_bitloops_skill: bool|
+                  enable_devql_guidance: bool|
      -> std::result::Result<InitAgentSelection, String> {
         Ok(InitAgentSelection {
             agents: vec![AGENT_CURSOR.to_string()],
-            enable_bitloops_skill,
+            enable_devql_guidance,
         })
     };
 
@@ -2005,7 +2008,7 @@ fn detect_or_select_agent_single_detected_with_tty_uses_selector() {
             let selected =
                 detect_or_select_agent(dir.path(), &mut out, true, Some(&select)).unwrap();
             assert_eq!(selected.agents, vec![AGENT_CURSOR.to_string()]);
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -2015,7 +2018,7 @@ fn detect_or_select_agent_selection_cancelled() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let select =
-        |_available: &[String], _enable_bitloops_skill: bool| Err("user cancelled".to_string());
+        |_available: &[String], _enable_devql_guidance: bool| Err("user cancelled".to_string());
     with_process_state(
         Some(dir.path()),
         &[("BITLOOPS_TEST_TTY", Some("1"))],
@@ -2032,10 +2035,10 @@ fn detect_or_select_agent_selection_cancelled() {
 fn detect_or_select_agent_none_selected_errors() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let select = |_available: &[String], _enable_bitloops_skill: bool| {
+    let select = |_available: &[String], _enable_devql_guidance: bool| {
         Ok(InitAgentSelection {
             agents: vec![],
-            enable_bitloops_skill: true,
+            enable_devql_guidance: true,
         })
     };
     with_process_state(
@@ -2065,7 +2068,7 @@ fn detect_or_select_agent_no_tty_returns_all_detected() {
             assert_eq!(selected.agents.len(), 2);
             assert!(selected.agents.contains(&AGENT_CLAUDE_CODE.to_string()));
             assert!(selected.agents.contains(&AGENT_GEMINI.to_string()));
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -2077,7 +2080,7 @@ fn detect_or_select_agent_multiple_with_selector() {
     std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
     std::fs::create_dir_all(dir.path().join(".gemini")).unwrap();
     let select = |_available: &[String],
-                  _enable_bitloops_skill: bool|
+                  _enable_devql_guidance: bool|
      -> std::result::Result<InitAgentSelection, String> {
         Ok(InitAgentSelection {
             agents: vec![
@@ -2085,7 +2088,7 @@ fn detect_or_select_agent_multiple_with_selector() {
                 AGENT_CODEX.to_string(),
                 AGENT_CLAUDE_CODE.to_string(),
             ],
-            enable_bitloops_skill: false,
+            enable_devql_guidance: false,
         })
     };
     with_process_state(
@@ -2103,7 +2106,7 @@ fn detect_or_select_agent_multiple_with_selector() {
                     AGENT_CLAUDE_CODE.to_string()
                 ]
             );
-            assert!(!selected.enable_bitloops_skill);
+            assert!(!selected.enable_devql_guidance);
         },
     );
 }
@@ -2129,13 +2132,31 @@ fn init_args_support_no_telemetry_flag() {
 }
 
 #[test]
-fn init_args_support_disable_bitloops_skill_flag() {
-    let parsed = Cli::try_parse_from(["bitloops", "init", "--disable-bitloops-skill"])
-        .expect("parse init disable Bitloops Skill flag");
+fn init_args_support_disable_devql_guidance_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--disable-devql-guidance"])
+        .expect("parse init disable DevQL Guidance flag");
     let Some(Commands::Init(args)) = parsed.command else {
         panic!("expected init command");
     };
-    assert!(args.disable_bitloops_skill);
+    assert!(args.disable_devql_guidance);
+}
+
+#[test]
+fn init_args_reject_legacy_disable_devql_skill_flag() {
+    let err = match Cli::try_parse_from(["bitloops", "init", "--disable-devql-skill"]) {
+        Ok(_) => panic!("legacy init flag should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
+#[test]
+fn init_args_reject_legacy_disable_bitloops_skill_flag() {
+    let err = match Cli::try_parse_from(["bitloops", "init", "--disable-bitloops-skill"]) {
+        Ok(_) => panic!("legacy init alias should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
 #[test]
@@ -2185,10 +2206,10 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
             || {
                 let mut out = Vec::new();
                 let mut input = Cursor::new("3\n");
-                let select = |_items: &[String], enable_bitloops_skill: bool| {
+                let select = |_items: &[String], enable_devql_guidance: bool| {
                     Ok(InitAgentSelection {
                         agents: vec!["claude-code".to_string()],
-                        enable_bitloops_skill,
+                        enable_devql_guidance,
                     })
                 };
                 let runtime = test_runtime();
@@ -2197,7 +2218,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
@@ -2257,7 +2278,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
@@ -2303,7 +2324,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                 InitArgs {
                     install_default_daemon: true,
                     force: false,
-                    disable_bitloops_skill: false,
+                    disable_devql_guidance: false,
                     agent: Vec::new(),
                     telemetry: None,
                     no_telemetry: false,
@@ -2393,7 +2414,7 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                             InitArgs {
                                                                 install_default_daemon: true,
                                                                 force: false,
-                                                                disable_bitloops_skill: false,
+                                                                disable_devql_guidance: false,
                                                                 agent: vec![DEFAULT_AGENT.to_string()],
                                                                 telemetry: Some(false),
                                                                 no_telemetry: false,
@@ -2525,7 +2546,7 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
@@ -2588,10 +2609,10 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                     || {
                         let mut out = Vec::new();
                         let mut input = Cursor::new("");
-                        let select = |_items: &[String], enable_bitloops_skill: bool| {
+                        let select = |_items: &[String], enable_devql_guidance: bool| {
                             Ok(InitAgentSelection {
                                 agents: vec!["claude-code".to_string()],
-                                enable_bitloops_skill,
+                                enable_devql_guidance,
                             })
                         };
                         let runtime = test_runtime();
@@ -2600,7 +2621,7 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                                 InitArgs {
                                     install_default_daemon: false,
                                     force: false,
-                                    disable_bitloops_skill: false,
+                                    disable_devql_guidance: false,
                                     agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
@@ -2766,13 +2787,13 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                 let mut input =
                                                                     Cursor::new("3\n\n");
                                                                 let select = |_items: &[String],
-                                                                              enable_bitloops_skill: bool| {
+                                                                              enable_devql_guidance: bool| {
                                                                     Ok(InitAgentSelection {
                                                                         agents: vec![
                                                                             "claude-code"
                                                                                 .to_string(),
                                                                         ],
-                                                                        enable_bitloops_skill,
+                                                                        enable_devql_guidance,
                                                                     })
                                                                 };
                                                                 let runtime = test_runtime();
@@ -2781,7 +2802,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                         InitArgs {
                                                                             install_default_daemon: true,
                                                                             force: false,
-                                                                            disable_bitloops_skill: false,
+                                                                            disable_devql_guidance: false,
                                                                             agent: Vec::new(),
                                                                             telemetry: Some(false),
                                                                             no_telemetry: false,
@@ -2953,7 +2974,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                         InitArgs {
                                             install_default_daemon: true,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -3057,7 +3078,7 @@ fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when
                                 InitArgs {
                                     install_default_daemon: true,
                                     force: false,
-                                    disable_bitloops_skill: false,
+                                    disable_devql_guidance: false,
                                     agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
@@ -3125,7 +3146,7 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                             InitArgs {
                                 install_default_daemon: true,
                                 force: false,
-                                disable_bitloops_skill: false,
+                                disable_devql_guidance: false,
                                 agent: vec![DEFAULT_AGENT.to_string()],
                                 telemetry: Some(false),
                                 no_telemetry: false,
@@ -3350,7 +3371,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                 InitArgs {
                                                                     install_default_daemon: true,
                                                                     force: false,
-                                                                    disable_bitloops_skill: false,
+                                                                    disable_devql_guidance: false,
                                                                     agent: vec![DEFAULT_AGENT.to_string()],
                                                                     telemetry: Some(false),
                                                                     no_telemetry: false,
@@ -3542,7 +3563,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                             InitArgs {
                                                                 install_default_daemon: true,
                                                                 force: false,
-                                                                disable_bitloops_skill: false,
+                                                                disable_devql_guidance: false,
                                                                 agent: vec![DEFAULT_AGENT.to_string()],
                                                                 telemetry: Some(false),
                                                                 no_telemetry: false,
@@ -3727,7 +3748,7 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                                 InitArgs {
                                                                     install_default_daemon: true,
                                                                     force: false,
-                                                                    disable_bitloops_skill: false,
+                                                                    disable_devql_guidance: false,
                                                                     agent: vec![DEFAULT_AGENT.to_string()],
                                                                     telemetry: Some(false),
                                                                     no_telemetry: false,
@@ -3884,7 +3905,7 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    disable_bitloops_skill: false,
+                                                    disable_devql_guidance: false,
                                                     agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
@@ -4047,7 +4068,7 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    disable_bitloops_skill: false,
+                                                    disable_devql_guidance: false,
                                                     agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
@@ -4205,7 +4226,7 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                 InitArgs {
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    disable_bitloops_skill: false,
+                                                    disable_devql_guidance: false,
                                                     agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
@@ -4351,7 +4372,7 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                         InitArgs {
                                                                             install_default_daemon: true,
                                                                             force: false,
-                                                                            disable_bitloops_skill: false,
+                                                                            disable_devql_guidance: false,
                                                                             agent: Vec::new(),
                                                                             telemetry: Some(false),
                                                                             no_telemetry: false,
@@ -4436,7 +4457,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                         InitArgs {
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
@@ -4609,10 +4630,10 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                             || {
                                 let mut out = Vec::new();
                                 let mut input = Cursor::new("\n");
-                                let select = |_items: &[String], enable_bitloops_skill: bool| {
+                                let select = |_items: &[String], enable_devql_guidance: bool| {
                                     Ok(InitAgentSelection {
                                         agents: vec!["claude-code".to_string()],
-                                        enable_bitloops_skill,
+                                        enable_devql_guidance,
                                     })
                                 };
                                 let runtime = test_runtime();
@@ -4621,7 +4642,7 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                                         InitArgs {
                                             install_default_daemon: true,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -4701,10 +4722,10 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                             || {
                                 let mut out = Vec::new();
                                 let mut input = Cursor::new("none\n");
-                                let select = |_items: &[String], enable_bitloops_skill: bool| {
+                                let select = |_items: &[String], enable_devql_guidance: bool| {
                                     Ok(InitAgentSelection {
                                         agents: vec!["claude-code".to_string()],
-                                        enable_bitloops_skill,
+                                        enable_devql_guidance,
                                     })
                                 };
                                 let runtime = test_runtime();
@@ -4713,7 +4734,7 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                                         InitArgs {
                                             install_default_daemon: true,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -4764,7 +4785,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                 InitArgs {
                     install_default_daemon: false,
                     force: false,
-                    disable_bitloops_skill: false,
+                    disable_devql_guidance: false,
                     agent: Vec::new(),
                     telemetry: Some(false),
                     no_telemetry: false,
@@ -4884,7 +4905,7 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -5029,7 +5050,7 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                         InitArgs {
                                             install_default_daemon: false,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,

@@ -28,61 +28,25 @@ mod tests {
     }
 
     #[test]
-    fn using_devql_skill_mentions_search_lookup() {
+    fn using_devql_skill_centers_search_overview_and_selector_choice() {
         let body = using_devql_skill_body();
         assert!(body.contains("search"));
-        assert!(body.contains("<natural-language request or approx symbol>"));
-        assert!(body.contains("payLatr()"));
-        assert!(body.contains("build invoice pdf"));
+        assert!(body.contains("overview"));
+        assert!(body.contains("Choosing The `by` Selector"));
+        assert!(body.contains("path + lines"));
+        assert!(body.contains("symbolFqn"));
+        assert!(body.contains("expandHint"));
+        assert!(body.contains("<distilled phrase or approximate symbol>"));
     }
 
     #[test]
-    fn using_devql_skill_requires_summary_for_file_prompts() {
+    fn using_devql_skill_omits_stale_selector_names_and_summary_routing() {
         let body = using_devql_skill_body();
-        assert!(body.contains("If the input clearly identifies a specific file"));
-        assert!(body.contains("start with `summary`."));
-        assert!(body.contains("Once you have selected a file-level artefact"));
-        assert!(body.contains("continue"));
-        assert!(body.contains("from that summary."));
-    }
-
-    #[test]
-    fn using_devql_skill_requires_search_followed_by_summary_for_natural_language_prompts() {
-        let body = using_devql_skill_body();
-        assert!(body.contains("If the input is natural language"));
-        assert!(body.contains("always follow with `summary`"));
-        assert!(body.contains("before expanding"));
-        assert!(body.contains("stages."));
-        assert!(body.contains("resolve concrete artefacts/files first"));
-        assert!(body.contains("with `search`"));
-    }
-
-    #[test]
-    fn using_devql_skill_forbids_summary_for_ambiguous_path_only_selectors() {
-        let body = using_devql_skill_body();
-        assert!(body.contains("Do not use `summary` for a `path` selector"));
-        assert!(body.contains("unless the path clearly resolves"));
-        assert!(body.contains("to a specific file."));
-        assert!(body.contains("If a `path` selector may refer to a directory"));
-        assert!(body.contains("another ambiguous scope"));
-        assert!(body.contains("If the path resolves to a directory, use `entries(first: ...)`."));
-        assert!(body.contains("Once you have selected a file-level artefact"));
-    }
-
-    #[test]
-    fn using_devql_skill_explains_selector_routing() {
-        let body = using_devql_skill_body();
-        assert!(body.contains("Selector Routing"));
-        assert!(body.contains("Do not pass the whole conversational prompt into `search`"));
-        assert!(body.contains("For mixed prompts, try structured lookup first"));
-        assert!(body.contains("help me understand the codebase"));
-        assert!(body.contains("fuzzy and semantic are query styles"));
-    }
-
-    #[test]
-    fn using_devql_skill_mentions_tests_stage_example() {
-        let body = using_devql_skill_body();
-        assert!(body.contains("tests { summary"));
-        assert!(body.contains("coveringTests"));
+        assert!(!body.contains("fuzzyName"));
+        assert!(!body.contains("naturalLanguage"));
+        assert!(!body.contains("semanticQuery"));
+        assert!(!body.contains("summary"));
+        assert!(!body.contains("entries(first: ...)"));
+        assert!(!body.contains("If the input clearly identifies a specific file"));
     }
 }

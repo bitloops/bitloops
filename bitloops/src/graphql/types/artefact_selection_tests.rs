@@ -1,4 +1,29 @@
-use super::*;
+use crate::capability_packs::semantic_clones::scoring::{
+    RELATION_KIND_DIVERGED_IMPLEMENTATION, RELATION_KIND_EXACT_DUPLICATE,
+    RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
+    RELATION_KIND_WEAK_CLONE_CANDIDATE,
+};
+use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineRangeInput};
+
+use super::support::{
+    build_clone_expand_hint, build_dependency_expand_hint, build_dependency_summary,
+};
+use super::{ArtefactSelectorInput, ArtefactSelectorMode, CloneExpandHint, DependencyExpandHint};
+
+fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> DependencyEdge {
+    DependencyEdge {
+        id: async_graphql::ID::from(id),
+        edge_kind,
+        language: "rust".to_string(),
+        from_artefact_id: async_graphql::ID::from("from-artefact"),
+        to_artefact_id: Some(async_graphql::ID::from("to-artefact")),
+        to_symbol_ref: Some(to_symbol_ref.to_string()),
+        start_line: Some(1),
+        end_line: Some(1),
+        metadata: None,
+        scope: crate::graphql::ResolverScope::default(),
+    }
+}
 
 #[test]
 fn artefact_selector_accepts_symbol_fqn_or_path_modes() {
@@ -139,4 +164,140 @@ fn artefact_selector_rejects_invalid_combinations() {
     .selection_mode()
     .expect_err("blank search selector should fail");
     assert!(err.message.contains("non-empty `search`"));
+}
+
+#[test]
+fn build_dependency_summary_embeds_expand_hint_when_present() {
+    let incoming = vec![test_dependency_edge(
+        "edge-1",
+        EdgeKind::Calls,
+        "src/lib.rs::target",
+    )];
+    let outgoing = vec![
+        test_dependency_edge("edge-1", EdgeKind::Calls, "src/lib.rs::target"),
+        test_dependency_edge("edge-2", EdgeKind::References, "src/lib.rs::other"),
+    ];
+    let expand_hint = build_dependency_expand_hint(2);
+
+    assert_eq!(
+        build_dependency_summary(&incoming, &outgoing, 1, expand_hint.as_ref()),
+        serde_json::json!({
+            "dependencies": {
+                "selectedArtefact": 1,
+                "total": 2,
+                "incoming": 1,
+                "outgoing": 2,
+                "kindCounts": {
+                    "calls": 1,
+                    "exports": 0,
+                    "extends": 0,
+                    "implements": 0,
+                "imports": 0,
+                "references": 1,
+                }
+            },
+            "expandHint": {
+                "intent": "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.",
+                "template": "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'",
+                "parameters": [
+                    {
+                        "name": "direction",
+                        "intent": "Choose dependency flow relative to the selected artefacts",
+                        "supportedValues": ["IN", "OUT"]
+                    },
+                    {
+                        "name": "kind",
+                        "intent": "Choose dependency relationship type",
+                        "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+                    }
+                ]
+            }
+        })
+    );
+}
+
+#[test]
+fn build_dependency_summary_keeps_zero_value_kind_buckets() {
+    assert_eq!(
+        build_dependency_summary(&[], &[], 1, None),
+        serde_json::json!({
+            "dependencies": {
+                "selectedArtefact": 1,
+                "total": 0,
+                "incoming": 0,
+                "outgoing": 0,
+                "kindCounts": {
+                    "calls": 0,
+                    "exports": 0,
+                    "extends": 0,
+                    "implements": 0,
+                    "imports": 0,
+                    "references": 0,
+                }
+            }
+        })
+    );
+}
+
+#[test]
+fn build_clone_expand_hint_matches_contract_when_matches_exist() {
+    assert_eq!(
+        build_clone_expand_hint(2),
+        Some(CloneExpandHint {
+            intent: "Inspect code matches".to_string(),
+            template: "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'".to_string(),
+            parameters: vec![ExpandHintParameter {
+                name: "kind".to_string(),
+                intent: "Choose which relation kind to inspect".to_string(),
+                supported_values: vec![
+                    RELATION_KIND_EXACT_DUPLICATE.to_string(),
+                    RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string(),
+                    RELATION_KIND_SHARED_LOGIC_CANDIDATE.to_string(),
+                    RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string(),
+                    RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string(),
+                ],
+            }],
+        })
+    );
+}
+
+#[test]
+fn build_clone_expand_hint_omits_hint_when_no_matches_exist() {
+    assert_eq!(build_clone_expand_hint(0), None);
+}
+
+#[test]
+fn build_dependency_expand_hint_matches_contract_when_dependencies_exist() {
+    assert_eq!(
+        build_dependency_expand_hint(2),
+        Some(DependencyExpandHint {
+            intent: "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.".to_string(),
+            template: "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'".to_string(),
+            parameters: vec![
+                ExpandHintParameter {
+                    name: "direction".to_string(),
+                    intent: "Choose dependency flow relative to the selected artefacts"
+                        .to_string(),
+                    supported_values: vec!["IN".to_string(), "OUT".to_string()],
+                },
+                ExpandHintParameter {
+                    name: "kind".to_string(),
+                    intent: "Choose dependency relationship type".to_string(),
+                    supported_values: vec![
+                        "CALLS".to_string(),
+                        "EXPORTS".to_string(),
+                        "EXTENDS".to_string(),
+                        "IMPLEMENTS".to_string(),
+                        "IMPORTS".to_string(),
+                        "REFERENCES".to_string(),
+                    ],
+                },
+            ],
+        })
+    );
+}
+
+#[test]
+fn build_dependency_expand_hint_omits_hint_when_no_dependencies_match() {
+    assert_eq!(build_dependency_expand_hint(0), None);
 }

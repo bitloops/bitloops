@@ -6,6 +6,7 @@ pub mod clone;
 pub mod commit;
 pub mod connection;
 pub mod dependency_edge;
+pub mod expand_hint;
 pub mod file_context;
 pub mod health;
 pub mod ingestion;
@@ -40,6 +41,7 @@ pub use connection::{
 pub use dependency_edge::{
     DependencyEdge, DepsDirection, DepsFilterInput, DepsSummary, DepsSummaryFilterInput, EdgeKind,
 };
+pub use expand_hint::{ExpandHint, ExpandHintParameter};
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};
 pub use ingestion::IngestionProgressEvent;

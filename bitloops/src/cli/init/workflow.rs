@@ -18,7 +18,7 @@ use crate::cli::inference::{
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
     DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
-    write_project_bootstrap_settings_with_daemon_binding,
+    write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance,
 };
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists};
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
@@ -320,10 +320,10 @@ pub(crate) async fn run_for_project_root(
     let selection = if !args.agent.is_empty() {
         InitAgentSelection {
             agents: resolve_cli_agents(&args.agent)?,
-            enable_bitloops_skill: !args.disable_bitloops_skill,
+            enable_devql_guidance: !args.disable_devql_guidance,
         }
     } else {
-        detect_or_select_agent(project_root, out, !args.disable_bitloops_skill, select_fn)?
+        detect_or_select_agent(project_root, out, !args.disable_devql_guidance, select_fn)?
     };
     let selected_agents = selection.agents;
     ensure_repo_init_files_excluded(&git_root, project_root, &selected_agents)?;
@@ -333,11 +333,12 @@ pub(crate) async fn run_for_project_root(
     let scope_exclude = normalize_cli_exclusions(&args.exclude);
     let scope_exclude_from = normalize_exclude_from_paths(project_root, &args.exclude_from)?;
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
-    write_project_bootstrap_settings_with_daemon_binding(
+    write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
         &local_policy_path,
         &strategy,
         &selected_agents,
         daemon_config_path.as_deref(),
+        selection.enable_devql_guidance,
     )?;
     if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
         set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
@@ -360,7 +361,7 @@ pub(crate) async fn run_for_project_root(
             settings.local_dev,
             args.force,
             crate::cli::agent_surfaces::ReconcileProjectAgentSurfacesOptions {
-                install_bitloops_skill: selection.enable_bitloops_skill,
+                install_bitloops_skill: selection.enable_devql_guidance,
             },
             &mut surface_updates,
         )?;

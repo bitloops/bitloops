@@ -893,7 +893,7 @@ fn TestTelemetryAction_DevqlQueryTracksDslStageSequence() {
         "bitloops",
         "devql",
         "query",
-        "repo(\"x\")->artefacts()->deps()->limit(5)",
+        "repo(\"x\")->artefacts()->dependencies()->limit(5)",
     ])
     .expect("devql query should parse");
     let command = parsed.command.as_ref().expect("command");
@@ -907,7 +907,7 @@ fn TestTelemetryAction_DevqlQueryTracksDslStageSequence() {
     let expected_sequence = vec![
         Value::String("repo".to_string()),
         Value::String("artefacts".to_string()),
-        Value::String("deps".to_string()),
+        Value::String("dependencies".to_string()),
         Value::String("limit".to_string()),
     ];
     assert_eq!(

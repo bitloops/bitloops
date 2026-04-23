@@ -228,6 +228,7 @@ impl Artefact {
         ))
     }
 
+    #[graphql(name = "outgoingDependencies")]
     async fn outgoing_deps(
         &self,
         ctx: &Context<'_>,
@@ -265,6 +266,7 @@ impl Artefact {
         ))
     }
 
+    #[graphql(name = "incomingDependencies")]
     async fn incoming_deps(
         &self,
         ctx: &Context<'_>,
@@ -302,7 +304,7 @@ impl Artefact {
         ))
     }
 
-    #[graphql(name = "depsSummary")]
+    #[graphql(name = "dependenciesSummary")]
     async fn deps_summary(
         &self,
         ctx: &Context<'_>,

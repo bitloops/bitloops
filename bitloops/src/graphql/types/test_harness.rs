@@ -1,5 +1,11 @@
-use async_graphql::SimpleObject;
+use async_graphql::{ComplexObject, SimpleObject};
 use serde::Deserialize;
+
+use crate::capability_packs::test_harness::types::{
+    TEST_HARNESS_TESTS_EXPAND_HINT_INTENT, TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE,
+};
+
+use super::ExpandHintParameter;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
 pub struct TestHarnessArtefactRef {
@@ -37,11 +43,36 @@ pub struct TestHarnessCoveringTest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+#[graphql(complex)]
+pub struct TestHarnessTestsExpandHint {
+    pub intent: String,
+    pub template: String,
+}
+
+impl Default for TestHarnessTestsExpandHint {
+    fn default() -> Self {
+        Self {
+            intent: TEST_HARNESS_TESTS_EXPAND_HINT_INTENT.to_string(),
+            template: TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE.to_string(),
+        }
+    }
+}
+
+#[ComplexObject]
+impl TestHarnessTestsExpandHint {
+    pub async fn parameters(&self) -> &[ExpandHintParameter] {
+        &[]
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
 pub struct TestHarnessTestsSummary {
     pub total_covering_tests: i32,
     pub cross_cutting: bool,
     pub data_sources: Vec<String>,
     pub diagnostic_count: i32,
+    #[serde(default)]
+    pub expand_hint: TestHarnessTestsExpandHint,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
