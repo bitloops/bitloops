@@ -531,6 +531,18 @@ fn tests_expand_hint_implements_base_expand_hint_interface() {
             ),
             "expected ExpandHintParameter type in SDL:\n{sdl}"
         );
+        assert!(
+            sdl.contains(
+                "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: DependencyExpandHintParameters!\n}",
+            ),
+            "expected dependency expand hint to implement ExpandHint:\n{sdl}"
+        );
+        if sdl.contains("type DependencyStageResult") {
+            assert!(
+                sdl.contains("expandHint: DependencyExpandHint"),
+                "expected dependency stage to keep its concrete expandHint field type:\n{sdl}"
+            );
+        }
     }
 
     assert!(

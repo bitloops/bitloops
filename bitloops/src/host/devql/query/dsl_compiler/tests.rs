@@ -670,6 +670,14 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
   selectArtefacts(by: { symbolFqn: "src/main.rs::main" }) {
     dependencies(includeUnresolved: true) {
       overview
+      expandHint {
+        intent
+        template
+        parameters {
+          direction
+          kind
+        }
+      }
       schema
     }
   }
@@ -693,6 +701,14 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
   selectArtefacts(by: { path: "src/main.rs" }) {
     dependencies(direction: IN, includeUnresolved: true) {
       overview
+      expandHint {
+        intent
+        template
+        parameters {
+          direction
+          kind
+        }
+      }
       schema
     }
   }

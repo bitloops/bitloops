@@ -65,27 +65,30 @@ fn compile_select_artefacts_leaf(
     parsed: &ParsedDevqlQuery,
     registered_stage: Option<RegisteredStageKind<'_>>,
 ) -> Result<GraphqlField> {
-    let selections = selection_stage_selections(&parsed.select_fields)?;
     let stage_field = if parsed.has_checkpoints_stage {
         GraphqlField::new(
             "checkpoints",
             compile_selection_checkpoint_args(parsed)?,
-            selections,
+            selection_stage_selections(&parsed.select_fields)?,
         )
     } else if parsed.has_clones_stage {
         GraphqlField::new(
             "codeMatches",
             compile_selection_clones_args(parsed),
-            selections,
+            selection_stage_selections(&parsed.select_fields)?,
         )
     } else if parsed.has_deps_stage {
         GraphqlField::new(
             "dependencies",
             compile_selection_deps_args(parsed),
-            selections,
+            dependency_stage_selections(&parsed.select_fields)?,
         )
     } else if let Some(RegisteredStageKind::Tests(stage)) = registered_stage {
-        GraphqlField::new("tests", compile_selection_tests_args(stage), selections)
+        GraphqlField::new(
+            "tests",
+            compile_selection_tests_args(stage),
+            selection_stage_selections(&parsed.select_fields)?,
+        )
     } else {
         bail!("selectArtefacts(...) requires checkpoints(), clones(), deps(), or tests()");
     };
@@ -285,6 +288,48 @@ fn selection_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSel
     for field in fields {
         match field.as_str() {
             "overview" | "summary" => selections.push(GraphqlSelection::scalar("overview")),
+            "schema" => selections.push(GraphqlSelection::scalar("schema")),
+            other => bail!(
+                "selectArtefacts(...) only supports select(overview), select(schema), or selecting both overview and schema; unsupported field `{other}`"
+            ),
+        }
+    }
+    Ok(selections)
+}
+
+fn dependency_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSelection>> {
+    let fields = if select_fields.is_empty() {
+        vec!["overview".to_string()]
+    } else {
+        select_fields.to_vec()
+    };
+
+    let mut selections = Vec::new();
+    for field in fields {
+        match field.as_str() {
+            "overview" | "summary" => {
+                selections.push(GraphqlSelection::scalar("overview"));
+                selections.push(
+                    GraphqlField::new(
+                        "expandHint",
+                        Vec::new(),
+                        vec![
+                            GraphqlSelection::scalar("intent"),
+                            GraphqlSelection::scalar("template"),
+                            GraphqlField::new(
+                                "parameters",
+                                Vec::new(),
+                                vec![
+                                    GraphqlSelection::scalar("direction"),
+                                    GraphqlSelection::scalar("kind"),
+                                ],
+                            )
+                            .into(),
+                        ],
+                    )
+                    .into(),
+                );
+            }
             "schema" => selections.push(GraphqlSelection::scalar("schema")),
             other => bail!(
                 "selectArtefacts(...) only supports select(overview), select(schema), or selecting both overview and schema; unsupported field `{other}`"

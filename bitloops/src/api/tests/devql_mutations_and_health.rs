@@ -2435,9 +2435,13 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     let stage_deps_overview = &json["selectArtefacts"]["dependencies"]["overview"];
     assert_eq!(stage_deps_overview["dependencies"]["incoming"], 0);
     assert_eq!(stage_deps_overview["dependencies"]["outgoing"], 2);
-    assert!(
-        stage_deps_overview["expandHint"].is_null(),
-        "dependency overview JSON should no longer embed expandHint: {stage_deps_overview:#}"
+    assert_eq!(
+        stage_deps_overview["expandHint"]["template"],
+        json["selectArtefacts"]["dependencies"]["expandHint"]["template"]
+    );
+    assert_eq!(
+        stage_deps_overview["expandHint"]["parameters"]["direction"][0],
+        "IN"
     );
     assert_eq!(
         stage_deps_overview,
@@ -2580,8 +2584,16 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
         json!(["IN", "OUT"])
     );
     assert_eq!(
-        json["selectArtefacts"]["dependencies"]["overview"]["expandHint"],
-        serde_json::Value::Null
+        json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["intent"],
+        "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on."
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["template"],
+        "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["parameters"],
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]
     );
     assert_eq!(
         json["selectArtefacts"]["tests"]["overview"]["matchedArtefactCount"],

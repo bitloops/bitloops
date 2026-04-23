@@ -1,6 +1,5 @@
 pub mod artefact;
 pub mod artefact_selection;
-mod artefact_selection_schema;
 pub mod chat;
 pub mod checkpoint;
 pub mod clone;

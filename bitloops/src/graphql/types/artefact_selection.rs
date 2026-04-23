@@ -12,9 +12,6 @@ use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
-use super::artefact_selection_schema::{
-    CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA, DEPENDENCY_STAGE_SCHEMA, TESTS_STAGE_SCHEMA,
-};
 use super::{
     Artefact, Checkpoint, CloneSummary, ClonesFilterInput, DateTimeScalar, DependencyEdge,
     DepsDirection, EdgeKind, ExpandHintParameter, JsonScalar, LineRangeInput,
@@ -545,14 +542,16 @@ impl ArtefactSelection {
                 .cmp(right.to_symbol_ref.as_deref().unwrap_or(""))
                 .then_with(|| left.id.as_ref().cmp(right.id.as_ref()))
         });
+        let expand_hint = build_dependency_expand_hint(items.len());
 
         Ok(DependencyStageData {
             summary: build_dependency_summary(
                 &incoming_edges,
                 &outgoing_edges,
                 self.artefacts.len(),
+                expand_hint.as_ref(),
             ),
-            expand_hint: build_dependency_expand_hint(items.len()),
+            expand_hint,
             schema: (!items.is_empty()).then(|| DEPENDENCY_STAGE_SCHEMA.to_string()),
             items,
         })
@@ -747,6 +746,7 @@ fn build_dependency_summary(
     incoming: &[DependencyEdge],
     outgoing: &[DependencyEdge],
     selected_artefact_count: usize,
+    expand_hint: Option<&DependencyExpandHint>,
 ) -> Value {
     let mut unique_by_id = BTreeMap::<String, EdgeKind>::new();
     for edge in incoming.iter().chain(outgoing.iter()) {
@@ -760,8 +760,10 @@ fn build_dependency_summary(
         *kind_counts.entry(edge_kind_name(kind)).or_default() += 1;
     }
 
-    json!({
-        "dependencies": {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "dependencies".to_string(),
+        json!({
             "selectedArtefact": selected_artefact_count,
             "total": unique_by_id.len(),
             "incoming": incoming.len(),
@@ -774,8 +776,15 @@ fn build_dependency_summary(
                 "imports": kind_counts.get("imports").copied().unwrap_or(0),
                 "references": kind_counts.get("references").copied().unwrap_or(0),
             }
-        }
-    })
+        }),
+    );
+    if let Some(expand_hint) = expand_hint {
+        payload.insert(
+            "expandHint".to_string(),
+            dependency_expand_hint_to_value(expand_hint),
+        );
+    }
+    Value::Object(payload)
 }
 
 fn build_dependency_expand_hint(dependency_count: usize) -> Option<DependencyExpandHint> {

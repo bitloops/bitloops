@@ -157,7 +157,7 @@ fn artefact_selector_rejects_invalid_combinations() {
 }
 
 #[test]
-fn build_dependency_summary_returns_counts_only_contract() {
+fn build_dependency_summary_embeds_expand_hint_when_present() {
     let incoming = vec![test_dependency_edge(
         "edge-1",
         EdgeKind::Calls,
@@ -167,9 +167,10 @@ fn build_dependency_summary_returns_counts_only_contract() {
         test_dependency_edge("edge-1", EdgeKind::Calls, "src/lib.rs::target"),
         test_dependency_edge("edge-2", EdgeKind::References, "src/lib.rs::other"),
     ];
+    let expand_hint = build_dependency_expand_hint(2);
 
     assert_eq!(
-        build_dependency_summary(&incoming, &outgoing, 1),
+        build_dependency_summary(&incoming, &outgoing, 1, expand_hint.as_ref()),
         serde_json::json!({
             "dependencies": {
                 "selectedArtefact": 1,
@@ -184,6 +185,20 @@ fn build_dependency_summary_returns_counts_only_contract() {
                 "imports": 0,
                 "references": 1,
                 }
+            },
+            "expandHint": {
+                "intent": "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.",
+                "template": "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'",
+                "parameters": {
+                    "direction": {
+                        "intent": "Choose dependency flow relative to the selected artefacts",
+                        "supportedValues": ["IN", "OUT"]
+                    },
+                    "kind": {
+                        "intent": "Choose dependency relationship type",
+                        "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+                    }
+                }
             }
         })
     );
@@ -192,7 +207,7 @@ fn build_dependency_summary_returns_counts_only_contract() {
 #[test]
 fn build_dependency_summary_keeps_zero_value_kind_buckets() {
     assert_eq!(
-        build_dependency_summary(&[], &[], 1),
+        build_dependency_summary(&[], &[], 1, None),
         serde_json::json!({
             "dependencies": {
                 "selectedArtefact": 1,
