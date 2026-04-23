@@ -251,8 +251,19 @@ type CloneEdge {
 	cursor: String!
 }
 
+type CloneExpandHint implements ExpandHint {
+	intent: String!
+	template: String!
+	parameters: CloneExpandHintParameters!
+}
+
+type CloneExpandHintParameters {
+	kind: ExpandHintParameter!
+}
+
 type CloneStageResult {
 	overview: JSON!
+	expandHint: CloneExpandHint
 	schema: String
 	items(first: Int! = 20): [Clone!]!
 }
@@ -323,15 +334,15 @@ type DependencyEdgeConnection {
 	totalCount: Int!
 }
 
-type DependencyExpandHint {
+type DependencyExpandHint implements ExpandHint {
 	intent: String!
 	template: String!
 	parameters: DependencyExpandHintParameters!
 }
 
 type DependencyExpandHintParameters {
-	direction: [DepsDirection!]!
-	kind: [EdgeKind!]!
+	direction: ExpandHintParameter!
+	kind: ExpandHintParameter!
 }
 
 type DependencyStageResult {
@@ -445,7 +456,15 @@ type EnqueueTaskResult {
 interface ExpandHint {
 	intent: String!
 	template: String!
+	parameters: ExpandHintParameters
 }
+
+type ExpandHintParameter {
+	intent: String!
+	supportedValues: [String!]!
+}
+
+union ExpandHintParameters = CloneExpandHintParameters | DependencyExpandHintParameters
 
 type FileContext {
 	path: String!
@@ -1151,6 +1170,7 @@ type TestHarnessLastRun {
 type TestHarnessTestsExpandHint implements ExpandHint {
 	intent: String!
 	template: String!
+	parameters: ExpandHintParameters
 }
 
 type TestHarnessTestsResult {

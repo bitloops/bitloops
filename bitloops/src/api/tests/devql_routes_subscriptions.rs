@@ -499,17 +499,19 @@ fn checked_in_slim_schema_file_matches_runtime_sdl() {
 
 #[test]
 fn tests_expand_hint_implements_base_expand_hint_interface() {
-    for sdl in [
-        crate::graphql::schema_sdl(),
-        crate::graphql::slim_schema_sdl(),
-    ] {
+    let schema_sdl = crate::graphql::schema_sdl();
+    let slim_sdl = crate::graphql::slim_schema_sdl();
+
+    for sdl in [&schema_sdl, &slim_sdl] {
         assert!(
-            sdl.contains("interface ExpandHint {\n\tintent: String!\n\ttemplate: String!\n}"),
+            sdl.contains(
+                "interface ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: ExpandHintParameters\n}",
+            ),
             "expected base ExpandHint interface in SDL:\n{sdl}"
         );
         assert!(
             sdl.contains(
-                "type TestHarnessTestsExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n}",
+                "type TestHarnessTestsExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: ExpandHintParameters\n}",
             ),
             "expected tests expand hint to implement ExpandHint:\n{sdl}"
         );
@@ -518,10 +520,45 @@ fn tests_expand_hint_implements_base_expand_hint_interface() {
             "expected tests summary to keep its concrete expandHint field type:\n{sdl}"
         );
         assert!(
-            !sdl.contains("type DependencyExpandHint implements ExpandHint"),
-            "dependency expand hint should not implement ExpandHint yet:\n{sdl}"
+            sdl.contains(
+                "union ExpandHintParameters = CloneExpandHintParameters | DependencyExpandHintParameters",
+            ),
+            "expected shared ExpandHintParameters union in SDL:\n{sdl}"
+        );
+        assert!(
+            sdl.contains(
+                "type ExpandHintParameter {\n\tintent: String!\n\tsupportedValues: [String!]!\n}",
+            ),
+            "expected ExpandHintParameter type in SDL:\n{sdl}"
         );
     }
+
+    assert!(
+        slim_sdl.contains(
+            "type CloneExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: CloneExpandHintParameters!\n}",
+        ),
+        "expected slim SDL to expose CloneExpandHint implementing ExpandHint:\n{slim_sdl}"
+    );
+    assert!(
+        slim_sdl.contains("type CloneExpandHintParameters {\n\tkind: ExpandHintParameter!\n}"),
+        "expected slim SDL to expose CloneExpandHintParameters:\n{slim_sdl}"
+    );
+    assert!(
+        slim_sdl.contains("expandHint: CloneExpandHint"),
+        "expected codeMatches stage to keep its concrete expandHint field type:\n{slim_sdl}"
+    );
+    assert!(
+        slim_sdl.contains(
+            "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: DependencyExpandHintParameters!\n}",
+        ),
+        "expected slim SDL to expose DependencyExpandHint implementing ExpandHint:\n{slim_sdl}"
+    );
+    assert!(
+        slim_sdl.contains(
+            "type DependencyExpandHintParameters {\n\tdirection: ExpandHintParameter!\n\tkind: ExpandHintParameter!\n}",
+        ),
+        "expected slim SDL to expose structured DependencyExpandHintParameters:\n{slim_sdl}"
+    );
 }
 
 fn graphql_parent_depth_limit_query(parent_depth: usize) -> String {

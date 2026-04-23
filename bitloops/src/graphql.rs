@@ -33,7 +33,7 @@ use self::query_root::QueryRoot;
 use self::slim_query_root::SlimQueryRoot;
 use self::slim_subscription_root::SlimSubscriptionRoot;
 use self::subscription_root::SubscriptionRoot;
-use self::types::test_harness::ExpandHint;
+use self::types::ExpandHint;
 use anyhow::{Result, anyhow};
 use async_graphql::http::{ALL_WEBSOCKET_PROTOCOLS, GraphQLPlaygroundConfig, playground_source};
 use async_graphql::{Pos, Request, Response, Schema, ServerError, Variables};

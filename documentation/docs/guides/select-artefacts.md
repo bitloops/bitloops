@@ -180,6 +180,22 @@ Representative shape:
         }
       }
     },
+    "expandHint": {
+      "intent": "Inspect code matches",
+      "template": "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'",
+      "parameters": {
+        "kind": {
+          "intent": "Choose which relation kind to inspect",
+          "supportedValues": [
+            "exact_duplicate",
+            "similar_implementation",
+            "shared_logic_candidate",
+            "diverged_implementation",
+            "weak_clone_candidate"
+          ]
+        }
+      }
+    },
     "schema": "type ArtefactSelection { ... }"
   },
   "dependencies": {
@@ -203,8 +219,14 @@ Representative shape:
       "intent": "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.",
       "template": "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'",
       "parameters": {
-        "direction": ["IN", "OUT"],
-        "kind": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+        "direction": {
+          "intent": "Choose dependency flow relative to the selected artefacts",
+          "supportedValues": ["IN", "OUT"]
+        },
+        "kind": {
+          "intent": "Choose dependency relationship type",
+          "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+        }
       }
     },
     "schema": "type ArtefactSelection { ... }"
@@ -253,9 +275,16 @@ The other stage result types follow the same pattern:
 - `DependencyStageResult`
 - `TestsStageResult`
 
-`DependencyStageResult` also exposes a typed `expandHint` field:
+`CloneStageResult` and `DependencyStageResult` both expose a typed `expandHint` field:
 
 ```graphql
+type CloneStageResult {
+  overview: JSON!
+  expandHint: CloneExpandHint
+  schema: String
+  items(first: Int! = 20): [Clone!]!
+}
+
 type DependencyStageResult {
   overview: JSON!
   expandHint: DependencyExpandHint
@@ -269,14 +298,37 @@ Use them like this:
 ```graphql
 {
   selectArtefacts(by: { path: "rust-app/src/main.rs" }) {
+    codeMatches {
+      overview
+      expandHint {
+        intent
+        template
+        parameters {
+          kind {
+            intent
+            supportedValues
+          }
+        }
+      }
+      items(first: 10) {
+        relationKind
+        score
+      }
+    }
     dependencies {
       overview
       expandHint {
         intent
         template
         parameters {
-          direction
-          kind
+          direction {
+            intent
+            supportedValues
+          }
+          kind {
+            intent
+            supportedValues
+          }
         }
       }
       schema

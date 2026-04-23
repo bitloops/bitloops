@@ -227,6 +227,16 @@ type CloneEdge {
 	cursor: String!
 }
 
+type CloneExpandHint implements ExpandHint {
+	intent: String!
+	template: String!
+	parameters: CloneExpandHintParameters!
+}
+
+type CloneExpandHintParameters {
+	kind: ExpandHintParameter!
+}
+
 type CloneSummary {
 	totalCount: Int!
 	groups: [CloneSummaryGroup!]!
@@ -291,6 +301,17 @@ type DependencyEdgeConnection {
 	edges: [DependencyConnectionEdge!]!
 	pageInfo: PageInfo!
 	totalCount: Int!
+}
+
+type DependencyExpandHint implements ExpandHint {
+	intent: String!
+	template: String!
+	parameters: DependencyExpandHintParameters!
+}
+
+type DependencyExpandHintParameters {
+	direction: ExpandHintParameter!
+	kind: ExpandHintParameter!
 }
 
 enum DepsDirection {
@@ -386,7 +407,15 @@ type EnqueueTaskResult {
 interface ExpandHint {
 	intent: String!
 	template: String!
+	parameters: ExpandHintParameters
 }
+
+type ExpandHintParameter {
+	intent: String!
+	supportedValues: [String!]!
+}
+
+union ExpandHintParameters = CloneExpandHintParameters | DependencyExpandHintParameters
 
 type FileContext {
 	path: String!
@@ -1097,6 +1126,7 @@ type TestHarnessLastRun {
 type TestHarnessTestsExpandHint implements ExpandHint {
 	intent: String!
 	template: String!
+	parameters: ExpandHintParameters
 }
 
 type TestHarnessTestsResult {

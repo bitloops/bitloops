@@ -1,9 +1,11 @@
-use async_graphql::{Interface, SimpleObject};
+use async_graphql::{ComplexObject, SimpleObject};
 use serde::Deserialize;
 
 use crate::capability_packs::test_harness::types::{
     TEST_HARNESS_TESTS_EXPAND_HINT_INTENT, TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE,
 };
+
+use super::ExpandHintParameters;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
 pub struct TestHarnessArtefactRef {
@@ -41,6 +43,7 @@ pub struct TestHarnessCoveringTest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, SimpleObject)]
+#[graphql(complex)]
 pub struct TestHarnessTestsExpandHint {
     pub intent: String,
     pub template: String,
@@ -65,6 +68,13 @@ impl Default for TestHarnessTestsExpandHint {
             intent: TEST_HARNESS_TESTS_EXPAND_HINT_INTENT.to_string(),
             template: TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE.to_string(),
         }
+    }
+}
+
+#[ComplexObject]
+impl TestHarnessTestsExpandHint {
+    pub async fn parameters(&self) -> Option<ExpandHintParameters> {
+        None
     }
 }
 

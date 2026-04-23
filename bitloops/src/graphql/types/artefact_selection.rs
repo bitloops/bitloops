@@ -17,7 +17,8 @@ use super::artefact_selection_schema::{
 };
 use super::{
     Artefact, Checkpoint, CloneSummary, ClonesFilterInput, DateTimeScalar, DependencyEdge,
-    DepsDirection, EdgeKind, JsonScalar, LineRangeInput, TestHarnessTestsResult,
+    DepsDirection, EdgeKind, ExpandHintParameter, JsonScalar, LineRangeInput,
+    TestHarnessTestsResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +187,7 @@ struct CheckpointStageData {
 #[derive(Debug, Clone)]
 struct CloneStageData {
     summary: Value,
+    expand_hint: Option<CloneExpandHint>,
     schema: Option<String>,
     items: Vec<super::SemanticClone>,
 }
@@ -220,9 +222,23 @@ pub struct CheckpointStageResult {
 pub struct CloneStageResult {
     #[graphql(name = "overview")]
     pub summary: JsonScalar,
+    #[graphql(name = "expandHint")]
+    pub expand_hint: Option<CloneExpandHint>,
     pub schema: Option<String>,
     #[graphql(skip)]
     pub(crate) items: Vec<super::SemanticClone>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct CloneExpandHintParameters {
+    pub kind: ExpandHintParameter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct CloneExpandHint {
+    pub intent: String,
+    pub template: String,
+    pub parameters: CloneExpandHintParameters,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -239,8 +255,8 @@ pub struct DependencyStageResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct DependencyExpandHintParameters {
-    pub direction: Vec<DepsDirection>,
-    pub kind: Vec<EdgeKind>,
+    pub direction: ExpandHintParameter,
+    pub kind: ExpandHintParameter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -274,6 +290,7 @@ impl From<CloneStageData> for CloneStageResult {
     fn from(data: CloneStageData) -> Self {
         Self {
             summary: Json(data.summary),
+            expand_hint: data.expand_hint,
             schema: data.schema,
             items: data.items,
         }
@@ -451,8 +468,10 @@ impl ArtefactSelection {
                 .total_cmp(&left.score)
                 .then_with(|| left.id.as_ref().cmp(right.id.as_ref()))
         });
+        let expand_hint = build_clone_expand_hint(clones.len());
         Ok(CloneStageData {
             summary: build_clone_summary(&clones),
+            expand_hint,
             schema: (!clones.is_empty()).then(|| CLONE_STAGE_SCHEMA.to_string()),
             items: clones,
         })
@@ -695,29 +714,33 @@ fn build_clone_summary(clones: &[super::SemanticClone]) -> Value {
     let mut payload = serde_json::Map::new();
     payload.insert("counts".to_string(), Value::Object(counts));
 
-    if summary.total_count > 0 {
+    if let Some(expand_hint) = build_clone_expand_hint(clones.len()) {
         payload.insert(
             "expandHint".to_string(),
-            json!({
-                "intent": "Inspect code matches",
-                "template": "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'",
-                "parameters": {
-                    "kind": {
-                        "intent": "Choose which relation kind to inspect",
-                        "supportedValues": [
-                            RELATION_KIND_EXACT_DUPLICATE,
-                            RELATION_KIND_SIMILAR_IMPLEMENTATION,
-                            RELATION_KIND_SHARED_LOGIC_CANDIDATE,
-                            RELATION_KIND_DIVERGED_IMPLEMENTATION,
-                            RELATION_KIND_WEAK_CLONE_CANDIDATE
-                        ],
-                    }
-                }
-            }),
+            clone_expand_hint_to_value(&expand_hint),
         );
     }
 
     Value::Object(payload)
+}
+
+fn build_clone_expand_hint(match_count: usize) -> Option<CloneExpandHint> {
+    (match_count > 0).then(|| CloneExpandHint {
+        intent: "Inspect code matches".to_string(),
+        template: "bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'".to_string(),
+        parameters: CloneExpandHintParameters {
+            kind: ExpandHintParameter {
+                intent: "Choose which relation kind to inspect".to_string(),
+                supported_values: vec![
+                    RELATION_KIND_EXACT_DUPLICATE.to_string(),
+                    RELATION_KIND_SIMILAR_IMPLEMENTATION.to_string(),
+                    RELATION_KIND_SHARED_LOGIC_CANDIDATE.to_string(),
+                    RELATION_KIND_DIVERGED_IMPLEMENTATION.to_string(),
+                    RELATION_KIND_WEAK_CLONE_CANDIDATE.to_string(),
+                ],
+            },
+        },
+    })
 }
 
 fn build_dependency_summary(
@@ -760,15 +783,24 @@ fn build_dependency_expand_hint(dependency_count: usize) -> Option<DependencyExp
         intent: "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on.".to_string(),
         template: "Direction example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nKind example: bitloops devql query '{ selectArtefacts(...) { dependencies(kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'\nCombined example: bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 50) { edgeKind fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'".to_string(),
         parameters: DependencyExpandHintParameters {
-            direction: vec![DepsDirection::In, DepsDirection::Out],
-            kind: vec![
-                EdgeKind::Calls,
-                EdgeKind::Exports,
-                EdgeKind::Extends,
-                EdgeKind::Implements,
-                EdgeKind::Imports,
-                EdgeKind::References,
-            ],
+            direction: ExpandHintParameter {
+                intent: "Choose dependency flow relative to the selected artefacts".to_string(),
+                supported_values: vec![
+                    deps_direction_name(DepsDirection::In).to_string(),
+                    deps_direction_name(DepsDirection::Out).to_string(),
+                ],
+            },
+            kind: ExpandHintParameter {
+                intent: "Choose dependency relationship type".to_string(),
+                supported_values: vec![
+                    edge_kind_graphql_name(EdgeKind::Calls).to_string(),
+                    edge_kind_graphql_name(EdgeKind::Exports).to_string(),
+                    edge_kind_graphql_name(EdgeKind::Extends).to_string(),
+                    edge_kind_graphql_name(EdgeKind::Implements).to_string(),
+                    edge_kind_graphql_name(EdgeKind::Imports).to_string(),
+                    edge_kind_graphql_name(EdgeKind::References).to_string(),
+                ],
+            },
         },
     })
 }
@@ -829,21 +861,26 @@ fn dependency_expand_hint_to_value(expand_hint: &DependencyExpandHint) -> Value 
         "intent": expand_hint.intent.as_str(),
         "template": expand_hint.template.as_str(),
         "parameters": {
-            "direction": expand_hint
-                .parameters
-                .direction
-                .iter()
-                .copied()
-                .map(deps_direction_name)
-                .collect::<Vec<_>>(),
-            "kind": expand_hint
-                .parameters
-                .kind
-                .iter()
-                .copied()
-                .map(edge_kind_graphql_name)
-                .collect::<Vec<_>>(),
+            "direction": expand_hint_parameter_to_value(&expand_hint.parameters.direction),
+            "kind": expand_hint_parameter_to_value(&expand_hint.parameters.kind),
         }
+    })
+}
+
+fn clone_expand_hint_to_value(expand_hint: &CloneExpandHint) -> Value {
+    json!({
+        "intent": expand_hint.intent.as_str(),
+        "template": expand_hint.template.as_str(),
+        "parameters": {
+            "kind": expand_hint_parameter_to_value(&expand_hint.parameters.kind),
+        }
+    })
+}
+
+fn expand_hint_parameter_to_value(parameter: &ExpandHintParameter) -> Value {
+    json!({
+        "intent": parameter.intent.as_str(),
+        "supportedValues": parameter.supported_values,
     })
 }
 
@@ -908,6 +945,137 @@ fn take_stage_items<T: Clone>(items: &[T], first: i32) -> Result<Vec<T>> {
     }
     Ok(items.iter().take(first as usize).cloned().collect())
 }
+
+const CHECKPOINT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
+  checkpoints(agent: String, since: DateTime): CheckpointStageResult!
+}
+
+type CheckpointStageResult {
+  overview: JSON!
+  schema: String
+  items(first: Int! = 20): [Checkpoint!]!
+}
+
+type Checkpoint {
+  id: ID!
+  sessionId: String!
+  commitSha: String
+  branch: String
+  agent: String
+  eventTime: DateTime!
+  strategy: String
+  filesTouched: [String!]!
+  payload: JSON
+  commit: Commit
+  fileRelations: [CheckpointFileRelation!]!
+}"#;
+
+const CLONE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
+  codeMatches(relationKind: String, minScore: Float): CloneStageResult!
+}
+
+type CloneStageResult {
+  overview: JSON!
+  expandHint: CloneExpandHint
+  schema: String
+  items(first: Int! = 20): [Clone!]!
+}
+
+interface ExpandHint {
+  intent: String!
+  template: String!
+  parameters: ExpandHintParameters
+}
+
+union ExpandHintParameters = CloneExpandHintParameters | DependencyExpandHintParameters
+
+type ExpandHintParameter {
+  intent: String!
+  supportedValues: [String!]!
+}
+
+type CloneExpandHint implements ExpandHint {
+  intent: String!
+  template: String!
+  parameters: CloneExpandHintParameters!
+}
+
+type CloneExpandHintParameters {
+  kind: ExpandHintParameter!
+}
+
+type Clone {
+  id: ID!
+  sourceArtefactId: ID!
+  targetArtefactId: ID!
+  relationKind: String!
+  score: Float!
+  metadata: JSON
+  sourceArtefact: Artefact!
+  targetArtefact: Artefact!
+}"#;
+
+const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
+  dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
+}
+
+type DependencyStageResult {
+  overview: JSON!
+  expandHint: DependencyExpandHint
+  schema: String
+  items(first: Int! = 20): [DependencyEdge!]!
+}
+
+interface ExpandHint {
+  intent: String!
+  template: String!
+  parameters: DependencyExpandHintParameters
+}
+
+type ExpandHintParameter {
+  intent: String!
+  supportedValues: [String!]!
+}
+
+type DependencyExpandHint implements ExpandHint {
+  intent: String!
+  template: String!
+  parameters: DependencyExpandHintParameters!
+}
+
+type DependencyExpandHintParameters {
+  direction: ExpandHintParameter!
+  kind: ExpandHintParameter!
+}
+
+type DependencyEdge {
+  id: ID!
+  edgeKind: EdgeKind!
+  fromArtefactId: ID!
+  toArtefactId: ID
+  toSymbolRef: String
+  startLine: Int
+  endLine: Int
+  metadata: JSON
+  fromArtefact: Artefact!
+  toArtefact: Artefact
+}"#;
+
+const TESTS_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
+  tests(minConfidence: Float, linkageSource: String): TestsStageResult!
+}
+
+type TestsStageResult {
+  overview: JSON!
+  schema: String
+  items(first: Int! = 20): [TestHarnessTestsResult!]!
+}
+
+type TestHarnessTestsResult {
+  artefact: TestHarnessArtefactRef!
+  coveringTests: [TestHarnessCoveringTest!]!
+  summary: TestHarnessTestsSummary!
+}"#;
 
 #[cfg(test)]
 #[path = "artefact_selection_tests.rs"]
