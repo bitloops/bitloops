@@ -344,6 +344,10 @@ fn run_notify_loop(
                 &runtime_handle,
             ) {
                 log::warn!("devql watcher capture failed: {err:#}");
+                // Keep the current batch so transient failures (for example SQLite locks)
+                // can retry on the next debounce window instead of dropping changes.
+                window_start = Some(Instant::now());
+                continue;
             }
             batch.clear();
             window_start = None;
