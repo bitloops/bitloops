@@ -392,7 +392,7 @@ fn derive_codex_exec_command_events(
     transcript_fragment: &str,
     mut sequence_number: i64,
     events: &mut Vec<InteractionEvent>,
-) -> i64 {
+) {
     let mut pending_exec_commands = HashMap::<String, DerivedToolInput>::new();
     let mut handled_exec_commands = HashSet::<String>::new();
 
@@ -491,8 +491,6 @@ fn derive_codex_exec_command_events(
             _ => {}
         }
     }
-
-    sequence_number
 }
 
 fn append_codex_exec_command_invocation(
@@ -908,6 +906,38 @@ mod tests {
         );
         assert_eq!(events[1].sequence_number, 2);
         assert_eq!(transcript_derived_turn_end_sequence(&events), 3);
+    }
+
+    #[test]
+    fn derives_codex_exec_command_events_after_ordinary_tools_with_unique_sequences() {
+        let fragment = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/lib.rs\"}}",
+            "]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"read file\"}",
+            "]}}\n",
+            "{\"timestamp\":\"2026-04-22T14:41:58.589Z\",\"type\":\"response_item\",\"payload\":",
+            "{\"type\":\"function_call\",\"name\":\"exec_command\",",
+            "\"arguments\":\"{\\\"cmd\\\":\\\"git status --short\\\"}\",",
+            "\"call_id\":\"call_status\"}}\n",
+            "{\"timestamp\":\"2026-04-22T14:41:58.678Z\",\"type\":\"response_item\",\"payload\":",
+            "{\"type\":\"function_call_output\",\"call_id\":\"call_status\",",
+            "\"output\":\"Output:\\n M src/lib.rs\\n\"}}\n"
+        );
+
+        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+            .expect("derive mixed transcript tool events");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].tool_use_id, "toolu_1");
+        assert_eq!(events[0].sequence_number, 1);
+        assert_eq!(events[1].tool_use_id, "toolu_1");
+        assert_eq!(events[1].sequence_number, 2);
+        assert_eq!(events[2].tool_use_id, "call_status");
+        assert_eq!(events[2].sequence_number, 3);
+        assert_eq!(events[3].tool_use_id, "call_status");
+        assert_eq!(events[3].sequence_number, 4);
+        assert_eq!(transcript_derived_turn_end_sequence(&events), 5);
     }
 
     #[test]

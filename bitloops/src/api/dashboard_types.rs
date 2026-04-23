@@ -116,6 +116,8 @@ pub(crate) struct DashboardAnalyticsSqlInput {
     pub(crate) sql: String,
     #[graphql(name = "repoIds")]
     pub(crate) repo_ids: Option<Vec<String>>,
+    #[graphql(name = "allRepos")]
+    pub(crate) all_repos: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]

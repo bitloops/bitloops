@@ -43,7 +43,7 @@ const QAT_EVENTUAL_TIMEOUT_ENV: &str = "BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS";
 // Watcher-driven sync materialisation is asynchronous end-to-end: the CLI
 // restarts the watcher, the watcher debounces filesystem events, and the daemon
 // then consumes the spooled sync work. CI can legitimately take longer here.
-const DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS: u64 = 120;
 const QAT_EVENTUAL_POLL_INTERVAL_MILLIS: u64 = 250;
 
 fn qat_eventual_timeout() -> StdDuration {

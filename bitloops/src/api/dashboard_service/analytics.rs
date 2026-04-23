@@ -28,9 +28,21 @@ pub(in crate::api) async fn load_dashboard_analytics_sql(
         ))
     })?;
 
-    let scope = match input.repo_ids {
-        Some(repo_ids) if !repo_ids.is_empty() => AnalyticsRepoScope::Explicit(repo_ids),
-        _ => AnalyticsRepoScope::AllKnown,
+    let all_repos = input.all_repos.unwrap_or(false);
+    let scope = match (input.repo_ids, all_repos) {
+        (Some(_), true) => {
+            return Err(ApiError::bad_request(
+                "analytics SQL scope cannot combine repoIds and allRepos",
+            ));
+        }
+        (Some(repo_ids), false) if repo_ids.is_empty() => {
+            return Err(ApiError::bad_request(
+                "analytics SQL repoIds must not be empty; omit repoIds for the current repository",
+            ));
+        }
+        (Some(repo_ids), false) => AnalyticsRepoScope::Explicit(repo_ids),
+        (None, true) => AnalyticsRepoScope::AllKnown,
+        (None, false) => AnalyticsRepoScope::CurrentRepo,
     };
     let result = execute_analytics_sql(&cfg, scope, &input.sql)
         .await

@@ -113,6 +113,63 @@ fn ensure_watcher_running_returns_early_when_autostart_is_disabled() {
 }
 
 #[test]
+fn dirty_worktree_paths_include_untracked_source_files() {
+    let (_dir, repo_root, _store) = seed_runtime_store();
+    let source_path = repo_root.join("src").join("math.rs");
+    fs::create_dir_all(source_path.parent().expect("source parent")).expect("create src dir");
+    fs::write(
+        &source_path,
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    )
+    .expect("write source file");
+
+    let paths = dirty_worktree_paths(&repo_root).expect("collect dirty worktree paths");
+
+    assert!(
+        paths.iter().any(|path| path.ends_with("src/math.rs")),
+        "dirty worktree rescan should include untracked source files, got {paths:?}"
+    );
+}
+
+#[test]
+fn dirty_worktree_rescan_adds_paths_without_internal_store_paths() {
+    let (_dir, repo_root, _store) = seed_runtime_store();
+    let source_path = repo_root.join("src").join("math.rs");
+    fs::create_dir_all(source_path.parent().expect("source parent")).expect("create src dir");
+    fs::write(
+        &source_path,
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    )
+    .expect("write source file");
+
+    let internal_path = repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("internal.rs");
+    fs::create_dir_all(internal_path.parent().expect("internal parent"))
+        .expect("create internal store dir");
+    fs::write(&internal_path, "pub fn ignored() {}\n").expect("write internal store file");
+
+    let mut batch = BTreeSet::new();
+    assert!(
+        add_dirty_worktree_paths_to_batch(&repo_root, &mut batch)
+            .expect("add dirty worktree paths"),
+        "source file should be added to the watcher batch"
+    );
+
+    assert!(
+        batch.iter().any(|path| path.ends_with("src/math.rs")),
+        "watcher fallback batch should contain source file, got {batch:?}"
+    );
+    assert!(
+        batch
+            .iter()
+            .all(|path| !path.ends_with(".bitloops/stores/internal.rs")),
+        "watcher fallback batch should omit Bitloops internal store files, got {batch:?}"
+    );
+}
+
+#[test]
 fn wait_for_watcher_registration_ready_ignores_stale_rows_until_expected_entry_exists() {
     let (_dir, repo_root, store) = seed_runtime_store();
     store

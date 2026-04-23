@@ -637,25 +637,27 @@ fn insert_rows(conn: &duckdb::Connection, table: &TableSpec, rows: &[Value]) -> 
         return Ok(());
     }
 
-    let column_list = table
+    let columns = table
         .columns
         .iter()
         .map(|column| column.name)
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect::<Vec<_>>();
+    let mut appender = conn
+        .appender_with_columns(table.name, &columns)
+        .with_context(|| format!("opening analytics cache appender for {}", table.name))?;
     for row in rows {
         let values = table
             .columns
             .iter()
-            .map(|column| value_literal(row.get(column.name), column.kind))
-            .collect::<Vec<_>>()
-            .join(", ");
-        conn.execute_batch(&format!(
-            "INSERT INTO {} ({column_list}) VALUES ({values})",
-            table.name
-        ))
-        .with_context(|| format!("inserting analytics cache row into {}", table.name))?;
+            .map(|column| cache_duckdb_value(row.get(column.name), column.kind))
+            .collect::<Vec<_>>();
+        appender
+            .append_row(duckdb::appender_params_from_iter(values))
+            .with_context(|| format!("appending analytics cache row into {}", table.name))?;
     }
+    appender
+        .flush()
+        .with_context(|| format!("flushing analytics cache rows into {}", table.name))?;
     Ok(())
 }
 
@@ -682,40 +684,41 @@ fn upsert_cache_state(
     Ok(())
 }
 
-fn value_literal(value: Option<&Value>, kind: ColumnKind) -> String {
+fn cache_duckdb_value(value: Option<&Value>, kind: ColumnKind) -> duckdb::types::Value {
     let Some(value) = value else {
-        return "NULL".to_string();
+        return duckdb::types::Value::Null;
     };
     match kind {
         ColumnKind::Text => match value {
-            Value::Null => "NULL".to_string(),
-            Value::String(value) => format!("'{}'", esc_pg(value)),
-            other => format!(
-                "'{}'",
-                esc_pg(&serde_json::to_string(other).unwrap_or_default())
-            ),
+            Value::Null => duckdb::types::Value::Null,
+            Value::String(value) => duckdb::types::Value::Text(value.clone()),
+            other => duckdb::types::Value::Text(serde_json::to_string(other).unwrap_or_default()),
         },
         ColumnKind::Integer => match value {
-            Value::Null => "NULL".to_string(),
-            Value::Bool(value) => {
-                if *value {
-                    "1".to_string()
-                } else {
-                    "0".to_string()
-                }
-            }
-            Value::Number(number) => number.to_string(),
+            Value::Null => duckdb::types::Value::Null,
+            Value::Bool(value) => duckdb::types::Value::BigInt(i64::from(*value)),
+            Value::Number(number) => number
+                .as_i64()
+                .map(duckdb::types::Value::BigInt)
+                .or_else(|| {
+                    number
+                        .as_u64()
+                        .and_then(|value| i64::try_from(value).ok())
+                        .map(duckdb::types::Value::BigInt)
+                })
+                .unwrap_or(duckdb::types::Value::Null),
             Value::String(value) => {
                 let trimmed = value.trim();
                 if trimmed.is_empty() {
-                    "NULL".to_string()
-                } else if trimmed.parse::<i64>().is_ok() {
-                    trimmed.to_string()
+                    duckdb::types::Value::Null
                 } else {
-                    "NULL".to_string()
+                    trimmed
+                        .parse::<i64>()
+                        .map(duckdb::types::Value::BigInt)
+                        .unwrap_or(duckdb::types::Value::Null)
                 }
             }
-            _ => "NULL".to_string(),
+            _ => duckdb::types::Value::Null,
         },
     }
 }

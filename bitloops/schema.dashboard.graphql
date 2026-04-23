@@ -10,6 +10,7 @@ type DashboardAnalyticsColumn {
 input DashboardAnalyticsSqlInput {
 	sql: String!
 	repoIds: [String!]
+	allRepos: Boolean
 }
 
 type DashboardAnalyticsSqlResult {

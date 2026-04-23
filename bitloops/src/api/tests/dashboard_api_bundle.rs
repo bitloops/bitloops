@@ -17,6 +17,62 @@ fn dashboard_health_query() -> &'static str {
     "#
 }
 
+fn seed_secondary_dashboard_analytics_repo(repo_root: &Path) -> String {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open relational sqlite store");
+    let repo_id = "repo-secondary-analytics";
+    conn.execute(
+        "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+         VALUES (?1, 'local', 'local', 'secondary-analytics', 'main')
+         ON CONFLICT(repo_id) DO UPDATE SET
+            provider = excluded.provider,
+            organization = excluded.organization,
+            name = excluded.name,
+            default_branch = excluded.default_branch",
+        rusqlite::params![repo_id],
+    )
+    .expect("upsert secondary repository row");
+    conn.execute(
+        "INSERT INTO repo_sync_state (
+            repo_id, repo_root, active_branch, head_commit_sha, head_tree_sha, parser_version,
+            extractor_version, scope_exclusions_fingerprint, last_sync_started_at,
+            last_sync_completed_at, last_sync_status, last_sync_reason
+         ) VALUES (
+            ?1, '/tmp/secondary-analytics', 'main', 'abc', 'def', '1', '1', '',
+            '2026-04-22T09:00:00Z', '2026-04-22T09:05:00Z', 'completed', ''
+         )
+         ON CONFLICT(repo_id) DO UPDATE SET
+            repo_root = excluded.repo_root,
+            active_branch = excluded.active_branch,
+            last_sync_completed_at = excluded.last_sync_completed_at,
+            last_sync_status = excluded.last_sync_status",
+        rusqlite::params![repo_id],
+    )
+    .expect("upsert secondary repo sync state row");
+    conn.execute(
+        "INSERT INTO current_file_state (
+            repo_id, path, analysis_mode, file_role, text_index_mode, language, resolved_language,
+            dialect, primary_context_id, secondary_context_ids_json, frameworks_json,
+            runtime_profile, classification_reason, context_fingerprint, extraction_fingerprint,
+            head_content_id, index_content_id, worktree_content_id, effective_content_id,
+            effective_source, parser_version, extractor_version, exists_in_head, exists_in_index,
+            exists_in_worktree, last_synced_at
+         ) VALUES (
+            ?1, 'secondary/lib.rs', 'code', 'source_code', 'none', 'rust', 'rust', '', '', '[]', '[]',
+            '', 'seeded', '', 'analytics-2', 'head-2', 'index-2', 'worktree-2', 'effective-2',
+            'worktree', '1', '1', 1, 1, 1, '2026-04-22T09:04:00Z'
+         )
+         ON CONFLICT(repo_id, path) DO UPDATE SET
+            extraction_fingerprint = excluded.extraction_fingerprint,
+            effective_content_id = excluded.effective_content_id,
+            last_synced_at = excluded.last_synced_at",
+        rusqlite::params![repo_id],
+    )
+    .expect("upsert secondary current file state row");
+
+    repo_id.to_string()
+}
+
 fn dashboard_kpis_query() -> &'static str {
     r#"
     {
@@ -203,6 +259,7 @@ async fn dashboard_sdl_route_returns_schema_text() {
 async fn dashboard_analytics_sql_query_returns_rows_and_metadata() {
     let repo = seed_dashboard_repo();
     seed_dashboard_analytics_sources(repo.path());
+    let secondary_repo_id = seed_secondary_dashboard_analytics_repo(repo.path());
     let app = dashboard_app(
         repo.path(),
         ServeMode::HelloWorld,
@@ -210,7 +267,7 @@ async fn dashboard_analytics_sql_query_returns_rows_and_metadata() {
     );
 
     let (status, payload) = request_dashboard_graphql(
-        app,
+        app.clone(),
         r#"
         {
           analyticsSql(input: { sql: "SELECT repo_id, path FROM analytics.current_file_state" }) {
@@ -240,6 +297,33 @@ async fn dashboard_analytics_sql_query_returns_rows_and_metadata() {
     assert_eq!(
         result["repoIds"][0],
         Value::from(crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id"))
+    );
+
+    let (status, payload) = request_dashboard_graphql(
+        app,
+        r#"
+        {
+          analyticsSql(input: { sql: "SELECT repo_id, path FROM analytics.current_file_state", allRepos: true }) {
+            rowCount
+            repoIds
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let result = &payload["data"]["analyticsSql"];
+    assert_eq!(result["rowCount"].as_u64(), Some(2));
+    let repo_ids = result["repoIds"]
+        .as_array()
+        .expect("repo ids")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(
+        repo_ids.contains(&secondary_repo_id.as_str()),
+        "allRepos should include secondary repo id, got {repo_ids:?}"
     );
 }
 

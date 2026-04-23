@@ -460,6 +460,45 @@ async fn analytics_query_returns_curated_views_and_shell_commands() {
 }
 
 #[tokio::test]
+async fn analytics_query_blocks_external_file_access_and_cache_store_escape() {
+    let temp = TempDir::new().expect("temp dir");
+    let (sqlite_path, duckdb_path) = seed_local_sources(temp.path());
+    write_test_config(temp.path(), &sqlite_path, &duckdb_path);
+    let cfg = sample_cfg(temp.path());
+
+    let secret_path = temp.path().join("secret.csv");
+    std::fs::write(&secret_path, "secret\nhost-data\n").expect("write secret csv");
+    let escaped_secret_path = secret_path.to_string_lossy().replace('\'', "''");
+    let file_err = execute_analytics_sql(
+        &cfg,
+        AnalyticsRepoScope::CurrentRepo,
+        &format!("SELECT * FROM read_csv('{escaped_secret_path}')"),
+    )
+    .await
+    .expect_err("external file readers must be blocked");
+    let file_message = format!("{file_err:#}");
+    assert!(
+        file_message.contains("read_csv")
+            || file_message.contains("external")
+            || file_message.contains("disabled"),
+        "unexpected external access error: {file_message}"
+    );
+
+    let cache_err = execute_analytics_sql(
+        &cfg,
+        AnalyticsRepoScope::CurrentRepo,
+        "SELECT repo_id FROM cache_store.cache_repositories",
+    )
+    .await
+    .expect_err("cache_store must not be exposed to user SQL");
+    let cache_message = format!("{cache_err:#}");
+    assert!(
+        cache_message.contains("cache_store") || cache_message.contains("does not exist"),
+        "unexpected cache store access error: {cache_message}"
+    );
+}
+
+#[tokio::test]
 async fn analytics_query_refreshes_from_runtime_spool_overlay() {
     let temp = TempDir::new().expect("temp dir");
     let (sqlite_path, duckdb_path) = seed_local_sources(temp.path());
