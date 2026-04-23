@@ -668,7 +668,7 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
         graphql,
         r#"query {
   selectArtefacts(by: { symbolFqn: "src/main.rs::main" }) {
-    deps(includeUnresolved: true) {
+    dependencies(includeUnresolved: true) {
       summary
       schema
     }
@@ -691,7 +691,7 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
         graphql,
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
-    deps(direction: IN, includeUnresolved: true) {
+    dependencies(direction: IN, includeUnresolved: true) {
       summary
       schema
     }
@@ -714,7 +714,7 @@ fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
         graphql,
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
-    deps(direction: IN, includeUnresolved: false) {
+    dependencies(direction: IN, includeUnresolved: false) {
       summary
       schema
     }

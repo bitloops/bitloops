@@ -152,7 +152,7 @@ The aggregate `summary` JSON includes the available stage categories, currently:
 
 - `checkpoints`
 - `clones`
-- `deps`
+- `dependencies`
 - `tests`
 
 Each category entry includes the default stage summary and, when the stage is non-empty, a stage-local `schema` SDL fragment.
@@ -162,8 +162,16 @@ When you need detail rows, query the stage directly and use `items(first: ...)`:
 ```graphql
 {
   selectArtefacts(by: { path: "rust-app/src/main.rs" }) {
-    deps {
+    dependencies {
       summary
+      expandHint {
+        intent
+        template
+        parameters {
+          direction
+          kind
+        }
+      }
       schema
       items(first: 10) {
         id

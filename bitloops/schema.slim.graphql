@@ -86,7 +86,7 @@ type ArtefactSelection {
 	entries(first: Int! = 20): [DirectoryEntry!]!
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
 	clones(relationKind: String, minScore: Float): CloneStageResult!
-	deps(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
+	dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 }
 
@@ -323,8 +323,20 @@ type DependencyEdgeConnection {
 	totalCount: Int!
 }
 
+type DependencyExpandHint {
+	intent: String!
+	template: String!
+	parameters: DependencyExpandHintParameters!
+}
+
+type DependencyExpandHintParameters {
+	direction: [DepsDirection!]!
+	kind: [EdgeKind!]!
+}
+
 type DependencyStageResult {
 	summary: JSON!
+	expandHint: DependencyExpandHint
 	schema: String
 	items(first: Int! = 20): [DependencyEdge!]!
 }
