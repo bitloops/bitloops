@@ -888,6 +888,14 @@ fn compile_tests_stage_defaults_to_covering_test_line_range_fields() {
         "expected covering test endLine in compiled graphql: {graphql}"
     );
     assert!(
+        graphql.contains("expandHint"),
+        "expected tests summary expandHint in compiled graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("template"),
+        "expected tests summary expandHint template in compiled graphql: {graphql}"
+    );
+    assert!(
         !graphql.contains("confidence"),
         "did not expect confidence in default tests() selections: {graphql}"
     );

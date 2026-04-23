@@ -82,6 +82,45 @@ fn assert_bad_user_input_error(
     );
 }
 
+fn assert_tests_expand_hint(value: &serde_json::Value) {
+    assert_eq!(
+        value["intent"],
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_INTENT
+    );
+    assert!(
+        value.get("devql").is_none(),
+        "expand hint should expose `template`, not `devql`: {value:#}"
+    );
+    let template = value["template"]
+        .as_str()
+        .expect("expand hint template string");
+    assert_eq!(
+        template,
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE
+    );
+    assert!(
+        template.contains("coveringTests { testName suiteName filePath startLine endLine }"),
+        "expected tests expand hint to select coveringTests, got {template}"
+    );
+    assert!(
+        !template.contains("artefact {"),
+        "tests expand hint should not include artefact selection, got {template}"
+    );
+}
+
+fn assert_compact_tests_stage_summary(summary: &serde_json::Value) {
+    for field in [
+        "crossCuttingArtefactCount",
+        "dataSources",
+        "diagnosticCount",
+    ] {
+        assert!(
+            summary.get(field).is_none(),
+            "tests stage summary should not include noisy field `{field}`: {summary:#}"
+        );
+    }
+}
+
 fn localhost_bind_available(test_name: &str) -> bool {
     match std::net::TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => {
@@ -2276,6 +2315,9 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
         json["selectArtefacts"]["summary"]["tests"]["summary"]["matchedArtefactCount"],
         2
     );
+    let aggregate_tests_summary = &json["selectArtefacts"]["summary"]["tests"]["summary"];
+    assert_compact_tests_stage_summary(aggregate_tests_summary);
+    assert_tests_expand_hint(&aggregate_tests_summary["expandHint"]);
     let aggregate_deps_schema = json["selectArtefacts"]["summary"]["deps"]["schema"]
         .as_str()
         .expect("aggregate dependency schema string");
@@ -2341,6 +2383,14 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
                 }
                 tests {
                   summary
+                  items(first: 20) {
+                    summary {
+                      expandHint {
+                        intent
+                        template
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -2367,6 +2417,12 @@ async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
     assert_eq!(
         json["selectArtefacts"]["tests"]["summary"]["matchedArtefactCount"],
         1
+    );
+    let direct_tests_summary = &json["selectArtefacts"]["tests"]["summary"];
+    assert_compact_tests_stage_summary(direct_tests_summary);
+    assert_tests_expand_hint(&direct_tests_summary["expandHint"]);
+    assert_tests_expand_hint(
+        &json["selectArtefacts"]["tests"]["items"][0]["summary"]["expandHint"],
     );
     let deps_items = json["selectArtefacts"]["deps"]["items"]
         .as_array()
@@ -2395,6 +2451,7 @@ async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
             {
               selectArtefacts(by: { search: "unrelated zeta quaternion" }) {
                 count
+                summary
                 artefacts {
                   path
                 }
@@ -2419,6 +2476,13 @@ async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
             .len(),
         0
     );
+    assert_eq!(
+        json["selectArtefacts"]["summary"]["tests"]["summary"]["totalCoveringTests"],
+        0
+    );
+    let empty_tests_summary = &json["selectArtefacts"]["summary"]["tests"]["summary"];
+    assert_compact_tests_stage_summary(empty_tests_summary);
+    assert_tests_expand_hint(&empty_tests_summary["expandHint"]);
 }
 
 #[tokio::test]

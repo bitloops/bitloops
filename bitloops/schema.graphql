@@ -1089,6 +1089,11 @@ type TestHarnessLastRun {
 	commitSha: String!
 }
 
+type TestHarnessTestsExpandHint {
+	intent: String!
+	template: String!
+}
+
 type TestHarnessTestsResult {
 	artefact: TestHarnessArtefactRef!
 	coveringTests: [TestHarnessCoveringTest!]!
@@ -1100,6 +1105,7 @@ type TestHarnessTestsSummary {
 	crossCutting: Boolean!
 	dataSources: [String!]!
 	diagnosticCount: Int!
+	expandHint: TestHarnessTestsExpandHint!
 }
 
 type UpdateCliTelemetryConsentResult {

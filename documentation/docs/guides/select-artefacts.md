@@ -189,9 +189,10 @@ Representative shape:
       "selectedArtefactCount": 2,
       "matchedArtefactCount": 2,
       "totalCoveringTests": 2,
-      "crossCuttingArtefactCount": 0,
-      "diagnosticCount": 0,
-      "dataSources": ["static_analysis"]
+      "expandHint": {
+        "intent": "Inspect concrete covering tests for selected artefacts",
+        "template": "bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { tests { summary items(first: 20) { coveringTests { testName suiteName filePath startLine endLine } } } } }'"
+      }
     },
     "schema": "type ArtefactSelection { ... }"
   }
@@ -203,6 +204,7 @@ Notes:
 - `summary` is stage-owned JSON, not stringified JSON
 - `schema` is `null` when that stage has no results
 - `schema` is included in the aggregate response so an agent can discover the drill-down surface without re-querying first
+- `tests.summary.expandHint` is always included when tests summary is requested and points to the concrete `coveringTests` drill-down query
 
 ## Stage Results
 
@@ -275,7 +277,7 @@ Current category coverage:
 | `checkpoints` | Count, latest timestamp, participating agents | `Checkpoint` |
 | `clones` | Total count, grouped relation kinds, max score | `Clone` |
 | `deps` | Unique edge counts, direction counts, edge-kind counts | `DependencyEdge` |
-| `tests` | Matched artefact count, total covering tests, diagnostics, data sources | `TestHarnessTestsResult` |
+| `tests` | Matched artefact count, total covering tests, drill-down hint | `TestHarnessTestsResult` |
 
 ## Stage Arguments
 

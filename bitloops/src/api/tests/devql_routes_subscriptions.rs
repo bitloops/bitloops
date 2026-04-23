@@ -1284,6 +1284,10 @@ async fn devql_post_route_executes_slim_test_harness_stage_queries() {
             }
             summary {
               totalCoveringTests
+              expandHint {
+                intent
+                template
+              }
             }
           }
           # coverage(filter: { symbolFqn: "src/caller.ts::caller" }, first: 5) {
@@ -1327,6 +1331,19 @@ async fn devql_post_route_executes_slim_test_harness_stage_queries() {
         payload["data"]["tests"][0]["summary"]["totalCoveringTests"],
         1
     );
+    assert_eq!(
+        payload["data"]["tests"][0]["summary"]["expandHint"]["intent"],
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_INTENT
+    );
+    let expand_template = payload["data"]["tests"][0]["summary"]["expandHint"]["template"]
+        .as_str()
+        .expect("expand hint template");
+    assert_eq!(
+        expand_template,
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE
+    );
+    assert!(expand_template.contains("coveringTests"));
+    assert!(!expand_template.contains("artefact {"));
     // coverage assertions are intentionally parked until the typed field is restored.
 }
 

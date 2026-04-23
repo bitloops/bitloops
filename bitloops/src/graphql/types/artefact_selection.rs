@@ -3,6 +3,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint_json;
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 
@@ -709,25 +710,12 @@ fn build_tests_summary(rows: &[TestHarnessTestsResult], selected_artefact_count:
         .iter()
         .map(|row| i64::from(row.summary.total_covering_tests))
         .sum::<i64>();
-    let diagnostic_count = rows
-        .iter()
-        .map(|row| i64::from(row.summary.diagnostic_count))
-        .sum::<i64>();
-    let cross_cutting_artefacts = rows.iter().filter(|row| row.summary.cross_cutting).count();
-    let data_sources = rows
-        .iter()
-        .flat_map(|row| row.summary.data_sources.iter().cloned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
 
     json!({
         "selectedArtefactCount": selected_artefact_count,
         "matchedArtefactCount": rows.len(),
         "totalCoveringTests": total_covering_tests,
-        "crossCuttingArtefactCount": cross_cutting_artefacts,
-        "diagnosticCount": diagnostic_count,
-        "dataSources": data_sources,
+        "expandHint": test_harness_tests_expand_hint_json(),
     })
 }
 
