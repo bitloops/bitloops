@@ -118,6 +118,31 @@ fn open_duckdb_connection_existing_missing_file_errors() {
     assert!(msg.contains("DuckDB database file not found"));
 }
 
+#[test]
+fn open_duckdb_connection_existing_can_read_while_writer_holds_lock() -> Result<()> {
+    let dir = tempdir()?;
+    let duckdb_path = dir.path().join("events.duckdb");
+    let writer = duckdb::Connection::open(&duckdb_path).context("opening writer duckdb")?;
+    writer
+        .execute_batch(
+            "CREATE TABLE checkpoint_events(value INTEGER); \
+             INSERT INTO checkpoint_events(value) VALUES (7), (8);",
+        )
+        .context("seeding writer duckdb")?;
+
+    let reader = open_duckdb_connection_existing(&duckdb_path)?;
+    let rows = super::duckdb::duckdb_query_rows_with_connection(
+        &reader,
+        "SELECT value FROM checkpoint_events ORDER BY value",
+    )?;
+
+    assert_eq!(rows, vec![json!({ "value": 7 }), json!({ "value": 8 })]);
+
+    drop(reader);
+    drop(writer);
+    Ok(())
+}
+
 #[tokio::test]
 async fn dashboard_db_pools_execute_and_query_sqlite_with_shared_pool() -> Result<()> {
     let dir = tempdir()?;

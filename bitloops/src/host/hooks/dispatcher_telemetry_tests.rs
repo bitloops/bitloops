@@ -1,6 +1,7 @@
 use super::*;
 use crate::host::checkpoints::lifecycle::adapters::{
-    CODEX_HOOK_POST_TOOL_USE, CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP,
+    CLAUDE_HOOK_POST_TOOL_USE, CLAUDE_HOOK_PRE_TOOL_USE, CODEX_HOOK_POST_TOOL_USE,
+    CODEX_HOOK_PRE_TOOL_USE, CODEX_HOOK_SESSION_START, CODEX_HOOK_STOP,
     CODEX_HOOK_USER_PROMPT_SUBMIT,
 };
 use serde_json::Value;
@@ -60,4 +61,16 @@ fn codex_hook_verb_names_cover_full_surface() {
 fn codex_bash_hooks_are_classified_as_tool_hooks() {
     assert_eq!(get_hook_type(AGENT_NAME_CODEX, "pre-tool-use"), "tool");
     assert_eq!(get_hook_type(AGENT_NAME_CODEX, "post-tool-use"), "tool");
+}
+
+#[test]
+fn claude_ordinary_tool_hooks_are_classified_as_tool_hooks() {
+    assert_eq!(
+        get_hook_type(AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_PRE_TOOL_USE),
+        "tool"
+    );
+    assert_eq!(
+        get_hook_type(AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_POST_TOOL_USE),
+        "tool"
+    );
 }

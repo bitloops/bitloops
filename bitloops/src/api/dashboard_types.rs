@@ -111,6 +111,32 @@ pub(crate) struct DashboardRepository {
     pub(crate) default_branch: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, InputObject)]
+pub(crate) struct DashboardAnalyticsSqlInput {
+    pub(crate) sql: String,
+    #[graphql(name = "repoIds")]
+    pub(crate) repo_ids: Option<Vec<String>>,
+    #[graphql(name = "allRepos")]
+    pub(crate) all_repos: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub(crate) struct DashboardAnalyticsColumn {
+    pub(crate) name: String,
+    pub(crate) logical_type: String,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub(crate) struct DashboardAnalyticsSqlResult {
+    pub(crate) columns: Vec<DashboardAnalyticsColumn>,
+    pub(crate) rows: DashboardJsonScalar,
+    pub(crate) row_count: i32,
+    pub(crate) truncated: bool,
+    pub(crate) duration_ms: i32,
+    pub(crate) repo_ids: Vec<String>,
+    pub(crate) warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub(crate) struct DashboardCheckpointSessionDetail {
     pub(crate) session_index: usize,

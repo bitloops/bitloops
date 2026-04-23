@@ -18,9 +18,9 @@ use crate::adapters::agents::{
 };
 use crate::config::settings;
 use crate::host::checkpoints::lifecycle::adapters::{
-    CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_PRE_TASK, COPILOT_HOOK_POST_TOOL_USE,
-    COPILOT_HOOK_PRE_TOOL_USE, GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL,
-    route_hook_command_to_lifecycle,
+    CLAUDE_HOOK_POST_TASK, CLAUDE_HOOK_POST_TODO, CLAUDE_HOOK_POST_TOOL_USE, CLAUDE_HOOK_PRE_TASK,
+    CLAUDE_HOOK_PRE_TOOL_USE, COPILOT_HOOK_POST_TOOL_USE, COPILOT_HOOK_PRE_TOOL_USE,
+    GEMINI_HOOK_AFTER_TOOL, GEMINI_HOOK_BEFORE_TOOL, route_hook_command_to_lifecycle,
 };
 #[cfg(test)]
 use crate::host::checkpoints::session::backend::SessionBackend;
@@ -88,6 +88,10 @@ pub enum ClaudeCodeHookVerb {
     PreTask,
     #[command(name = "post-task")]
     PostTask,
+    #[command(name = "pre-tool-use")]
+    PreToolUse,
+    #[command(name = "post-tool-use")]
+    PostToolUse,
     #[command(name = "post-todo")]
     PostTodo,
 }
@@ -227,6 +231,8 @@ impl ClaudeCodeHookVerb {
             Self::UserPromptSubmit => "user-prompt-submit",
             Self::PreTask => "pre-task",
             Self::PostTask => "post-task",
+            Self::PreToolUse => "pre-tool-use",
+            Self::PostToolUse => "post-tool-use",
             Self::PostTodo => "post-todo",
         }
     }
@@ -364,6 +370,7 @@ fn get_hook_type(agent_name: &str, hook_name: &str) -> &'static str {
             AGENT_NAME_CLAUDE_CODE,
             CLAUDE_HOOK_PRE_TASK | CLAUDE_HOOK_POST_TASK | CLAUDE_HOOK_POST_TODO,
         ) => "subagent",
+        (AGENT_NAME_CLAUDE_CODE, CLAUDE_HOOK_PRE_TOOL_USE | CLAUDE_HOOK_POST_TOOL_USE) => "tool",
         (
             AGENT_NAME_CURSOR,
             crate::adapters::agents::cursor::lifecycle::HOOK_NAME_SUBAGENT_START

@@ -365,7 +365,7 @@ These commands cover session inspection, resume/rewind workflows, shadow-state c
 
 ## DevQL
 
-DevQL commands now talk to the local daemon over the existing HTTP and GraphQL surface.
+Most DevQL commands talk to the local daemon over the existing HTTP and GraphQL surface. Analytics SQL is a read-only local analysis surface over the configured DevQL stores.
 
 ### Schema, ingestion, and sync
 
@@ -414,6 +414,27 @@ Highlights:
 - Injected hook guidance is instruction-only; Bitloops does not run DevQL queries on the agent's behalf in the hook path.
 - GitHub currently documents Copilot CLI `sessionStart` output as ignored, so Bitloops can emit the session-start payload there without claiming the Copilot runtime will surface it to the model yet.
 - `devql packs --with-health` is the easiest way to inspect capability-pack and embeddings health
+
+### Analytics
+
+```bash
+bitloops devql analytics sql 'SELECT * FROM analytics.repositories'
+bitloops devql analytics sql 'SELECT command_binary, COUNT(*) AS invocations FROM analytics.shell_commands GROUP BY command_binary' --json
+bitloops devql analytics sql 'SELECT repo_id, COUNT(*) AS files FROM analytics.current_file_state GROUP BY repo_id' --all-repos
+bitloops devql analytics sql 'SELECT * FROM analytics.current_file_state LIMIT 10' --repo bitloops
+```
+
+Highlights:
+
+- `devql analytics sql` accepts a single read-only `SELECT` or `WITH` statement
+- the default scope is the current repository
+- repeat `--repo <selector>` to select explicit repositories by repo id, identity, or unique name
+- use `--all-repos` to query every known repository in the current daemon scope
+- use `--json` for structured output with columns, rows, duration, selected repo ids, and warnings
+- curated views live under `analytics.*`; diagnostic request materialisations live under `analytics_raw.*`
+- results are capped at 5,000 rows and query execution times out after 30 seconds
+
+See [DevQL Analytics](/guides/devql-analytics) for the view catalogue, SQL contract, and examples.
 
 ### Knowledge
 

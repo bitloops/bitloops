@@ -14,23 +14,24 @@ use super::DashboardState;
 use super::dashboard_params::{parse_commit_checkpoint_filter, parse_dashboard_commit_query};
 use super::dashboard_service::{
     check_dashboard_bundle_version, fetch_dashboard_bundle, load_dashboard_agents,
-    load_dashboard_branches, load_dashboard_checkpoint, load_dashboard_commits,
-    load_dashboard_health, load_dashboard_interaction_actors, load_dashboard_interaction_agents,
-    load_dashboard_interaction_commit_authors, load_dashboard_interaction_kpis,
-    load_dashboard_interaction_session, load_dashboard_interaction_sessions,
-    load_dashboard_interaction_update, load_dashboard_interaction_update_for_repo_root,
-    load_dashboard_kpis, load_dashboard_repositories, load_dashboard_users,
-    resolve_dashboard_repo_root, search_dashboard_interaction_sessions,
-    search_dashboard_interaction_turns,
+    load_dashboard_analytics_sql, load_dashboard_branches, load_dashboard_checkpoint,
+    load_dashboard_commits, load_dashboard_health, load_dashboard_interaction_actors,
+    load_dashboard_interaction_agents, load_dashboard_interaction_commit_authors,
+    load_dashboard_interaction_kpis, load_dashboard_interaction_session,
+    load_dashboard_interaction_sessions, load_dashboard_interaction_update,
+    load_dashboard_interaction_update_for_repo_root, load_dashboard_kpis,
+    load_dashboard_repositories, load_dashboard_users, resolve_dashboard_repo_root,
+    search_dashboard_interaction_sessions, search_dashboard_interaction_turns,
 };
 use super::dashboard_types::{
-    DashboardAgent, DashboardBranchSummary, DashboardBundleVersion, DashboardCheckpointDetail,
-    DashboardCommitRow, DashboardFetchBundleResult, DashboardInteractionActorBucket,
-    DashboardInteractionAgentBucket, DashboardInteractionCommitAuthorBucket,
-    DashboardInteractionFilterInput, DashboardInteractionKpis, DashboardInteractionSearchInput,
-    DashboardInteractionSession, DashboardInteractionSessionDetail,
-    DashboardInteractionSessionSearchHit, DashboardInteractionTurnSearchHit,
-    DashboardInteractionUpdate, DashboardKpis, DashboardRepository, DashboardUser,
+    DashboardAgent, DashboardAnalyticsSqlInput, DashboardAnalyticsSqlResult,
+    DashboardBranchSummary, DashboardBundleVersion, DashboardCheckpointDetail, DashboardCommitRow,
+    DashboardFetchBundleResult, DashboardInteractionActorBucket, DashboardInteractionAgentBucket,
+    DashboardInteractionCommitAuthorBucket, DashboardInteractionFilterInput,
+    DashboardInteractionKpis, DashboardInteractionSearchInput, DashboardInteractionSession,
+    DashboardInteractionSessionDetail, DashboardInteractionSessionSearchHit,
+    DashboardInteractionTurnSearchHit, DashboardInteractionUpdate, DashboardKpis,
+    DashboardRepository, DashboardUser,
 };
 use crate::graphql::{
     GraphqlActionTelemetry, HealthStatus, MAX_DEVQL_QUERY_COMPLEXITY, MAX_DEVQL_QUERY_DEPTH,
@@ -86,6 +87,17 @@ impl DashboardQueryRoot {
 
     async fn repositories(&self, ctx: &Context<'_>) -> Result<Vec<DashboardRepository>> {
         load_dashboard_repositories(ctx.data_unchecked::<DashboardState>())
+            .await
+            .map_err(map_dashboard_error)
+    }
+
+    #[graphql(name = "analyticsSql")]
+    async fn analytics_sql(
+        &self,
+        ctx: &Context<'_>,
+        input: DashboardAnalyticsSqlInput,
+    ) -> Result<DashboardAnalyticsSqlResult> {
+        load_dashboard_analytics_sql(ctx.data_unchecked::<DashboardState>(), input)
             .await
             .map_err(map_dashboard_error)
     }

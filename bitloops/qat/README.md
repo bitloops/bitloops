@@ -995,6 +995,7 @@ If you run QAT 15 times, you will have 15 top-level suite folders.
 - `BITLOOPS_QAT_BINARY` (override the binary under test; otherwise `CARGO_BIN_EXE_bitloops` is used)
 - `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS` (default `1`; per-suite scenario concurrency, separate from bundle-level scheduling under `cargo qat`, which runs onboarding + smoke in parallel and the DevQL suites serially)
 - `BITLOOPS_QAT_COMMAND_TIMEOUT_SECS` (default `180`)
+- `BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS` (default `120`)
 - `BITLOOPS_QAT_CLAUDE_TIMEOUT_SECS` (default `30`)
 - `BITLOOPS_QAT_CLAUDE_AUTH_TIMEOUT_SECS` (default `300`)
 - `BITLOOPS_QAT_CLAUDE_CMD` (override Claude prompt command)

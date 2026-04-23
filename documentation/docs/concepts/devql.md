@@ -23,6 +23,7 @@ It is designed for:
 - Temporal queries with `asOf(...)` so reads can be pinned to a commit, branch ref, or save state
 - Monorepo scoping through `project(path: ...)`
 - Capability-pack enrichments such as knowledge, test coverage, covering tests, and semantic clones
+- Read-only analytics over current-state and interaction data when aggregate SQL is the better fit
 
 ## Core Model
 
@@ -121,5 +122,6 @@ DevQL still uses the three-store Bitloops architecture:
 Start with [Configuring DevQL](/guides/configuring-devql), then use:
 
 - [DevQL GraphQL](/guides/devql-graphql) for endpoints, SDL export, mutations, subscriptions, and migration notes
+- [DevQL Analytics](/guides/devql-analytics) for read-only SQL over repository state, sessions, turns, tools, and cross-repository activity
 - [selectArtefacts](/guides/select-artefacts) for the slim selection-stage model, aggregate summaries, and staged detail queries
 - [DevQL Query Cookbook](/guides/devql-query-cookbook) for practical query examples

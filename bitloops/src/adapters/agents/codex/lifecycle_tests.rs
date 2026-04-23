@@ -182,25 +182,38 @@ fn parse_invalid_payload_errors() {
 }
 
 #[test]
-fn parse_pre_tool_use_accepts_bash_payload_and_returns_none() {
+fn parse_pre_tool_use_accepts_bash_payload_and_maps_tool_invocation_event() {
     let mut input = std::io::Cursor::new(
         br#"{"session_id":"codex-session-ptu","transcript_path":"/tmp/codex-ptu.jsonl","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"git status"}}"#.as_slice(),
     );
-    let parsed = parse_hook_event(HOOK_NAME_PRE_TOOL_USE, &mut input).expect("parse");
-    assert!(
-        parsed.is_none(),
-        "tool hooks should be parsed but not mapped to lifecycle events yet"
+    let parsed = parse_hook_event(HOOK_NAME_PRE_TOOL_USE, &mut input)
+        .expect("parse")
+        .expect("event");
+    assert_eq!(
+        parsed.event_type,
+        Some(LifecycleEventType::ToolInvocationObserved)
+    );
+    assert_eq!(parsed.tool_name, "Bash");
+    assert_eq!(parsed.tool_use_id, "toolu_1");
+    assert_eq!(
+        parsed.tool_input,
+        Some(serde_json::json!({"command":"git status"}))
     );
 }
 
 #[test]
-fn parse_post_tool_use_accepts_bash_payload_and_returns_none() {
+fn parse_post_tool_use_accepts_bash_payload_and_maps_tool_result_event() {
     let mut input = std::io::Cursor::new(
         br#"{"session_id":"codex-session-post","transcript_path":"/tmp/codex-post.jsonl","tool_name":"Bash","tool_use_id":"toolu_2","tool_input":{"command":"git status"},"tool_response":"clean"}"#.as_slice(),
     );
-    let parsed = parse_hook_event(HOOK_NAME_POST_TOOL_USE, &mut input).expect("parse");
-    assert!(
-        parsed.is_none(),
-        "tool hooks should be parsed but not mapped to lifecycle events yet"
+    let parsed = parse_hook_event(HOOK_NAME_POST_TOOL_USE, &mut input)
+        .expect("parse")
+        .expect("event");
+    assert_eq!(
+        parsed.event_type,
+        Some(LifecycleEventType::ToolResultObserved)
     );
+    assert_eq!(parsed.tool_name, "Bash");
+    assert_eq!(parsed.tool_use_id, "toolu_2");
+    assert_eq!(parsed.tool_response, Some(serde_json::json!("clean")));
 }
