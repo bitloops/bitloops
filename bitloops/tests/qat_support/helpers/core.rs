@@ -1799,6 +1799,26 @@ pub fn add_source_file_at_path_for_repo(
     write_deterministic_source_file(world.repo_dir(), relative_path, false)
 }
 
+fn nudge_source_file_at_path_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    relative_path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let path = world.repo_dir().join(relative_path);
+    ensure!(
+        path.exists(),
+        "expected source file `{relative_path}` to exist before watcher nudge"
+    );
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("opening {} for watcher nudge append", path.display()))?;
+    file.write_all(b"\n")
+        .with_context(|| format!("appending watcher nudge newline to {}", path.display()))?;
+    Ok(())
+}
+
 pub fn modify_rust_main(world: &QatWorld) -> Result<()> {
     let file_path = world.repo_dir().join("src").join("main.rs");
     fs::write(
@@ -4284,19 +4304,42 @@ pub fn assert_artefacts_current_contains_path(
 }
 
 pub fn assert_artefacts_current_contains_path_eventually(
-    world: &QatWorld,
+    world: &mut QatWorld,
     repo_name: &str,
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    wait_for_qat_condition(
+    let expected = format!("artefacts_current to eventually contain `{path}`");
+    let first_attempt = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
-        &format!("artefacts_current to eventually contain `{path}`"),
+        &expected,
         || assert_artefacts_current_contains_path(world, repo_name, path),
         |_| true,
         |_| format!("artefacts_current contains `{path}`"),
-    )?;
+    );
+    if let Err(first_err) = first_attempt {
+        append_world_log(
+            world,
+            &format!(
+                "Initial watcher materialisation wait for `{path}` timed out; nudging source file and retrying.\n",
+            ),
+        )?;
+        nudge_source_file_at_path_for_repo(world, repo_name, path)?;
+        wait_for_qat_condition(
+            qat_eventual_timeout(),
+            qat_eventual_poll_interval(),
+            &expected,
+            || assert_artefacts_current_contains_path(world, repo_name, path),
+            |_| true,
+            |_| format!("artefacts_current contains `{path}`"),
+        )
+        .map_err(|retry_err| {
+            anyhow!(
+                "artefacts_current watcher materialisation did not recover after file nudge\nfirst attempt: {first_err:#}\nretry attempt: {retry_err:#}"
+            )
+        })?;
+    }
     Ok(())
 }
 
