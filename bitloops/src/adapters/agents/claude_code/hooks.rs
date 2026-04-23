@@ -961,9 +961,9 @@ mod tests {
             ORDINARY_TOOL_MATCHER,
             &cmd_post_tool_use,
             "Bitloops ordinary PostToolUse hook",
-         );
+        );
     }
-  
+
     #[test]
     fn install_hooks_installs_session_start_matcher_with_resume_boundary() {
         let dir = tempfile::tempdir().unwrap();
