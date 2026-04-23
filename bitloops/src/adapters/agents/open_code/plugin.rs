@@ -1,21 +1,20 @@
 use std::path::Path;
 
-use super::skills::{OPEN_CODE_SKILL_RELATIVE_PATH, repo_skill_path};
+use crate::adapters::agents::AGENT_NAME_OPEN_CODE;
+use crate::host::hooks::augmentation::devql_guidance::build_session_bootstrap;
+use crate::host::hooks::augmentation::prompt_surface_presence::installed_prompt_surface_relative_path;
 
 pub const BITLOOPS_CMD_PLACEHOLDER: &str = "__BITLOOPS_CMD__";
 pub const BOOTSTRAP_CONTEXT_PLACEHOLDER: &str = "__BOOTSTRAP_CONTEXT__";
 
 pub(crate) fn session_bootstrap_text(repo_root: &Path) -> String {
-    if !repo_skill_path(repo_root).is_file() {
+    let Some(surface_path) =
+        installed_prompt_surface_relative_path(repo_root, AGENT_NAME_OPEN_CODE)
+    else {
         return String::new();
-    }
+    };
 
-    format!(
-        "<EXTREMELY_IMPORTANT>\n\
-Bitloops has installed DevQL guidance for this repo at `{OPEN_CODE_SKILL_RELATIVE_PATH}`.\n\
-Use that repo-local skill for DevQL-specific instructions.\n\
-</EXTREMELY_IMPORTANT>"
-    )
+    build_session_bootstrap(surface_path)
 }
 
 pub const PLUGIN_TEMPLATE: &str = r##"// Bitloops CLI plugin for OpenCode

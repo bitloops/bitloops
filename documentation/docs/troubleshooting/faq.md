@@ -28,7 +28,7 @@ Use:
 bitloops uninstall --full
 ```
 
-Use `bitloops disable` if you only want to stop capture for the current project while leaving hooks installed.
+Use `bitloops disable --capture` if you only want to stop capture for the current project while leaving hooks installed.
 
 ### Do I need a repo config file?
 

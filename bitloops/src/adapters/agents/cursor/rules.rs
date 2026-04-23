@@ -17,7 +17,7 @@ fn cursor_rule_content() -> String {
     let body = using_devql_skill_body().trim();
     format!(
         "---\n\
-description: Use DevQL first for code understanding and repo exploration in this repository.\n\
+description: When DevQL is available in the current session, use it first for repo-understanding questions and fall back to targeted repo search or file reads when needed.\n\
 alwaysApply: true\n\
 ---\n\n\
 {body}\n"
@@ -54,8 +54,10 @@ mod tests {
         let content = cursor_rule_content();
         assert!(content.starts_with("---\n"));
         assert!(content.contains("alwaysApply: true"));
-        assert!(content.contains("# Using DevQL"));
+        assert!(content.contains("repo-understanding questions"));
+        assert!(content.contains("When DevQL is available in the current"));
         assert!(content.contains("bitloops devql query"));
+        assert!(content.contains("fall back to targeted repo search or file reads"));
     }
 
     #[test]

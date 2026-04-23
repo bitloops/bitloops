@@ -12,7 +12,7 @@ Checks:
 1. Run `bitloops init` in the repository or subproject you want to capture.
 2. Verify the repo is still a git repository.
 3. Run `bitloops checkpoints status --detailed` to confirm the effective capture policy.
-4. If capture is disabled, re-enable it with `bitloops enable`.
+4. If capture is disabled, re-enable it with `bitloops enable --capture`.
 
 ## The Dashboard Does Not Open
 
@@ -67,4 +67,4 @@ Checks:
 1. Inspect `.bitloops.toml`.
 2. Inspect `.bitloops.local.toml`.
 3. Run `bitloops checkpoints status --detailed` to confirm the active policy root and fingerprint.
-4. Re-enable capture with `bitloops enable` if `[capture].enabled = false`.
+4. Re-enable capture with `bitloops enable --capture` if `[capture].enabled = false`.

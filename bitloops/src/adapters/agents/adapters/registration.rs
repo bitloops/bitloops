@@ -28,6 +28,9 @@ pub struct AgentAdapterRegistration {
     hooks_installed: fn(&Path) -> bool,
     install_hooks: fn(&Path, bool, bool, AgentHookInstallOptions) -> Result<usize>,
     uninstall_hooks: fn(&Path) -> Result<()>,
+    prompt_surface_installed: fn(&Path) -> bool,
+    install_prompt_surface: fn(&Path) -> Result<bool>,
+    uninstall_prompt_surface: fn(&Path) -> Result<()>,
     format_resume_command: fn(&str) -> String,
     render_prompt_augmentation: Option<PromptAugmentationRenderer>,
 }
@@ -41,6 +44,9 @@ impl AgentAdapterRegistration {
         hooks_installed: fn(&Path) -> bool,
         install_hooks: fn(&Path, bool, bool, AgentHookInstallOptions) -> Result<usize>,
         uninstall_hooks: fn(&Path) -> Result<()>,
+        prompt_surface_installed: fn(&Path) -> bool,
+        install_prompt_surface: fn(&Path) -> Result<bool>,
+        uninstall_prompt_surface: fn(&Path) -> Result<()>,
         format_resume_command: fn(&str) -> String,
         render_prompt_augmentation: Option<PromptAugmentationRenderer>,
     ) -> Self {
@@ -51,6 +57,9 @@ impl AgentAdapterRegistration {
             hooks_installed,
             install_hooks,
             uninstall_hooks,
+            prompt_surface_installed,
+            install_prompt_surface,
+            uninstall_prompt_surface,
             format_resume_command,
             render_prompt_augmentation,
         }
@@ -84,6 +93,18 @@ impl AgentAdapterRegistration {
 
     pub fn uninstall_hooks(&self, repo_root: &Path) -> Result<()> {
         (self.uninstall_hooks)(repo_root)
+    }
+
+    pub fn is_prompt_surface_installed(&self, repo_root: &Path) -> bool {
+        (self.prompt_surface_installed)(repo_root)
+    }
+
+    pub fn install_prompt_surface(&self, repo_root: &Path) -> Result<bool> {
+        (self.install_prompt_surface)(repo_root)
+    }
+
+    pub fn uninstall_prompt_surface(&self, repo_root: &Path) -> Result<()> {
+        (self.uninstall_prompt_surface)(repo_root)
     }
 
     pub fn format_resume_command(&self, session_id: &str) -> String {

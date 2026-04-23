@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use super::devql_guidance::{build_session_bootstrap, build_turn_guidance, prompt_warrants_devql};
 use super::prompt_surface_presence::installed_prompt_surface_relative_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,7 +15,7 @@ pub fn build_devql_session_start_augmentation(
 ) -> Option<HookAugmentation> {
     let surface_path = installed_prompt_surface_relative_path(repo_root, agent_name)?;
     Some(HookAugmentation {
-        additional_context: session_bootstrap_text(surface_path),
+        additional_context: build_session_bootstrap(surface_path),
         targeted: false,
     })
 }
@@ -30,23 +31,9 @@ pub fn build_devql_hook_augmentation(
     }
 
     Some(HookAugmentation {
-        additional_context: format!(
-            "Use DevQL first for this repo-aware request. Prefer `path`, `path + lines`, `symbolFqn`, `fuzzyName`, or a distilled `semanticQuery` before broad repo search. Detailed repo-local DevQL guidance: `{surface_path}`."
-        ),
+        additional_context: build_turn_guidance(surface_path),
         targeted: true,
     })
-}
-
-fn session_bootstrap_text(surface_path: &str) -> String {
-    format!(
-        "<EXTREMELY_IMPORTANT>\n\
-This repo has DevQL.\n\
-For code understanding, repo exploration, architecture questions, symbol lookup, path/line resolution, and callers/usages/imports/tests/dependencies, use DevQL first before broad repo search or directory crawling.\n\
-Start with the most specific selector available: `path`, `path + lines`, `symbolFqn`, `fuzzyName`, or a distilled `semanticQuery`.\n\
-Fall back to targeted repo search only if DevQL returns no useful artefacts or rows.\n\
-Detailed repo-local DevQL guidance is installed at `{surface_path}`.\n\
-</EXTREMELY_IMPORTANT>"
-    )
 }
 
 fn agent_supports_turn_guidance(agent_name: &str) -> bool {
@@ -56,51 +43,25 @@ fn agent_supports_turn_guidance(agent_name: &str) -> bool {
     )
 }
 
-fn prompt_warrants_devql(prompt: &str) -> bool {
-    let lower = prompt.to_ascii_lowercase();
-    let repo_understanding_terms = [
-        "understand",
-        "explain",
-        "architecture",
-        "where is",
-        "find",
-        "inspect",
-        "caller",
-        "usage",
-        "import",
-        "dependency",
-        "test covering",
-    ];
-    let execution_terms = [
-        "fix ",
-        "implement ",
-        "edit ",
-        "write ",
-        "run ",
-        "build ",
-        "test ",
-        "format ",
-    ];
-    let looks_like_code_reference = prompt.contains('/')
-        || prompt.contains("::")
-        || prompt.contains('`')
-        || prompt.contains(':');
-    let looks_like_edit_or_execution = execution_terms.iter().any(|needle| lower.contains(needle));
-    let looks_like_repo_understanding = repo_understanding_terms
-        .iter()
-        .any(|needle| lower.contains(needle));
-
-    (looks_like_code_reference || looks_like_repo_understanding) && !looks_like_edit_or_execution
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
 
+    fn write_repo_policy(dir: &tempfile::TempDir, body: &str) {
+        std::fs::write(dir.path().join(".bitloops.toml"), body).expect("write repo policy");
+    }
+
     #[test]
     fn session_start_guidance_includes_direct_devql_first_instructions_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
         crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
             .expect("install codex repo skill");
 
@@ -116,16 +77,17 @@ mod tests {
         assert!(
             augmentation
                 .additional_context
-                .contains("This repo has DevQL")
+                .contains("DevQL-capable guidance surface")
         );
         assert!(
             augmentation
                 .additional_context
-                .contains("use DevQL first before broad repo search or directory crawling")
+                .contains("When DevQL is available in this session")
         );
         assert!(augmentation.additional_context.contains("path"));
         assert!(augmentation.additional_context.contains("symbolFqn"));
         assert!(augmentation.additional_context.contains("fuzzyName"));
+        assert!(augmentation.additional_context.contains("naturalLanguage"));
         assert!(augmentation.additional_context.contains("semanticQuery"));
         assert!(
             augmentation
@@ -137,6 +99,11 @@ mod tests {
             !augmentation
                 .additional_context
                 .contains("bitloops devql query '{")
+        );
+        assert!(
+            augmentation
+                .additional_context
+                .contains("fall back to targeted repo search or file reads")
         );
     }
 
@@ -151,8 +118,35 @@ mod tests {
     }
 
     #[test]
+    fn session_start_guidance_is_absent_when_policy_disables_guidance_even_if_skill_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = false
+"#,
+        );
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
+
+        assert_eq!(
+            build_devql_session_start_augmentation(dir.path(), AGENT_NAME_CODEX),
+            None
+        );
+    }
+
+    #[test]
     fn session_start_guidance_is_agent_specific() {
         let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
         crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
             .expect("install codex repo skill");
         crate::adapters::agents::gemini::skills::install_repo_skill(dir.path())
@@ -183,6 +177,13 @@ mod tests {
     #[test]
     fn turn_guidance_is_present_for_repo_understanding_prompt_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
         crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
             .expect("install codex repo skill");
 
@@ -194,18 +195,85 @@ mod tests {
         .expect("augmentation");
 
         assert!(augmentation.targeted);
-        assert!(augmentation.additional_context.contains("Use DevQL first"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("when it is available in this session")
+        );
         assert!(augmentation.additional_context.contains("path + lines"));
+        assert!(augmentation.additional_context.contains("naturalLanguage"));
+        assert!(
+            augmentation
+                .additional_context
+                .contains("fall back to targeted repo search or file reads")
+        );
+    }
+
+    #[test]
+    fn turn_guidance_is_present_for_repo_overview_prompt_when_skill_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
+
+        let augmentation =
+            build_devql_hook_augmentation(dir.path(), AGENT_NAME_CODEX, "What does this repo do?")
+                .expect("augmentation");
+
+        assert!(augmentation.targeted);
+        assert!(
+            augmentation
+                .additional_context
+                .contains("repo-aware request")
+        );
+        assert!(augmentation.additional_context.contains("naturalLanguage"));
     }
 
     #[test]
     fn turn_guidance_is_absent_for_non_repo_understanding_prompt() {
         let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
         crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
             .expect("install codex repo skill");
 
         assert_eq!(
             build_devql_hook_augmentation(dir.path(), AGENT_NAME_CODEX, "Run cargo fmt"),
+            None
+        );
+    }
+
+    #[test]
+    fn turn_guidance_is_absent_when_policy_disables_guidance_even_if_skill_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = false
+"#,
+        );
+        crate::adapters::agents::codex::skills::install_repo_skill(dir.path())
+            .expect("install codex repo skill");
+
+        assert_eq!(
+            build_devql_hook_augmentation(
+                dir.path(),
+                AGENT_NAME_CODEX,
+                "Help me understand src/payments/invoice.ts:42",
+            ),
             None
         );
     }

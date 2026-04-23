@@ -89,6 +89,32 @@ pub fn supported_agents(start: &Path) -> Result<Vec<String>> {
     supported_agents_from_policy(&policy)
 }
 
+pub fn devql_guidance_enabled(start: &Path) -> Result<bool> {
+    let policy = discover_repo_policy(start)?;
+    devql_guidance_enabled_from_policy(&policy)
+}
+
+pub fn devql_guidance_enabled_or_false(start: &Path) -> bool {
+    devql_guidance_enabled(start).unwrap_or(false)
+}
+
+pub fn agent_hook_install_options_for_policy(
+    start: &Path,
+) -> crate::adapters::agents::AgentHookInstallOptions {
+    crate::adapters::agents::AgentHookInstallOptions {
+        install_bitloops_skill: devql_guidance_enabled_or_false(start),
+    }
+}
+
+pub fn devql_guidance_enabled_from_policy(policy: &super::RepoPolicySnapshot) -> Result<bool> {
+    let Some(raw) = policy.agents.get("devql_guidance_enabled") else {
+        return Ok(true);
+    };
+
+    raw.as_bool()
+        .ok_or_else(|| anyhow!("`[agents].devql_guidance_enabled` must be a boolean"))
+}
+
 pub fn supported_agents_from_policy(policy: &super::RepoPolicySnapshot) -> Result<Vec<String>> {
     let Some(raw) = policy.agents.get("supported") else {
         return Ok(Vec::new());
@@ -227,7 +253,13 @@ pub fn write_project_bootstrap_settings(
     strategy: &str,
     supported_agents: &[String],
 ) -> Result<()> {
-    write_project_bootstrap_settings_with_daemon_binding(path, strategy, supported_agents, None)
+    write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
+        path,
+        strategy,
+        supported_agents,
+        None,
+        true,
+    )
 }
 
 pub fn write_project_bootstrap_settings_with_daemon_binding(
@@ -236,12 +268,30 @@ pub fn write_project_bootstrap_settings_with_daemon_binding(
     supported_agents: &[String],
     daemon_config_path: Option<&Path>,
 ) -> Result<()> {
+    write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
+        path,
+        strategy,
+        supported_agents,
+        daemon_config_path,
+        true,
+    )
+}
+
+pub fn write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
+    path: &Path,
+    strategy: &str,
+    supported_agents: &[String],
+    daemon_config_path: Option<&Path>,
+    devql_guidance_enabled: bool,
+) -> Result<()> {
     write_repo_policy_file(path, |doc| {
         ensure_capture_table(doc);
         doc["capture"]["enabled"] = Item::Value(TomlValue::from(true));
         doc["capture"]["strategy"] = Item::Value(TomlValue::from(strategy));
         ensure_agents_table(doc);
         doc["agents"]["supported"] = string_array_item(supported_agents);
+        doc["agents"]["devql_guidance_enabled"] =
+            Item::Value(TomlValue::from(devql_guidance_enabled));
         if let Some(daemon_config_path) = daemon_config_path {
             ensure_daemon_table(doc);
             doc["daemon"]["config_path"] = Item::Value(TomlValue::from(
@@ -279,6 +329,14 @@ pub fn set_capture_enabled(path: &Path, enabled: bool) -> Result<()> {
     write_repo_policy_file(path, |doc| {
         ensure_capture_table(doc);
         doc["capture"]["enabled"] = Item::Value(TomlValue::from(enabled));
+        Ok(())
+    })
+}
+
+pub fn set_devql_guidance_enabled(path: &Path, enabled: bool) -> Result<()> {
+    write_repo_policy_file(path, |doc| {
+        ensure_agents_table(doc);
+        doc["agents"]["devql_guidance_enabled"] = Item::Value(TomlValue::from(enabled));
         Ok(())
     })
 }
@@ -396,4 +454,84 @@ fn string_array_item(values: &[String]) -> Item {
         array.push(value.as_str());
     }
     Item::Value(TomlValue::Array(array))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn devql_guidance_enabled_defaults_true_when_repo_policy_omits_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(REPO_POLICY_FILE_NAME),
+            r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["codex"]
+"#,
+        )
+        .expect("write repo policy");
+
+        assert!(devql_guidance_enabled(dir.path()).expect("load devql guidance flag"));
+    }
+
+    #[test]
+    fn devql_guidance_enabled_rejects_non_boolean_values() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(REPO_POLICY_FILE_NAME),
+            r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = "sometimes"
+"#,
+        )
+        .expect("write repo policy");
+
+        let err = devql_guidance_enabled(dir.path()).expect_err("non-bool flag should fail");
+        assert!(format!("{err:#}").contains("`[agents].devql_guidance_enabled` must be a boolean"));
+    }
+
+    #[test]
+    fn devql_guidance_enabled_ignores_legacy_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(REPO_POLICY_FILE_NAME),
+            r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["codex"]
+devql_skill_enabled = false
+"#,
+        )
+        .expect("write repo policy");
+
+        assert!(devql_guidance_enabled(dir.path()).expect("load devql guidance flag"));
+    }
+
+    #[test]
+    fn write_project_bootstrap_settings_persists_devql_guidance_state() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(REPO_POLICY_LOCAL_FILE_NAME);
+
+        write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
+            &path,
+            "manual-commit",
+            &["codex".to_string()],
+            None,
+            false,
+        )
+        .expect("write repo policy");
+
+        let content = fs::read_to_string(path).expect("read repo policy");
+        assert!(content.contains("devql_guidance_enabled = false"));
+    }
 }

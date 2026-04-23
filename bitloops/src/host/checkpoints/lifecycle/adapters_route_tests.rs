@@ -1,7 +1,7 @@
 use super::*;
 use crate::adapters::agents::{
-    AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR, AGENT_NAME_GEMINI,
-    AGENT_NAME_OPEN_CODE,
+    AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
+    AGENT_NAME_GEMINI, AGENT_NAME_OPEN_CODE,
 };
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::interactions::db_store::interaction_spool_db_path;
@@ -32,11 +32,23 @@ fn seed_repo() -> TempDir {
     git_ok(root, &["config", "user.name", "Bitloops Test"]);
     git_ok(root, &["config", "user.email", "bitloops-test@example.com"]);
     std::fs::write(root.join(".gitignore"), "stores/\n").expect("write .gitignore");
+    std::fs::write(
+        root.join(".bitloops.toml"),
+        r#"
+[capture]
+enabled = true
+"#,
+    )
+    .expect("write repo policy");
     crate::test_support::git_fixtures::ensure_test_store_backends(root);
     std::fs::write(root.join("tracked.txt"), "one\n").expect("write tracked file");
     git_ok(root, &["add", "."]);
     git_ok(root, &["commit", "-m", "initial"]);
     dir
+}
+
+fn write_repo_policy(repo_root: &std::path::Path, body: &str) {
+    std::fs::write(repo_root.join(".bitloops.toml"), body).expect("write repo policy");
 }
 
 fn with_route_test_state<T>(
@@ -83,12 +95,10 @@ fn install_devql_prompt_surface_for_agent(repo_root: &std::path::Path, agent_nam
 
 fn assert_direct_session_start_context(context: &str, surface_path: &str) {
     assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-    assert!(context.contains("This repo has DevQL"));
-    assert!(context.contains("use DevQL first"));
-    assert!(context.contains("path"));
-    assert!(context.contains("symbolFqn"));
-    assert!(context.contains("fuzzyName"));
-    assert!(context.contains("semanticQuery"));
+    assert!(context.contains("This repo has DevQL guidance available"));
+    assert!(context.contains("when it is available in this session"));
+    assert!(context.contains("\"what does this repo do\""));
+    assert!(context.contains("fall back to targeted repo search or file reads"));
     assert!(context.contains(surface_path));
     assert!(!context.contains("# Using DevQL"));
     assert!(!context.contains("bitloops devql query '{"));
@@ -454,7 +464,8 @@ fn route_codex_user_prompt_submit_returns_targeted_devql_guidance_when_skill_exi
             serde_json::Value::String("UserPromptSubmit".to_string())
         );
         assert!(context.contains("Use DevQL first"));
-        assert!(context.contains("path + lines"));
+        assert!(context.contains("when it is available in this session"));
+        assert!(context.contains("fall back to targeted repo search or file reads"));
         assert!(
             context.contains(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
         );
@@ -516,10 +527,180 @@ fn route_claude_user_prompt_submit_returns_targeted_devql_guidance_when_skill_ex
             serde_json::Value::String("UserPromptSubmit".to_string())
         );
         assert!(context.contains("Use DevQL first"));
-        assert!(context.contains("path + lines"));
+        assert!(context.contains("when it is available in this session"));
+        assert!(context.contains("fall back to targeted repo search or file reads"));
         assert!(context.contains(
             crate::adapters::agents::claude_code::skills::CLAUDE_CODE_SKILL_RELATIVE_PATH
         ));
+        Ok(())
+    })
+}
+
+#[test]
+fn route_codex_user_prompt_submit_returns_targeted_devql_guidance_for_repo_overview_prompt()
+-> Result<()> {
+    let repo = seed_repo();
+    let session_id = "codex-session-prompt-repo-overview";
+    let transcript_path = repo.path().join("codex-transcript-repo-overview.json");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(
+        &transcript_path,
+        r#"{"messages":[{"type":"user","content":"Inspect tracked file"},{"type":"assistant","content":"Looking"}]}"#,
+    )
+    .expect("write transcript");
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_CODEX);
+
+        let session_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str.clone(),
+        })
+        .to_string();
+        route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_SESSION_START,
+            &session_payload,
+        )?;
+
+        let prompt_payload = serde_json::json!({
+            "sessionId": session_id,
+            "transcriptPath": transcript_path_str,
+            "prompt": "What does this repo do?",
+        })
+        .to_string();
+        let outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            &prompt_payload,
+        )?;
+
+        let stdout = outcome.stdout.expect("stdout");
+        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
+        let context = json["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .expect("additionalContext");
+        assert_eq!(
+            json["hookSpecificOutput"]["hookEventName"],
+            serde_json::Value::String("UserPromptSubmit".to_string())
+        );
+        assert!(context.contains("Use DevQL first"));
+        assert!(context.contains("when it is available in this session"));
+        assert!(context.contains("fall back to targeted repo search or file reads"));
+        assert!(
+            context.contains(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn route_claude_session_start_returns_no_context_when_guidance_is_disabled_even_if_skill_exists()
+-> Result<()> {
+    let repo = seed_repo();
+    write_repo_policy(
+        repo.path(),
+        r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["claude-code"]
+devql_guidance_enabled = false
+"#,
+    );
+    let session_id = "claude-session-start-disabled";
+    let transcript_path = repo.path().join("claude-transcript-disabled.json");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    std::fs::write(&transcript_path, "").expect("write transcript");
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        install_devql_prompt_surface_for_agent(repo.path(), AGENT_NAME_CLAUDE_CODE);
+
+        let session_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str,
+        })
+        .to_string();
+        let outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CLAUDE_CODE,
+            CLAUDE_HOOK_SESSION_START,
+            &session_payload,
+        )?;
+
+        assert!(outcome.stdout.is_none());
+        Ok(())
+    })
+}
+
+#[test]
+fn route_claude_user_prompt_submit_does_not_reinstall_or_emit_guidance_when_disabled() -> Result<()>
+{
+    let repo = seed_repo();
+    write_repo_policy(
+        repo.path(),
+        r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["claude-code"]
+devql_guidance_enabled = false
+"#,
+    );
+    let session_id = "claude-session-prompt-disabled";
+    let transcript_path = repo.path().join("claude-transcript-prompt-disabled.json");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    let skill_path = repo
+        .path()
+        .join(".claude/skills/bitloops/using-devql/SKILL.md");
+    let settings_path = repo.path().join(".claude/settings.json");
+    std::fs::write(
+        &transcript_path,
+        r#"{"messages":[{"type":"user","content":"Inspect tracked file"},{"type":"assistant","content":"Looking"}]}"#,
+    )
+    .expect("write transcript");
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        assert!(!settings_path.exists());
+        assert!(!skill_path.exists());
+
+        let session_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str.clone(),
+        })
+        .to_string();
+        let session_outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CLAUDE_CODE,
+            CLAUDE_HOOK_SESSION_START,
+            &session_payload,
+        )?;
+        assert!(session_outcome.stdout.is_none());
+        assert!(!skill_path.exists());
+
+        let prompt_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str,
+            "prompt": "Explain tracked.txt:1",
+        })
+        .to_string();
+        let prompt_outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CLAUDE_CODE,
+            CLAUDE_HOOK_USER_PROMPT_SUBMIT,
+            &prompt_payload,
+        )?;
+
+        assert!(
+            settings_path.exists(),
+            "expected hook self-heal to recreate settings"
+        );
+        assert!(prompt_outcome.stdout.is_none());
+        assert!(!skill_path.exists());
         Ok(())
     })
 }
@@ -629,6 +810,79 @@ fn route_codex_session_start_returns_no_context_when_skill_is_absent() -> Result
         )?;
 
         assert!(outcome.stdout.is_none());
+        Ok(())
+    })
+}
+
+#[test]
+fn route_codex_user_prompt_submit_does_not_reinstall_or_emit_guidance_when_disabled() -> Result<()>
+{
+    let repo = seed_repo();
+    write_repo_policy(
+        repo.path(),
+        r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["codex"]
+devql_guidance_enabled = false
+"#,
+    );
+    let session_id = "codex-session-prompt-disabled";
+    let transcript_path = repo.path().join("codex-transcript-prompt-disabled.json");
+    let transcript_path_str = transcript_path.to_string_lossy().to_string();
+    let skill_path = repo
+        .path()
+        .join(".agents/skills/bitloops/using-devql/SKILL.md");
+    let hooks_path = repo.path().join(".codex/config.toml");
+    std::fs::write(
+        &transcript_path,
+        [
+            codex_response_item_line("user", "input_text", "Inspect tracked file"),
+            codex_response_item_line("assistant", "output_text", "Looking"),
+        ]
+        .join("\n"),
+    )
+    .expect("write transcript");
+
+    with_route_test_state(repo.path(), &[], || -> Result<()> {
+        assert!(!hooks_path.exists());
+        assert!(!skill_path.exists());
+
+        let session_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str.clone(),
+        })
+        .to_string();
+        let session_outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_SESSION_START,
+            &session_payload,
+        )?;
+        assert!(session_outcome.stdout.is_none());
+        assert!(!skill_path.exists());
+
+        let prompt_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str,
+            "prompt": "Explain tracked.txt:1",
+        })
+        .to_string();
+        let prompt_outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_USER_PROMPT_SUBMIT,
+            &prompt_payload,
+        )?;
+
+        assert!(
+            hooks_path.exists(),
+            "expected hook self-heal to recreate codex hooks"
+        );
+        assert!(prompt_outcome.stdout.is_none());
+        assert!(!skill_path.exists());
         Ok(())
     })
 }

@@ -5,7 +5,9 @@ title: Uninstalling Bitloops
 
 # Uninstalling Bitloops
 
-`bitloops disable` turns capture off in the nearest discovered project policy while leaving hooks installed.
+`bitloops disable --capture` turns capture off in the nearest discovered project policy while leaving hooks installed.
+
+`bitloops disable --devql-guidance` removes only the repo-local DevQL guidance surface for configured agents while leaving hooks installed and making hook augmentation silent about DevQL.
 
 `bitloops uninstall` removes Bitloops-managed artefacts from your machine and, for repo-local targets, from known repositories or Bitloops projects.
 
@@ -75,7 +77,9 @@ By default, `--agent-hooks`, `--repo-config`, and `--git-hooks` operate on all k
 
 `--only-current-project` is valid only with `--agent-hooks`, `--repo-config`, and/or `--git-hooks`.
 
-If you only want to pause capture without removing hooks, use `bitloops disable`.
+If you only want to pause capture without removing hooks, use `bitloops disable --capture`.
+
+If you only want to suppress the repo-local DevQL guidance without removing hooks, use `bitloops disable --devql-guidance`.
 
 ## What `--full` Means
 

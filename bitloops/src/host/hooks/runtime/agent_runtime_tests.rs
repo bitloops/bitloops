@@ -53,6 +53,10 @@ fn setup_git_repo(dir: &TempDir) {
     run(&["commit", "-m", "initial"]);
 }
 
+fn write_repo_policy(path: &Path, body: &str) {
+    fs::write(path.join(".bitloops.toml"), body).expect("write repo policy");
+}
+
 fn run_git(dir: &Path, args: &[&str]) {
     let out = isolated_git_command(dir).args(args).output().unwrap();
     assert!(out.status.success(), "git {:?} failed", args);
@@ -329,6 +333,52 @@ fn user_prompt_submit_transitions_to_active() {
         assert!(pp.is_some());
         assert_eq!(pp.unwrap().prompt, "Fix the bug");
     });
+}
+
+#[test]
+fn user_prompt_submit_self_heal_does_not_reinstall_claude_guidance_when_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    write_repo_policy(
+        dir.path(),
+        r#"
+[capture]
+enabled = true
+
+[agents]
+supported = ["claude-code"]
+devql_guidance_enabled = false
+"#,
+    );
+    let backend = LocalFileBackend::new(dir.path());
+    let strategy = NoOpStrategy;
+    let skill_path = dir
+        .path()
+        .join(".claude/skills/bitloops/using-devql/SKILL.md");
+    let settings_path = dir.path().join(".claude/settings.json");
+
+    with_process_state(Some(dir.path()), &[], || {
+        handle_user_prompt_submit_with_strategy(
+            UserPromptSubmitInput {
+                session_id: "claude-guidance-disabled".to_string(),
+                transcript_path: "/tmp/claude-guidance-disabled.jsonl".to_string(),
+                prompt: "Explain tracked.txt:1".to_string(),
+            },
+            &backend,
+            &strategy,
+            Some(dir.path()),
+        )
+        .expect("user prompt submit should succeed");
+    });
+
+    assert!(
+        settings_path.exists(),
+        "expected hook self-heal to recreate Claude settings"
+    );
+    assert!(
+        !skill_path.exists(),
+        "disabled guidance should not be recreated during self-heal"
+    );
 }
 
 #[test]

@@ -16,6 +16,21 @@ use crate::host::checkpoints::transcript::{
 
 pub const DEFAULT_MODEL: &str = "sonnet";
 const SKILL_CONTENT_PREFIX: &str = "Base directory for this skill:";
+const EXTREMELY_IMPORTANT_OPEN: &str = "<EXTREMELY_IMPORTANT>";
+const EXTREMELY_IMPORTANT_CLOSE: &str = "</EXTREMELY_IMPORTANT>";
+const BITLOOPS_DEVQL_BOOTSTRAP_MARKERS: &[&str] = &[
+    "This repo has DevQL.",
+    "This repo has DevQL guidance available.",
+    "This repo has a DevQL-capable guidance surface installed.",
+    "Use DevQL first for code understanding in this repo.",
+    "Use DevQL first for this request.",
+    "Use DevQL first for this repo-aware request.",
+    "Bitloops has installed DevQL guidance for this repo at",
+    "Detailed repo-local DevQL guidance is installed at",
+    "Use that repo-local skill for DevQL-specific instructions.",
+    "Run DevQL before broad repo search.",
+    "Run this before broad repo search.",
+];
 const SUMMARIZATION_PROMPT_TEMPLATE: &str = r#"Analyze this development session transcript and generate a structured summary.
 
 <transcript>
@@ -371,9 +386,46 @@ fn empty_tool_input() -> ToolInput {
     }
 }
 
+fn contains_bitloops_devql_bootstrap_markers(content: &str) -> bool {
+    BITLOOPS_DEVQL_BOOTSTRAP_MARKERS
+        .iter()
+        .any(|marker| content.contains(marker))
+}
+
+fn strip_bitloops_bootstrap_text(content: &str) -> String {
+    let mut remainder = content;
+    let mut stripped_bootstrap = false;
+
+    loop {
+        let candidate = remainder.trim_start();
+        let Some(after_open) = candidate.strip_prefix(EXTREMELY_IMPORTANT_OPEN) else {
+            return if stripped_bootstrap {
+                candidate.to_string()
+            } else {
+                content.to_string()
+            };
+        };
+        let Some(close_idx) = after_open.find(EXTREMELY_IMPORTANT_CLOSE) else {
+            return content.to_string();
+        };
+
+        let bootstrap_block = &after_open[..close_idx];
+        if !contains_bitloops_devql_bootstrap_markers(bootstrap_block) {
+            return if stripped_bootstrap {
+                candidate.to_string()
+            } else {
+                content.to_string()
+            };
+        }
+
+        stripped_bootstrap = true;
+        remainder = &after_open[close_idx + EXTREMELY_IMPORTANT_CLOSE.len()..];
+    }
+}
+
 fn extract_user_entry(line: &Line) -> Option<Entry> {
     let raw = serde_json::to_vec(&line.message).ok()?;
-    let content = extract_user_content(&raw);
+    let content = strip_bitloops_bootstrap_text(&extract_user_content(&raw));
     if content.is_empty() || content.starts_with(SKILL_CONTENT_PREFIX) {
         return None;
     }
@@ -510,9 +562,13 @@ fn build_condensed_transcript_from_opencode(content: &[u8]) -> Vec<Entry> {
 
         match message.role.as_str() {
             "user" if !message.content.is_empty() => {
+                let content = strip_bitloops_bootstrap_text(&message.content);
+                if content.is_empty() {
+                    continue;
+                }
                 entries.push(Entry {
                     entry_type: EntryType::User,
-                    content: message.content,
+                    content,
                     tool_name: String::new(),
                     tool_detail: String::new(),
                 });
