@@ -11,7 +11,7 @@ Feature: Agent enablement produces a queryable repository
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
-    And I run EnableCLI for bitloops
+    And I run bitloops enable --capture in bitloops
     And I make a first change using Claude Code to bitloops
     And I committed today in bitloops
     And I run DevQL init in bitloops
@@ -28,7 +28,7 @@ Feature: Agent enablement produces a queryable repository
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
-    And I run EnableCLI for bitloops
+    And I run bitloops enable --capture in bitloops
     And I make a first change using Claude Code to bitloops
     And I committed today in bitloops
     And I run DevQL init in bitloops

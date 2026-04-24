@@ -10,9 +10,9 @@ use crate::capability_packs::semantic_clones::runtime_config::{
 };
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT, SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT,
+    SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::BlockedMailboxStatus;
 use crate::host::capability_host::{
@@ -323,6 +323,20 @@ fn workplane_mailbox_registration(
             CapabilityMailboxRegistration::new(
                 SEMANTIC_CLONES_CAPABILITY_ID,
                 SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                crate::host::capability_host::CapabilityMailboxPolicy::Job,
+                crate::host::capability_host::CapabilityMailboxHandler::Ingester(
+                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
+                ),
+            )
+            .readiness_policy(CapabilityMailboxReadinessPolicy::EmbeddingsSlot(
+                SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT,
+            ))
+            .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
+        ),
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => Some(
+            CapabilityMailboxRegistration::new(
+                SEMANTIC_CLONES_CAPABILITY_ID,
+                SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
                 crate::host::capability_host::CapabilityMailboxPolicy::Job,
                 crate::host::capability_host::CapabilityMailboxHandler::Ingester(
                     crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,

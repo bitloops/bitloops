@@ -18,8 +18,11 @@ const CMD_STOP: &str = "bitloops hooks claude-code stop";
 const CMD_USER_PROMPT_SUBMIT: &str = "bitloops hooks claude-code user-prompt-submit";
 const CMD_PRE_TASK: &str = "bitloops hooks claude-code pre-task";
 const CMD_POST_TASK: &str = "bitloops hooks claude-code post-task";
+const CMD_PRE_TOOL_USE: &str = "bitloops hooks claude-code pre-tool-use";
+const CMD_POST_TOOL_USE: &str = "bitloops hooks claude-code post-tool-use";
 const CMD_POST_TODO: &str = "bitloops hooks claude-code post-todo";
-const SESSION_START_MATCHER: &str = "startup|clear|compact";
+const SESSION_START_MATCHER: &str = "startup|resume|clear|compact";
+const ORDINARY_TOOL_MATCHER: &str = "^(?!Task$|TodoWrite$).+";
 
 /// A single hook entry within a matcher.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +166,8 @@ pub fn install_hooks_with_bitloops_skill(
         crate::adapters::agents::managed_hook_command(CMD_USER_PROMPT_SUBMIT);
     let cmd_pre_task = crate::adapters::agents::managed_hook_command(CMD_PRE_TASK);
     let cmd_post_task = crate::adapters::agents::managed_hook_command(CMD_POST_TASK);
+    let cmd_pre_tool_use = crate::adapters::agents::managed_hook_command(CMD_PRE_TOOL_USE);
+    let cmd_post_tool_use = crate::adapters::agents::managed_hook_command(CMD_POST_TOOL_USE);
     let cmd_post_todo = crate::adapters::agents::managed_hook_command(CMD_POST_TODO);
 
     // Parse existing settings as a raw map — preserves ALL unknown fields and hook types.
@@ -224,8 +229,18 @@ pub fn install_hooks_with_bitloops_skill(
         pre_tool_use = add_hook_to_matcher(pre_tool_use, "Task", &cmd_pre_task);
         count += 1;
     }
+    if !hook_command_exists_with_matcher(&pre_tool_use, ORDINARY_TOOL_MATCHER, &cmd_pre_tool_use) {
+        pre_tool_use = add_hook_to_matcher(pre_tool_use, ORDINARY_TOOL_MATCHER, &cmd_pre_tool_use);
+        count += 1;
+    }
     if !hook_command_exists_with_matcher(&post_tool_use, "Task", &cmd_post_task) {
         post_tool_use = add_hook_to_matcher(post_tool_use, "Task", &cmd_post_task);
+        count += 1;
+    }
+    if !hook_command_exists_with_matcher(&post_tool_use, ORDINARY_TOOL_MATCHER, &cmd_post_tool_use)
+    {
+        post_tool_use =
+            add_hook_to_matcher(post_tool_use, ORDINARY_TOOL_MATCHER, &cmd_post_tool_use);
         count += 1;
     }
     if !hook_command_exists_with_matcher(&post_tool_use, "TodoWrite", &cmd_post_todo) {
@@ -661,6 +676,8 @@ mod tests {
             let cmd_session_start =
                 crate::adapters::agents::managed_hook_command(CMD_SESSION_START);
             let cmd_post_task = crate::adapters::agents::managed_hook_command(CMD_POST_TASK);
+            let cmd_post_tool_use =
+                crate::adapters::agents::managed_hook_command(CMD_POST_TOOL_USE);
             let cmd_post_todo = crate::adapters::agents::managed_hook_command(CMD_POST_TODO);
 
             let stop = read_hook_type(&dir, "Stop");
@@ -676,7 +693,7 @@ mod tests {
             );
             assert_hook_exists(
                 &session_start,
-                "startup|clear|compact",
+                "startup|resume|clear|compact",
                 &cmd_session_start,
                 "Bitloops SessionStart hook",
             );
@@ -689,6 +706,12 @@ mod tests {
                 "user Write hook",
             );
             assert_hook_exists(&post_tool_use, "Task", &cmd_post_task, "Bitloops Task hook");
+            assert_hook_exists(
+                &post_tool_use,
+                ORDINARY_TOOL_MATCHER,
+                &cmd_post_tool_use,
+                "Bitloops ordinary PostToolUse hook",
+            );
             assert_hook_exists(
                 &post_tool_use,
                 "TodoWrite",
@@ -855,7 +878,7 @@ mod tests {
         let session_start = read_hook_type(&dir, "SessionStart");
         assert_hook_exists(
             &session_start,
-            "startup|clear|compact",
+            "startup|resume|clear|compact",
             "BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE='/tmp/config root/config.toml' bitloops hooks claude-code session-start",
             "Bitloops SessionStart hook with daemon config override",
         );
@@ -913,6 +936,54 @@ mod tests {
         assert!(
             !are_hooks_installed(dir.path()),
             "are_hooks_installed should be false when Stop hook is missing"
+        );
+    }
+
+    #[test]
+    fn install_hooks_adds_ordinary_tool_hooks_with_exclusion_matcher() {
+        let dir = tempfile::tempdir().unwrap();
+        install_hooks(dir.path(), false).unwrap();
+
+        let cmd_pre_tool_use = crate::adapters::agents::managed_hook_command(CMD_PRE_TOOL_USE);
+        let cmd_post_tool_use = crate::adapters::agents::managed_hook_command(CMD_POST_TOOL_USE);
+
+        let pre_tool_use = read_hook_type(&dir, "PreToolUse");
+        assert_hook_exists(
+            &pre_tool_use,
+            ORDINARY_TOOL_MATCHER,
+            &cmd_pre_tool_use,
+            "Bitloops ordinary PreToolUse hook",
+        );
+
+        let post_tool_use = read_hook_type(&dir, "PostToolUse");
+        assert_hook_exists(
+            &post_tool_use,
+            ORDINARY_TOOL_MATCHER,
+            &cmd_post_tool_use,
+            "Bitloops ordinary PostToolUse hook",
+        );
+    }
+
+    #[test]
+    fn install_hooks_installs_session_start_matcher_with_resume_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+
+        install_hooks(dir.path(), false).unwrap();
+
+        let session_start = read_hook_type(&dir, "SessionStart");
+        assert_eq!(
+            session_start.len(),
+            1,
+            "should install a single SessionStart matcher"
+        );
+        assert_eq!(
+            session_start[0].matcher, "startup|resume|clear|compact",
+            "SessionStart matcher should include resume"
+        );
+        assert_eq!(
+            session_start[0].hooks[0].command,
+            crate::adapters::agents::managed_hook_command(CMD_SESSION_START),
+            "SessionStart matcher should install the Bitloops command"
         );
     }
 }

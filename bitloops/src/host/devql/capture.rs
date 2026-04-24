@@ -158,14 +158,39 @@ async fn sync_changed_paths(
 
     #[cfg(not(test))]
     {
-        crate::host::devql::enqueue_spooled_sync_task(
-            cfg,
-            crate::daemon::DevqlTaskSource::Watcher,
-            crate::host::devql::SyncMode::Paths(paths),
-        )
-        .context("queueing DevQL sync for watcher capture paths in repo-local spool")?;
+        enqueue_spooled_sync_task_with_retry(cfg, paths)
+            .context("queueing DevQL sync for watcher capture paths in repo-local spool")?;
         Ok(())
     }
+}
+
+#[cfg(not(test))]
+fn enqueue_spooled_sync_task_with_retry(
+    cfg: &crate::host::devql::DevqlConfig,
+    paths: Vec<String>,
+) -> Result<()> {
+    const MAX_ATTEMPTS: usize = 5;
+    for attempt in 1..=MAX_ATTEMPTS {
+        match crate::host::devql::enqueue_spooled_sync_task(
+            cfg,
+            crate::daemon::DevqlTaskSource::Watcher,
+            crate::host::devql::SyncMode::Paths(paths.clone()),
+        ) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                if attempt == MAX_ATTEMPTS
+                    || !err
+                        .to_string()
+                        .to_ascii_lowercase()
+                        .contains("database is locked")
+                {
+                    return Err(err);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100_u64 * attempt as u64));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn filter_paths_for_sync(

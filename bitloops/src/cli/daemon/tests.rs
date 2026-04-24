@@ -7,7 +7,8 @@ use crate::daemon::{
     DevqlTaskKindCounts, DevqlTaskProgress, DevqlTaskQueueState, DevqlTaskQueueStatus,
     DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus, EnrichmentQueueMode,
     EnrichmentQueueState, EnrichmentQueueStatus, EnrichmentWorkerPoolKind,
-    EnrichmentWorkerPoolStatus, FailedEmbeddingJobSummary, RepoTaskControlState,
+    EnrichmentWorkerPoolStatus, FailedEmbeddingJobSummary, InitRuntimeLaneProgressView,
+    InitRuntimeLaneQueueView, InitRuntimeLaneView, InitRuntimeSessionView, RepoTaskControlState,
     ServiceManagerKind, SyncTaskMode, SyncTaskSpec,
 };
 use crate::host::devql::{SyncProgressPhase, SyncProgressUpdate};
@@ -86,6 +87,77 @@ fn sample_capability_event_status() -> CapabilityEventQueueStatus {
         current_repo_run: Some(sample_capability_event_run(
             CapabilityEventRunStatus::Running,
         )),
+    }
+}
+
+fn sample_lane(status: &str) -> InitRuntimeLaneView {
+    InitRuntimeLaneView {
+        status: status.to_string(),
+        waiting_reason: None,
+        detail: None,
+        activity_label: None,
+        task_id: None,
+        run_id: None,
+        progress: None,
+        queue: InitRuntimeLaneQueueView {
+            queued: 0,
+            running: 0,
+            failed: 0,
+        },
+        warnings: Vec::new(),
+        pending_count: 0,
+        running_count: 0,
+        failed_count: 0,
+        completed_count: 0,
+    }
+}
+
+fn sample_current_init_session() -> InitRuntimeSessionView {
+    InitRuntimeSessionView {
+        init_session_id: "init-session-1".to_string(),
+        status: "running".to_string(),
+        waiting_reason: Some("waiting_for_embeddings_bootstrap".to_string()),
+        warning_summary: None,
+        follow_up_sync_required: false,
+        run_sync: true,
+        run_ingest: false,
+        embeddings_selected: true,
+        summaries_selected: false,
+        summary_embeddings_selected: false,
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        ingest_task_id: None,
+        follow_up_sync_task_id: None,
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        summary_bootstrap_task_id: None,
+        terminal_error: None,
+        sync_lane: sample_lane("completed"),
+        ingest_lane: sample_lane("skipped"),
+        code_embeddings_lane: InitRuntimeLaneView {
+            status: "running".to_string(),
+            waiting_reason: Some("waiting_for_embeddings_bootstrap".to_string()),
+            detail: Some("code_embeddings".to_string()),
+            activity_label: Some("Creating code embeddings".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(InitRuntimeLaneProgressView {
+                completed: 0,
+                in_memory_completed: 0,
+                total: 1,
+                remaining: 1,
+            }),
+            queue: InitRuntimeLaneQueueView {
+                queued: 1,
+                running: 0,
+                failed: 0,
+            },
+            warnings: Vec::new(),
+            pending_count: 1,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 0,
+        },
+        summaries_lane: sample_lane("skipped"),
+        summary_embeddings_lane: sample_lane("skipped"),
     }
 }
 
@@ -519,6 +591,7 @@ fn status_lines_show_global_supervisor_install_and_state() {
         health: None,
         current_state_consumers: None,
         capability_events: None,
+        current_init_session: None,
         enrichment: Some(EnrichmentQueueStatus {
             state: EnrichmentQueueState {
                 version: 1,
@@ -680,6 +753,7 @@ fn status_lines_show_log_file_for_running_daemon() {
         health: None,
         current_state_consumers: None,
         capability_events: None,
+        current_init_session: None,
         enrichment: None,
         devql_tasks: None,
     };
@@ -699,6 +773,7 @@ fn status_lines_show_log_file_when_daemon_is_stopped() {
         health: None,
         current_state_consumers: None,
         capability_events: None,
+        current_init_session: None,
         enrichment: None,
         devql_tasks: None,
     };
@@ -743,6 +818,7 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
         health: None,
         current_state_consumers: None,
         capability_events: None,
+        current_init_session: None,
         enrichment: None,
         devql_tasks: Some(DevqlTaskQueueStatus {
             state: DevqlTaskQueueState {
@@ -839,6 +915,54 @@ fn status_lines_include_sync_queue_and_current_repo_task() {
 }
 
 #[test]
+fn status_lines_include_current_init_session_and_code_embeddings_lane() {
+    let report = DaemonStatusReport {
+        runtime: None,
+        service: None,
+        service_running: false,
+        health: None,
+        current_state_consumers: None,
+        capability_events: None,
+        current_init_session: Some(sample_current_init_session()),
+        enrichment: None,
+        devql_tasks: Some(DevqlTaskQueueStatus {
+            state: DevqlTaskQueueState {
+                version: 1,
+                queued_tasks: 1,
+                running_tasks: 0,
+                failed_tasks: 0,
+                completed_recent_tasks: 0,
+                by_kind: vec![DevqlTaskKindCounts {
+                    kind: DevqlTaskKind::EmbeddingsBootstrap,
+                    queued_tasks: 1,
+                    running_tasks: 0,
+                    failed_tasks: 0,
+                    completed_recent_tasks: 0,
+                }],
+                last_action: Some("queued".to_string()),
+                last_updated_unix: 0,
+            },
+            persisted: true,
+            current_repo_tasks: Vec::new(),
+            current_repo_control: None,
+        }),
+    };
+
+    let lines = status_lines(&report);
+    assert!(lines.contains(&"Current init session: init-session-1 (Running)".to_string()));
+    assert!(lines.contains(
+        &"Current init waiting: Waiting for the embeddings runtime to warm up".to_string()
+    ));
+    assert!(lines.contains(&"Current repo code embeddings: Creating code embeddings (Waiting for the embeddings runtime to warm up) · 0 of 1 ready · 1 left · Work items: 1 waiting · 0 in flight · 0 failed".to_string()));
+    assert!(
+        lines.contains(
+            &"DevQL embeddings runtime bootstrap tasks: queued=1, running=0, failed=0, completed_recent=0"
+                .to_string()
+        )
+    );
+}
+
+#[test]
 fn status_lines_include_capability_event_queue_and_current_repo_run() {
     let report = DaemonStatusReport {
         runtime: None,
@@ -859,6 +983,7 @@ fn status_lines_include_capability_event_queue_and_current_repo_run() {
             ));
             status
         }),
+        current_init_session: None,
         enrichment: None,
         devql_tasks: None,
     };
@@ -888,6 +1013,7 @@ fn run_status_writes_json_when_requested() {
         health: None,
         current_state_consumers: Some(sample_capability_event_status()),
         capability_events: Some(sample_capability_event_status()),
+        current_init_session: Some(sample_current_init_session()),
         enrichment: None,
         devql_tasks: None,
     };
@@ -917,6 +1043,10 @@ fn run_status_writes_json_when_requested() {
     assert_eq!(
         value["capability_events"]["current_repo_run"]["error"],
         serde_json::json!("handler failed")
+    );
+    assert_eq!(
+        value["current_init_session"]["code_embeddings_lane"]["status"],
+        serde_json::json!("running")
     );
 }
 

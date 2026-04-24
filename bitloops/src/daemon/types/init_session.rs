@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::devql_task::DevqlTaskStatus;
 use super::embeddings_bootstrap::InitEmbeddingsBootstrapRequest;
 use super::summary_bootstrap::SummaryBootstrapRequest;
 
@@ -29,6 +30,15 @@ pub enum InitSessionTerminalStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InitSessionTaskTerminalSnapshot {
+    pub task_id: String,
+    pub status: DevqlTaskStatus,
+    pub updated_at_unix: u64,
+    pub completed_at_unix: Option<u64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InitSessionRecord {
     pub init_session_id: String,
     pub repo_id: String,
@@ -36,12 +46,22 @@ pub struct InitSessionRecord {
     pub daemon_config_root: PathBuf,
     pub selections: StartInitSessionSelections,
     pub initial_sync_task_id: Option<String>,
+    #[serde(default)]
+    pub initial_sync_terminal: Option<InitSessionTaskTerminalSnapshot>,
     pub ingest_task_id: Option<String>,
+    #[serde(default)]
+    pub ingest_terminal: Option<InitSessionTaskTerminalSnapshot>,
     pub embeddings_bootstrap_task_id: Option<String>,
+    #[serde(default)]
+    pub embeddings_bootstrap_terminal: Option<InitSessionTaskTerminalSnapshot>,
     #[serde(alias = "summary_bootstrap_run_id", default)]
     pub summary_bootstrap_task_id: Option<String>,
+    #[serde(default)]
+    pub summary_bootstrap_terminal: Option<InitSessionTaskTerminalSnapshot>,
     pub follow_up_sync_required: bool,
     pub follow_up_sync_task_id: Option<String>,
+    #[serde(default)]
+    pub follow_up_sync_terminal: Option<InitSessionTaskTerminalSnapshot>,
     #[serde(default)]
     pub next_completion_seq: u64,
     #[serde(default)]

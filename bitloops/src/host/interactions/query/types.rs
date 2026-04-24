@@ -1,6 +1,7 @@
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::interactions::types::{
-    InteractionEvent, InteractionSession, InteractionToolUse, InteractionTurn,
+    InteractionEvent, InteractionSession, InteractionSubagentRun, InteractionToolInvocation,
+    InteractionTurn,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -49,7 +50,8 @@ pub struct InteractionSessionSummary {
     pub checkpoint_ids: Vec<String>,
     pub token_usage: Option<TokenUsageMetadata>,
     pub file_paths: Vec<String>,
-    pub tool_uses: Vec<InteractionToolUse>,
+    pub tool_uses: Vec<InteractionToolInvocation>,
+    pub subagent_runs: Vec<InteractionSubagentRun>,
     pub linked_checkpoints: Vec<InteractionLinkedCheckpoint>,
     pub latest_commit_author: Option<InteractionLinkedCheckpoint>,
 }
@@ -57,7 +59,8 @@ pub struct InteractionSessionSummary {
 #[derive(Debug, Clone)]
 pub struct InteractionTurnSummary {
     pub turn: InteractionTurn,
-    pub tool_uses: Vec<InteractionToolUse>,
+    pub tool_uses: Vec<InteractionToolInvocation>,
+    pub subagent_runs: Vec<InteractionSubagentRun>,
     pub linked_checkpoints: Vec<InteractionLinkedCheckpoint>,
     pub latest_commit_author: Option<InteractionLinkedCheckpoint>,
 }
@@ -90,6 +93,7 @@ pub struct InteractionKpis {
     pub total_turns: usize,
     pub total_checkpoints: usize,
     pub total_tool_uses: usize,
+    pub total_subagent_runs: usize,
     pub total_actors: usize,
     pub total_agents: usize,
     pub input_tokens: u64,

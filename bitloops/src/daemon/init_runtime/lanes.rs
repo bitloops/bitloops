@@ -9,6 +9,10 @@ use super::orchestration::{
     summaries_follow_up_pending, summary_bootstrap_outstanding_after_initial_sync, task_failed,
 };
 use super::stats::{SessionWorkplaneStats, StatusCounts};
+use super::tasks::{
+    effective_task_id, follow_up_sync_status, initial_sync_status, task_status_is_completed,
+    task_status_is_failed, task_status_is_terminal,
+};
 use super::types::{
     InitRuntimeLaneProgressView, InitRuntimeLaneQueueView, InitRuntimeLaneView,
     InitRuntimeLaneWarningView,
@@ -22,6 +26,14 @@ pub(crate) struct SummaryEmbeddingsLaneContext<'a> {
     pub(crate) current_state: StatusCounts,
     pub(crate) progress: Option<InitRuntimeLaneProgressView>,
     pub(crate) summaries_progress: Option<InitRuntimeLaneProgressView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncDependencyState {
+    Ready,
+    Failed,
+    WaitingForInitialSync,
+    WaitingForCurrentStateConsumer,
 }
 
 pub(crate) fn derive_sync_lane(
@@ -79,7 +91,39 @@ pub(crate) fn derive_sync_lane(
         return failed_lane(
             Some("Applying codebase updates failed".to_string()),
             current_state,
+            effective_task_id(
+                initial_sync,
+                session.initial_sync_terminal.as_ref(),
+                session.initial_sync_task_id.as_deref(),
+            ),
             None,
+            None,
+            Vec::new(),
+        );
+    }
+    if follow_up_sync_status(session, follow_up_sync).is_some_and(task_status_is_failed) {
+        return failed_lane(
+            Some("Running a follow-up sync failed".to_string()),
+            current_state,
+            effective_task_id(
+                follow_up_sync,
+                session.follow_up_sync_terminal.as_ref(),
+                session.follow_up_sync_task_id.as_deref(),
+            ),
+            None,
+            None,
+            Vec::new(),
+        );
+    }
+    if initial_sync_status(session, initial_sync).is_some_and(task_status_is_failed) {
+        return failed_lane(
+            Some("Syncing repository failed".to_string()),
+            current_state,
+            effective_task_id(
+                initial_sync,
+                session.initial_sync_terminal.as_ref(),
+                session.initial_sync_task_id.as_deref(),
+            ),
             None,
             None,
             Vec::new(),
@@ -123,16 +167,11 @@ pub(crate) fn derive_ingest_lane(
         );
     }
     if session.selections.run_sync
-        && !initial_sync.is_some_and(|task| {
-            matches!(
-                task.status,
-                DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
-            )
-        })
+        && !initial_sync_status(session, initial_sync).is_some_and(task_status_is_terminal)
     {
         return runtime_lane("waiting", None, StatusCounts::default(), Vec::new())
             .with_waiting_reason("waiting_for_sync")
-            .with_activity_label("Waiting for sync to finish before starting ingest");
+            .with_activity_label("Waiting for sync to complete before starting ingest");
     }
     if ingest_task.is_none() {
         return runtime_lane("waiting", None, StatusCounts::default(), Vec::new())
@@ -198,50 +237,32 @@ pub(crate) fn derive_code_embeddings_lane(
             warnings,
         );
     }
-    if sync_dependency_failed(session, initial_sync, current_state) {
-        return failed_lane(
-            Some("Syncing repository failed".to_string()),
-            stats.code_embedding_jobs.counts,
-            initial_sync.map(|task| task.task_id.clone()),
-            None,
-            progress,
-            warnings,
-        );
-    }
-    if session.selections.run_sync && !sync_dependency_ready(session, initial_sync, current_state) {
-        return runtime_lane(
-            "waiting",
-            progress,
-            stats.code_embedding_jobs.counts,
-            warnings,
-        )
-        .with_waiting_reason("waiting_for_sync")
-        .with_activity_label("Waiting for sync to finish before creating code embeddings");
-    }
-    if let Some(reason) = stats.blocked_code_embedding_reason.clone() {
-        return runtime_lane(
-            "waiting",
-            progress,
-            stats.code_embedding_jobs.counts,
-            warnings,
-        )
-        .with_waiting_reason("blocked_mailbox")
-        .with_activity_label("Indexing source code")
-        .with_detail(reason);
-    }
-    if stats.code_embedding_jobs.counts.pending > 0 || stats.code_embedding_jobs.counts.running > 0
-    {
-        return runtime_lane(
-            if stats.code_embedding_jobs.counts.running > 0 {
-                "running"
-            } else {
-                "queued"
-            },
-            progress,
-            stats.code_embedding_jobs.counts,
-            warnings,
-        )
-        .with_activity_label("Indexing source code");
+    match sync_dependency_state(session, initial_sync, current_state) {
+        SyncDependencyState::Failed => {
+            return failed_lane(
+                Some("Syncing repository failed".to_string()),
+                stats.code_embedding_jobs.counts,
+                effective_task_id(
+                    initial_sync,
+                    session.initial_sync_terminal.as_ref(),
+                    session.initial_sync_task_id.as_deref(),
+                ),
+                None,
+                progress,
+                warnings,
+            );
+        }
+        SyncDependencyState::WaitingForInitialSync => {
+            return runtime_lane(
+                "waiting",
+                progress,
+                stats.code_embedding_jobs.counts,
+                warnings,
+            )
+            .with_waiting_reason("waiting_for_sync")
+            .with_activity_label("Waiting for sync to complete before creating code embeddings");
+        }
+        SyncDependencyState::Ready | SyncDependencyState::WaitingForCurrentStateConsumer => {}
     }
     if embeddings_bootstrap_outstanding_after_initial_sync(session, initial_sync, embeddings_task) {
         return runtime_lane(
@@ -262,6 +283,53 @@ pub(crate) fn derive_code_embeddings_lane(
         )
         .with_waiting_reason("waiting_for_follow_up_sync")
         .with_activity_label("Running a follow-up sync");
+    }
+    if sync_dependency_state(session, initial_sync, current_state)
+        == SyncDependencyState::WaitingForCurrentStateConsumer
+    {
+        return runtime_lane(
+            "waiting",
+            progress,
+            stats.code_embedding_jobs.counts,
+            warnings,
+        )
+        .with_waiting_reason("waiting_for_current_state_consumer")
+        .with_activity_label("Applying codebase updates");
+    }
+    if let Some(reason) = stats.blocked_code_embedding_reason.clone() {
+        return runtime_lane(
+            "waiting",
+            progress,
+            stats.code_embedding_jobs.counts,
+            warnings,
+        )
+        .with_waiting_reason("blocked_mailbox")
+        .with_activity_label("Indexing source code")
+        .with_detail(reason);
+    }
+    if embedding_batches_are_preparing(stats, progress.as_ref()) {
+        return runtime_lane(
+            "waiting",
+            progress,
+            stats.code_embedding_jobs.counts,
+            warnings,
+        )
+        .with_waiting_reason("preparing_embedding_batches")
+        .with_activity_label("Preparing embedding batches");
+    }
+    if stats.code_embedding_jobs.counts.pending > 0 || stats.code_embedding_jobs.counts.running > 0
+    {
+        return runtime_lane(
+            if stats.code_embedding_jobs.counts.running > 0 {
+                "running"
+            } else {
+                "queued"
+            },
+            progress,
+            stats.code_embedding_jobs.counts,
+            warnings,
+        )
+        .with_activity_label("Indexing source code");
     }
     if !warnings.is_empty() {
         return runtime_lane(
@@ -326,20 +394,55 @@ pub(crate) fn derive_summaries_lane(
             );
         }
     }
-    if sync_dependency_failed(session, initial_sync, current_state) {
-        return failed_lane(
-            Some("Syncing repository failed".to_string()),
-            stats.summary_jobs,
-            initial_sync.map(|task| task.task_id.clone()),
-            summary_run.map(|run| run.run_id.clone()),
-            progress,
-            warnings,
-        );
+    match sync_dependency_state(session, initial_sync, current_state) {
+        SyncDependencyState::Failed => {
+            return failed_lane(
+                Some("Syncing repository failed".to_string()),
+                stats.summary_jobs,
+                effective_task_id(
+                    initial_sync,
+                    session.initial_sync_terminal.as_ref(),
+                    session.initial_sync_task_id.as_deref(),
+                ),
+                summary_run
+                    .map(|run| run.run_id.clone())
+                    .or_else(|| {
+                        session
+                            .summary_bootstrap_terminal
+                            .as_ref()
+                            .map(|terminal| terminal.task_id.clone())
+                    })
+                    .or_else(|| session.summary_bootstrap_task_id.clone()),
+                progress,
+                warnings,
+            );
+        }
+        SyncDependencyState::WaitingForInitialSync => {
+            return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
+                .with_waiting_reason("waiting_for_sync")
+                .with_activity_label("Waiting for sync to complete before generating summaries")
+                .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
+        }
+        SyncDependencyState::Ready | SyncDependencyState::WaitingForCurrentStateConsumer => {}
     }
-    if session.selections.run_sync && !sync_dependency_ready(session, initial_sync, current_state) {
+    if summary_bootstrap_outstanding_after_initial_sync(session, initial_sync, summary_run) {
         return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
-            .with_waiting_reason("waiting_for_sync")
-            .with_activity_label("Waiting for sync to finish before generating summaries")
+            .with_waiting_reason("waiting_for_summary_bootstrap")
+            .with_activity_label("Preparing summary generation")
+            .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
+    }
+    if summaries_follow_up_pending(session, initial_sync, follow_up_sync, summary_run) {
+        return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
+            .with_waiting_reason("waiting_for_follow_up_sync")
+            .with_activity_label("Running a follow-up sync")
+            .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
+    }
+    if sync_dependency_state(session, initial_sync, current_state)
+        == SyncDependencyState::WaitingForCurrentStateConsumer
+    {
+        return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
+            .with_waiting_reason("waiting_for_current_state_consumer")
+            .with_activity_label("Applying codebase updates")
             .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
     }
     if let Some(reason) = stats.blocked_summary_reason.clone() {
@@ -362,18 +465,6 @@ pub(crate) fn derive_summaries_lane(
         )
         .with_activity_label("Generating summaries")
         .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
-    }
-    if summary_bootstrap_outstanding_after_initial_sync(session, initial_sync, summary_run) {
-        return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
-            .with_waiting_reason("waiting_for_summary_bootstrap")
-            .with_activity_label("Preparing summary generation")
-            .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
-    }
-    if summaries_follow_up_pending(session, initial_sync, follow_up_sync, summary_run) {
-        return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
-            .with_waiting_reason("waiting_for_follow_up_sync")
-            .with_activity_label("Running a follow-up sync")
-            .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
     }
     if !warnings.is_empty() {
         return runtime_lane("warning", progress, stats.summary_jobs, warnings)
@@ -435,25 +526,42 @@ pub(crate) fn derive_summary_embeddings_lane(
             warnings,
         );
     }
-    if sync_dependency_failed(session, initial_sync, current_state) {
-        return failed_lane(
-            Some("Syncing repository failed".to_string()),
-            stats.summary_embedding_jobs.counts,
-            initial_sync.map(|task| task.task_id.clone()),
-            summary_run.map(|run| run.run_id.clone()),
-            progress,
-            warnings,
-        );
-    }
-    if session.selections.run_sync && !sync_dependency_ready(session, initial_sync, current_state) {
-        return runtime_lane(
-            "waiting",
-            progress,
-            stats.summary_embedding_jobs.counts,
-            warnings,
-        )
-        .with_waiting_reason("waiting_for_sync")
-        .with_activity_label("Waiting for sync to finish before creating summary embeddings");
+    match sync_dependency_state(session, initial_sync, current_state) {
+        SyncDependencyState::Failed => {
+            return failed_lane(
+                Some("Syncing repository failed".to_string()),
+                stats.summary_embedding_jobs.counts,
+                effective_task_id(
+                    initial_sync,
+                    session.initial_sync_terminal.as_ref(),
+                    session.initial_sync_task_id.as_deref(),
+                ),
+                summary_run
+                    .map(|run| run.run_id.clone())
+                    .or_else(|| {
+                        session
+                            .summary_bootstrap_terminal
+                            .as_ref()
+                            .map(|terminal| terminal.task_id.clone())
+                    })
+                    .or_else(|| session.summary_bootstrap_task_id.clone()),
+                progress,
+                warnings,
+            );
+        }
+        SyncDependencyState::WaitingForInitialSync => {
+            return runtime_lane(
+                "waiting",
+                progress,
+                stats.summary_embedding_jobs.counts,
+                warnings,
+            )
+            .with_waiting_reason("waiting_for_sync")
+            .with_activity_label(
+                "Waiting for sync to complete before creating summary embeddings",
+            );
+        }
+        SyncDependencyState::Ready | SyncDependencyState::WaitingForCurrentStateConsumer => {}
     }
     if embeddings_bootstrap_outstanding_after_initial_sync(session, initial_sync, embeddings_task) {
         return runtime_lane(
@@ -484,6 +592,18 @@ pub(crate) fn derive_summary_embeddings_lane(
         )
         .with_waiting_reason("waiting_for_follow_up_sync")
         .with_activity_label("Running a follow-up sync");
+    }
+    if sync_dependency_state(session, initial_sync, current_state)
+        == SyncDependencyState::WaitingForCurrentStateConsumer
+    {
+        return runtime_lane(
+            "waiting",
+            progress,
+            stats.summary_embedding_jobs.counts,
+            warnings,
+        )
+        .with_waiting_reason("waiting_for_current_state_consumer")
+        .with_activity_label("Applying codebase updates");
     }
     if stats.summary_jobs.pending > 0 || stats.summary_jobs.running > 0 {
         return runtime_lane(
@@ -649,27 +769,46 @@ fn progress_has_remaining(progress: Option<&InitRuntimeLaneProgressView>) -> boo
     progress.is_some_and(|progress| progress.remaining > 0)
 }
 
-fn sync_dependency_failed(
-    session: &InitSessionRecord,
-    initial_sync: Option<&DevqlTaskRecord>,
-    current_state: StatusCounts,
-) -> bool {
-    session.selections.run_sync && (task_failed(initial_sync) || current_state.failed > 0)
+fn progress_visible_completed(progress: Option<&InitRuntimeLaneProgressView>) -> u64 {
+    progress
+        .map(|progress| {
+            progress
+                .completed
+                .saturating_add(progress.in_memory_completed)
+        })
+        .unwrap_or(0)
 }
 
-fn sync_dependency_ready(
+fn embedding_batches_are_preparing(
+    stats: &SessionWorkplaneStats,
+    progress: Option<&InitRuntimeLaneProgressView>,
+) -> bool {
+    stats.code_embedding_jobs.counts.running > 0
+        && stats.code_embedding_jobs.counts.completed == 0
+        && progress_visible_completed(progress) == 0
+}
+
+fn sync_dependency_state(
     session: &InitSessionRecord,
     initial_sync: Option<&DevqlTaskRecord>,
     current_state: StatusCounts,
-) -> bool {
+) -> SyncDependencyState {
     if !session.selections.run_sync {
-        return true;
+        return SyncDependencyState::Ready;
     }
 
-    initial_sync.is_some_and(|task| task.status == DevqlTaskStatus::Completed)
-        && current_state.pending == 0
-        && current_state.running == 0
-        && current_state.failed == 0
+    if initial_sync_status(session, initial_sync).is_some_and(task_status_is_failed)
+        || current_state.failed > 0
+    {
+        return SyncDependencyState::Failed;
+    }
+    if !initial_sync_status(session, initial_sync).is_some_and(task_status_is_completed) {
+        return SyncDependencyState::WaitingForInitialSync;
+    }
+    if current_state.pending > 0 || current_state.running > 0 {
+        return SyncDependencyState::WaitingForCurrentStateConsumer;
+    }
+    SyncDependencyState::Ready
 }
 
 pub(crate) fn active_task(task: Option<&DevqlTaskRecord>) -> Option<&DevqlTaskRecord> {

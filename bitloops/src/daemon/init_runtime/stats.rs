@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::runtime_presentation::{
     RETRY_FAILED_ENRICHMENTS_COMMAND, mailbox_label, workplane_warning_message,
@@ -98,12 +99,6 @@ impl SessionWorkplaneStats {
         ]);
     }
 
-    pub(crate) fn warning_failed_jobs_total(&self) -> u64 {
-        self.code_embedding_jobs.counts.failed
-            + self.summary_embedding_jobs.counts.failed
-            + self.summary_refresh_jobs.counts.failed
-    }
-
     pub(crate) fn summary_warnings(&self) -> Vec<InitRuntimeLaneWarningView> {
         mailbox_warning(
             SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
@@ -161,7 +156,9 @@ pub(crate) fn mailbox_stats_mut<'a>(
 ) -> &'a mut SessionMailboxStats {
     match mailbox_name {
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => &mut stats.summary_refresh_jobs,
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => &mut stats.code_embedding_jobs,
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => {
+            &mut stats.code_embedding_jobs
+        }
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => &mut stats.summary_embedding_jobs,
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => &mut stats.clone_rebuild_jobs,
         _ => &mut stats.clone_rebuild_jobs,
@@ -173,6 +170,12 @@ pub(crate) fn semantic_embedding_mailbox_name_for_representation(
 ) -> &'static str {
     if representation_kind.eq_ignore_ascii_case(&EmbeddingRepresentationKind::Summary.to_string()) {
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+    } else if EmbeddingRepresentationKind::Identity
+        .storage_values()
+        .iter()
+        .any(|value| representation_kind.eq_ignore_ascii_case(value))
+    {
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
     } else {
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
     }
@@ -183,6 +186,8 @@ pub(crate) fn semantic_embedding_representation_kind_for_mailbox(
 ) -> &'static str {
     if mailbox_name == SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX {
         "summary"
+    } else if mailbox_name == SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX {
+        "identity"
     } else {
         "code"
     }

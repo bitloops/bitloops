@@ -122,7 +122,7 @@ Example:
 enabled = false
 ```
 
-Use `bitloops enable` and `bitloops disable` to toggle `[capture].enabled` in the nearest discovered project policy without reinstalling hooks.
+Use `bitloops enable --capture` and `bitloops disable --capture` to toggle `[capture].enabled` in the nearest discovered project policy without reinstalling hooks. Use `bitloops enable --devql-guidance` and `bitloops disable --devql-guidance` when you want to manage the repo-local DevQL guidance surface separately.
 
 Use `bitloops enable --install-embeddings` or `bitloops daemon enable --install-embeddings` when a developer also needs the default local embeddings profile added to the effective daemon config. Interactive `bitloops enable` offers that setup automatically with a default-yes `[Y/n]` prompt when embeddings are not already configured.
 

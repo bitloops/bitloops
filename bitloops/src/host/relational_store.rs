@@ -19,22 +19,22 @@ pub trait RelationalStore: Send + Sync {
     fn exec<'a>(
         &'a self,
         sql: &'a str,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + 'a>>;
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>>;
 
     fn exec_batch_transactional<'a>(
         &'a self,
         statements: &'a [String],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + 'a>>;
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>>;
 
     fn exec_remote_batch_transactional<'a>(
         &'a self,
         statements: &'a [String],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + 'a>>;
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>>;
 
     fn query_rows<'a>(
         &'a self,
         sql: &'a str,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + 'a>>;
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + Send + 'a>>;
 }
 
 #[derive(Debug)]
@@ -207,21 +207,21 @@ impl RelationalStore for DefaultRelationalStore {
     fn exec<'a>(
         &'a self,
         sql: &'a str,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + 'a>> {
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move { self.inner.exec(sql).await })
     }
 
     fn exec_batch_transactional<'a>(
         &'a self,
         statements: &'a [String],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + 'a>> {
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move { self.inner.exec_batch_transactional(statements).await })
     }
 
     fn exec_remote_batch_transactional<'a>(
         &'a self,
         statements: &'a [String],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + 'a>> {
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             if !self.has_remote() {
                 bail!("remote Postgres storage is not configured");
@@ -233,7 +233,8 @@ impl RelationalStore for DefaultRelationalStore {
     fn query_rows<'a>(
         &'a self,
         sql: &'a str,
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + 'a>> {
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + Send + 'a>>
+    {
         Box::pin(async move { self.inner.query_rows(sql).await })
     }
 }

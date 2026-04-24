@@ -9,7 +9,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     Then DevQL sync history shows artefacts indexed for current HEAD in bitloops
@@ -23,7 +22,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a TypeScript project with tests and coverage in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     Then daemon capability-event status shows TestHarness sync handler completed in bitloops
@@ -36,7 +34,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a TypeScript project with tests and coverage in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     Then daemon capability-event status shows TestHarness sync handler completed in bitloops
@@ -54,7 +51,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I add a new source file in bitloops
@@ -69,7 +65,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I modify an existing source file in bitloops
@@ -85,7 +80,6 @@ Feature: DevQL sync workspace reconciliation
     And I create a simple Rust project in bitloops
     And I add a new source file in bitloops
     And I run InitCommit without post-commit refresh for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I delete a source file in bitloops
@@ -100,7 +94,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I enqueue DevQL sync task with status in bitloops
@@ -116,7 +109,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I create a new branch with additional source files in bitloops
@@ -131,7 +123,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I stop the daemon in bitloops
@@ -151,7 +142,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I simulate a git pull with new changes in bitloops
@@ -165,7 +155,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
@@ -178,7 +167,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I add a new source file in bitloops
@@ -194,7 +182,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I add a new source file in bitloops
@@ -210,7 +197,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I add a new source file in bitloops
@@ -229,7 +215,6 @@ Feature: DevQL sync workspace reconciliation
     And I create a simple Rust project in bitloops
     And I add a source file "src/lib.rs" in bitloops
     And I run InitCommit without post-commit refresh for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I snapshot current-state content ids for "src/main.rs,src/lib.rs" in bitloops
@@ -249,7 +234,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL full sync task with status in bitloops
     Then DevQL sync history shows artefacts indexed for current HEAD in bitloops
@@ -263,7 +247,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I stop the daemon in bitloops
     And I attempt to enqueue DevQL sync task with require-daemon in bitloops
@@ -277,7 +260,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I add a new source file in bitloops
     And I commit changes without hooks in bitloops
@@ -304,7 +286,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I pause the DevQL task queue with reason "qat-maintenance" in bitloops
     Given I run DevQL tasks status in bitloops
@@ -321,7 +302,6 @@ Feature: DevQL sync workspace reconciliation
     And I run bitloops init --agent claude --sync=false in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I add a new source file in bitloops
     And I commit changes without hooks in bitloops
@@ -341,7 +321,6 @@ Feature: DevQL sync workspace reconciliation
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=true in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync task with status in bitloops
     Then DevQL sync summary shows 0 added in bitloops
@@ -349,7 +328,7 @@ Feature: DevQL sync workspace reconciliation
     And DevQL sync summary shows 0 removed in bitloops
     And DevQL sync summary shows unchanged greater than 0 in bitloops
 
-  @devql @sync @sync_init_sync_true_incremental
+  @devql @sync @sync_init_sync_true_incremental @develop_gate
   Scenario: Watcher-driven materialization after init --sync=true
     Given I run CleanStart for flow "SyncInitSyncTrueIncremental"
     And I enable watcher autostart in bitloops
@@ -368,7 +347,6 @@ Feature: DevQL sync workspace reconciliation
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent claude --sync=true in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops

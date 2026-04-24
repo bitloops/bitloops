@@ -184,6 +184,7 @@ fn lifecycle_event_conversion_trims_host_owned_values() {
         tool_name: String::new(),
         tool_use_id: "  tool-1  ".to_string(),
         tool_input: None,
+        tool_response: None,
         subagent_id: "  subagent-9  ".to_string(),
         model: "  gemini-2.5  ".to_string(),
         finalize_open_turn: false,

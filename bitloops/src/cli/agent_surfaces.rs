@@ -52,41 +52,6 @@ pub(crate) fn configured_agents_or_bail(start: &Path) -> Result<Vec<String>> {
     Ok(agents)
 }
 
-pub(crate) fn reconcile_project_agent_surfaces(
-    project_root: &Path,
-    selected_agents: &[String],
-    local_dev: bool,
-    force: bool,
-    out: &mut dyn Write,
-) -> Result<()> {
-    let report = reconcile_project_agent_surfaces_with_options(
-        project_root,
-        selected_agents,
-        local_dev,
-        force,
-        ReconcileProjectAgentSurfacesOptions::default(),
-        out,
-    )?;
-
-    for integration in report.integrations {
-        if integration.state == AgentIntegrationState::Installed {
-            writeln!(
-                out,
-                "Installed {} {} hooks and prompt surfaces.",
-                integration.newly_installed_hook_count, integration.label
-            )?;
-        } else {
-            writeln!(
-                out,
-                "{} hooks and prompt surfaces are already initialised.",
-                integration.label
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
 pub(crate) fn reconcile_project_agent_surfaces_with_options(
     project_root: &Path,
     selected_agents: &[String],
@@ -170,6 +135,43 @@ pub(crate) fn cleanup_project_agent_surfaces(
     }
 
     Ok(candidates.len())
+}
+
+pub(crate) fn install_project_prompt_surfaces(
+    project_root: &Path,
+    selected_agents: &[String],
+    out: &mut dyn Write,
+) -> Result<usize> {
+    let registry = AgentAdapterRegistry::builtin();
+    let mut installed = 0usize;
+
+    for agent in selected_agents {
+        let (label, changed) = registry.install_agent_prompt_surface(project_root, agent)?;
+        if changed {
+            writeln!(out, "Installed {label} prompt surfaces.")?;
+            installed += 1;
+        } else {
+            writeln!(out, "{label} prompt surfaces are already initialised.")?;
+        }
+    }
+
+    Ok(installed)
+}
+
+pub(crate) fn remove_project_prompt_surfaces(
+    project_root: &Path,
+    selected_agents: &[String],
+    out: &mut dyn Write,
+) -> Result<usize> {
+    let registry = AgentAdapterRegistry::builtin();
+    let selected = selected_agents.iter().cloned().collect::<BTreeSet<_>>();
+
+    for agent in &selected {
+        let label = registry.uninstall_agent_prompt_surface(project_root, agent)?;
+        writeln!(out, "Ensured {label} prompt surfaces are removed.")?;
+    }
+
+    Ok(selected.len())
 }
 
 fn managed_hook_count(agent: &str) -> usize {

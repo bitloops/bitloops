@@ -7,7 +7,9 @@ use crate::host::interactions::query::{
     InteractionSessionDetail, InteractionSessionSearchHit, InteractionSessionSummary,
     InteractionTurnSearchHit, InteractionTurnSummary,
 };
-use crate::host::interactions::types::{InteractionEvent, InteractionToolUse};
+use crate::host::interactions::types::{
+    InteractionEvent, InteractionSubagentRun, InteractionToolInvocation,
+};
 
 type DashboardJsonScalar = async_graphql::types::Json<serde_json::Value>;
 
@@ -109,6 +111,32 @@ pub(crate) struct DashboardRepository {
     pub(crate) default_branch: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, InputObject)]
+pub(crate) struct DashboardAnalyticsSqlInput {
+    pub(crate) sql: String,
+    #[graphql(name = "repoIds")]
+    pub(crate) repo_ids: Option<Vec<String>>,
+    #[graphql(name = "allRepos")]
+    pub(crate) all_repos: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub(crate) struct DashboardAnalyticsColumn {
+    pub(crate) name: String,
+    pub(crate) logical_type: String,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub(crate) struct DashboardAnalyticsSqlResult {
+    pub(crate) columns: Vec<DashboardAnalyticsColumn>,
+    pub(crate) rows: DashboardJsonScalar,
+    pub(crate) row_count: i32,
+    pub(crate) truncated: bool,
+    pub(crate) duration_ms: i32,
+    pub(crate) repo_ids: Vec<String>,
+    pub(crate) warnings: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub(crate) struct DashboardCheckpointSessionDetail {
     pub(crate) session_index: usize,
@@ -198,13 +226,35 @@ pub(crate) struct DashboardInteractionCommitAuthor {
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub(crate) struct DashboardInteractionToolUse {
+    pub(crate) tool_invocation_id: String,
     pub(crate) tool_use_id: String,
     pub(crate) session_id: String,
     pub(crate) turn_id: Option<String>,
     pub(crate) tool_kind: Option<String>,
     pub(crate) task_description: Option<String>,
-    pub(crate) subagent_id: Option<String>,
+    pub(crate) input_summary: Option<String>,
+    pub(crate) output_summary: Option<String>,
+    pub(crate) source: Option<String>,
+    pub(crate) command: Option<String>,
+    pub(crate) command_binary: Option<String>,
+    pub(crate) command_argv: Vec<String>,
     pub(crate) transcript_path: Option<String>,
+    pub(crate) started_at: Option<String>,
+    pub(crate) ended_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub(crate) struct DashboardInteractionSubagentRun {
+    pub(crate) subagent_run_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) tool_use_id: Option<String>,
+    pub(crate) subagent_id: Option<String>,
+    pub(crate) subagent_type: Option<String>,
+    pub(crate) task_description: Option<String>,
+    pub(crate) source: Option<String>,
+    pub(crate) transcript_path: Option<String>,
+    pub(crate) child_session_id: Option<String>,
     pub(crate) started_at: Option<String>,
     pub(crate) ended_at: Option<String>,
 }
@@ -218,6 +268,8 @@ pub(crate) struct DashboardInteractionEvent {
     pub(crate) actor: Option<DashboardInteractionActor>,
     pub(crate) event_type: String,
     pub(crate) event_time: String,
+    pub(crate) source: Option<String>,
+    pub(crate) sequence_number: i64,
     pub(crate) agent_type: String,
     pub(crate) model: Option<String>,
     pub(crate) tool_use_id: Option<String>,
@@ -243,6 +295,7 @@ pub(crate) struct DashboardInteractionSession {
     pub(crate) token_usage: Option<DashboardTokenUsage>,
     pub(crate) file_paths: Vec<String>,
     pub(crate) tool_uses: Vec<DashboardInteractionToolUse>,
+    pub(crate) subagent_runs: Vec<DashboardInteractionSubagentRun>,
     pub(crate) linked_checkpoints: Vec<DashboardInteractionCommitAuthor>,
     pub(crate) latest_commit_author: Option<DashboardInteractionCommitAuthor>,
 }
@@ -275,6 +328,7 @@ pub(crate) struct DashboardInteractionTurn {
     pub(crate) files_modified: Vec<String>,
     pub(crate) checkpoint_id: Option<String>,
     pub(crate) tool_uses: Vec<DashboardInteractionToolUse>,
+    pub(crate) subagent_runs: Vec<DashboardInteractionSubagentRun>,
     pub(crate) linked_checkpoints: Vec<DashboardInteractionCommitAuthor>,
     pub(crate) latest_commit_author: Option<DashboardInteractionCommitAuthor>,
 }
@@ -307,6 +361,7 @@ pub(crate) struct DashboardInteractionKpis {
     pub(crate) total_turns: usize,
     pub(crate) total_checkpoints: usize,
     pub(crate) total_tool_uses: usize,
+    pub(crate) total_subagent_runs: usize,
     pub(crate) total_actors: usize,
     pub(crate) total_agents: usize,
     pub(crate) input_tokens: u64,
@@ -390,17 +445,43 @@ impl DashboardInteractionCommitAuthor {
 }
 
 impl DashboardInteractionToolUse {
-    fn from_domain(tool_use: &InteractionToolUse) -> Self {
+    fn from_domain(tool_use: &InteractionToolInvocation) -> Self {
         Self {
+            tool_invocation_id: tool_use.tool_invocation_id.clone(),
             tool_use_id: tool_use.tool_use_id.clone(),
             session_id: tool_use.session_id.clone(),
             turn_id: non_empty(&tool_use.turn_id),
-            tool_kind: non_empty(&tool_use.tool_kind),
-            task_description: non_empty(&tool_use.task_description),
-            subagent_id: non_empty(&tool_use.subagent_id),
+            tool_kind: non_empty(&tool_use.tool_name),
+            task_description: non_empty(&tool_use.input_summary)
+                .or_else(|| non_empty(&tool_use.output_summary)),
+            input_summary: non_empty(&tool_use.input_summary),
+            output_summary: non_empty(&tool_use.output_summary),
+            source: non_empty(&tool_use.source),
+            command: non_empty(&tool_use.command),
+            command_binary: non_empty(&tool_use.command_binary),
+            command_argv: tool_use.command_argv.clone(),
             transcript_path: non_empty(&tool_use.transcript_path),
             started_at: tool_use.started_at.clone(),
             ended_at: tool_use.ended_at.clone(),
+        }
+    }
+}
+
+impl DashboardInteractionSubagentRun {
+    fn from_domain(subagent_run: &InteractionSubagentRun) -> Self {
+        Self {
+            subagent_run_id: subagent_run.subagent_run_id.clone(),
+            session_id: subagent_run.session_id.clone(),
+            turn_id: non_empty(&subagent_run.turn_id),
+            tool_use_id: non_empty(&subagent_run.tool_use_id),
+            subagent_id: non_empty(&subagent_run.subagent_id),
+            subagent_type: non_empty(&subagent_run.subagent_type),
+            task_description: non_empty(&subagent_run.task_description),
+            source: non_empty(&subagent_run.source),
+            transcript_path: non_empty(&subagent_run.transcript_path),
+            child_session_id: non_empty(&subagent_run.child_session_id),
+            started_at: subagent_run.started_at.clone(),
+            ended_at: subagent_run.ended_at.clone(),
         }
     }
 }
@@ -433,6 +514,11 @@ impl DashboardInteractionSession {
                 .tool_uses
                 .iter()
                 .map(DashboardInteractionToolUse::from_domain)
+                .collect(),
+            subagent_runs: summary
+                .subagent_runs
+                .iter()
+                .map(DashboardInteractionSubagentRun::from_domain)
                 .collect(),
             linked_checkpoints: summary
                 .linked_checkpoints
@@ -478,6 +564,11 @@ impl DashboardInteractionTurn {
                 .iter()
                 .map(DashboardInteractionToolUse::from_domain)
                 .collect(),
+            subagent_runs: summary
+                .subagent_runs
+                .iter()
+                .map(DashboardInteractionSubagentRun::from_domain)
+                .collect(),
             linked_checkpoints: summary
                 .linked_checkpoints
                 .iter()
@@ -506,6 +597,8 @@ impl DashboardInteractionEvent {
             ),
             event_type: event.event_type.as_str().to_string(),
             event_time: event.event_time.clone(),
+            source: non_empty(&event.source),
+            sequence_number: event.sequence_number,
             agent_type: event.agent_type.clone(),
             model: non_empty(&event.model),
             tool_use_id: non_empty(&event.tool_use_id),
@@ -577,6 +670,7 @@ impl DashboardInteractionKpis {
             total_turns: kpis.total_turns,
             total_checkpoints: kpis.total_checkpoints,
             total_tool_uses: kpis.total_tool_uses,
+            total_subagent_runs: kpis.total_subagent_runs,
             total_actors: kpis.total_actors,
             total_agents: kpis.total_agents,
             input_tokens: kpis.input_tokens,

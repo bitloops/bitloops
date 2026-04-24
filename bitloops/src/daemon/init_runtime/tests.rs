@@ -7,8 +7,10 @@ use uuid::Uuid;
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
+use crate::daemon::types::InitSessionTaskTerminalSnapshot;
 use crate::daemon::{
     DevqlTaskKind, DevqlTaskRecord, DevqlTaskSource, DevqlTaskStatus, EmbeddingsBootstrapTaskSpec,
     InitEmbeddingsBootstrapRequest, InitSessionRecord, StartInitSessionSelections,
@@ -18,10 +20,15 @@ use crate::daemon::{
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 use super::coordinator::InitRuntimeCoordinator;
+use super::embedding_freshness::EmbeddingFreshnessState;
 use super::lanes::{
-    derive_code_embeddings_lane, derive_session_status, derive_summaries_lane, derive_sync_lane,
+    derive_code_embeddings_lane, derive_ingest_lane, derive_session_status, derive_summaries_lane,
+    derive_sync_lane,
 };
-use super::orchestration::{semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync};
+use super::orchestration::{
+    selected_session_workplane_stats, selected_sync_terminal, selected_top_level_terminal,
+    semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync,
+};
 use super::session_stats::{
     load_semantic_embedding_session_mailbox_counts, load_semantic_summary_session_mailbox_counts,
     summary_effective_work_item_count,
@@ -62,6 +69,44 @@ fn completed_sync_task(task_id: &str, completed_at_unix: u64) -> DevqlTaskRecord
     }
 }
 
+fn running_ingest_task(task_id: &str, updated_at_unix: u64) -> DevqlTaskRecord {
+    DevqlTaskRecord {
+        task_id: task_id.to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::Ingest,
+        source: DevqlTaskSource::Init,
+        spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+            backfill: None,
+        }),
+        status: DevqlTaskStatus::Running,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix,
+        completed_at_unix: None,
+        queue_position: None,
+        tasks_ahead: None,
+        error: None,
+        progress: crate::daemon::DevqlTaskProgress::Ingest(
+            crate::host::devql::IngestionProgressUpdate {
+                phase: crate::host::devql::IngestionProgressPhase::Persisting,
+                commits_total: 10,
+                commits_processed: 7,
+                current_checkpoint_id: Some("checkpoint-7".to_string()),
+                current_commit_sha: Some("commit-7".to_string()),
+                counters: crate::host::devql::IngestionCounters::default(),
+            },
+        ),
+        result: None,
+    }
+}
+
 fn embeddings_only_session() -> InitSessionRecord {
     InitSessionRecord {
         init_session_id: "init-session-1".to_string(),
@@ -85,13 +130,57 @@ fn embeddings_only_session() -> InitSessionRecord {
             summaries_bootstrap: None,
         },
         initial_sync_task_id: None,
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: false,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 0,
         initial_sync_completion_seq: None,
+        embeddings_bootstrap_completion_seq: None,
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    }
+}
+
+fn sync_only_session() -> InitSessionRecord {
+    InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: false,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: None,
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: None,
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: None,
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 0,
+        initial_sync_completion_seq: Some(1),
         embeddings_bootstrap_completion_seq: None,
         summary_bootstrap_completion_seq: None,
         follow_up_sync_completion_seq: None,
@@ -150,6 +239,9 @@ fn summary_lane_classification_only_includes_summary_refresh_mailbox() {
         SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
     ));
     assert!(!is_summary_mailbox(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX));
+    assert!(!is_summary_mailbox(
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+    ));
     assert!(!is_summary_mailbox(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX));
 }
 
@@ -192,6 +284,22 @@ fn summary_effective_work_item_count_uses_outstanding_repo_backfill_work() {
 }
 
 #[test]
+fn embedding_freshness_requires_identity_for_code_lane_completion() {
+    let freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: ["artefact-1".to_string(), "artefact-2".to_string()]
+            .into_iter()
+            .collect(),
+        fresh_code_artefact_ids: ["artefact-1".to_string(), "artefact-2".to_string()]
+            .into_iter()
+            .collect(),
+        fresh_identity_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
+        fresh_summary_artefact_ids: Default::default(),
+    };
+
+    assert_eq!(freshness.code_lane_completed_count(), 1);
+}
+
+#[test]
 fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
     let conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.execute_batch(
@@ -209,6 +317,7 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
              representation_kind TEXT NOT NULL,
              status TEXT NOT NULL,
              item_kind TEXT NOT NULL,
+             artefact_id TEXT,
              payload_json TEXT
          );",
     )
@@ -229,15 +338,22 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
     .expect("insert other session summary inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'code', 'pending', 'artefact', NULL)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'code', 'pending', 'artefact', 'artefact-1', NULL)",
         ("repo-1", "init-session-1"),
     )
     .expect("insert code embedding inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'summary', 'leased', 'artefact', NULL)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'identity', 'pending', 'artefact', 'artefact-2', NULL)",
+        ("repo-1", "init-session-1"),
+    )
+    .expect("insert identity embedding inbox row");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'summary', 'leased', 'artefact', 'artefact-3', NULL)",
         ("repo-1", "init-session-1"),
     )
     .expect("insert summary embedding inbox row");
@@ -245,6 +361,18 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
     let freshness = SummaryFreshnessState {
         eligible_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
         fresh_model_backed_artefact_ids: Default::default(),
+    };
+    let embedding_freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: [
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "artefact-3".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        fresh_code_artefact_ids: Default::default(),
+        fresh_identity_artefact_ids: Default::default(),
+        fresh_summary_artefact_ids: Default::default(),
     };
     let mut stats = SessionWorkplaneStats::default();
 
@@ -256,16 +384,22 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
         &freshness,
     )
     .expect("load semantic summary mailbox counts");
-    load_semantic_embedding_session_mailbox_counts(&conn, &mut stats, "repo-1", "init-session-1")
-        .expect("load semantic embedding mailbox counts");
+    load_semantic_embedding_session_mailbox_counts(
+        &conn,
+        &mut stats,
+        "repo-1",
+        "init-session-1",
+        &embedding_freshness,
+    )
+    .expect("load semantic embedding mailbox counts");
     stats.refresh_lane_counts();
 
     assert_eq!(stats.summary_refresh_jobs.counts.pending, 1);
     assert_eq!(stats.summary_refresh_jobs.counts.running, 0);
-    assert_eq!(stats.code_embedding_jobs.counts.pending, 1);
+    assert_eq!(stats.code_embedding_jobs.counts.pending, 2);
     assert_eq!(stats.summary_embedding_jobs.counts.running, 1);
     assert_eq!(stats.summary_jobs.pending, 1);
-    assert_eq!(stats.embedding_jobs.pending, 1);
+    assert_eq!(stats.embedding_jobs.pending, 2);
     assert_eq!(stats.embedding_jobs.running, 1);
 }
 
@@ -287,6 +421,7 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
              representation_kind TEXT NOT NULL,
              status TEXT NOT NULL,
              item_kind TEXT NOT NULL,
+             artefact_id TEXT,
              payload_json TEXT
          );",
     )
@@ -304,23 +439,23 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
     .expect("insert failed summary inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'code', 'pending', 'repo_backfill', ?3)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'code', 'pending', 'repo_backfill', NULL, ?3)",
         (
             "repo-1",
             "init-session-1",
-            json!(["embed-1", "embed-2", "embed-3", "embed-4"]).to_string(),
+            json!(["artefact-1", "artefact-2", "artefact-3", "artefact-4"]).to_string(),
         ),
     )
     .expect("insert pending code embedding inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'summary', 'leased', 'repo_backfill', ?3)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'summary', 'leased', 'repo_backfill', NULL, ?3)",
         (
             "repo-1",
             "init-session-1",
-            json!(["summary-1", "summary-2"]).to_string(),
+            json!(["artefact-1", "artefact-2"]).to_string(),
         ),
     )
     .expect("insert running summary embedding inbox row");
@@ -336,6 +471,19 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
         .collect(),
         fresh_model_backed_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
     };
+    let embedding_freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: [
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "artefact-3".to_string(),
+            "artefact-4".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        fresh_code_artefact_ids: Default::default(),
+        fresh_identity_artefact_ids: Default::default(),
+        fresh_summary_artefact_ids: Default::default(),
+    };
     let mut stats = SessionWorkplaneStats::default();
 
     load_semantic_summary_session_mailbox_counts(
@@ -346,8 +494,14 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
         &freshness,
     )
     .expect("load semantic summary mailbox counts");
-    load_semantic_embedding_session_mailbox_counts(&conn, &mut stats, "repo-1", "init-session-1")
-        .expect("load semantic embedding mailbox counts");
+    load_semantic_embedding_session_mailbox_counts(
+        &conn,
+        &mut stats,
+        "repo-1",
+        "init-session-1",
+        &embedding_freshness,
+    )
+    .expect("load semantic embedding mailbox counts");
     stats.refresh_lane_counts();
 
     assert_eq!(stats.summary_refresh_jobs.counts.failed, 2);
@@ -356,6 +510,76 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
     assert_eq!(stats.summary_jobs.failed, 2);
     assert_eq!(stats.embedding_jobs.pending, 4);
     assert_eq!(stats.embedding_jobs.running, 2);
+}
+
+#[test]
+fn semantic_embedding_counts_only_include_unsatisfied_current_work() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute_batch(
+        "CREATE TABLE semantic_embedding_mailbox_items (
+             repo_id TEXT NOT NULL,
+             init_session_id TEXT,
+             representation_kind TEXT NOT NULL,
+             status TEXT NOT NULL,
+             item_kind TEXT NOT NULL,
+             artefact_id TEXT,
+             payload_json TEXT
+         );",
+    )
+    .expect("create semantic embedding inbox table");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'code', 'pending', 'artefact', 'artefact-1', NULL)",
+        ("repo-1", "init-session-1"),
+    )
+    .expect("insert code artefact row");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'identity', 'pending', 'artefact', 'artefact-2', NULL)",
+        ("repo-1", "init-session-1"),
+    )
+    .expect("insert identity artefact row");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'summary', 'failed', 'repo_backfill', NULL, ?3)",
+        (
+            "repo-1",
+            "init-session-1",
+            json!(["artefact-3", "artefact-4"]).to_string(),
+        ),
+    )
+    .expect("insert summary repo backfill row");
+
+    let mut stats = SessionWorkplaneStats::default();
+    let embedding_freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: [
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "artefact-3".to_string(),
+            "artefact-4".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        fresh_code_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
+        fresh_identity_artefact_ids: Default::default(),
+        fresh_summary_artefact_ids: ["artefact-3".to_string()].into_iter().collect(),
+    };
+
+    load_semantic_embedding_session_mailbox_counts(
+        &conn,
+        &mut stats,
+        "repo-1",
+        "init-session-1",
+        &embedding_freshness,
+    )
+    .expect("load semantic embedding mailbox counts");
+    stats.refresh_lane_counts();
+
+    assert_eq!(stats.code_embedding_jobs.counts.pending, 1);
+    assert_eq!(stats.summary_embedding_jobs.counts.failed, 1);
 }
 
 #[test]
@@ -420,7 +644,104 @@ fn refresh_lane_counts_excludes_clone_rebuild_from_embeddings_lane() {
             completed: 12,
         }
     );
-    assert_eq!(stats.warning_failed_jobs_total(), 3);
+    assert_eq!(stats.code_embedding_jobs.counts.failed, 1);
+    assert_eq!(stats.summary_embedding_jobs.counts.failed, 0);
+    assert_eq!(stats.summary_refresh_jobs.counts.failed, 2);
+}
+
+#[test]
+fn selected_session_workplane_stats_ignore_unselected_semantic_lanes() {
+    let session = sync_only_session();
+    let mut stats = SessionWorkplaneStats {
+        code_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 2,
+                running: 0,
+                failed: 1,
+                completed: 0,
+            },
+            latest_error: Some("code embeddings stalled".to_string()),
+        },
+        summary_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 0,
+                running: 3,
+                failed: 1,
+                completed: 0,
+            },
+            latest_error: Some("summary embeddings stalled".to_string()),
+        },
+        summary_refresh_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 4,
+                running: 0,
+                failed: 2,
+                completed: 0,
+            },
+            latest_error: Some("summary refresh stalled".to_string()),
+        },
+        blocked_code_embedding_reason: Some("code blocked".to_string()),
+        blocked_summary_embedding_reason: Some("summary embeddings blocked".to_string()),
+        blocked_summary_reason: Some("summary blocked".to_string()),
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let selected = selected_session_workplane_stats(&session, &stats);
+
+    assert_eq!(selected.embedding_jobs, StatusCounts::default());
+    assert_eq!(selected.summary_jobs, StatusCounts::default());
+    assert_eq!(selected.warning_failed_jobs_total, 0);
+    assert_eq!(selected.blocked_embedding_reason, None);
+    assert_eq!(selected.blocked_summary_reason, None);
+}
+
+#[test]
+fn selected_session_workplane_stats_only_include_requested_embedding_lanes() {
+    let session = embeddings_only_session();
+    let mut stats = SessionWorkplaneStats {
+        code_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 1,
+                running: 2,
+                failed: 1,
+                completed: 0,
+            },
+            latest_error: Some("code embeddings stalled".to_string()),
+        },
+        summary_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 5,
+                running: 6,
+                failed: 7,
+                completed: 0,
+            },
+            latest_error: Some("summary embeddings stalled".to_string()),
+        },
+        blocked_code_embedding_reason: Some("code blocked".to_string()),
+        blocked_summary_embedding_reason: Some("summary embeddings blocked".to_string()),
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let selected = selected_session_workplane_stats(&session, &stats);
+
+    assert_eq!(
+        selected.embedding_jobs,
+        StatusCounts {
+            pending: 1,
+            running: 2,
+            failed: 1,
+            completed: 0,
+        }
+    );
+    assert_eq!(selected.summary_jobs, StatusCounts::default());
+    assert_eq!(selected.warning_failed_jobs_total, 1);
+    assert_eq!(
+        selected.blocked_embedding_reason,
+        Some("code blocked".to_string())
+    );
+    assert_eq!(selected.blocked_summary_reason, None);
 }
 
 #[test]
@@ -469,6 +790,190 @@ fn code_embeddings_lane_ignores_clone_rebuild_activity_and_warnings() {
 }
 
 #[test]
+fn code_embeddings_lane_waits_for_codebase_updates_after_sync_task_completion() {
+    let session = embeddings_only_session();
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        None,
+        StatusCounts {
+            pending: 1,
+            running: 1,
+            failed: 0,
+            completed: 0,
+        },
+        &SessionWorkplaneStats::default(),
+        Some(InitRuntimeLaneProgressView {
+            completed: 2193,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 50,
+        }),
+    );
+
+    assert_eq!(lane.status, "waiting");
+    assert_eq!(
+        lane.waiting_reason.as_deref(),
+        Some("waiting_for_current_state_consumer")
+    );
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Applying codebase updates")
+    );
+}
+
+#[test]
+fn code_embeddings_lane_waits_for_follow_up_sync_after_late_embeddings_bootstrap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: true,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: Some("ingest-task-1".to_string()),
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: true,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let embeddings_task = DevqlTaskRecord {
+        task_id: "bootstrap-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::EmbeddingsBootstrap,
+        source: DevqlTaskSource::Init,
+        spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+            config_path: PathBuf::from("/tmp/config-1/config.toml"),
+            profile_name: "local_code".to_string(),
+            mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+            gateway_url_override: None,
+            api_key_env: None,
+        }),
+        status: DevqlTaskStatus::Completed,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 12,
+        completed_at_unix: Some(12),
+        queue_position: None,
+        tasks_ahead: None,
+        error: None,
+        progress: crate::daemon::DevqlTaskProgress::EmbeddingsBootstrap(
+            crate::daemon::EmbeddingsBootstrapProgress::default(),
+        ),
+        result: None,
+    };
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        Some(&embeddings_task),
+        StatusCounts::default(),
+        &SessionWorkplaneStats::default(),
+        Some(InitRuntimeLaneProgressView {
+            completed: 0,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 2243,
+        }),
+    );
+
+    assert_eq!(lane.status, "waiting");
+    assert_eq!(
+        lane.waiting_reason.as_deref(),
+        Some("waiting_for_follow_up_sync")
+    );
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Running a follow-up sync")
+    );
+}
+
+#[test]
+fn code_embeddings_lane_reports_preparing_batches_before_first_completed_work_item() {
+    let session = embeddings_only_session();
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let mut stats = SessionWorkplaneStats {
+        code_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 2184,
+                running: 50,
+                failed: 0,
+                completed: 0,
+            },
+            latest_error: None,
+        },
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        None,
+        StatusCounts::default(),
+        &stats,
+        Some(InitRuntimeLaneProgressView {
+            completed: 0,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 2243,
+        }),
+    );
+
+    assert_eq!(lane.status, "waiting");
+    assert_eq!(
+        lane.waiting_reason.as_deref(),
+        Some("preparing_embedding_batches")
+    );
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Preparing embedding batches")
+    );
+}
+
+#[test]
 fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embeddings() {
     let initial_sync = completed_sync_task("sync-task-1", 10);
     let session = InitSessionRecord {
@@ -498,11 +1003,16 @@ fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embedding
             }),
         },
         initial_sync_task_id: None,
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: false,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 0,
         initial_sync_completion_seq: None,
         embeddings_bootstrap_completion_seq: None,
@@ -594,11 +1104,16 @@ fn semantic_bootstrap_waiting_reason_distinguishes_embeddings_only() {
             }),
         },
         initial_sync_task_id: None,
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: true,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 1,
         initial_sync_completion_seq: None,
         embeddings_bootstrap_completion_seq: None,
@@ -697,11 +1212,16 @@ fn summaries_lane_waits_for_follow_up_sync_after_summary_bootstrap_finishes_late
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: true,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 2,
         initial_sync_completion_seq: Some(1),
         embeddings_bootstrap_completion_seq: None,
@@ -784,11 +1304,16 @@ fn summaries_lane_becomes_warning_after_failed_jobs_drain() {
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: false,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 2,
         initial_sync_completion_seq: Some(1),
         embeddings_bootstrap_completion_seq: None,
@@ -887,11 +1412,16 @@ fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: false,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 2,
         initial_sync_completion_seq: Some(1),
         embeddings_bootstrap_completion_seq: None,
@@ -978,11 +1508,16 @@ fn summary_follow_up_can_start_before_embeddings_bootstrap_finishes() {
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: true,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 2,
         initial_sync_completion_seq: Some(1),
         embeddings_bootstrap_completion_seq: None,
@@ -1057,6 +1592,148 @@ fn summary_follow_up_can_start_before_embeddings_bootstrap_finishes() {
 }
 
 #[test]
+fn sync_terminal_allows_follow_up_sync_before_ingest_finishes_after_late_embeddings_bootstrap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: true,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: Some("ingest-task-1".to_string()),
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: true,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let embeddings_task = DevqlTaskRecord {
+        task_id: "bootstrap-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::EmbeddingsBootstrap,
+        source: DevqlTaskSource::Init,
+        spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+            config_path: PathBuf::from("/tmp/config-1/config.toml"),
+            profile_name: "local_code".to_string(),
+            mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+            gateway_url_override: None,
+            api_key_env: None,
+        }),
+        status: DevqlTaskStatus::Completed,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 12,
+        completed_at_unix: Some(12),
+        queue_position: None,
+        tasks_ahead: None,
+        error: None,
+        progress: crate::daemon::DevqlTaskProgress::EmbeddingsBootstrap(
+            crate::daemon::EmbeddingsBootstrapProgress::default(),
+        ),
+        result: None,
+    };
+
+    assert!(selected_sync_terminal(&session, Some(&initial_sync)));
+    assert!(semantic_follow_up_ready_for_sync(
+        &session,
+        Some(&initial_sync),
+        None,
+        Some(&embeddings_task),
+        None,
+    ));
+}
+
+#[test]
+fn top_level_terminal_still_waits_for_ingest_after_late_embeddings_bootstrap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: true,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: Some("ingest-task-1".to_string()),
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: true,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let ingest_task = running_ingest_task("ingest-task-1", 11);
+
+    assert!(!selected_top_level_terminal(
+        &session,
+        Some(&initial_sync),
+        Some(&ingest_task),
+    ));
+}
+
+#[test]
 fn embeddings_can_trigger_a_second_follow_up_after_summary_follow_up_completes() {
     let session = InitSessionRecord {
         init_session_id: "init-session-1".to_string(),
@@ -1085,11 +1762,16 @@ fn embeddings_can_trigger_a_second_follow_up_after_summary_follow_up_completes()
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: true,
         follow_up_sync_task_id: Some("follow-up-sync-1".to_string()),
+        follow_up_sync_terminal: None,
         next_completion_seq: 4,
         initial_sync_completion_seq: Some(1),
         embeddings_bootstrap_completion_seq: Some(4),
@@ -1182,11 +1864,16 @@ fn sync_lane_reports_failed_sync_task() {
             summaries_bootstrap: None,
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
         ingest_task_id: None,
+        ingest_terminal: None,
         embeddings_bootstrap_task_id: None,
+        embeddings_bootstrap_terminal: None,
         summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
         follow_up_sync_required: false,
         follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
         next_completion_seq: 0,
         initial_sync_completion_seq: None,
         embeddings_bootstrap_completion_seq: None,
@@ -1231,6 +1918,139 @@ fn sync_lane_reports_failed_sync_task() {
     assert_eq!(lane.waiting_reason.as_deref(), Some("failed"));
     assert_eq!(lane.detail.as_deref(), Some("Syncing repository failed"));
     assert_eq!(lane.task_id.as_deref(), Some("sync-task-1"));
+}
+
+#[test]
+fn ingest_lane_uses_durable_sync_completion_when_sync_task_is_pruned() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: true,
+            run_code_embeddings: false,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: None,
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: Some(InitSessionTaskTerminalSnapshot {
+            task_id: "sync-task-1".to_string(),
+            status: DevqlTaskStatus::Completed,
+            updated_at_unix: 2,
+            completed_at_unix: Some(2),
+            error: None,
+        }),
+        ingest_task_id: Some("ingest-task-1".to_string()),
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: None,
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 1,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: None,
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 2,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let ingest_task = running_ingest_task("ingest-task-1", 3);
+
+    let lane = derive_ingest_lane(&session, None, Some(&ingest_task));
+
+    assert_eq!(lane.status, "running");
+    assert_eq!(lane.waiting_reason, None);
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Ingesting commit history")
+    );
+}
+
+#[test]
+fn code_embeddings_lane_uses_durable_sync_completion_when_sync_task_is_pruned() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: None,
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: Some(InitSessionTaskTerminalSnapshot {
+            task_id: "sync-task-1".to_string(),
+            status: DevqlTaskStatus::Completed,
+            updated_at_unix: 2,
+            completed_at_unix: Some(2),
+            error: None,
+        }),
+        ingest_task_id: None,
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: None,
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: None,
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 1,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: None,
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 2,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let stats = SessionWorkplaneStats {
+        code_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 8,
+                running: 3,
+                failed: 0,
+                completed: 5,
+            },
+            latest_error: None,
+        },
+        ..SessionWorkplaneStats::default()
+    };
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        None,
+        None,
+        None,
+        StatusCounts::default(),
+        &stats,
+        Some(InitRuntimeLaneProgressView {
+            completed: 5,
+            in_memory_completed: 0,
+            total: 20,
+            remaining: 15,
+        }),
+    );
+
+    assert_eq!(lane.status, "running");
+    assert_eq!(lane.waiting_reason, None);
+    assert_eq!(lane.activity_label.as_deref(), Some("Indexing source code"));
 }
 
 #[test]

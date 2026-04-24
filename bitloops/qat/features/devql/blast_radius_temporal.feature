@@ -10,7 +10,6 @@ Feature: Workspace-aware blast radius and temporal correctness
     And I create a TypeScript project with known dependencies in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
-    And I run EnableCLI for bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
 

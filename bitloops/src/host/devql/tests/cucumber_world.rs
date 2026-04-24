@@ -136,7 +136,14 @@ impl DevqlBddWorld {
     fn isolated_test_repo_root() -> PathBuf {
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("bitloops-devql-bdd-test-{id}"))
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "bitloops-devql-bdd-test-{}-{timestamp}-{id}",
+            std::process::id()
+        ))
     }
 
     pub(super) fn reset(&mut self) {

@@ -10,10 +10,11 @@ mod temporal_scope;
 
 use crate::api::DashboardDbPools;
 use crate::config::StoreBackendConfig;
+use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::capability_host::DevqlCapabilityHost;
-use crate::host::devql::{DevqlConfig, RepoIdentity};
+use crate::host::devql::{DevqlConfig, RelationalStorage, RepoIdentity};
 use crate::storage::blob::BlobStore;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -137,6 +138,13 @@ impl DevqlGraphqlContext {
                     .unwrap_or_else(|| "DevQL configuration unavailable".to_string())
             )
         })
+    }
+
+    pub(crate) async fn open_relational_storage(&self, command: &str) -> Result<RelationalStorage> {
+        let cfg = self.devql_config()?;
+        let backends = resolve_store_backend_config_for_repo(&cfg.repo_root)
+            .with_context(|| format!("resolving backend config for `{command}`"))?;
+        RelationalStorage::connect(&cfg, &backends.relational, command).await
     }
 
     pub(crate) fn daemon_config_path(&self) -> PathBuf {

@@ -2,8 +2,8 @@ use async_graphql::{Context, Object, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::graphql::fuzzy_artefact_name::select_fuzzy_named_artefacts;
 use crate::graphql::pack_adapter::StageResolverAdapter;
+use crate::graphql::search_artefact_query::select_search_artefacts;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_user_input_error};
 
 use super::types::artefact_selection::ArtefactSelectorMode;
@@ -18,7 +18,7 @@ use super::types::{
     InteractionTurnEdge, InteractionTurnSearchHitObject, KnowledgeItemConnection,
     KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
     TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
@@ -550,10 +550,10 @@ impl SlimQueryRoot {
         let scope = context.slim_root_scope();
         let selector = by.selection_mode()?;
 
-        let selection = match selector {
+        let selection = match &selector {
             ArtefactSelectorMode::SymbolFqn(symbol_fqn) => {
                 let filter = ArtefactFilterInput {
-                    symbol_fqn: Some(symbol_fqn),
+                    symbol_fqn: Some(symbol_fqn.clone()),
                     ..Default::default()
                 };
                 let artefacts = context
@@ -566,22 +566,13 @@ impl SlimQueryRoot {
                     })?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
-            ArtefactSelectorMode::FuzzyName(fuzzy_name) => {
-                let artefacts =
-                    context
-                        .list_artefacts(None, None, &scope)
-                        .await
-                        .map_err(|err| {
-                            backend_error(format!(
-                                "failed to resolve selected artefacts by fuzzyName: {err:#}"
-                            ))
-                        })?;
-                let artefacts = select_fuzzy_named_artefacts(&fuzzy_name, artefacts);
-                ArtefactSelection::new(artefacts, Vec::new(), scope)
+            ArtefactSelectorMode::Search { query, mode } => {
+                let bundle = select_search_artefacts(context, &scope, query, *mode).await?;
+                ArtefactSelection::new_search(bundle.unified, bundle.breakdown, scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
                 let normalized = context
-                    .resolve_scope_path(&scope, &path, false)
+                    .resolve_scope_path(&scope, path, false)
                     .map_err(bad_user_input_error)?;
                 let metadata = context
                     .repo_root_for_scope(&scope)
@@ -608,8 +599,8 @@ impl SlimQueryRoot {
                         })?;
                     ArtefactSelection::from_directory_entries(directory_entries, scope)
                 } else {
-                    let filter = lines.map(|lines| ArtefactFilterInput {
-                        lines: Some(lines),
+                    let filter = lines.as_ref().map(|lines| ArtefactFilterInput {
+                        lines: Some(lines.clone()),
                         ..Default::default()
                     });
                     let artefacts = context
@@ -628,6 +619,7 @@ impl SlimQueryRoot {
         Ok(selection)
     }
 
+    #[graphql(name = "dependencies")]
     async fn deps(
         &self,
         ctx: &Context<'_>,
@@ -806,6 +798,8 @@ impl SlimQueryRoot {
         )
     }
 
+    // Temporarily hidden from the typed GraphQL surface until coverage is refreshed.
+    /*
     async fn coverage(
         &self,
         ctx: &Context<'_>,
@@ -838,6 +832,7 @@ impl SlimQueryRoot {
                 .map_err(|err| map_stage_adapter_error("coverage", err))?,
         )
     }
+    */
 
     #[graphql(name = "testsSummary")]
     async fn tests_summary(&self, ctx: &Context<'_>) -> Result<TestHarnessCommitSummary> {

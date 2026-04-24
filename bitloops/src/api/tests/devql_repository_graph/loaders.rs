@@ -67,7 +67,7 @@ async fn devql_graphql_dependency_loaders_batch_nested_edge_and_artefact_reads()
                   edges {
                     node {
                       symbolFqn
-                      outgoingDeps(filter: { includeUnresolved: true }) {
+                      outgoingDependencies(filter: { includeUnresolved: true }) {
                         totalCount
                         edges {
                           node {
@@ -83,7 +83,7 @@ async fn devql_graphql_dependency_loaders_batch_nested_edge_and_artefact_reads()
                           }
                         }
                       }
-                      incomingDeps {
+                      incomingDependencies {
                         totalCount
                       }
                     }
@@ -119,19 +119,19 @@ async fn devql_graphql_dependency_loaders_batch_nested_edge_and_artefact_reads()
         "src/target.ts::target"
     );
     assert_eq!(
-        json["repo"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["totalCount"],
+        json["repo"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["artefacts"]["edges"][1]["node"]["outgoingDeps"]["totalCount"],
+        json["repo"]["artefacts"]["edges"][1]["node"]["outgoingDependencies"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["artefacts"]["edges"][2]["node"]["incomingDeps"]["totalCount"],
+        json["repo"]["artefacts"]["edges"][2]["node"]["incomingDependencies"]["totalCount"],
         0
     );
     assert_eq!(
-        json["repo"]["artefacts"]["edges"][3]["node"]["incomingDeps"]["totalCount"],
+        json["repo"]["artefacts"]["edges"][3]["node"]["incomingDependencies"]["totalCount"],
         1
     );
 

@@ -39,7 +39,7 @@ pub(crate) fn build_filtered_artefacts_cte_sql(spec: &ArtefactQuerySpec) -> Stri
 pub(crate) fn filtered_artefact_columns_sql(_use_historical_tables: bool) -> &'static str {
     "symbol_id, artefact_id, path, language, canonical_kind, language_kind, symbol_fqn, \
      parent_artefact_id, start_line, end_line, start_byte, end_byte, signature, modifiers, \
-     docstring, blob_sha, content_hash, created_at"
+     docstring, summary, embedding_representations, blob_sha, content_hash, created_at"
 }
 
 pub(crate) fn filtered_artefact_order_sql() -> &'static str {
@@ -210,13 +210,18 @@ fn artefacts_table_sql(use_historical_tables: bool) -> &'static str {
 }
 
 fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> String {
+    let summary_expr = artefact_summary_sql(alias, use_historical_tables);
+    let embedding_representations_expr =
+        artefact_embedding_representations_sql(alias, use_historical_tables);
     if use_historical_tables {
         format!(
             "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
              {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
              {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
              {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
-             {alias}.docstring, {alias}.blob_sha, {alias}.content_hash, {alias}.created_at AS created_at",
+             {alias}.docstring, {summary_expr} AS summary, \
+             {embedding_representations_expr} AS embedding_representations, \
+             {alias}.blob_sha, {alias}.content_hash, {alias}.created_at AS created_at",
         )
     } else {
         format!(
@@ -224,9 +229,76 @@ fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> Stri
              {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
              {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
              {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
-             {alias}.docstring, {alias}.content_id AS blob_sha, NULL AS content_hash, {alias}.updated_at AS created_at",
+             {alias}.docstring, {summary_expr} AS summary, \
+             {embedding_representations_expr} AS embedding_representations, \
+             {alias}.content_id AS blob_sha, NULL AS content_hash, {alias}.updated_at AS created_at",
         )
     }
+}
+
+fn artefact_summary_sql(alias: &str, use_historical_tables: bool) -> String {
+    if use_historical_tables {
+        format!(
+            "(SELECT ss.summary FROM symbol_semantics ss \
+               WHERE ss.repo_id = {alias}.repo_id \
+                 AND ss.artefact_id = {alias}.artefact_id \
+                 AND ss.blob_sha = {alias}.blob_sha \
+               LIMIT 1)"
+        )
+    } else {
+        format!(
+            "COALESCE( \
+               (SELECT ss.summary FROM symbol_semantics_current ss \
+                  WHERE ss.repo_id = {alias}.repo_id \
+                    AND ss.artefact_id = {alias}.artefact_id \
+                    AND ss.content_id = {alias}.content_id \
+                  LIMIT 1), \
+               (SELECT hs.summary FROM symbol_semantics hs \
+                  WHERE hs.repo_id = {alias}.repo_id \
+                    AND hs.artefact_id = {alias}.artefact_id \
+                    AND hs.blob_sha = {alias}.content_id \
+                  LIMIT 1) \
+             )"
+        )
+    }
+}
+
+fn artefact_embedding_representations_sql(alias: &str, use_historical_tables: bool) -> String {
+    let (table, blob_column) = if use_historical_tables {
+        ("symbol_embeddings", format!("{alias}.blob_sha"))
+    } else {
+        ("symbol_embeddings_current", format!("{alias}.content_id"))
+    };
+
+    format!(
+        "CASE \
+           WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '{table}') \
+           THEN COALESCE((SELECT json_group_array(representation_kind) \
+               FROM (SELECT DISTINCT se.representation_kind AS representation_kind \
+                       FROM {table} se \
+                      WHERE se.repo_id = {alias}.repo_id \
+                        AND se.artefact_id = {alias}.artefact_id \
+                        AND se.{embedding_blob_column} = {blob_column} \
+                   ORDER BY CASE se.representation_kind \
+                       WHEN 'identity' THEN 0 \
+                       WHEN 'locator' THEN 0 \
+                       WHEN 'code' THEN 1 \
+                       WHEN 'baseline' THEN 1 \
+                       WHEN 'enriched' THEN 1 \
+                       WHEN 'summary' THEN 2 \
+                       ELSE 9 \
+                   END)), '[]') \
+           ELSE '[]' \
+         END",
+        table = table,
+        alias = alias,
+        embedding_blob_column = if use_historical_tables {
+            "blob_sha"
+        } else {
+            "content_id"
+        },
+        blob_column = blob_column,
+    )
 }
 
 fn artefact_kind_rank_sql(alias: &str) -> String {
@@ -289,6 +361,13 @@ mod tests {
         let sql = build_filtered_artefacts_select_sql(&current_activity_spec());
 
         assert!(sql.contains("FROM filtered"));
+        assert!(sql.contains("summary"));
+        assert!(sql.contains("embedding_representations"));
+        assert!(sql.contains("FROM symbol_embeddings_current se"));
+        assert!(sql.contains("FROM symbol_semantics_current ss"));
+        assert!(sql.contains("FROM symbol_semantics hs"));
+        assert!(sql.contains("hs.blob_sha ="));
+        assert!(sql.contains("content_id"));
         assert!(sql.contains("ORDER BY path, kind_rank, start_line, end_line, artefact_id"));
         assert!(!sql.contains("blob_sha IN"));
     }
@@ -315,6 +394,7 @@ mod tests {
         assert!(sql.contains("FROM artefacts_historical a"));
         assert!(sql.contains("a.path = 'src/main.rs'"));
         assert!(sql.contains("a.blob_sha = 'blob-123'"));
+        assert!(sql.contains("FROM symbol_semantics ss"));
         assert!(!sql.contains("FROM file_state fs"));
     }
 }

@@ -89,8 +89,28 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
             }))
         }
         HOOK_NAME_PRE_TOOL_USE | HOOK_NAME_POST_TOOL_USE => {
-            let _raw = parse_tool_hook_input(stdin)?;
-            Ok(None)
+            let raw = parse_tool_hook_input(stdin)?;
+            let session_id = apply_session_id_policy(&raw.session_id, SessionIdPolicy::Strict)
+                .context("codex tool hook requires non-empty session_id")?;
+            let event_type = match (hook_name, raw.tool_name.eq_ignore_ascii_case("task")) {
+                (HOOK_NAME_PRE_TOOL_USE, true) => LifecycleEventType::SubagentStart,
+                (HOOK_NAME_POST_TOOL_USE, true) => LifecycleEventType::SubagentEnd,
+                (HOOK_NAME_PRE_TOOL_USE, false) => LifecycleEventType::ToolInvocationObserved,
+                (HOOK_NAME_POST_TOOL_USE, false) => LifecycleEventType::ToolResultObserved,
+                _ => return Ok(None),
+            };
+            Ok(Some(LifecycleEvent {
+                event_type: Some(event_type),
+                session_id: session_id.clone(),
+                session_ref: resolve_transcript_ref(&session_id, Some(&raw.transcript_path)),
+                tool_name: raw.tool_name.clone(),
+                tool_use_id: raw.tool_use_id,
+                tool_input: raw.tool_input,
+                tool_response: raw.tool_response.clone(),
+                subagent_id: task_agent_id(raw.tool_response.as_ref()),
+                model: raw.model,
+                ..LifecycleEvent::default()
+            }))
         }
         HOOK_NAME_STOP => {
             let raw = parse_session_info_input(stdin)?;
@@ -106,6 +126,23 @@ pub fn parse_hook_event(hook_name: &str, stdin: &mut dyn Read) -> Result<Option<
         }
         _ => Ok(None),
     }
+}
+
+fn task_agent_id(tool_response: Option<&serde_json::Value>) -> String {
+    tool_response
+        .and_then(|value| {
+            value
+                .pointer("/agentId")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    value
+                        .pointer("/agent_id")
+                        .and_then(serde_json::Value::as_str)
+                })
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
 
 fn parse_session_info_input(stdin: &mut dyn Read) -> Result<CodexSessionInfoRaw> {

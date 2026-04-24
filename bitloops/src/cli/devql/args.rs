@@ -10,6 +10,8 @@ pub struct DevqlArgs {
 pub enum DevqlCommand {
     /// Create schema for configured relational/events backends.
     Init(DevqlInitArgs),
+    /// Run read-only SQL against the daemon-wide analytics query layer.
+    Analytics(DevqlAnalyticsArgs),
     /// Manage daemon-owned DevQL sync and ingest tasks.
     Tasks(DevqlTasksArgs),
     /// Backfill or repair DevQL relational projections.
@@ -30,6 +32,36 @@ pub enum DevqlCommand {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlInitArgs {}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlAnalyticsArgs {
+    #[command(subcommand)]
+    pub command: DevqlAnalyticsCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlAnalyticsCommand {
+    /// Execute a read-only SQL query over analytics.* and analytics_raw.* views.
+    Sql(DevqlAnalyticsSqlArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlAnalyticsSqlArgs {
+    /// SQL query to execute.
+    pub query: String,
+
+    /// Select an explicit repository by repo id, identity, or unique name.
+    #[arg(long = "repo", conflicts_with = "all_repos")]
+    pub repos: Vec<String>,
+
+    /// Query all known repositories in the current daemon scope.
+    #[arg(long = "all-repos", default_value_t = false)]
+    pub all_repos: bool,
+
+    /// Emit JSON instead of the default tabular output.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlTasksArgs {

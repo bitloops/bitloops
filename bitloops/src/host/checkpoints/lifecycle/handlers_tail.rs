@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde_json::Value;
 
 use super::adapter::LifecycleAgentAdapter;
 use super::interaction::{flush_interaction_spool_best_effort, resolve_interaction_spool};
@@ -24,6 +25,9 @@ use crate::host::hooks::runtime::agent_runtime::helpers::{
 };
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
+use crate::host::interactions::tool_events::{
+    INTERACTION_SOURCE_LIVE_HOOK, derive_tool_input, summarise_tool_result,
+};
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventType, InteractionSession,
 };
@@ -248,6 +252,7 @@ pub fn handle_lifecycle_subagent_start(
                 repo_id: spool.repo_id().to_string(),
                 event_type: InteractionEventType::SubagentStart,
                 event_time: now_rfc3339(),
+                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
                 agent_type: String::new(),
                 model: resolve_interaction_model(&event.model, &event.session_ref),
                 payload: serde_json::json!({
@@ -261,6 +266,115 @@ pub fn handle_lifecycle_subagent_start(
             flush_interaction_spool_best_effort(&repo_root);
         }
     }
+    Ok(())
+}
+
+pub fn handle_lifecycle_tool_invocation(
+    _agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    handle_lifecycle_tool_event(event, InteractionEventType::ToolInvocationObserved)
+}
+
+pub fn handle_lifecycle_tool_result(
+    _agent: &dyn LifecycleAgentAdapter,
+    event: &LifecycleEvent,
+) -> Result<()> {
+    handle_lifecycle_tool_event(event, InteractionEventType::ToolResultObserved)
+}
+
+fn handle_lifecycle_tool_event(
+    event: &LifecycleEvent,
+    event_type: InteractionEventType,
+) -> Result<()> {
+    let tool_name = event.tool_name.trim();
+    let tool_use_id = event.tool_use_id.trim();
+    if tool_name.is_empty() || tool_use_id.is_empty() || tool_name.eq_ignore_ascii_case("task") {
+        return Ok(());
+    }
+
+    if let Ok(repo_root) = crate::utils::paths::repo_root() {
+        let backend = create_session_backend_or_local(&repo_root);
+        let now = now_rfc3339();
+        let session_state = backend.load_session(&event.session_id)?;
+        if let Some(mut state) = session_state.clone() {
+            state.last_interaction_time = Some(now.clone());
+            backend.save_session(&state)?;
+        }
+
+        if let Some(spool) = resolve_interaction_spool(&repo_root) {
+            let turn_id = session_state
+                .as_ref()
+                .filter(|state| !state.turn_id.trim().is_empty())
+                .map(|state| state.turn_id.clone());
+            let transcript_path = session_state
+                .as_ref()
+                .map(|state| state.transcript_path.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(event.session_ref.as_str());
+            let model = resolve_interaction_model(&event.model, transcript_path);
+            let tool_input = event.tool_input.as_ref().unwrap_or(&Value::Null);
+            let input = derive_tool_input(tool_name, tool_input);
+            let input_summary = input.summary.clone();
+            let command = input.command.clone();
+            let command_binary = input.command_binary.clone();
+            let command_argv = input.command_argv.clone();
+            let output_summary = event
+                .tool_response
+                .as_ref()
+                .map(summarise_tool_result)
+                .unwrap_or_default();
+            let payload = match event_type {
+                InteractionEventType::ToolInvocationObserved => serde_json::json!({
+                    "source": INTERACTION_SOURCE_LIVE_HOOK,
+                    "tool_name": tool_name,
+                    "tool_input": event.tool_input.clone().unwrap_or(Value::Null),
+                    "input_summary": input_summary,
+                    "command": command,
+                    "command_binary": command_binary,
+                    "command_argv": command_argv,
+                    "transcript_path": transcript_path,
+                }),
+                InteractionEventType::ToolResultObserved => serde_json::json!({
+                    "source": INTERACTION_SOURCE_LIVE_HOOK,
+                    "tool_name": tool_name,
+                    "tool_response": event.tool_response.clone().unwrap_or(Value::Null),
+                    "output_summary": output_summary,
+                    "transcript_path": transcript_path,
+                }),
+                _ => return Ok(()),
+            };
+            let task_description = match event_type {
+                InteractionEventType::ToolInvocationObserved => input.summary,
+                InteractionEventType::ToolResultObserved => output_summary.clone(),
+                _ => String::new(),
+            };
+            if let Err(err) = spool.record_event(&InteractionEvent {
+                event_id: generate_interaction_event_id(),
+                session_id: event.session_id.clone(),
+                turn_id,
+                repo_id: spool.repo_id().to_string(),
+                event_type,
+                event_time: now.clone(),
+                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
+                sequence_number: 0,
+                agent_type: session_state
+                    .as_ref()
+                    .map(|state| state.agent_type.clone())
+                    .unwrap_or_default(),
+                model,
+                tool_use_id: tool_use_id.to_string(),
+                tool_kind: tool_name.to_string(),
+                task_description,
+                payload,
+                ..Default::default()
+            }) {
+                eprintln!("[bitloops] Warning: failed to spool {event_type} event: {err}");
+            }
+            flush_interaction_spool_best_effort(&repo_root);
+        }
+    }
+
     Ok(())
 }
 
@@ -293,6 +407,7 @@ pub fn handle_lifecycle_subagent_end(
                 repo_id: spool.repo_id().to_string(),
                 event_type: InteractionEventType::SubagentEnd,
                 event_time: now_rfc3339(),
+                source: INTERACTION_SOURCE_LIVE_HOOK.to_string(),
                 agent_type: String::new(),
                 model: resolve_interaction_model(&event.model, &event.session_ref),
                 payload: serde_json::json!({

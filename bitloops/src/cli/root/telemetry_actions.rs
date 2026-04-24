@@ -359,6 +359,10 @@ fn reset_action(args: &ResetArgs) -> crate::telemetry::analytics::ActionDescript
 }
 
 fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics::ActionDescriptor {
+    if let Some(crate::cli::init::InitCommand::Status(status_args)) = args.command.as_ref() {
+        return init_status_action(status_args);
+    }
+
     let mut props = HashMap::new();
     let mut flags = Vec::new();
     if args.install_default_daemon {
@@ -388,6 +392,25 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     new_action("bitloops init", props)
 }
 
+fn init_status_action(
+    args: &crate::cli::init::InitStatusArgs,
+) -> crate::telemetry::analytics::ActionDescriptor {
+    let mut props = HashMap::new();
+    let mut flags = Vec::new();
+    if args.json {
+        flags.push("json");
+    }
+    if args.wait {
+        flags.push("wait");
+    }
+    if args.watch {
+        flags.push("watch");
+    }
+    insert_flags(&mut props, flags);
+    insert_bool_property(&mut props, "has_session_id", args.session_id.is_some());
+    new_action("bitloops init status", props)
+}
+
 fn enable_action(
     args: &crate::cli::enable::EnableArgs,
 ) -> crate::telemetry::analytics::ActionDescriptor {
@@ -401,6 +424,12 @@ fn enable_action(
     }
     if args.force {
         flags.push("force");
+    }
+    if args.capture {
+        flags.push("capture");
+    }
+    if args.devql_guidance {
+        flags.push("devql_guidance");
     }
     if args.telemetry.is_some() {
         flags.push("telemetry");
@@ -421,6 +450,12 @@ fn disable_action(args: &DisableArgs) -> crate::telemetry::analytics::ActionDesc
     let mut flags = Vec::new();
     if args.project {
         flags.push("project");
+    }
+    if args.capture {
+        flags.push("capture");
+    }
+    if args.devql_guidance {
+        flags.push("devql_guidance");
     }
     insert_flags(&mut props, flags);
     new_action("bitloops disable", props)
@@ -451,6 +486,9 @@ fn uninstall_action(
     }
     if args.agent_hooks {
         flags.push("agent_hooks");
+    }
+    if args.repo_config {
+        flags.push("repo_config");
     }
     if args.git_hooks {
         flags.push("git_hooks");
@@ -529,6 +567,21 @@ fn devql_action(
         crate::cli::devql::DevqlCommand::Init(_) => {
             Some(new_action("bitloops devql init", HashMap::new()))
         }
+        crate::cli::devql::DevqlCommand::Analytics(args) => match &args.command {
+            crate::cli::devql::DevqlAnalyticsCommand::Sql(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.all_repos {
+                    flags.push("all_repos");
+                }
+                if args.json {
+                    flags.push("json");
+                }
+                insert_flags(&mut props, flags);
+                insert_count_property(&mut props, "repo_count", args.repos.len());
+                Some(new_action("bitloops devql analytics sql", props))
+            }
+        },
         crate::cli::devql::DevqlCommand::Tasks(args) => devql_tasks_action(args),
         crate::cli::devql::DevqlCommand::Projection(args) => match &args.command {
             crate::cli::devql::DevqlProjectionCommand::CheckpointFileSnapshots(args) => {

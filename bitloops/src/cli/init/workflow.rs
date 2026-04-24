@@ -18,7 +18,7 @@ use crate::cli::inference::{
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
     DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
-    write_project_bootstrap_settings_with_daemon_binding,
+    write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance,
 };
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists};
 use crate::utils::branding::{BITLOOPS_PURPLE_HEX, bitloops_wordmark, color_hex_if_enabled};
@@ -258,8 +258,9 @@ pub(crate) async fn run_for_project_root(
     }
 
     maybe_install_default_daemon(args.install_default_daemon, telemetry_choice).await?;
-    let daemon_status = crate::daemon::status().await?;
-    let daemon_config_path = if let Some(runtime) = daemon_status.runtime.as_ref() {
+    let daemon_runtime = crate::daemon::runtime_state()?;
+    let daemon_service = crate::daemon::service_metadata()?;
+    let daemon_config_path = if let Some(runtime) = daemon_runtime.as_ref() {
         Some(
             runtime
                 .config_path
@@ -272,8 +273,7 @@ pub(crate) async fn run_for_project_root(
         None
     };
     if args.install_default_daemon {
-        let port = daemon_status
-            .runtime
+        let port = daemon_runtime
             .as_ref()
             .map(|runtime| runtime.port)
             .unwrap_or(crate::api::DEFAULT_DASHBOARD_PORT);
@@ -312,18 +312,17 @@ pub(crate) async fn run_for_project_root(
         false
     };
     let daemon_already_always_on = args.install_default_daemon
-        && (daemon_status
-            .runtime
+        && (daemon_runtime
             .as_ref()
             .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Service)
-            || daemon_status.service.is_some());
+            || daemon_service.is_some());
     let selection = if !args.agent.is_empty() {
         InitAgentSelection {
             agents: resolve_cli_agents(&args.agent)?,
-            enable_bitloops_skill: !args.disable_bitloops_skill,
+            enable_devql_guidance: !args.disable_devql_guidance,
         }
     } else {
-        detect_or_select_agent(project_root, out, !args.disable_bitloops_skill, select_fn)?
+        detect_or_select_agent(project_root, out, !args.disable_devql_guidance, select_fn)?
     };
     let selected_agents = selection.agents;
     ensure_repo_init_files_excluded(&git_root, project_root, &selected_agents)?;
@@ -333,11 +332,12 @@ pub(crate) async fn run_for_project_root(
     let scope_exclude = normalize_cli_exclusions(&args.exclude);
     let scope_exclude_from = normalize_exclude_from_paths(project_root, &args.exclude_from)?;
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
-    write_project_bootstrap_settings_with_daemon_binding(
+    write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance(
         &local_policy_path,
         &strategy,
         &selected_agents,
         daemon_config_path.as_deref(),
+        selection.enable_devql_guidance,
     )?;
     if !scope_exclude.is_empty() || !scope_exclude_from.is_empty() {
         set_scope_exclusions(&local_policy_path, &scope_exclude, &scope_exclude_from)?;
@@ -360,7 +360,7 @@ pub(crate) async fn run_for_project_root(
             settings.local_dev,
             args.force,
             crate::cli::agent_surfaces::ReconcileProjectAgentSurfacesOptions {
-                install_bitloops_skill: selection.enable_bitloops_skill,
+                install_bitloops_skill: selection.enable_devql_guidance,
             },
             &mut surface_updates,
         )?;
@@ -577,7 +577,7 @@ pub(crate) async fn run_for_project_root(
 }
 
 async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
-    if let Some(runtime) = crate::daemon::status().await?.runtime {
+    if let Some(runtime) = crate::daemon::runtime_state()? {
         return Ok(runtime
             .config_path
             .canonicalize()
@@ -599,10 +599,7 @@ async fn bound_running_daemon_config_path() -> Result<std::path::PathBuf> {
         return Ok(config_path.canonicalize().unwrap_or(config_path));
     }
 
-    let runtime = crate::daemon::status()
-        .await?
-        .runtime
-        .context("Bitloops daemon is not running")?;
+    let runtime = crate::daemon::runtime_state()?.context("Bitloops daemon is not running")?;
     Ok(runtime
         .config_path
         .canonicalize()
@@ -806,7 +803,7 @@ async fn write_init_setup_handoff(
     }
     writeln!(out, "You can:")?;
     writeln!(out, "  • View progress: {dashboard_url}")?;
-    writeln!(out, "  • Check status anytime: bitloops status")?;
+    writeln!(out, "  • Check status anytime: bitloops init status")?;
     writeln!(
         out,
         "  • Close this terminal — setup will continue in the background"
@@ -868,8 +865,5 @@ fn write_local_http_mkcert_notice(out: &mut dyn Write) -> Result<()> {
 }
 
 async fn current_dashboard_url() -> Result<Option<String>> {
-    Ok(crate::daemon::status()
-        .await
-        .ok()
-        .and_then(|status| status.runtime.map(|runtime| runtime.url)))
+    Ok(crate::daemon::runtime_state()?.map(|runtime| runtime.url))
 }

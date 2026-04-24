@@ -3,7 +3,7 @@ use super::super::*;
 #[test]
 fn parse_devql_deps_stage_basic() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->file("src/main.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"both",include_unresolved:false)->limit(25)"#,
+        r#"repo("bitloops-cli")->file("src/main.ts")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"both",include_unresolved:false)->limit(25)"#,
     )
     .unwrap();
 
@@ -18,7 +18,8 @@ fn parse_devql_deps_stage_basic() {
 async fn execute_devql_query_rejects_combining_deps_and_checkpoints_stage() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
-    let parsed = parse_devql_query(r#"repo("temp2")->checkpoints()->artefacts()->deps()"#).unwrap();
+    let parsed =
+        parse_devql_query(r#"repo("temp2")->checkpoints()->artefacts()->dependencies()"#).unwrap();
     let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
         .await
         .unwrap_err();
@@ -39,7 +40,7 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
         "exports",
     ] {
         let parsed = parse_devql_query(&format!(
-            r#"repo("bitloops-cli")->artefacts(kind:"function")->deps(kind:"{kind}")->limit(5)"#
+            r#"repo("bitloops-cli")->artefacts(kind:"function")->dependencies(kind:"{kind}")->limit(5)"#
         ))
         .unwrap();
 
@@ -47,7 +48,7 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
     }
 
     let legacy = parse_devql_query(
-        r#"repo("bitloops-cli")->artefacts(kind:"function")->deps(kind:"inherits")->limit(5)"#,
+        r#"repo("bitloops-cli")->artefacts(kind:"function")->dependencies(kind:"inherits")->limit(5)"#,
     )
     .unwrap();
     assert_eq!(legacy.deps.kind, Some(DepsKind::Extends));
@@ -57,15 +58,15 @@ fn parse_devql_deps_stage_accepts_all_v1_edge_kinds() {
 fn build_postgres_deps_query_respects_direction_and_unresolved_filters() {
     let cfg = test_cfg();
     let out = parse_devql_query(
-        r#"repo("bitloops-cli")->file("src/main.ts")->artefacts(kind:"function")->deps(kind:"calls",direction:"out",include_unresolved:false)->limit(5)"#,
+        r#"repo("bitloops-cli")->file("src/main.ts")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"out",include_unresolved:false)->limit(5)"#,
     )
     .unwrap();
     let in_query = parse_devql_query(
-        r#"repo("bitloops-cli")->artefacts(kind:"interface")->deps(kind:"references",direction:"in")->limit(5)"#,
+        r#"repo("bitloops-cli")->artefacts(kind:"interface")->dependencies(kind:"references",direction:"in")->limit(5)"#,
     )
     .unwrap();
     let both = parse_devql_query(
-        r#"repo("bitloops-cli")->artefacts()->deps(kind:"exports",direction:"both")->limit(5)"#,
+        r#"repo("bitloops-cli")->artefacts()->dependencies(kind:"exports",direction:"both")->limit(5)"#,
     )
     .unwrap();
 
@@ -95,7 +96,7 @@ fn build_postgres_deps_query_respects_direction_and_unresolved_filters() {
 fn build_postgres_deps_query_uses_historical_tables_for_asof_queries() {
     let cfg = test_cfg();
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->asOf(commit:"abc123")->file("src/main.ts")->artefacts(kind:"function")->deps(kind:"calls")->limit(5)"#,
+        r#"repo("bitloops-cli")->asOf(commit:"abc123")->file("src/main.ts")->artefacts(kind:"function")->dependencies(kind:"calls")->limit(5)"#,
     )
     .unwrap();
 
@@ -117,7 +118,7 @@ fn build_postgres_deps_query_uses_historical_tables_for_asof_queries() {
 fn build_postgres_deps_query_uses_sync_shaped_current_tables_for_save_revision() {
     let cfg = test_cfg();
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->deps(kind:"calls",direction:"both")->limit(10)"#,
+        r#"repo("bitloops-cli")->asOf(saveRevision:"temp:42")->artefacts(kind:"function")->dependencies(kind:"calls",direction:"both")->limit(10)"#,
     )
     .unwrap();
 
@@ -139,7 +140,7 @@ fn build_postgres_deps_query_uses_sync_shaped_current_tables_for_save_revision()
 fn build_postgres_deps_query_supports_symbol_fqn_filter() {
     let cfg = test_cfg();
     let parsed = parse_devql_query(
-        r#"repo("rust-example")->artefacts(kind:"method",symbol_fqn:"hello_rust/src/main.rs::impl@1::handle_factorial")->deps(kind:"calls",direction:"out")->limit(20)"#,
+        r#"repo("rust-example")->artefacts(kind:"method",symbol_fqn:"hello_rust/src/main.rs::impl@1::handle_factorial")->dependencies(kind:"calls",direction:"out")->limit(20)"#,
     )
     .unwrap();
 
@@ -151,22 +152,23 @@ fn build_postgres_deps_query_supports_symbol_fqn_filter() {
 #[test]
 fn build_postgres_deps_query_rejects_invalid_direction() {
     let err = parse_devql_query(
-        r#"repo("bitloops-cli")->artefacts()->deps(kind:"calls",direction:"sideways")->limit(5)"#,
+        r#"repo("bitloops-cli")->artefacts()->dependencies(kind:"calls",direction:"sideways")->limit(5)"#,
     )
     .unwrap_err();
     assert!(
         err.to_string()
-            .contains("deps(direction:...) must be one of: out, in, both")
+            .contains("dependencies(direction:...) must be one of: out, in, both")
     );
 }
 
 #[test]
 fn build_postgres_deps_query_rejects_invalid_kind() {
-    let err =
-        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->deps(kind:"surprise")->limit(5)"#)
-            .unwrap_err();
+    let err = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->dependencies(kind:"surprise")->limit(5)"#,
+    )
+    .unwrap_err();
     assert!(err.to_string().contains(
-        "deps(kind:...) must be one of: imports, calls, references, extends, implements, exports"
+        "dependencies(kind:...) must be one of: imports, calls, references, extends, implements, exports"
     ));
 }
 
@@ -175,7 +177,7 @@ async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->deps(kind:"calls")->chatHistory()->limit(1)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->dependencies(kind:"calls")->chatHistory()->limit(1)"#,
     )
     .unwrap();
     let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
@@ -183,6 +185,6 @@ async fn execute_devql_query_rejects_combining_deps_and_chat_history_stage() {
         .unwrap_err();
     assert!(
         err.to_string()
-            .contains("deps() cannot be combined with chatHistory()")
+            .contains("dependencies() cannot be combined with chatHistory()")
     );
 }

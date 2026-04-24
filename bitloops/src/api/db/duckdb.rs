@@ -91,8 +91,11 @@ pub(super) fn ensure_duckdb_file_exists(path: &Path) -> Result<()> {
 
 pub(super) fn open_duckdb_connection_existing(path: &Path) -> Result<duckdb::Connection> {
     ensure_duckdb_file_exists(path)?;
-    duckdb::Connection::open(path)
-        .with_context(|| format!("opening DuckDB events database at {}", path.display()))
+    duckdb::Connection::open_with_flags(
+        path,
+        duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly)?,
+    )
+    .with_context(|| format!("opening DuckDB events database at {}", path.display()))
 }
 
 pub(super) fn duckdb_query_rows_with_connection(

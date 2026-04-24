@@ -7,13 +7,14 @@ use uuid::Uuid;
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::{
     DevqlTaskRecord, DevqlTaskSpec, DevqlTaskStatus, EmbeddingsBootstrapTaskSpec, IngestTaskSpec,
-    InitSessionRecord, InitSessionTerminalStatus, StartInitSessionSelections,
-    SummaryBootstrapRunRecord, SyncTaskMode, SyncTaskSpec, unix_timestamp_now,
+    InitSessionRecord, InitSessionTaskTerminalSnapshot, InitSessionTerminalStatus,
+    StartInitSessionSelections, SummaryBootstrapRunRecord, SyncTaskMode, SyncTaskSpec,
+    unix_timestamp_now,
 };
 use crate::graphql::SubscriptionHub;
 use crate::host::devql::{DevqlConfig, SyncMode};
@@ -26,17 +27,19 @@ use super::lanes::{
     running_task,
 };
 use super::orchestration::{
-    record_task_completion_seq, selected_top_level_terminal,
-    semantic_bootstrap_still_outstanding_after_initial_sync, semantic_bootstrap_waiting_reason,
-    semantic_bootstraps_ready, semantic_bootstraps_terminal, semantic_follow_up_pending,
-    semantic_follow_up_ready_for_sync, session_fatal_failure_detail, session_has_remaining_work,
-    session_requires_semantic_follow_up, summary_run_failed, task_failed,
+    record_task_completion_seq, selected_session_workplane_stats, selected_sync_terminal,
+    selected_top_level_terminal, semantic_bootstrap_still_outstanding_after_initial_sync,
+    semantic_bootstrap_waiting_reason, semantic_bootstraps_ready, semantic_bootstraps_terminal,
+    semantic_follow_up_pending, semantic_follow_up_ready_for_sync, session_fatal_failure_detail,
+    session_has_remaining_work, session_requires_semantic_follow_up,
 };
 use super::progress::load_runtime_lane_progress;
 use super::session_stats::load_session_workplane_stats;
 use super::stats::{RuntimeLaneProgressState, SummaryInMemoryBatchProgress};
 use super::tasks::{
-    load_summary_task_by_id, load_task_by_id, summary_run_from_task, summary_run_from_task_ref,
+    embeddings_bootstrap_status, follow_up_sync_status, ingest_status, initial_sync_status,
+    load_summary_task_by_id, load_task_by_id, summary_bootstrap_status, summary_run_from_task,
+    summary_run_from_task_ref, summary_status_is_failed, task_status_is_failed,
 };
 use super::types::{
     InitRuntimeSessionView, InitRuntimeSnapshot, InitSessionHandle, RuntimeEventRecord,
@@ -83,11 +86,16 @@ impl InitRuntimeCoordinator {
             daemon_config_root: cfg.daemon_config_root.clone(),
             selections: selections.clone(),
             initial_sync_task_id: None,
+            initial_sync_terminal: None,
             ingest_task_id: None,
+            ingest_terminal: None,
             embeddings_bootstrap_task_id: None,
+            embeddings_bootstrap_terminal: None,
             summary_bootstrap_task_id: None,
+            summary_bootstrap_terminal: None,
             follow_up_sync_required: false,
             follow_up_sync_task_id: None,
+            follow_up_sync_terminal: None,
             next_completion_seq: 0,
             initial_sync_completion_seq: None,
             embeddings_bootstrap_completion_seq: None,
@@ -184,6 +192,7 @@ impl InitRuntimeCoordinator {
             };
             session.updated_at_unix = unix_timestamp_now();
             record_task_completion_seq(session, &task);
+            record_task_terminal_snapshot(session, &task);
             if task.task_id == session.initial_sync_task_id.clone().unwrap_or_default()
                 && task.status == DevqlTaskStatus::Completed
             {
@@ -226,6 +235,7 @@ impl InitRuntimeCoordinator {
                     return Ok(());
                 };
                 session.ingest_task_id = Some(queued.task.task_id.clone());
+                session.ingest_terminal = None;
                 session.updated_at_unix = unix_timestamp_now();
                 state.last_action = Some("staged_ingest_enqueued".to_string());
                 state.updated_at_unix = unix_timestamp_now();
@@ -251,13 +261,16 @@ impl InitRuntimeCoordinator {
             RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
         let repo_id = cfg.repo.repo_id.clone();
         let task_queue = crate::daemon::shared_devql_task_coordinator().snapshot(Some(&repo_id))?;
-        let current_state_consumer =
-            crate::daemon::shared_capability_event_coordinator().snapshot(Some(&repo_id))?;
+        let current_state_consumer = crate::daemon::capability_event_status_for_config_root(
+            &cfg.daemon_config_root,
+            Some(&repo_id),
+        )?;
         let mailboxes = repo_store.load_capability_workplane_mailbox_status(
             SEMANTIC_CLONES_CAPABILITY_ID,
             [
                 SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
                 SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
                 SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
                 SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
             ],
@@ -398,15 +411,17 @@ impl InitRuntimeCoordinator {
             &stats,
         );
         let has_fatal_failure = fatal_failure_detail.is_some();
+        let selected_workplane = selected_session_workplane_stats(&session, &stats);
         let has_remaining_work = session_has_remaining_work(
             initial_sync.as_ref(),
             ingest_task.as_ref(),
             follow_up_sync.as_ref(),
             embeddings_task.as_ref(),
             summary_run.as_ref(),
-            &stats,
+            stats.current_state,
+            &selected_workplane,
         );
-        let warning_failures = stats.warning_failed_jobs_total();
+        let warning_failures = selected_workplane.warning_failed_jobs_total;
         let has_warnings = warning_failures > 0;
         let semantic_bootstraps_terminal =
             semantic_bootstraps_terminal(&session, embeddings_task.as_ref(), summary_run.as_ref());
@@ -427,11 +442,8 @@ impl InitRuntimeCoordinator {
         let follow_up_satisfied = !follow_up_pending;
         let selected_top_level_terminal =
             selected_top_level_terminal(&session, initial_sync.as_ref(), ingest_task.as_ref());
-        let blocked_embedding = stats
-            .blocked_code_embedding_reason
-            .clone()
-            .or(stats.blocked_summary_embedding_reason.clone());
-        let blocked_summary = stats.blocked_summary_reason.clone();
+        let blocked_embedding = selected_workplane.blocked_embedding_reason.clone();
+        let blocked_summary = selected_workplane.blocked_summary_reason.clone();
         let waiting_reason = if has_fatal_failure {
             Some("failed".to_string())
         } else if !selected_top_level_terminal {
@@ -440,10 +452,10 @@ impl InitRuntimeCoordinator {
             Some("waiting_for_current_state_consumer".to_string())
         } else if blocked_embedding.is_some() || blocked_summary.is_some() {
             Some("waiting_on_blocked_mailbox".to_string())
-        } else if stats.embedding_jobs.pending > 0
-            || stats.embedding_jobs.running > 0
-            || stats.summary_jobs.pending > 0
-            || stats.summary_jobs.running > 0
+        } else if selected_workplane.embedding_jobs.pending > 0
+            || selected_workplane.embedding_jobs.running > 0
+            || selected_workplane.summary_jobs.pending > 0
+            || selected_workplane.summary_jobs.running > 0
         {
             Some("waiting_for_workplane".to_string())
         } else if bootstrap_waiting {
@@ -467,10 +479,10 @@ impl InitRuntimeCoordinator {
             && follow_up_satisfied
             && stats.current_state.pending == 0
             && stats.current_state.running == 0
-            && stats.embedding_jobs.pending == 0
-            && stats.embedding_jobs.running == 0
-            && stats.summary_jobs.pending == 0
-            && stats.summary_jobs.running == 0
+            && selected_workplane.embedding_jobs.pending == 0
+            && selected_workplane.embedding_jobs.running == 0
+            && selected_workplane.summary_jobs.pending == 0
+            && selected_workplane.summary_jobs.running == 0
             && blocked_embedding.is_none()
             && blocked_summary.is_none();
         let terminal_failed = has_fatal_failure && !has_remaining_work;
@@ -564,14 +576,17 @@ impl InitRuntimeCoordinator {
         let embeddings_task = load_task_by_id(session.embeddings_bootstrap_task_id.as_deref())?;
         let summary_task = load_summary_task_by_id(session.summary_bootstrap_task_id.as_deref())?;
         let summary_run = summary_task.as_ref().and_then(summary_run_from_task_ref);
-        if !selected_top_level_terminal(&session, initial_sync.as_ref(), ingest_task.as_ref()) {
+        if !selected_sync_terminal(&session, initial_sync.as_ref()) {
             return Ok(());
         }
-        if task_failed(initial_sync.as_ref())
-            || task_failed(ingest_task.as_ref())
-            || task_failed(follow_up_sync.as_ref())
-            || task_failed(embeddings_task.as_ref())
-            || summary_run.as_ref().is_some_and(summary_run_failed)
+        if initial_sync_status(&session, initial_sync.as_ref()).is_some_and(task_status_is_failed)
+            || ingest_status(&session, ingest_task.as_ref()).is_some_and(task_status_is_failed)
+            || follow_up_sync_status(&session, follow_up_sync.as_ref())
+                .is_some_and(task_status_is_failed)
+            || embeddings_bootstrap_status(&session, embeddings_task.as_ref())
+                .is_some_and(task_status_is_failed)
+            || summary_bootstrap_status(&session, summary_run.as_ref())
+                .is_some_and(summary_status_is_failed)
         {
             return Ok(());
         }
@@ -618,6 +633,7 @@ impl InitRuntimeCoordinator {
                 return Ok(());
             };
             record.follow_up_sync_task_id = Some(queued.task.task_id.clone());
+            record.follow_up_sync_terminal = None;
             record.updated_at_unix = unix_timestamp_now();
             state.last_action = Some("follow_up_sync_enqueued".to_string());
             state.updated_at_unix = unix_timestamp_now();
@@ -738,4 +754,43 @@ impl InitRuntimeCoordinator {
             });
         }
     }
+}
+
+fn record_task_terminal_snapshot(session: &mut InitSessionRecord, task: &DevqlTaskRecord) {
+    let Some(snapshot) = task_terminal_snapshot(task) else {
+        return;
+    };
+    if session.initial_sync_task_id.as_deref() == Some(task.task_id.as_str()) {
+        session.initial_sync_terminal = Some(snapshot);
+        return;
+    }
+    if session.ingest_task_id.as_deref() == Some(task.task_id.as_str()) {
+        session.ingest_terminal = Some(snapshot);
+        return;
+    }
+    if session.embeddings_bootstrap_task_id.as_deref() == Some(task.task_id.as_str()) {
+        session.embeddings_bootstrap_terminal = Some(snapshot);
+        return;
+    }
+    if session.summary_bootstrap_task_id.as_deref() == Some(task.task_id.as_str()) {
+        session.summary_bootstrap_terminal = Some(snapshot);
+        return;
+    }
+    if session.follow_up_sync_task_id.as_deref() == Some(task.task_id.as_str()) {
+        session.follow_up_sync_terminal = Some(snapshot);
+    }
+}
+
+fn task_terminal_snapshot(task: &DevqlTaskRecord) -> Option<InitSessionTaskTerminalSnapshot> {
+    matches!(
+        task.status,
+        DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
+    )
+    .then(|| InitSessionTaskTerminalSnapshot {
+        task_id: task.task_id.clone(),
+        status: task.status,
+        updated_at_unix: task.updated_at_unix,
+        completed_at_unix: task.completed_at_unix,
+        error: task.error.clone(),
+    })
 }

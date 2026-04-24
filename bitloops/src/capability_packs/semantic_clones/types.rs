@@ -4,6 +4,7 @@ pub const SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX: &str =
     "semantic_clones.inbound.current_state";
 pub const SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX: &str = "semantic_clones.summary_refresh";
 pub const SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX: &str = "semantic_clones.embedding.code";
+pub const SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX: &str = "semantic_clones.embedding.identity";
 pub const SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX: &str = "semantic_clones.embedding.summary";
 pub const SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX: &str = "semantic_clones.clone_rebuild";
 pub const SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT: &str = "summary_generation";

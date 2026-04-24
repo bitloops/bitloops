@@ -73,5 +73,5 @@ pub struct ToolState {
     #[serde(default)]
     pub input: Map<String, Value>,
     #[serde(default)]
-    pub output: String,
+    pub output: Value,
 }

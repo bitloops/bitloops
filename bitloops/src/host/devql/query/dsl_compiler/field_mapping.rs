@@ -136,9 +136,15 @@ pub(super) fn tests_result_selections() -> Vec<GraphqlSelection> {
             Vec::new(),
             vec![
                 GraphqlSelection::scalar("totalCoveringTests"),
-                GraphqlSelection::scalar("crossCutting"),
-                GraphqlSelection::scalar("dataSources"),
-                GraphqlSelection::scalar("diagnosticCount"),
+                GraphqlField::new(
+                    "expandHint",
+                    Vec::new(),
+                    vec![
+                        GraphqlSelection::scalar("intent"),
+                        GraphqlSelection::scalar("template"),
+                    ],
+                )
+                .into(),
             ],
         )
         .into(),

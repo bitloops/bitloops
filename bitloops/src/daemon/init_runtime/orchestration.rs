@@ -4,7 +4,21 @@ use crate::daemon::types::{
 };
 
 use super::lanes::{active_task, running_task};
-use super::stats::SessionWorkplaneStats;
+use super::stats::{SessionWorkplaneStats, StatusCounts, merge_status_counts};
+use super::tasks::{
+    embeddings_bootstrap_status, ingest_status, initial_sync_status, summary_bootstrap_status,
+    summary_status_is_completed, summary_status_is_failed, summary_status_is_terminal,
+    task_status_is_completed, task_status_is_failed, task_status_is_terminal,
+};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SelectedSessionWorkplaneStats {
+    pub(crate) embedding_jobs: StatusCounts,
+    pub(crate) summary_jobs: StatusCounts,
+    pub(crate) blocked_embedding_reason: Option<String>,
+    pub(crate) blocked_summary_reason: Option<String>,
+    pub(crate) warning_failed_jobs_total: u64,
+}
 
 pub(crate) fn record_task_completion_seq(session: &mut InitSessionRecord, task: &DevqlTaskRecord) {
     if task.status != DevqlTaskStatus::Completed {
@@ -58,6 +72,61 @@ pub(crate) fn session_requires_semantic_follow_up(session: &InitSessionRecord) -
         || session.selections.summaries_bootstrap.is_some()
 }
 
+pub(crate) fn selected_session_workplane_stats(
+    session: &InitSessionRecord,
+    stats: &SessionWorkplaneStats,
+) -> SelectedSessionWorkplaneStats {
+    let include_code_embeddings = session.selections.run_code_embeddings;
+    let include_summary_embeddings = session.selections.run_summary_embeddings;
+    let include_summaries = session.selections.run_summaries;
+
+    let embedding_jobs = merge_status_counts([
+        if include_code_embeddings {
+            stats.code_embedding_jobs.counts
+        } else {
+            StatusCounts::default()
+        },
+        if include_summary_embeddings {
+            stats.summary_embedding_jobs.counts
+        } else {
+            StatusCounts::default()
+        },
+    ]);
+    let summary_jobs = if include_summaries {
+        stats.summary_refresh_jobs.counts
+    } else {
+        StatusCounts::default()
+    };
+
+    let blocked_embedding_reason =
+        if include_code_embeddings && stats.code_embedding_jobs.counts.has_pending_or_running() {
+            stats.blocked_code_embedding_reason.clone()
+        } else if include_summary_embeddings
+            && stats.summary_embedding_jobs.counts.has_pending_or_running()
+        {
+            stats.blocked_summary_embedding_reason.clone()
+        } else {
+            None
+        };
+    let blocked_summary_reason =
+        if include_summaries && stats.summary_refresh_jobs.counts.has_pending_or_running() {
+            stats.blocked_summary_reason.clone()
+        } else {
+            None
+        };
+
+    SelectedSessionWorkplaneStats {
+        embedding_jobs,
+        summary_jobs,
+        blocked_embedding_reason,
+        blocked_summary_reason,
+        warning_failed_jobs_total: u64::from(include_code_embeddings)
+            * stats.code_embedding_jobs.counts.failed
+            + u64::from(include_summary_embeddings) * stats.summary_embedding_jobs.counts.failed
+            + u64::from(include_summaries) * stats.summary_refresh_jobs.counts.failed,
+    }
+}
+
 pub(crate) fn task_failed(task: Option<&DevqlTaskRecord>) -> bool {
     task.is_some_and(|task| {
         matches!(
@@ -77,22 +146,12 @@ pub(crate) fn semantic_bootstraps_terminal(
     summary_run: Option<&SummaryBootstrapRunRecord>,
 ) -> bool {
     let embeddings_terminal = if session.selections.embeddings_bootstrap.is_some() {
-        embeddings_task.is_some_and(|task| {
-            matches!(
-                task.status,
-                DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
-            )
-        })
+        embeddings_bootstrap_status(session, embeddings_task).is_some_and(task_status_is_terminal)
     } else {
         true
     };
     let summaries_terminal = if session.selections.summaries_bootstrap.is_some() {
-        summary_run.is_some_and(|run| {
-            matches!(
-                run.status,
-                SummaryBootstrapStatus::Completed | SummaryBootstrapStatus::Failed
-            )
-        })
+        summary_bootstrap_status(session, summary_run).is_some_and(summary_status_is_terminal)
     } else {
         true
     };
@@ -105,12 +164,12 @@ pub(crate) fn semantic_bootstraps_ready(
     summary_run: Option<&SummaryBootstrapRunRecord>,
 ) -> bool {
     let embeddings_ready = if session.selections.embeddings_bootstrap.is_some() {
-        embeddings_task.is_some_and(|task| task.status == DevqlTaskStatus::Completed)
+        embeddings_bootstrap_status(session, embeddings_task).is_some_and(task_status_is_completed)
     } else {
         true
     };
     let summaries_ready = if session.selections.summaries_bootstrap.is_some() {
-        summary_run.is_some_and(|run| run.status == SummaryBootstrapStatus::Completed)
+        summary_bootstrap_status(session, summary_run).is_some_and(summary_status_is_completed)
     } else {
         true
     };
@@ -123,9 +182,10 @@ pub(crate) fn semantic_bootstrap_waiting_reason(
     summary_run: Option<&SummaryBootstrapRunRecord>,
 ) -> Option<&'static str> {
     let embeddings_waiting = session.selections.embeddings_bootstrap.is_some()
-        && !embeddings_task.is_some_and(|task| task.status == DevqlTaskStatus::Completed);
+        && !embeddings_bootstrap_status(session, embeddings_task)
+            .is_some_and(task_status_is_completed);
     let summaries_waiting = session.selections.summaries_bootstrap.is_some()
-        && !summary_run.is_some_and(|run| run.status == SummaryBootstrapStatus::Completed);
+        && !summary_bootstrap_status(session, summary_run).is_some_and(summary_status_is_completed);
 
     match (embeddings_waiting, summaries_waiting) {
         (true, false) => Some("waiting_for_embeddings_bootstrap"),
@@ -143,7 +203,7 @@ pub(crate) fn embeddings_bootstrap_outstanding_after_initial_sync(
     session.selections.embeddings_bootstrap.is_some()
         && session.initial_sync_completion_seq.is_some()
         && session.embeddings_bootstrap_completion_seq.is_none()
-        && !task_failed(embeddings_task)
+        && !embeddings_bootstrap_status(session, embeddings_task).is_some_and(task_status_is_failed)
 }
 
 pub(crate) fn summary_bootstrap_outstanding_after_initial_sync(
@@ -154,7 +214,7 @@ pub(crate) fn summary_bootstrap_outstanding_after_initial_sync(
     session.selections.summaries_bootstrap.is_some()
         && session.initial_sync_completion_seq.is_some()
         && session.summary_bootstrap_completion_seq.is_none()
-        && !summary_run.is_some_and(summary_run_failed)
+        && !summary_bootstrap_status(session, summary_run).is_some_and(summary_status_is_failed)
 }
 
 pub(crate) fn embeddings_follow_up_pending(
@@ -169,7 +229,7 @@ pub(crate) fn embeddings_follow_up_pending(
     if session.selections.embeddings_bootstrap.is_none() {
         return false;
     }
-    if task_failed(embeddings_task) {
+    if embeddings_bootstrap_status(session, embeddings_task).is_some_and(task_status_is_failed) {
         return false;
     }
     let Some(bootstrap_completed_seq) = session.embeddings_bootstrap_completion_seq else {
@@ -193,7 +253,7 @@ pub(crate) fn summaries_follow_up_pending(
     if session.selections.summaries_bootstrap.is_none() {
         return false;
     }
-    if summary_run.is_some_and(summary_run_failed) {
+    if summary_bootstrap_status(session, summary_run).is_some_and(summary_status_is_failed) {
         return false;
     }
     let Some(bootstrap_completed_seq) = session.summary_bootstrap_completion_seq else {
@@ -249,28 +309,25 @@ pub(crate) fn semantic_follow_up_pending(
         )
 }
 
+pub(crate) fn selected_sync_terminal(
+    session: &InitSessionRecord,
+    initial_sync: Option<&DevqlTaskRecord>,
+) -> bool {
+    if session.selections.run_sync {
+        initial_sync_status(session, initial_sync).is_some_and(task_status_is_terminal)
+    } else {
+        true
+    }
+}
+
 pub(crate) fn selected_top_level_terminal(
     session: &InitSessionRecord,
     initial_sync: Option<&DevqlTaskRecord>,
     ingest_task: Option<&DevqlTaskRecord>,
 ) -> bool {
-    let sync_terminal = if session.selections.run_sync {
-        initial_sync.is_some_and(|task| {
-            matches!(
-                task.status,
-                DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
-            )
-        })
-    } else {
-        true
-    };
+    let sync_terminal = selected_sync_terminal(session, initial_sync);
     let ingest_terminal = if session.selections.run_ingest {
-        ingest_task.is_some_and(|task| {
-            matches!(
-                task.status,
-                DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
-            )
-        })
+        ingest_status(session, ingest_task).is_some_and(task_status_is_terminal)
     } else {
         true
     };
@@ -283,7 +340,8 @@ pub(crate) fn session_has_remaining_work(
     follow_up_sync: Option<&DevqlTaskRecord>,
     embeddings_task: Option<&DevqlTaskRecord>,
     summary_run: Option<&SummaryBootstrapRunRecord>,
-    stats: &SessionWorkplaneStats,
+    current_state: StatusCounts,
+    selected_workplane: &SelectedSessionWorkplaneStats,
 ) -> bool {
     active_task(initial_sync).is_some()
         || active_task(ingest_task).is_some()
@@ -295,9 +353,9 @@ pub(crate) fn session_has_remaining_work(
                 SummaryBootstrapStatus::Queued | SummaryBootstrapStatus::Running
             )
         })
-        || stats.current_state.has_pending_or_running()
-        || stats.embedding_jobs.has_pending_or_running()
-        || stats.summary_jobs.has_pending_or_running()
+        || current_state.has_pending_or_running()
+        || selected_workplane.embedding_jobs.has_pending_or_running()
+        || selected_workplane.summary_jobs.has_pending_or_running()
 }
 
 pub(crate) fn session_fatal_failure_detail(

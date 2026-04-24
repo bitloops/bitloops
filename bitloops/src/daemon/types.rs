@@ -77,7 +77,8 @@ pub use enrichment::{
 };
 pub use health::DaemonHealthSummary;
 pub use init_session::{
-    InitSessionRecord, InitSessionState, InitSessionTerminalStatus, StartInitSessionSelections,
+    InitSessionRecord, InitSessionState, InitSessionTaskTerminalSnapshot,
+    InitSessionTerminalStatus, StartInitSessionSelections,
 };
 pub use process_args::{
     DaemonMode, DaemonProcessModeArg, InternalDaemonProcessArgs, InternalDaemonSupervisorArgs,

@@ -11,9 +11,10 @@ use super::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
     CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
     DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
-    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    DepsSummary, DepsSummaryFilterInput, TestHarnessTestsResult, paginate_items,
 };
+
+const GRAPHQL_SCORE_PRECISION_SCALE: f64 = 10_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum CanonicalKind {
@@ -56,6 +57,13 @@ impl CanonicalKind {
             Self::Alias => "alias",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum EmbeddingRepresentationKind {
+    Identity,
+    Code,
+    Summary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, InputObject)]
@@ -108,7 +116,42 @@ pub struct ArtefactCopyLineage {
     pub(crate) scope: ResolverScope,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct ArtefactSearchScore {
+    pub total: f64,
+    pub exact: f64,
+    pub full_text: f64,
+    pub fuzzy: f64,
+    pub semantic: f64,
+    pub literal_matches: i32,
+    pub exact_case_literal_matches: i32,
+    pub phrase_matches: i32,
+    pub exact_case_phrase_matches: i32,
+    pub body_literal_matches: i32,
+    pub signature_literal_matches: i32,
+    pub summary_literal_matches: i32,
+}
+
+impl ArtefactSearchScore {
+    pub(crate) fn rounded(&self) -> Self {
+        Self {
+            total: round_graphql_score(self.total),
+            exact: round_graphql_score(self.exact),
+            full_text: round_graphql_score(self.full_text),
+            fuzzy: round_graphql_score(self.fuzzy),
+            semantic: round_graphql_score(self.semantic),
+            literal_matches: self.literal_matches,
+            exact_case_literal_matches: self.exact_case_literal_matches,
+            phrase_matches: self.phrase_matches,
+            exact_case_phrase_matches: self.exact_case_phrase_matches,
+            body_literal_matches: self.body_literal_matches,
+            signature_literal_matches: self.signature_literal_matches,
+            summary_literal_matches: self.summary_literal_matches,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
 #[graphql(complex)]
 pub struct Artefact {
     pub id: ID,
@@ -126,9 +169,15 @@ pub struct Artefact {
     pub signature: Option<String>,
     pub modifiers: Vec<String>,
     pub docstring: Option<String>,
+    pub summary: Option<String>,
+    pub embedding_representations: Vec<EmbeddingRepresentationKind>,
     pub content_hash: Option<String>,
     pub blob_sha: String,
     pub created_at: DateTimeScalar,
+    #[graphql(skip)]
+    pub score: Option<f64>,
+    #[graphql(skip)]
+    pub search_score: Option<ArtefactSearchScore>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
@@ -140,6 +189,17 @@ impl Artefact {
 
     pub(crate) fn with_scope(mut self, scope: ResolverScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    pub(crate) fn with_score(mut self, score: f64) -> Self {
+        self.score = Some(score);
+        self
+    }
+
+    pub(crate) fn with_search_score(mut self, search_score: ArtefactSearchScore) -> Self {
+        self.score = Some(search_score.total);
+        self.search_score = Some(search_score);
         self
     }
 }
@@ -173,6 +233,15 @@ impl ArtefactCopyLineage {
 
 #[ComplexObject]
 impl Artefact {
+    async fn score(&self) -> Option<f64> {
+        self.score.map(round_graphql_score)
+    }
+
+    #[graphql(name = "searchScore")]
+    async fn search_score(&self) -> Option<ArtefactSearchScore> {
+        self.search_score.as_ref().map(ArtefactSearchScore::rounded)
+    }
+
     async fn parent(&self, ctx: &Context<'_>) -> Result<Option<Artefact>> {
         let Some(parent_id) = self.parent_artefact_id.as_ref() else {
             return Ok(None);
@@ -223,6 +292,7 @@ impl Artefact {
         ))
     }
 
+    #[graphql(name = "outgoingDependencies")]
     async fn outgoing_deps(
         &self,
         ctx: &Context<'_>,
@@ -260,6 +330,7 @@ impl Artefact {
         ))
     }
 
+    #[graphql(name = "incomingDependencies")]
     async fn incoming_deps(
         &self,
         ctx: &Context<'_>,
@@ -297,7 +368,7 @@ impl Artefact {
         ))
     }
 
-    #[graphql(name = "depsSummary")]
+    #[graphql(name = "dependenciesSummary")]
     async fn deps_summary(
         &self,
         ctx: &Context<'_>,
@@ -438,6 +509,8 @@ impl Artefact {
         )
     }
 
+    // Temporarily hidden from the typed GraphQL surface until coverage is refreshed.
+    /*
     async fn coverage(
         &self,
         ctx: &Context<'_>,
@@ -459,6 +532,7 @@ impl Artefact {
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
     }
+    */
 
     async fn copy_lineage(&self, ctx: &Context<'_>) -> Result<Vec<ArtefactCopyLineage>> {
         ctx.data_unchecked::<DevqlGraphqlContext>()
@@ -471,6 +545,10 @@ impl Artefact {
                 ))
             })
     }
+}
+
+fn round_graphql_score(value: f64) -> f64 {
+    (value * GRAPHQL_SCORE_PRECISION_SCALE).round() / GRAPHQL_SCORE_PRECISION_SCALE
 }
 
 fn stage_limit(first: i32) -> Result<usize> {

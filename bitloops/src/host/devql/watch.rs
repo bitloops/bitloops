@@ -23,6 +23,7 @@ const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
 pub const DISABLE_WATCHER_AUTOSTART_ENV: &str = "BITLOOPS_DISABLE_WATCHER_AUTOSTART";
 const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WATCHER_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const WATCHER_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -281,6 +282,9 @@ fn run_notify_loop(
     );
 
     let debounce = Duration::from_millis(opts.debounce_ms.max(50));
+    let rescan_interval =
+        Duration::from_millis(opts.poll_fallback_ms).max(WATCHER_RESCAN_MIN_INTERVAL);
+    let mut last_rescan = Instant::now();
     let mut batch: BTreeSet<PathBuf> = BTreeSet::new();
     let mut window_start: Option<Instant> = None;
 
@@ -315,6 +319,20 @@ fn run_notify_loop(
             }
         }
 
+        if last_rescan.elapsed() >= rescan_interval {
+            match add_dirty_worktree_paths_to_batch(&cfg.repo_root, &mut batch) {
+                Ok(added) => {
+                    if added && window_start.is_none() {
+                        window_start = Some(Instant::now());
+                    }
+                }
+                Err(err) => {
+                    log::warn!("devql watcher worktree rescan failed: {err:#}");
+                }
+            }
+            last_rescan = Instant::now();
+        }
+
         if let Some(start) = window_start
             && !batch.is_empty()
             && start.elapsed() >= debounce
@@ -326,6 +344,10 @@ fn run_notify_loop(
                 &runtime_handle,
             ) {
                 log::warn!("devql watcher capture failed: {err:#}");
+                // Keep the current batch so transient failures (for example SQLite locks)
+                // can retry on the next debounce window instead of dropping changes.
+                window_start = Some(Instant::now());
+                continue;
             }
             batch.clear();
             window_start = None;
@@ -333,6 +355,36 @@ fn run_notify_loop(
     }
 
     Ok(())
+}
+
+fn add_dirty_worktree_paths_to_batch(
+    repo_root: &Path,
+    batch: &mut BTreeSet<PathBuf>,
+) -> Result<bool> {
+    let before = batch.len();
+    for path in dirty_worktree_paths(repo_root)? {
+        if should_ignore_path(repo_root, &path) || is_gitignored(repo_root, &path) {
+            continue;
+        }
+        batch.insert(path);
+    }
+    Ok(batch.len() != before)
+}
+
+fn dirty_worktree_paths(repo_root: &Path) -> Result<Vec<PathBuf>> {
+    let (modified, new_files, deleted) =
+        crate::host::checkpoints::strategy::manual_commit::working_tree_changes(repo_root)
+            .context("listing dirty worktree paths for DevQL watcher fallback rescan")?;
+    let mut paths = modified
+        .into_iter()
+        .chain(new_files)
+        .chain(deleted)
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| repo_root.join(path))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
 }
 
 fn watcher_repo_root_missing(repo_root: &Path) -> bool {

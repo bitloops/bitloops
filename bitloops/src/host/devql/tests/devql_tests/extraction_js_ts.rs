@@ -14,7 +14,7 @@ fn extract_js_ts_functions_detects_basic_function() {
     assert_eq!(functions[0].end_line, 3);
     assert_eq!(functions[0].start_byte, 0);
     assert_eq!(functions[0].end_byte as usize, content.len());
-    assert_eq!(functions[0].signature, "export function hello() {");
+    assert_eq!(functions[0].signature, "export function hello()");
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn extract_js_ts_functions_detects_arrow_function_assignment() {
     assert_eq!(functions[0].end_line, 3);
     assert_eq!(functions[0].start_byte, 0);
     assert_eq!(functions[0].end_byte as usize, content.len());
-    assert_eq!(functions[0].signature, "export const hello = () => {");
+    assert_eq!(functions[0].signature, "export const hello = () =>");
 }
 
 #[test]

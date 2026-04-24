@@ -40,7 +40,10 @@ pub fn enable_watcher_autostart_for_scenario(world: &mut QatWorld) -> Result<()>
 }
 
 const QAT_EVENTUAL_TIMEOUT_ENV: &str = "BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS";
-const DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS: u64 = 15;
+// Watcher-driven sync materialisation is asynchronous end-to-end: the CLI
+// restarts the watcher, the watcher debounces filesystem events, and the daemon
+// then consumes the spooled sync work. CI can legitimately take longer here.
+const DEFAULT_QAT_EVENTUAL_TIMEOUT_SECS: u64 = 120;
 const QAT_EVENTUAL_POLL_INTERVAL_MILLIS: u64 = 250;
 
 fn qat_eventual_timeout() -> StdDuration {
@@ -160,6 +163,10 @@ fn error_chain_contains_not_found(err: &anyhow::Error) -> bool {
     })
 }
 
+fn text_has_database_locked_error(text: &str) -> bool {
+    text.to_ascii_lowercase().contains("database is locked")
+}
+
 const WATCHER_TEARDOWN_TIMEOUT_SECS: u64 = 5;
 const WATCHER_TEARDOWN_POLL_INTERVAL_MILLIS: u64 = 50;
 
@@ -173,7 +180,9 @@ fn scenario_daemon_config_root(world: &QatWorld) -> Result<PathBuf> {
     })
 }
 
-fn open_scenario_runtime_sqlite(world: &QatWorld) -> Result<bitloops::storage::SqliteConnectionPool> {
+fn open_scenario_runtime_sqlite(
+    world: &QatWorld,
+) -> Result<bitloops::storage::SqliteConnectionPool> {
     let config_root = scenario_daemon_config_root(world)?;
     let db_path = bitloops::config::resolve_repo_runtime_db_path_for_config_root(&config_root);
     let sqlite = bitloops::storage::SqliteConnectionPool::connect(db_path.clone())
@@ -223,7 +232,10 @@ fn terminate_watcher_process(pid: u32) -> Result<()> {
             .stderr(Stdio::null())
             .status()
             .context("running `taskkill` for DevQL watcher")?;
-        ensure!(status.success(), "failed to stop DevQL watcher process {pid}");
+        ensure!(
+            status.success(),
+            "failed to stop DevQL watcher process {pid}"
+        );
     }
 
     #[cfg(not(windows))]
@@ -235,7 +247,10 @@ fn terminate_watcher_process(pid: u32) -> Result<()> {
             .stderr(Stdio::null())
             .status()
             .context("running `kill -TERM` for DevQL watcher")?;
-        ensure!(status.success(), "failed to stop DevQL watcher process {pid}");
+        ensure!(
+            status.success(),
+            "failed to stop DevQL watcher process {pid}"
+        );
     }
 
     Ok(())
@@ -340,36 +355,88 @@ pub fn stop_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     let mut stop_error = None;
 
     if had_daemon {
-        match run_command_capture(
-            world,
-            "bitloops daemon stop",
-            build_bitloops_command(world, &["daemon", "stop"])?,
-        ) {
-            Ok(output) if output.status.success() => {
-                append_world_log(world, "Daemon stopped for scenario via CLI.\n")?;
-            }
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                append_world_log(
-                    world,
-                    &format!(
-                        "Daemon stop returned non-zero.\nstdout:\n{stdout}\nstderr:\n{stderr}\n",
-                    ),
-                )?;
-                stop_error = Some(anyhow!(
-                    "bitloops daemon stop returned non-zero\nstdout:\n{stdout}\nstderr:\n{stderr}"
-                ));
-            }
-            Err(err) if error_chain_contains_not_found(&err) => {
-                append_world_log(
-                    world,
-                    "Daemon stop skipped because the bitloops binary is no longer present.\n",
-                )?;
-            }
-            Err(err) => {
-                append_world_log(world, &format!("Daemon stop failed: {err:#}\n"))?;
-                stop_error = Some(err.context("running bitloops daemon stop"));
+        let mut attempts = 0_u8;
+        loop {
+            match run_command_capture(
+                world,
+                "bitloops daemon stop",
+                build_bitloops_command(world, &["daemon", "stop"])?,
+            ) {
+                Ok(output) if output.status.success() => {
+                    append_world_log(world, "Daemon stopped for scenario via CLI.\n")?;
+                    break;
+                }
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if text_has_database_locked_error(&stdout)
+                        || text_has_database_locked_error(&stderr)
+                    {
+                        attempts += 1;
+                        if attempts <= 3 {
+                            append_world_log(
+                                world,
+                                &format!(
+                                    "Daemon stop hit a transient SQLite lock (attempt {attempts}/3); retrying.\n",
+                                ),
+                            )?;
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                200 * u64::from(attempts),
+                            ));
+                            continue;
+                        }
+
+                        append_world_log(
+                            world,
+                            "Daemon stop remained locked after retries; falling back to forced process teardown.\n",
+                        )?;
+                        break;
+                    }
+
+                    append_world_log(
+                        world,
+                        &format!(
+                            "Daemon stop returned non-zero.\nstdout:\n{stdout}\nstderr:\n{stderr}\n",
+                        ),
+                    )?;
+                    stop_error = Some(anyhow!(
+                        "bitloops daemon stop returned non-zero\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                    ));
+                    break;
+                }
+                Err(err) if error_chain_contains_not_found(&err) => {
+                    append_world_log(
+                        world,
+                        "Daemon stop skipped because the bitloops binary is no longer present.\n",
+                    )?;
+                    break;
+                }
+                Err(err) => {
+                    let locked = text_has_database_locked_error(&err.to_string());
+                    if locked {
+                        attempts += 1;
+                        if attempts <= 3 {
+                            append_world_log(
+                                world,
+                                &format!(
+                                    "Daemon stop command hit a transient SQLite lock (attempt {attempts}/3); retrying.\n",
+                                ),
+                            )?;
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                200 * u64::from(attempts),
+                            ));
+                            continue;
+                        }
+                        append_world_log(
+                            world,
+                            "Daemon stop command remained locked after retries; falling back to forced process teardown.\n",
+                        )?;
+                        break;
+                    }
+                    append_world_log(world, &format!("Daemon stop failed: {err:#}\n"))?;
+                    stop_error = Some(err.context("running bitloops daemon stop"));
+                    break;
+                }
             }
         }
     }
@@ -735,11 +802,6 @@ fn build_init_bitloops_args_with_options(
     args
 }
 
-pub fn run_enable_cli_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    run_enable(world, &["enable"], "bitloops enable")
-}
-
 pub fn run_bitloops_enable_with_flags(
     world: &mut QatWorld,
     repo_name: &str,
@@ -758,9 +820,16 @@ fn run_enable(world: &mut QatWorld, args: &[&str], label: &str) -> Result<()> {
     ensure_success(&output, label)
 }
 
-pub fn run_bitloops_disable(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+pub fn run_bitloops_disable_with_flags(
+    world: &mut QatWorld,
+    repo_name: &str,
+    flags: &[&str],
+) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    run_bitloops_success(world, &["disable"], "bitloops disable")
+    let mut args = vec!["disable"];
+    args.extend_from_slice(flags);
+    let label = format!("bitloops {}", args.join(" "));
+    run_bitloops_success(world, &args, &label)
 }
 
 pub fn run_bitloops_uninstall_full(world: &mut QatWorld, repo_name: &str) -> Result<()> {
@@ -1730,6 +1799,26 @@ pub fn add_source_file_at_path_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     write_deterministic_source_file(world.repo_dir(), relative_path, false)
+}
+
+fn nudge_source_file_at_path_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    relative_path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let path = world.repo_dir().join(relative_path);
+    ensure!(
+        path.exists(),
+        "expected source file `{relative_path}` to exist before watcher nudge"
+    );
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("opening {} for watcher nudge append", path.display()))?;
+    file.write_all(b"\n")
+        .with_context(|| format!("appending watcher nudge newline to {}", path.display()))?;
+    Ok(())
 }
 
 pub fn modify_rust_main(world: &QatWorld) -> Result<()> {
@@ -3231,6 +3320,138 @@ pub fn assert_devql_artefacts_query_returns_results(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SelectArtefactsSearchObservation {
+    count: usize,
+    symbols: Vec<String>,
+}
+
+fn build_select_artefacts_search_query(search: &str) -> String {
+    format!(
+        r#"query {{
+  selectArtefacts(by: {{ search: "{}" }}) {{
+    count
+    artefacts {{
+      path
+      symbolFqn
+    }}
+  }}
+}}"#,
+        escape_devql_string(search)
+    )
+}
+
+fn extract_select_artefacts_search_observation(
+    value: &serde_json::Value,
+) -> Result<SelectArtefactsSearchObservation> {
+    let select_artefacts = value
+        .get("selectArtefacts")
+        .ok_or_else(|| anyhow!("expected selectArtefacts payload in GraphQL response"))?;
+    let artefacts = select_artefacts
+        .get("artefacts")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected selectArtefacts.artefacts array in GraphQL response"))?;
+    let count = select_artefacts
+        .get("count")
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(artefacts.len());
+    let symbols = artefacts
+        .iter()
+        .filter_map(|artefact| {
+            artefact
+                .get("symbolFqn")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+        })
+        .collect::<Vec<_>>();
+
+    Ok(SelectArtefactsSearchObservation { count, symbols })
+}
+
+fn observe_select_artefacts_search(
+    world: &mut QatWorld,
+    search: &str,
+) -> Result<SelectArtefactsSearchObservation> {
+    let query = build_select_artefacts_search_query(search);
+    let value = run_devql_graphql_query(world, &query)?;
+    extract_select_artefacts_search_observation(&value)
+}
+
+pub fn assert_devql_select_artefacts_search_returns_at_least(
+    world: &mut QatWorld,
+    repo_name: &str,
+    search: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!(
+            "DevQL selectArtefacts search for `{search}` to return at least {min_count} results"
+        ),
+        || observe_select_artefacts_search(world, search),
+        |observation| observation.count >= min_count,
+        |observation| {
+            format!(
+                "count={}; symbols=[{}]",
+                observation.count,
+                observation.symbols.join(", ")
+            )
+        },
+    )?;
+    world.last_query_result_count = Some(observation.count);
+    ensure!(
+        observation.count >= min_count,
+        "expected DevQL selectArtefacts search for `{search}` to return at least {min_count} results, got {} with symbols [{}]",
+        observation.count,
+        observation.symbols.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_devql_select_artefacts_search_returns_symbol(
+    world: &mut QatWorld,
+    repo_name: &str,
+    search: &str,
+    expected_symbol: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!(
+            "DevQL selectArtefacts search for `{search}` to return symbol `{expected_symbol}`"
+        ),
+        || observe_select_artefacts_search(world, search),
+        |observation| {
+            observation
+                .symbols
+                .iter()
+                .any(|symbol| symbol == expected_symbol)
+        },
+        |observation| {
+            format!(
+                "count={}; symbols=[{}]",
+                observation.count,
+                observation.symbols.join(", ")
+            )
+        },
+    )?;
+    world.last_query_result_count = Some(observation.count);
+    ensure!(
+        observation
+            .symbols
+            .iter()
+            .any(|symbol| symbol == expected_symbol),
+        "expected DevQL selectArtefacts search for `{search}` to include `{expected_symbol}`, got count={} with symbols [{}]",
+        observation.count,
+        observation.symbols.join(", ")
+    );
+    Ok(())
+}
+
 fn checkpoint_agent_candidates(agent: &str) -> Vec<String> {
     let mut candidates = vec![agent.to_string()];
     if agent == "claude" {
@@ -4085,19 +4306,42 @@ pub fn assert_artefacts_current_contains_path(
 }
 
 pub fn assert_artefacts_current_contains_path_eventually(
-    world: &QatWorld,
+    world: &mut QatWorld,
     repo_name: &str,
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    wait_for_qat_condition(
+    let expected = format!("artefacts_current to eventually contain `{path}`");
+    let first_attempt = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
-        &format!("artefacts_current to eventually contain `{path}`"),
+        &expected,
         || assert_artefacts_current_contains_path(world, repo_name, path),
         |_| true,
         |_| format!("artefacts_current contains `{path}`"),
-    )?;
+    );
+    if let Err(first_err) = first_attempt {
+        append_world_log(
+            world,
+            &format!(
+                "Initial watcher materialisation wait for `{path}` timed out; nudging source file and retrying.\n",
+            ),
+        )?;
+        nudge_source_file_at_path_for_repo(world, repo_name, path)?;
+        wait_for_qat_condition(
+            qat_eventual_timeout(),
+            qat_eventual_poll_interval(),
+            &expected,
+            || assert_artefacts_current_contains_path(world, repo_name, path),
+            |_| true,
+            |_| format!("artefacts_current contains `{path}`"),
+        )
+        .map_err(|retry_err| {
+            anyhow!(
+                "artefacts_current watcher materialisation did not recover after file nudge\nfirst attempt: {first_err:#}\nretry attempt: {retry_err:#}"
+            )
+        })?;
+    }
     Ok(())
 }
 

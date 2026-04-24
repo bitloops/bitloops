@@ -13,6 +13,31 @@ fn to_kebab_case(input: &str) -> String {
     output
 }
 
+fn recursive_symbol_file_paths(world: &QatWorld, stem: &str) -> Vec<String> {
+    let src_root = world.repo_dir().join("src");
+    if !src_root.exists() {
+        return Vec::new();
+    }
+
+    let target_file_names = [format!("{stem}.ts"), format!("{stem}.tsx")];
+    let mut matches = walkdir::WalkDir::new(&src_root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file_name = path.file_name()?.to_str()?;
+            target_file_names
+                .contains(&file_name.to_string())
+                .then_some(path.to_path_buf())
+        })
+        .filter_map(|path| path.strip_prefix(world.repo_dir()).ok().map(Path::to_path_buf))
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches
+}
+
 fn candidate_symbol_file_paths(world: &QatWorld, symbol_alias: &str) -> Vec<String> {
     let mut candidates = Vec::new();
     let mut push_if_exists = |path: String| {
@@ -32,15 +57,17 @@ fn candidate_symbol_file_paths(world: &QatWorld, symbol_alias: &str) -> Vec<Stri
         ] {
             push_if_exists(path);
         }
-    } else {
-        let stem = to_kebab_case(symbol_alias);
-        for path in [
-            "src/new-caller.ts".to_string(),
-            format!("src/{stem}.ts"),
-            "src/index.ts".to_string(),
-        ] {
+        for path in recursive_symbol_file_paths(world, &stem) {
             push_if_exists(path);
         }
+    } else {
+        let stem = to_kebab_case(symbol_alias);
+        push_if_exists("src/new-caller.ts".to_string());
+        push_if_exists(format!("src/{stem}.ts"));
+        for path in recursive_symbol_file_paths(world, &stem) {
+            push_if_exists(path);
+        }
+        push_if_exists("src/index.ts".to_string());
     }
 
     candidates

@@ -27,6 +27,8 @@ pub const CLAUDE_HOOK_STOP: &str = "stop";
 pub const CLAUDE_HOOK_PRE_TASK: &str = "pre-task";
 pub const CLAUDE_HOOK_POST_TASK: &str = "post-task";
 pub const CLAUDE_HOOK_POST_TODO: &str = "post-todo";
+pub const CLAUDE_HOOK_PRE_TOOL_USE: &str = "pre-tool-use";
+pub const CLAUDE_HOOK_POST_TOOL_USE: &str = "post-tool-use";
 
 pub const GEMINI_HOOK_SESSION_START: &str = "session-start";
 pub const GEMINI_HOOK_SESSION_END: &str = "session-end";
@@ -156,6 +158,33 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
                     ..LifecycleEvent::default()
                 }))
             }
+            CLAUDE_HOOK_PRE_TOOL_USE => {
+                let raw: ToolHookInputRaw = read_and_parse_hook_input(stdin)?;
+                Ok(Some(LifecycleEvent {
+                    event_type: Some(LifecycleEventType::ToolInvocationObserved),
+                    session_id: raw.session_id,
+                    session_ref: raw.transcript_path,
+                    tool_name: raw.tool_name,
+                    tool_use_id: raw.tool_use_id,
+                    tool_input: raw.tool_input,
+                    model: raw.model,
+                    ..LifecycleEvent::default()
+                }))
+            }
+            CLAUDE_HOOK_POST_TOOL_USE => {
+                let raw: ToolHookInputRaw = read_and_parse_hook_input(stdin)?;
+                Ok(Some(LifecycleEvent {
+                    event_type: Some(LifecycleEventType::ToolResultObserved),
+                    session_id: raw.session_id,
+                    session_ref: raw.transcript_path,
+                    tool_name: raw.tool_name,
+                    tool_use_id: raw.tool_use_id,
+                    tool_input: raw.tool_input,
+                    tool_response: raw.tool_response,
+                    model: raw.model,
+                    ..LifecycleEvent::default()
+                }))
+            }
             CLAUDE_HOOK_POST_TODO => {
                 let raw: PostTodoHookInputRaw = read_and_parse_hook_input(stdin)?;
                 Ok(Some(LifecycleEvent {
@@ -181,12 +210,20 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
             CLAUDE_HOOK_STOP,
             CLAUDE_HOOK_PRE_TASK,
             CLAUDE_HOOK_POST_TASK,
+            CLAUDE_HOOK_PRE_TOOL_USE,
+            CLAUDE_HOOK_POST_TOOL_USE,
             CLAUDE_HOOK_POST_TODO,
         ]
     }
 
     fn format_resume_command(&self, _session_id: &str) -> String {
         String::from("claude")
+    }
+
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(&CLAUDE_AGENT_FOR_LIFECYCLE)
     }
 
     fn as_token_calculator(&self) -> Option<&dyn TokenCalculator> {
@@ -330,6 +367,12 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
         }
     }
 
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(&OPENCODE_AGENT_FOR_LIFECYCLE)
+    }
+
     fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {
         Some(&OPENCODE_AGENT_FOR_LIFECYCLE)
     }
@@ -450,6 +493,12 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
         } else {
             format!("codex --resume {session_id}")
         }
+    }
+
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(&CODEX_AGENT_FOR_LIFECYCLE)
     }
 
     fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {
@@ -651,6 +700,34 @@ struct PostTodoHookInputRaw {
     model: String,
     #[serde(default, rename = "tool_input")]
     tool_input: Option<Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ToolHookInputRaw {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    transcript_path: String,
+    #[serde(default)]
+    tool_use_id: String,
+    #[serde(default)]
+    tool_name: String,
+    #[serde(
+        default,
+        alias = "modelName",
+        alias = "model_name",
+        alias = "modelSlug",
+        alias = "model_slug",
+        alias = "modelId",
+        alias = "model_id",
+        alias = "newModel",
+        alias = "new_model"
+    )]
+    model: String,
+    #[serde(default, rename = "tool_input")]
+    tool_input: Option<Value>,
+    #[serde(default)]
+    tool_response: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, Default)]

@@ -351,13 +351,13 @@ fn TestCodexAgentHooksSessionIOAndResumeCommand() {
             "pre-tool-use hook parsing",
             "pre-tool-use",
             br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"git status"}}"#.as_slice(),
-            false,
+            true,
         ),
         (
             "post-tool-use hook parsing",
             "post-tool-use",
             br#"{"session_id":"codex-session-1","transcript_path":"/tmp/codex-session-1.jsonl","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"git status"},"tool_response":"clean"}"#.as_slice(),
-            false,
+            true,
         ),
         (
             "stop hook parsing",

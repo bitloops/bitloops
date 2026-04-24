@@ -507,6 +507,93 @@ fn build_symbol_clone_edges_for_source_unions_code_and_summary_ann_neighbors() {
 }
 
 #[test]
+fn degenerate_embedding_groups_fall_back_to_full_group_scoring() {
+    let mut source = sample_input("source", "render_invoice");
+    source.path = "src/render/render_invoice.ts".to_string();
+    source.symbol_fqn = "src/render/render_invoice.ts::render_invoice".to_string();
+    source.normalized_name = "render_invoice".to_string();
+    source.normalized_signature =
+        Some("function render_invoice(order_id: string, locale: string)".to_string());
+    source.identifier_tokens = vec![
+        "render".to_string(),
+        "invoice".to_string(),
+        "order".to_string(),
+    ];
+    source.normalized_body_tokens = vec![
+        "return".to_string(),
+        "render".to_string(),
+        "header".to_string(),
+        "body".to_string(),
+        "join".to_string(),
+    ];
+    source.context_tokens = vec!["render".to_string(), "invoice".to_string()];
+    source.call_targets = vec![
+        "createRenderHeader".to_string(),
+        "createRenderBody".to_string(),
+    ];
+    source.dependency_targets = vec!["references:common_snapshot_utils".to_string()];
+    source.embedding = vec![0.1, 0.2, 0.3];
+
+    let mut target = sample_input("target", "render_invoice_document");
+    target.path = "src/render/render_invoice_document.ts".to_string();
+    target.symbol_fqn =
+        "src/render/render_invoice_document.ts::render_invoice_document".to_string();
+    target.normalized_name = "render_invoice_document".to_string();
+    target.normalized_signature =
+        Some("function render_invoice_document(order_id: string, locale: string)".to_string());
+    target.identifier_tokens = vec![
+        "render".to_string(),
+        "invoice".to_string(),
+        "document".to_string(),
+    ];
+    target.normalized_body_tokens = source.normalized_body_tokens.clone();
+    target.context_tokens = source.context_tokens.clone();
+    target.call_targets = source.call_targets.clone();
+    target.dependency_targets = source.dependency_targets.clone();
+    target.embedding = source.embedding.clone();
+
+    let mut candidates = vec![source.clone()];
+    for idx in 0..6 {
+        let mut distractor = sample_input(&format!("distractor-{idx}"), "archive_customer");
+        distractor.path = format!("src/archive/distractor_{idx}.ts");
+        distractor.symbol_fqn = format!("src/archive/distractor_{idx}.ts::archive_customer");
+        distractor.normalized_name = format!("archive_customer_{idx}");
+        distractor.normalized_signature = Some(format!(
+            "function archive_customer_{idx}(customer_id: string)"
+        ));
+        distractor.identifier_tokens = vec![
+            "archive".to_string(),
+            "customer".to_string(),
+            idx.to_string(),
+        ];
+        distractor.normalized_body_tokens = vec![
+            "archive".to_string(),
+            "customer".to_string(),
+            "record".to_string(),
+        ];
+        distractor.context_tokens = vec!["archive".to_string(), "customer".to_string()];
+        distractor.call_targets = vec!["archiveCustomer".to_string()];
+        distractor.dependency_targets = vec!["references:archive_repository".to_string()];
+        distractor.embedding = source.embedding.clone();
+        candidates.push(distractor);
+    }
+    candidates.push(target);
+
+    let result = build_symbol_clone_edges_for_source_with_options(
+        &candidates,
+        "source",
+        CloneScoringOptions::new(1),
+    );
+
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| { edge.source_symbol_id == "source" && edge.target_symbol_id == "target" })
+    );
+}
+
+#[test]
 fn build_symbol_clone_edges_exposes_multi_view_similarity_pattern() {
     let summary_setup = EmbeddingSetup::new("openai", "text-embedding-3-large", 3);
 

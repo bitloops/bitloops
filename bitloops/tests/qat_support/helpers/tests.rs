@@ -220,6 +220,15 @@ fn error_chain_contains_not_found_ignores_other_io_errors() {
 }
 
 #[test]
+fn text_has_database_locked_error_detects_sqlite_lock_messages() {
+    assert!(text_has_database_locked_error(
+        "configuring SQLite pragmas: database is locked"
+    ));
+    assert!(text_has_database_locked_error("DATABASE IS LOCKED"));
+    assert!(!text_has_database_locked_error("connection refused"));
+}
+
+#[test]
 fn build_init_bitloops_args_defaults_to_sync_false_when_unspecified() {
     let args = build_init_bitloops_args("claude-code", false, None);
     assert_eq!(
@@ -1698,6 +1707,34 @@ fn extract_clone_nodes_accepts_flattened_clone_query_rows() {
 }
 
 #[test]
+fn candidate_symbol_fqns_prefer_nested_exact_file_matches_over_index_fallback() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = temp.path().to_path_buf();
+    fs::create_dir_all(repo_dir.join("src").join("render")).expect("create render dir");
+    fs::write(repo_dir.join("src").join("index.ts"), "export {};\n").expect("write src/index.ts");
+    fs::write(
+        repo_dir
+            .join("src")
+            .join("render")
+            .join("render-invoice.ts"),
+        "export function renderInvoice(): string { return 'ok'; }\n",
+    )
+    .expect("write nested render file");
+
+    let world = QatWorld {
+        repo_dir: Some(repo_dir),
+        ..QatWorld::default()
+    };
+
+    let candidates = candidate_symbol_fqns(&world, "renderInvoice");
+
+    assert_eq!(
+        candidates.first().map(String::as_str),
+        Some("src/render/render-invoice.ts::renderInvoice")
+    );
+}
+
+#[test]
 fn extract_clone_summary_accepts_devql_summary_rows() {
     let value = serde_json::json!([
         {
@@ -2273,4 +2310,45 @@ fn semantic_clone_store_evidence_proves_rebuild_when_store_has_current_rows() {
             clone_edges: 0,
         }
     ));
+}
+
+#[test]
+fn build_select_artefacts_search_query_escapes_input_and_omits_score() {
+    let query = build_select_artefacts_search_query(r#"invoice "document" renderer"#);
+
+    assert!(query.contains(r#"search: "invoice \"document\" renderer""#));
+    assert!(query.contains("path"));
+    assert!(query.contains("symbolFqn"));
+    assert!(!query.contains("score"));
+}
+
+#[test]
+fn extract_select_artefacts_search_observation_reads_count_and_symbols() {
+    let value = serde_json::json!({
+        "selectArtefacts": {
+            "count": 2,
+            "artefacts": [
+                {
+                    "path": "src/render/render-invoice.ts",
+                    "symbolFqn": "src/render/render-invoice.ts::renderInvoice"
+                },
+                {
+                    "path": "src/render/render-invoice-document.ts",
+                    "symbolFqn": "src/render/render-invoice-document.ts::renderInvoiceDocument"
+                }
+            ]
+        }
+    });
+
+    let observation =
+        extract_select_artefacts_search_observation(&value).expect("extract search observation");
+
+    assert_eq!(observation.count, 2);
+    assert_eq!(
+        observation.symbols,
+        vec![
+            "src/render/render-invoice.ts::renderInvoice".to_string(),
+            "src/render/render-invoice-document.ts::renderInvoiceDocument".to_string(),
+        ]
+    );
 }

@@ -23,14 +23,23 @@ After that, use capture toggles:
 
 ```bash
 bitloops enable
+bitloops enable --capture
+bitloops enable --devql-guidance
 bitloops enable --install-embeddings
 bitloops daemon enable
 bitloops disable
+bitloops disable --devql-guidance
 ```
 
-These commands edit `[capture].enabled` in the nearest discovered project policy. Installed hooks stay in place and no-op while capture is disabled.
+With no target flags in an interactive terminal, `bitloops enable` and `bitloops disable` open a picker for `Capture` and `DevQL Guidance`. In non-interactive mode you must pass explicit target flags.
+
+`--capture` edits `[capture].enabled` in the nearest discovered project policy. Installed hooks stay in place and no-op while capture is disabled.
+
+`--devql-guidance` edits `[agents].devql_guidance_enabled` and adds or removes the managed repo-local DevQL guidance surface without changing capture state. When DevQL Guidance is disabled, Bitloops hook augmentation becomes silent about DevQL, exactly like a repo where the managed guidance surface was never installed.
 
 `bitloops daemon enable` is an alias to the same implementation. `--install-embeddings` also lets `enable` configure the default local embeddings profile in the effective daemon config and run the existing runtime warm/bootstrap path. In an interactive terminal, plain `bitloops enable` asks about that setup when embeddings are not already configured and defaults to `Yes`.
+
+Embeddings flags require `--capture`. Guidance-only enable does not prompt for embeddings setup and only touches the repo-local DevQL guidance surfaces plus repo policy.
 
 If the global daemon config already exists but telemetry consent is unresolved, interactive `bitloops enable` can ask before it edits project policy. In non-interactive mode you must pass an explicit telemetry flag.
 

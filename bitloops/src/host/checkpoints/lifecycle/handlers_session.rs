@@ -24,8 +24,7 @@ use crate::host::interactions::types::{
 
 fn ensure_hook_setup(repo_root: &std::path::Path, agent_name: &str) -> Result<()> {
     let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
-    let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
-    let local_dev = crate::config::settings::load_settings(&policy_start)
+    let local_dev = crate::config::settings::load_settings(repo_root)
         .map(|s| s.local_dev)
         .unwrap_or(false);
 
@@ -38,7 +37,7 @@ fn ensure_hook_setup(repo_root: &std::path::Path, agent_name: &str) -> Result<()
             agent_name,
             local_dev,
             false,
-            crate::adapters::agents::AgentHookInstallOptions::default(),
+            crate::config::settings::agent_hook_install_options_for_policy(repo_root),
         );
     }
     if !crate::adapters::agents::claude_code::git_hooks::is_git_hook_installed(repo_root) {

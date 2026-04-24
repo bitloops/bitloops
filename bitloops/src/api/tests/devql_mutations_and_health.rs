@@ -82,6 +82,53 @@ fn assert_bad_user_input_error(
     );
 }
 
+fn assert_tests_expand_hint(value: &serde_json::Value) {
+    assert_eq!(
+        value["intent"],
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_INTENT
+    );
+    assert!(
+        value.get("devql").is_none(),
+        "expand hint should expose `template`, not `devql`: {value:#}"
+    );
+    let template = value["template"]
+        .as_str()
+        .expect("expand hint template string");
+    assert_eq!(
+        template,
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE
+    );
+    assert!(
+        template.contains("coveringTests { testName suiteName filePath startLine endLine }"),
+        "expected tests expand hint to select coveringTests, got {template}"
+    );
+    assert!(
+        !template.contains("artefact {"),
+        "tests expand hint should not include artefact selection, got {template}"
+    );
+}
+
+fn assert_compact_tests_stage_summary(summary: &serde_json::Value) {
+    for field in [
+        "crossCuttingArtefactCount",
+        "dataSources",
+        "diagnosticCount",
+    ] {
+        assert!(
+            summary.get(field).is_none(),
+            "tests stage summary should not include noisy field `{field}`: {summary:#}"
+        );
+    }
+}
+
+fn assert_score_is_rounded_to_four_decimal_places(score: f64) {
+    let rounded = (score * 10_000.0).round() / 10_000.0;
+    assert!(
+        (score - rounded).abs() < 1e-9,
+        "expected score to be rounded to four decimal places, got {score}"
+    );
+}
+
 fn localhost_bind_available(test_name: &str) -> bool {
     match std::net::TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => {
@@ -1604,7 +1651,7 @@ async fn slim_select_artefacts_resolves_symbol_selection_and_empty_checkpoint_sc
                   symbolFqn
                 }
                 checkpoints {
-                  summary
+                  overview
                   schema
                 }
               }
@@ -1630,7 +1677,7 @@ async fn slim_select_artefacts_resolves_symbol_selection_and_empty_checkpoint_sc
         "src/target.ts::target"
     );
     assert_eq!(
-        json["selectArtefacts"]["checkpoints"]["summary"]["totalCount"],
+        json["selectArtefacts"]["checkpoints"]["overview"]["totalCount"],
         0
     );
     assert!(json["selectArtefacts"]["checkpoints"]["schema"].is_null());
@@ -1639,6 +1686,7 @@ async fn slim_select_artefacts_resolves_symbol_selection_and_empty_checkpoint_sc
 #[tokio::test]
 async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
     let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
     let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
 
     let response = schema
@@ -1650,6 +1698,7 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
                 artefacts {
                   path
                   symbolFqn
+                  summary
                 }
               }
             }
@@ -1680,10 +1729,146 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
             .any(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller"),
         "expected project-scoped caller artefact, got {artefacts:?}"
     );
+    let caller_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller")
+        .expect("caller artefact");
+    assert_eq!(
+        caller_artefact["summary"],
+        "Calls API target and web render helpers to build a response payload."
+    );
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() {
+async fn slim_select_artefacts_summary_falls_back_to_historical_rows_when_current_is_empty() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_historical_summary_inputs(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src/target.ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                  summary
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    let target_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/target.ts::target")
+        .expect("target artefact");
+    assert_eq!(
+        target_artefact["summary"],
+        "Builds API response payload fields and returns the transformed target result."
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_reports_embedding_representations_for_current_rows() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "packages/api/src/target.ts" }) {
+                artefacts {
+                  symbolFqn
+                  summary
+                  embeddingRepresentations
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    let target_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/target.ts::target")
+        .expect("target artefact");
+    assert_eq!(
+        target_artefact["summary"],
+        "Builds API response payload fields and returns the transformed target result."
+    );
+    assert_eq!(
+        target_artefact["embeddingRepresentations"],
+        json!(["IDENTITY", "CODE", "SUMMARY"])
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_reports_empty_embedding_representations_when_missing() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "packages/api/src/caller.ts" }) {
+                artefacts {
+                  symbolFqn
+                  embeddingRepresentations
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    let caller_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller")
+        .expect("caller artefact");
+    assert_eq!(caller_artefact["embeddingRepresentations"], json!([]));
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_prefers_fuzzy_hits_in_project_scope() {
     let repo = seed_graphql_monorepo_repo();
     let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
 
@@ -1691,7 +1876,7 @@ async fn slim_select_artefacts_resolves_fuzzy_name_selection_in_project_scope() 
         .execute(async_graphql::Request::new(
             r#"
             {
-              selectArtefacts(by: { fuzzyName: "targte()" }) {
+              selectArtefacts(by: { search: "targte()" }) {
                 count
                 artefacts {
                   path
@@ -1830,11 +2015,11 @@ async fn slim_select_artefacts_directory_rejects_summary_and_stage_fields() {
     let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
 
     for (field_name, selection) in [
-        ("summary", "summary"),
-        ("checkpoints", "checkpoints { summary }"),
-        ("clones", "clones { summary }"),
-        ("deps", "deps { summary }"),
-        ("tests", "tests { summary }"),
+        ("overview", "overview"),
+        ("checkpoints", "checkpoints { overview }"),
+        ("codeMatches", "codeMatches { overview }"),
+        ("dependencies", "dependencies { overview }"),
+        ("tests", "tests { overview }"),
     ] {
         let response = schema
             .execute(async_graphql::Request::new(format!(
@@ -1944,6 +2129,637 @@ async fn slim_select_artefacts_file_rejects_entries_field() {
 }
 
 #[tokio::test]
+async fn slim_select_artefacts_search_resolves_embedding_hits_in_repo_scope() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "render in page ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/web/src/page.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_embedding_hits_in_project_scope() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+                artefacts {
+                  score
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    let score = artefacts[0]["score"].as_f64().expect("semantic score");
+    assert!(
+        score >= 1000.0,
+        "expected final search score above semantic-only band floor, got {score}"
+    );
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_identity_name_and_path_terms() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_identity_path_terms() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "render in page ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/web/src/page.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_rounds_scores_to_four_decimal_places() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "build response payload", searchMode: SUMMARY }) {
+                artefacts {
+                  score
+                  searchScore {
+                    total
+                    semantic
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+
+    let score = artefacts[0]["score"]
+        .as_f64()
+        .expect("rounded artefact score");
+    let total = artefacts[0]["searchScore"]["total"]
+        .as_f64()
+        .expect("rounded total search score");
+    let semantic = artefacts[0]["searchScore"]["semantic"]
+        .as_f64()
+        .expect("rounded semantic search score");
+
+    assert_score_is_rounded_to_four_decimal_places(score);
+    assert_score_is_rounded_to_four_decimal_places(total);
+    assert_score_is_rounded_to_four_decimal_places(semantic);
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "build response payload" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                  summary
+                  embeddingRepresentations
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 2);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+    assert_eq!(artefacts[1]["path"], "packages/api/src/target.ts");
+    assert_eq!(
+        artefacts[1]["symbolFqn"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        artefacts[0]["summary"],
+        "Calls API target and web render helpers to build a response payload."
+    );
+    assert_eq!(
+        artefacts[0]["embeddingRepresentations"],
+        json!(["IDENTITY", "CODE"])
+    );
+    assert_eq!(
+        artefacts[1]["summary"],
+        "Builds API response payload fields and returns the transformed target result."
+    );
+    assert_eq!(
+        artefacts[1]["embeddingRepresentations"],
+        json!(["IDENTITY", "CODE", "SUMMARY"])
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_dedupes_overlapping_fuzzy_and_embedding_hits() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert_eq!(artefacts.len(), 1);
+    assert_eq!(artefacts[0]["path"], "packages/api/src/caller.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_mode_lexical_prefers_repeated_exact_case_literal_mentions() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_search_quality_inputs(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "HEAD", searchMode: LEXICAL }) {
+                count
+                searchBreakdown {
+                  lexical {
+                    symbolFqn
+                  }
+                }
+                artefacts {
+                  score
+                  path
+                  symbolFqn
+                  searchScore {
+                    total
+                    exact
+                    fullText
+                    fuzzy
+                    semantic
+                    literalMatches
+                    exactCaseLiteralMatches
+                    bodyLiteralMatches
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert!(json["selectArtefacts"]["searchBreakdown"].is_null());
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert!(
+        !artefacts.is_empty(),
+        "expected lexical artefacts for HEAD query, got {json:?}"
+    );
+    assert_eq!(artefacts[0]["path"], "packages/api/src/http.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/http.ts::routeByMethod"
+    );
+    assert!(
+        artefacts[0]["score"].as_f64().unwrap_or_default() >= 4000.0,
+        "expected exact lexical band score for HEAD body-token hit, got {:?}",
+        artefacts[0]["score"]
+    );
+    assert!(
+        artefacts[0]["searchScore"]["literalMatches"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 6,
+        "expected repeated literal matches for routeByMethod, got {:?}",
+        artefacts[0]["searchScore"]
+    );
+    assert!(
+        artefacts[0]["searchScore"]["exactCaseLiteralMatches"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 6,
+        "expected repeated exact-case literal matches for routeByMethod, got {:?}",
+        artefacts[0]["searchScore"]
+    );
+    assert_eq!(
+        artefacts[1]["symbolFqn"],
+        "packages/api/src/http.ts::stripBodyForHead"
+    );
+    assert!(
+        artefacts[0]["score"].as_f64().unwrap_or_default()
+            > artefacts[1]["score"].as_f64().unwrap_or_default(),
+        "expected repeated literal mentions to outrank a single mention, got {artefacts:?}"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_mode_lexical_uses_full_text_for_snippets() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_search_quality_inputs(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "strip_body($method == Method::HEAD)", searchMode: LEXICAL }) {
+                artefacts {
+                  path
+                  symbolFqn
+                  score
+                  searchScore {
+                    total
+                    exact
+                    fullText
+                    literalMatches
+                    phraseMatches
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    assert!(
+        !artefacts.is_empty(),
+        "expected lexical snippet artefacts, got {json:?}"
+    );
+    assert_eq!(artefacts[0]["path"], "packages/api/src/http.ts");
+    assert_eq!(
+        artefacts[0]["symbolFqn"],
+        "packages/api/src/http.ts::stripBodyForHead"
+    );
+    assert!(
+        artefacts[0]["score"].as_f64().unwrap_or_default() >= 3000.0,
+        "expected full-text lexical band score for snippet hit, got {:?}",
+        artefacts[0]["score"]
+    );
+    assert!(
+        artefacts[0]["searchScore"]["fullText"]
+            .as_f64()
+            .unwrap_or_default()
+            > 0.0,
+        "expected snippet hit to expose full-text contribution, got {:?}",
+        artefacts[0]["searchScore"]
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_mode_auto_returns_breakdown_and_mode_specific_slices() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    seed_graphql_search_quality_inputs(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                  score
+                }
+                searchBreakdown(first: 2) {
+                  lexical {
+                    symbolFqn
+                    score
+                  }
+                  identity {
+                    symbolFqn
+                    score
+                  }
+                  code {
+                    symbolFqn
+                    score
+                  }
+                  summary {
+                    symbolFqn
+                    score
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"][0]["path"],
+        "packages/api/src/caller.ts"
+    );
+    let breakdown = &json["selectArtefacts"]["searchBreakdown"];
+    assert!(
+        breakdown.is_object(),
+        "expected auto search breakdown, got {breakdown:?}"
+    );
+    assert_eq!(
+        breakdown["identity"][0]["symbolFqn"],
+        "packages/api/src/caller.ts::caller"
+    );
+    assert!(
+        breakdown["code"].as_array().is_some(),
+        "expected code breakdown slice, got {breakdown:?}"
+    );
+    assert!(
+        breakdown["summary"].as_array().is_some(),
+        "expected summary breakdown slice, got {breakdown:?}"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_mode_auto_reuses_query_embedding_for_shared_setup() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let log = fs::read_to_string(semantic_query_runtime_log_path(repo.path()))
+        .expect("read semantic query runtime log");
+    let query_embed_requests = log
+        .lines()
+        .filter(|line| line.contains(r#""cmd":"embed""#))
+        .filter(|line| !line.contains("bitloops python embedding dimension probe"))
+        .count();
+    assert_eq!(
+        query_embed_requests, 1,
+        "expected auto semantic search to reuse a single embed request, got log:\n{log}"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_breakdown_is_null_for_non_search_selections() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src/caller.ts" }) {
+                count
+                searchBreakdown {
+                  lexical {
+                    symbolFqn
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert!(json["selectArtefacts"]["searchBreakdown"].is_null());
+}
+
+#[tokio::test]
 async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_items() {
     let repo = seed_graphql_monorepo_repo_with_duckdb_events();
     seed_graphql_clone_data(repo.path());
@@ -1966,13 +2782,35 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
             {
               selectArtefacts(by: { path: "src/caller.ts", lines: { start: 4, end: 6 } }) {
                 count
-                summary
-                deps {
+                overview
+                dependencies {
+                  overview
+                  expandHint {
+                    intent
+                    template
+                    parameters {
+                      name
+                      intent
+                      supportedValues
+                    }
+                  }
                   schema
                   items(first: 5) {
                     id
                     edgeKind
                     toSymbolRef
+                  }
+                }
+                codeMatches {
+                  overview
+                  expandHint {
+                    intent
+                    template
+                    parameters {
+                      name
+                      intent
+                      supportedValues
+                    }
                   }
                 }
               }
@@ -1990,45 +2828,158 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     let json = response.data.into_json().expect("graphql data to json");
     assert_eq!(json["selectArtefacts"]["count"], 2);
     assert_eq!(
-        json["selectArtefacts"]["summary"]["selectedArtefactCount"],
+        json["selectArtefacts"]["overview"]["selectedArtefactCount"],
         2
     );
     assert_eq!(
-        json["selectArtefacts"]["summary"]["checkpoints"]["summary"]["totalCount"],
+        json["selectArtefacts"]["overview"]["checkpoints"]["overview"]["totalCount"],
         0
     );
     assert!(
-        json["selectArtefacts"]["summary"]["checkpoints"]["schema"].is_null(),
-        "expected empty checkpoint schema in aggregate summary: {json:#}"
+        json["selectArtefacts"]["overview"]["checkpoints"]["schema"].is_null(),
+        "expected empty checkpoint schema in aggregate overview: {json:#}"
     );
     assert_eq!(
-        json["selectArtefacts"]["summary"]["clones"]["summary"]["totalCount"],
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["counts"]["total"],
+        2
+    );
+    let aggregate_deps_overview = &json["selectArtefacts"]["overview"]["dependencies"]["overview"];
+    assert_eq!(aggregate_deps_overview["dependencies"]["total"], 2);
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["counts"]["similar_implementation"],
+        2
+    );
+    assert!(
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["counts"]
+            .get("contextual_neighbor")
+            .is_none(),
+        "expected compact clone summary counts to omit absent relation kinds from this selection: {json:#}"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["expandHint"]["intent"],
+        "Inspect code matches"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["expandHint"]["template"],
+        r#"bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'"#
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["expandHint"]["parameters"],
+        json!([{
+            "name": "kind",
+            "intent": "Choose which relation kind to inspect",
+            "supportedValues": [
+                "exact_duplicate",
+                "similar_implementation",
+                "shared_logic_candidate",
+                "diverged_implementation",
+                "weak_clone_candidate"
+            ]
+        }])
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["overview"]["counts"]["total"],
         2
     );
     assert_eq!(
-        json["selectArtefacts"]["summary"]["deps"]["summary"]["totalCount"],
+        json["selectArtefacts"]["codeMatches"]["overview"]["counts"]["similar_implementation"],
         2
     );
     assert_eq!(
-        json["selectArtefacts"]["summary"]["tests"]["summary"]["matchedArtefactCount"],
+        json["selectArtefacts"]["codeMatches"]["overview"]["expandHint"]["template"],
+        r#"bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'"#
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["expandHint"]["intent"],
+        "Inspect code matches"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["expandHint"]["template"],
+        r#"bitloops devql query '{ selectArtefacts(by: ...) { codeMatches(relationKind: <KIND>) { items(first: 20) { ... } } } }'"#
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["expandHint"]["parameters"],
+        json!([{
+            "name": "kind",
+            "intent": "Choose which relation kind to inspect",
+            "supportedValues": [
+                "exact_duplicate",
+                "similar_implementation",
+                "shared_logic_candidate",
+                "diverged_implementation",
+                "weak_clone_candidate"
+            ]
+        }])
+    );
+    assert_eq!(
+        aggregate_deps_overview["dependencies"]["selectedArtefact"],
         2
     );
-    let aggregate_deps_schema = json["selectArtefacts"]["summary"]["deps"]["schema"]
+    assert_eq!(
+        aggregate_deps_overview["dependencies"]["kindCounts"]["exports"],
+        0
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["dependencies"]["expandHint"]["template"],
+        "bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 20) { edgeKind toSymbolRef } } } }'"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["tests"]["overview"]["matchedArtefactCount"],
+        2
+    );
+    let aggregate_tests_overview = &json["selectArtefacts"]["overview"]["tests"]["overview"];
+    assert_compact_tests_stage_summary(aggregate_tests_overview);
+    assert_tests_expand_hint(&aggregate_tests_overview["expandHint"]);
+    let aggregate_deps_schema = json["selectArtefacts"]["overview"]["dependencies"]["schema"]
         .as_str()
         .expect("aggregate dependency schema string");
     assert!(
         aggregate_deps_schema.contains("items(first: Int! = 20): [DependencyEdge!]!"),
-        "expected aggregate summary to surface dependency items(...), got {aggregate_deps_schema}"
+        "expected aggregate overview to surface dependency items(...), got {aggregate_deps_schema}"
     );
 
-    let deps_schema = json["selectArtefacts"]["deps"]["schema"]
+    let stage_deps_overview = &json["selectArtefacts"]["dependencies"]["overview"];
+    assert_eq!(stage_deps_overview["dependencies"]["incoming"], 0);
+    assert_eq!(stage_deps_overview["dependencies"]["outgoing"], 2);
+    assert_eq!(
+        stage_deps_overview["expandHint"]["template"],
+        json["selectArtefacts"]["dependencies"]["expandHint"]["template"]
+    );
+    assert_eq!(
+        stage_deps_overview["expandHint"]["parameters"],
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]
+    );
+    assert_eq!(
+        stage_deps_overview,
+        &json["selectArtefacts"]["overview"]["dependencies"]["overview"]
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["expandHint"]["template"],
+        json["selectArtefacts"]["overview"]["dependencies"]["expandHint"]["template"]
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"],
+        json!([
+            {
+                "name": "direction",
+                "intent": "Choose dependency flow relative to the selected artefacts",
+                "supportedValues": ["IN", "OUT"]
+            },
+            {
+                "name": "kind",
+                "intent": "Choose dependency relationship type",
+                "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+            }
+        ])
+    );
+    let deps_schema = json["selectArtefacts"]["dependencies"]["schema"]
         .as_str()
         .expect("dependency schema string");
     assert!(
         deps_schema.contains("items(first: Int! = 20): [DependencyEdge!]!"),
         "expected dependency schema to expose items(...), got {deps_schema}"
     );
-    let deps_items = json["selectArtefacts"]["deps"]["items"]
+    let deps_items = json["selectArtefacts"]["dependencies"]["items"]
         .as_array()
         .expect("dependency items array");
     assert_eq!(deps_items.len(), 2);
@@ -2045,7 +2996,218 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
 }
 
 #[tokio::test]
-async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() {
+async fn slim_select_artefacts_search_drives_summary_and_deps_and_tests() {
+    let repo = seed_graphql_monorepo_repo_with_duckdb_events();
+    seed_graphql_clone_data(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    seed_graphql_test_harness_stage_data(
+        repo.path(),
+        &commit_sha,
+        &[(
+            "sym::api-caller",
+            "artefact::api-caller",
+            "packages/api/src/caller.ts",
+            "caller delegates to target",
+        )],
+    );
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+                overview
+                dependencies {
+                  overview
+                  expandHint {
+                    parameters {
+                      name
+                      intent
+                      supportedValues
+                    }
+                  }
+                  items(first: 10) {
+                    edgeKind
+                    toSymbolRef
+                  }
+                }
+                tests {
+                  overview
+                  items(first: 20) {
+                    summary {
+                      expandHint {
+                        intent
+                        template
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 1);
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["selectedArtefactCount"],
+        1
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["dependencies"]["overview"]["dependencies"]["total"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["overview"]["dependencies"]["total"],
+        2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"],
+        json!([
+            {
+                "name": "direction",
+                "intent": "Choose dependency flow relative to the selected artefacts",
+                "supportedValues": ["IN", "OUT"]
+            },
+            {
+                "name": "kind",
+                "intent": "Choose dependency relationship type",
+                "supportedValues": ["CALLS", "EXPORTS", "EXTENDS", "IMPLEMENTS", "IMPORTS", "REFERENCES"]
+            }
+        ])
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["intent"],
+        "Use direction to filter dependencies by flow relative to the selected artefacts: incoming maps to IN and outgoing maps to OUT. Use kind to filter dependencies by relationship type: kindCounts.calls maps to CALLS, kindCounts.imports maps to IMPORTS and so on."
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["template"],
+        "bitloops devql query '{ selectArtefacts(...) { dependencies(direction: IN, kind: CALLS) { items(first: 20) { edgeKind toSymbolRef } } } }'"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["dependencies"]["overview"]["expandHint"]["parameters"],
+        json["selectArtefacts"]["dependencies"]["expandHint"]["parameters"]
+    );
+    assert_eq!(
+        json["selectArtefacts"]["tests"]["overview"]["matchedArtefactCount"],
+        1
+    );
+    let direct_tests_overview = &json["selectArtefacts"]["tests"]["overview"];
+    assert_compact_tests_stage_summary(direct_tests_overview);
+    assert_tests_expand_hint(&direct_tests_overview["expandHint"]);
+    assert_tests_expand_hint(
+        &json["selectArtefacts"]["tests"]["items"][0]["summary"]["expandHint"],
+    );
+    let deps_items = json["selectArtefacts"]["dependencies"]["items"]
+        .as_array()
+        .expect("dependency items array");
+    assert_eq!(deps_items.len(), 2);
+    assert_eq!(
+        deps_items[0]["toSymbolRef"],
+        "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        deps_items[1]["toSymbolRef"],
+        "packages/web/src/page.ts::render"
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_returns_empty_when_no_match_is_close() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "unrelated zeta quaternion" }) {
+                count
+                overview
+                codeMatches {
+                  overview
+                  expandHint {
+                    intent
+                    template
+                    parameters {
+                      name
+                      intent
+                      supportedValues
+                    }
+                  }
+                }
+                artefacts {
+                  path
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 0);
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["counts"],
+        json!({ "total": 0 })
+    );
+    assert!(
+        json["selectArtefacts"]["overview"]["codeMatches"]["overview"]
+            .get("expandHint")
+            .is_none(),
+        "expected aggregate codeMatches overview to omit expandHint when there are no counts: {json:#}"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["codeMatches"]["overview"]["counts"],
+        json!({ "total": 0 })
+    );
+    assert!(
+        json["selectArtefacts"]["codeMatches"]["overview"]
+            .get("expandHint")
+            .is_none(),
+        "expected codeMatches stage overview to omit expandHint when there are no counts: {json:#}"
+    );
+    assert!(
+        json["selectArtefacts"]["codeMatches"]["expandHint"].is_null(),
+        "expected typed codeMatches expandHint to be null when there are no matches: {json:#}"
+    );
+    assert_eq!(
+        json["selectArtefacts"]["artefacts"]
+            .as_array()
+            .expect("artefacts array")
+            .len(),
+        0
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["tests"]["overview"]["totalCoveringTests"],
+        0
+    );
+    let empty_tests_summary = &json["selectArtefacts"]["overview"]["tests"]["overview"];
+    assert_compact_tests_stage_summary(empty_tests_summary);
+    assert_tests_expand_hint(&empty_tests_summary["expandHint"]);
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_dependencies_include_unresolved_false_true_and_default() {
     let repo = seed_graphql_rust_select_artefacts_repo();
     let schema = slim_schema_for_repo(repo.path());
 
@@ -2054,7 +3216,7 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
             r#"
             {
               selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
-                deps(includeUnresolved: false) {
+                dependencies(includeUnresolved: false) {
                   items(first: 10) {
                     edgeKind
                     toSymbolRef
@@ -2078,9 +3240,9 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
         .data
         .into_json()
         .expect("graphql data (false) to json");
-    let items_false = json_false["selectArtefacts"]["deps"]["items"]
+    let items_false = json_false["selectArtefacts"]["dependencies"]["items"]
         .as_array()
-        .expect("deps false items array");
+        .expect("dependencies false items array");
     assert_eq!(items_false.len(), 1);
     assert_eq!(items_false[0]["edgeKind"], "REFERENCES");
     assert_eq!(
@@ -2093,7 +3255,7 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
             r#"
             {
               selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
-                deps(includeUnresolved: true) {
+                dependencies(includeUnresolved: true) {
                   items(first: 10) {
                     edgeKind
                     toSymbolRef
@@ -2117,9 +3279,9 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
         .data
         .into_json()
         .expect("graphql data (true) to json");
-    let items_true = json_true["selectArtefacts"]["deps"]["items"]
+    let items_true = json_true["selectArtefacts"]["dependencies"]["items"]
         .as_array()
-        .expect("deps true items array");
+        .expect("dependencies true items array");
     assert_eq!(items_true.len(), 3);
     assert!(
         items_true
@@ -2141,7 +3303,7 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
             r#"
             {
               selectArtefacts(by: { path: "treleas.rs", lines: { start: 1, end: 10 } }) {
-                deps {
+                dependencies {
                   items(first: 10) {
                     edgeKind
                     toSymbolRef
@@ -2165,9 +3327,9 @@ async fn slim_select_artefacts_deps_include_unresolved_false_true_and_default() 
         .data
         .into_json()
         .expect("graphql data (default) to json");
-    let items_default = json_default["selectArtefacts"]["deps"]["items"]
+    let items_default = json_default["selectArtefacts"]["dependencies"]["items"]
         .as_array()
-        .expect("deps default items array");
+        .expect("dependencies default items array");
 
     assert_eq!(items_default.len(), items_true.len());
     assert_eq!(

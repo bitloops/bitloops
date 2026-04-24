@@ -2,7 +2,8 @@ use std::path::Path;
 
 use crate::daemon;
 use crate::runtime_presentation::{
-    RETRY_FAILED_ENRICHMENTS_COMMAND, mailbox_label, workplane_pool_label,
+    INIT_CODE_EMBEDDINGS_LANE_LABEL, RETRY_FAILED_ENRICHMENTS_COMMAND, mailbox_label,
+    queue_state_summary, session_status_label, waiting_reason_label, workplane_pool_label,
 };
 
 fn current_state_consumer_status(
@@ -42,6 +43,9 @@ pub(super) fn status_lines_with_log_path(
         if let Some(capability_events) = current_state_consumer_status(report) {
             append_capability_event_lines(&mut lines, capability_events);
         }
+        if let Some(session) = report.current_init_session.as_ref() {
+            append_current_init_session_lines(&mut lines, session);
+        }
         if let Some(devql_tasks) = report.devql_tasks.as_ref() {
             append_devql_task_lines(&mut lines, devql_tasks);
         }
@@ -74,6 +78,9 @@ pub(super) fn status_lines_with_log_path(
         if let Some(capability_events) = current_state_consumer_status(report) {
             append_capability_event_lines(&mut lines, capability_events);
         }
+        if let Some(session) = report.current_init_session.as_ref() {
+            append_current_init_session_lines(&mut lines, session);
+        }
         if let Some(devql_tasks) = report.devql_tasks.as_ref() {
             append_devql_task_lines(&mut lines, devql_tasks);
         }
@@ -88,6 +95,9 @@ pub(super) fn status_lines_with_log_path(
     }
     if let Some(capability_events) = current_state_consumer_status(report) {
         append_capability_event_lines(&mut lines, capability_events);
+    }
+    if let Some(session) = report.current_init_session.as_ref() {
+        append_current_init_session_lines(&mut lines, session);
     }
     if let Some(devql_tasks) = report.devql_tasks.as_ref() {
         append_devql_task_lines(&mut lines, devql_tasks);
@@ -383,6 +393,67 @@ fn append_capability_event_lines(
     ));
 }
 
+fn append_current_init_session_lines(
+    lines: &mut Vec<String>,
+    session: &daemon::InitRuntimeSessionView,
+) {
+    lines.push(format!(
+        "Current init session: {} ({})",
+        session.init_session_id,
+        session_status_label(&session.status)
+    ));
+    if let Some(reason) = session.waiting_reason.as_ref() {
+        lines.push(format!(
+            "Current init waiting: {}",
+            waiting_reason_label(reason)
+        ));
+    }
+    if let Some(summary) = session.warning_summary.as_ref() {
+        lines.push(format!("Current init warning: {summary}"));
+    }
+    if session.embeddings_selected {
+        lines.push(format!(
+            "Current repo code embeddings: {}",
+            format_init_runtime_lane_summary(
+                INIT_CODE_EMBEDDINGS_LANE_LABEL,
+                &session.code_embeddings_lane,
+            )
+        ));
+    }
+    if let Some(error) = session.terminal_error.as_ref() {
+        lines.push(format!("Current init error: {error}"));
+    }
+}
+
+fn format_init_runtime_lane_summary(
+    lane_label: &str,
+    lane: &daemon::InitRuntimeLaneView,
+) -> String {
+    let mut summary = lane
+        .activity_label
+        .clone()
+        .unwrap_or_else(|| lane_label.to_string());
+    if let Some(reason) = lane.waiting_reason.as_ref() {
+        summary.push_str(&format!(" ({})", waiting_reason_label(reason)));
+    }
+    if let Some(progress) = lane.progress.as_ref()
+        && progress.total > 0
+    {
+        summary.push_str(&format!(
+            " · {} of {} ready · {} left",
+            progress.completed, progress.total, progress.remaining
+        ));
+    }
+    summary.push_str(&format!(
+        " · {}",
+        queue_state_summary(lane.queue.queued, lane.queue.running, lane.queue.failed)
+    ));
+    if let Some(warning) = lane.warnings.first() {
+        summary.push_str(&format!(" · Warning: {}", warning.message));
+    }
+    summary
+}
+
 fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQueueStatus) {
     lines.push("DevQL task queue: available".to_string());
     lines.push(format!("DevQL queued tasks: {}", status.state.queued_tasks));
@@ -398,7 +469,7 @@ fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQu
     for counts in &status.state.by_kind {
         lines.push(format!(
             "DevQL {} tasks: queued={}, running={}, failed={}, completed_recent={}",
-            counts.kind,
+            devql_task_kind_label(counts.kind),
             counts.queued_tasks,
             counts.running_tasks,
             counts.failed_tasks,
@@ -415,6 +486,15 @@ fn append_devql_task_lines(lines: &mut Vec<String>, status: &daemon::DevqlTaskQu
         ));
         if let Some(reason) = control.paused_reason.as_ref() {
             lines.push(format!("Current repo task pause reason: {reason}"));
+        }
+    }
+
+    fn devql_task_kind_label(kind: daemon::DevqlTaskKind) -> &'static str {
+        match kind {
+            daemon::DevqlTaskKind::Sync => "sync",
+            daemon::DevqlTaskKind::Ingest => "ingest",
+            daemon::DevqlTaskKind::EmbeddingsBootstrap => "embeddings runtime bootstrap",
+            daemon::DevqlTaskKind::SummaryBootstrap => "summary bootstrap",
         }
     }
     for task in &status.current_repo_tasks {

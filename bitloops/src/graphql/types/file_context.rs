@@ -93,6 +93,7 @@ impl FileContext {
         ))
     }
 
+    #[graphql(name = "dependencies")]
     async fn deps(
         &self,
         ctx: &Context<'_>,
