@@ -324,9 +324,10 @@ fn current_repo_init_runtime_snapshot(
     runtime: Option<&DaemonRuntimeState>,
     service: Option<&DaemonServiceMetadata>,
 ) -> Option<crate::daemon::InitRuntimeSnapshot> {
-    let daemon_config_root = current_repo_daemon_config_root(repo_root, runtime, service)?;
+    let daemon_config_path = current_repo_daemon_config_path(repo_root, runtime, service)?;
+    let daemon_config = resolve_daemon_config(Some(daemon_config_path.as_path())).ok()?;
     let cfg = crate::host::devql::DevqlConfig::from_roots(
-        daemon_config_root,
+        daemon_config.config_root,
         repo_root.to_path_buf(),
         repo.clone(),
     )
@@ -343,19 +344,21 @@ fn current_repo_init_runtime_snapshot(
     }
 }
 
-fn current_repo_daemon_config_root(
+fn current_repo_daemon_config_path(
     repo_root: &Path,
     runtime: Option<&DaemonRuntimeState>,
     service: Option<&DaemonServiceMetadata>,
 ) -> Option<std::path::PathBuf> {
-    crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)
+    crate::config::resolve_bound_daemon_config_path_for_repo(repo_root)
         .ok()
+        .filter(|config_path| config_path.is_file())
         .or_else(|| {
             crate::config::resolve_preferred_daemon_config_path_for_repo(repo_root)
                 .ok()
-                .and_then(|config_path| resolve_daemon_config(Some(config_path.as_path())).ok())
-                .map(|config| config.config_root)
+                .filter(|config_path| config_path.is_file())
         })
-        .or_else(|| runtime.map(|state| state.config_root.clone()))
-        .or_else(|| service.map(|metadata| metadata.config_root.clone()))
+        .or_else(|| runtime.map(|state| state.config_path.clone()))
+        .filter(|config_path| config_path.is_file())
+        .or_else(|| service.map(|metadata| metadata.config_path.clone()))
+        .filter(|config_path| config_path.is_file())
 }

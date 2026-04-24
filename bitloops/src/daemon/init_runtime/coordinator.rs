@@ -252,8 +252,10 @@ impl InitRuntimeCoordinator {
             RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
         let repo_id = cfg.repo.repo_id.clone();
         let task_queue = crate::daemon::shared_devql_task_coordinator().snapshot(Some(&repo_id))?;
-        let current_state_consumer =
-            crate::daemon::shared_capability_event_coordinator().snapshot(Some(&repo_id))?;
+        let current_state_consumer = crate::daemon::capability_event_status_for_config_root(
+            &cfg.daemon_config_root,
+            Some(&repo_id),
+        )?;
         let mailboxes = repo_store.load_capability_workplane_mailbox_status(
             SEMANTIC_CLONES_CAPABILITY_ID,
             [
