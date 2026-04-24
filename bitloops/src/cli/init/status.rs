@@ -455,11 +455,9 @@ fn lane_detail_text(title: &str, lane: &RuntimeInitLaneGraphqlRecord) -> Option<
     lane.activity_label
         .clone()
         .or_else(|| lane.detail.clone())
-        .or_else(|| match lane.status.to_ascii_lowercase().as_str() {
-            "completed" => Some("Complete".to_string()),
-            "failed" => Some("Failed".to_string()),
-            "skipped" => Some("Skipped".to_string()),
-            _ => None,
+        .filter(|_| {
+            let status = lane.status.to_ascii_lowercase();
+            !(status == "completed" || status == "failed" || status == "skipped")
         })
 }
 

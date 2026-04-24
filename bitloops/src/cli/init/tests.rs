@@ -1008,7 +1008,7 @@ fn run_init_status_watch_streams_updates_until_terminal_state() {
 
             let rendered = String::from_utf8(out).expect("utf8 output");
             assert!(rendered.contains("Status: Running"));
-            assert!(rendered.contains("Status: Finished"));
+            assert!(rendered.contains("Status: Completed"));
         },
     );
 

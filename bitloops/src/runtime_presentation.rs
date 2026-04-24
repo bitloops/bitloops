@@ -65,8 +65,8 @@ pub(crate) fn lane_activity_label(detail: &str) -> &'static str {
 
 pub(crate) fn session_status_label(status: &str) -> &'static str {
     match status.to_ascii_lowercase().as_str() {
-        "completed" => "Finished",
-        "completed_with_warnings" => "Finished with warnings",
+        "completed" => "Completed",
+        "completed_with_warnings" => "Completed with warnings",
         "failing" => "Finishing remaining work after a failure",
         "failed" => "Failed",
         "waiting" => "Waiting",
