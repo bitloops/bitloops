@@ -9,14 +9,18 @@ use serde_json::Value;
 use crate::artefact_query_planner::plan_graphql_artefact_query;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::{
-    EmbeddingRepresentationKind, EmbeddingSetup, resolve_embedding_setup,
+    EmbeddingRepresentationKind as SemanticEmbeddingRepresentationKind, EmbeddingSetup,
+    resolve_embedding_setup,
 };
 use crate::capability_packs::semantic_clones::load_active_embedding_setup;
 use crate::capability_packs::semantic_clones::runtime_config::{
     EmbeddingProviderMode, embeddings_enabled, resolve_embedding_provider,
     resolve_semantic_clones_config,
 };
-use crate::graphql::types::{Artefact, CanonicalKind, DateTimeScalar};
+use crate::graphql::types::{
+    Artefact, CanonicalKind, DateTimeScalar,
+    EmbeddingRepresentationKind as GraphqlEmbeddingRepresentationKind,
+};
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
 use crate::host::devql::esc_pg;
@@ -28,16 +32,16 @@ const DEFAULT_MIN_SEMANTIC_SCORE: f32 = 0.72;
 const DEFAULT_RESULT_LIMIT: usize = 5;
 const ANN_PREFILTER_MULTIPLIER: usize = 4;
 const ANN_PREFILTER_MIN_LIMIT: usize = 32;
-const SEARCH_REPRESENTATION_KINDS: [EmbeddingRepresentationKind; 3] = [
-    EmbeddingRepresentationKind::Identity,
-    EmbeddingRepresentationKind::Code,
-    EmbeddingRepresentationKind::Summary,
+const SEARCH_REPRESENTATION_KINDS: [SemanticEmbeddingRepresentationKind; 3] = [
+    SemanticEmbeddingRepresentationKind::Identity,
+    SemanticEmbeddingRepresentationKind::Code,
+    SemanticEmbeddingRepresentationKind::Summary,
 ];
 
 #[derive(Debug, Clone)]
 struct SemanticArtefactCandidate {
     artefact: Artefact,
-    representation_kind: EmbeddingRepresentationKind,
+    representation_kind: SemanticEmbeddingRepresentationKind,
     embedding: Vec<f32>,
     setup: EmbeddingSetup,
 }
@@ -168,7 +172,7 @@ async fn load_semantic_candidates(
     context: &DevqlGraphqlContext,
     scope: &ResolverScope,
     repo_id: &str,
-    representation_kinds: &[EmbeddingRepresentationKind],
+    representation_kinds: &[SemanticEmbeddingRepresentationKind],
 ) -> Result<Vec<SemanticArtefactCandidate>> {
     let spec = plan_graphql_artefact_query(
         repo_id,
@@ -193,7 +197,8 @@ async fn load_semantic_candidates(
                 filtered.canonical_kind, filtered.language_kind, filtered.symbol_fqn, \
                 filtered.parent_artefact_id, filtered.start_line, filtered.end_line, \
                 filtered.start_byte, filtered.end_byte, filtered.signature, filtered.modifiers, \
-                filtered.docstring, filtered.summary, filtered.blob_sha, filtered.content_hash, filtered.created_at, \
+                filtered.docstring, filtered.summary, filtered.embedding_representations, \
+                filtered.blob_sha, filtered.content_hash, filtered.created_at, \
                 se.representation_kind AS representation_kind, \
                 se.setup_fingerprint, se.provider AS embedding_provider, \
                 se.model AS embedding_model, se.dimension AS embedding_dimension, \
@@ -215,7 +220,7 @@ async fn load_semantic_candidates(
 
 fn compatible_candidates_for_representation_setup(
     candidates: &[SemanticArtefactCandidate],
-    representation_kind: EmbeddingRepresentationKind,
+    representation_kind: SemanticEmbeddingRepresentationKind,
     query_setup: &EmbeddingSetup,
 ) -> Vec<SemanticArtefactCandidate> {
     candidates
@@ -358,15 +363,15 @@ fn candidate_from_row(row: Value) -> Result<SemanticArtefactCandidate> {
     })
 }
 
-fn representation_kind_from_row(row: &Value) -> Result<EmbeddingRepresentationKind> {
+fn representation_kind_from_row(row: &Value) -> Result<SemanticEmbeddingRepresentationKind> {
     match string_field(row, "representation_kind")?
         .trim()
         .to_ascii_lowercase()
         .as_str()
     {
-        "code" | "baseline" | "enriched" => Ok(EmbeddingRepresentationKind::Code),
-        "summary" => Ok(EmbeddingRepresentationKind::Summary),
-        "identity" | "locator" => Ok(EmbeddingRepresentationKind::Identity),
+        "code" | "baseline" | "enriched" => Ok(SemanticEmbeddingRepresentationKind::Code),
+        "summary" => Ok(SemanticEmbeddingRepresentationKind::Summary),
+        "identity" | "locator" => Ok(SemanticEmbeddingRepresentationKind::Identity),
         other => Err(anyhow!("unknown representation kind `{other}`")),
     }
 }
@@ -389,6 +394,10 @@ fn artefact_from_value(row: &Value) -> Result<Artefact> {
         modifiers: parse_string_array_field(row, "modifiers"),
         docstring: optional_string_field(row, "docstring"),
         summary: optional_string_field(row, "summary"),
+        embedding_representations: parse_embedding_representation_field(
+            row,
+            "embedding_representations",
+        ),
         content_hash: optional_string_field(row, "content_hash"),
         blob_sha: string_field(row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(row, "created_at")?.as_str())?,
@@ -496,6 +505,35 @@ fn parse_string_array_field(row: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn parse_embedding_representation_field(
+    row: &Value,
+    key: &str,
+) -> Vec<GraphqlEmbeddingRepresentationKind> {
+    let mut parsed = Vec::new();
+
+    for value in parse_string_array_field(row, key) {
+        let mapped = match value.trim().to_ascii_lowercase().as_str() {
+            "identity" | "locator" => Some(GraphqlEmbeddingRepresentationKind::Identity),
+            "code" | "baseline" | "enriched" => Some(GraphqlEmbeddingRepresentationKind::Code),
+            "summary" => Some(GraphqlEmbeddingRepresentationKind::Summary),
+            _ => None,
+        };
+
+        if let Some(kind) = mapped
+            && !parsed.contains(&kind)
+        {
+            parsed.push(kind);
+        }
+    }
+
+    parsed.sort_by_key(|kind| match kind {
+        GraphqlEmbeddingRepresentationKind::Identity => 0,
+        GraphqlEmbeddingRepresentationKind::Code => 1,
+        GraphqlEmbeddingRepresentationKind::Summary => 2,
+    });
+    parsed
+}
+
 fn parse_storage_datetime(value: &str) -> Result<DateTimeScalar> {
     if let Ok(timestamp) = DateTimeScalar::from_rfc3339(value.to_string()) {
         return Ok(timestamp);
@@ -533,6 +571,7 @@ mod tests {
             modifiers: Vec::new(),
             docstring: None,
             summary: None,
+            embedding_representations: Vec::new(),
             content_hash: None,
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-21T09:00:00Z")
@@ -550,7 +589,7 @@ mod tests {
     ) -> SemanticArtefactCandidate {
         SemanticArtefactCandidate {
             artefact: sample_artefact(id, path, symbol_fqn),
-            representation_kind: EmbeddingRepresentationKind::Identity,
+            representation_kind: SemanticEmbeddingRepresentationKind::Identity,
             embedding,
             setup: EmbeddingSetup::new("bitloops_embeddings_ipc", "semantic-query-test-model", 3),
         }
@@ -619,7 +658,7 @@ mod tests {
 
         let compatible = compatible_candidates_for_representation_setup(
             &[mismatched],
-            EmbeddingRepresentationKind::Identity,
+            SemanticEmbeddingRepresentationKind::Identity,
             &query_setup,
         );
 

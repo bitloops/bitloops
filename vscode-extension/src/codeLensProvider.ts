@@ -110,6 +110,7 @@ export class BitloopsOverviewCodeLensProvider implements vscode.CodeLensProvider
   ): vscode.ProviderResult<vscode.CodeLens[]> {
     const cacheKey = document.uri.toString();
     const cached = this.cache.get(cacheKey);
+    const workspaceFolder = resolveDocumentWorkspaceFolder(document);
 
     if (!cached) {
       if (getBitloopsSettings().autoRefresh && !this.inFlight.has(cacheKey)) {
@@ -119,20 +120,38 @@ export class BitloopsOverviewCodeLensProvider implements vscode.CodeLensProvider
       return [];
     }
 
-    return this.buildCodeLenses(cached);
+    if (!workspaceFolder) {
+      return [];
+    }
+
+    return this.buildCodeLenses(cached, workspaceFolder.uri.fsPath);
   }
 
-  private buildCodeLenses(data: DocumentOverviewData): vscode.CodeLens[] {
+  private buildCodeLenses(
+    data: DocumentOverviewData,
+    workspaceFolderFsPath: string,
+  ): vscode.CodeLens[] {
     const lenses: vscode.CodeLens[] = [];
     const fileCommandArgs: OverviewCommandArgs = {
-      title: `Bitloops file overview · ${data.path}`,
-      overview: data.overview,
+      target: {
+        kind: 'file',
+        workspaceFolderFsPath,
+        selector: {
+          path: data.path,
+        },
+        title: data.path,
+        subtitle: `File overview · ${data.count} artefact${data.count === 1 ? '' : 's'}`,
+        preview: {
+          count: data.count,
+          overview: data.overview,
+        },
+      },
     };
 
     lenses.push(
       new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
         title: formatOverviewCodeLensTitle(data.overview),
-        tooltip: fileCommandArgs.title,
+        tooltip: `Bitloops file overview · ${data.path}`,
         command: 'bitloops.showOverviewDetails',
         arguments: [fileCommandArgs],
       }),
@@ -146,16 +165,39 @@ export class BitloopsOverviewCodeLensProvider implements vscode.CodeLensProvider
 
       const line = Math.max(0, artefact.startLine - 1);
       const commandArgs: OverviewCommandArgs = {
-        title: `Bitloops artefact details · ${artefactTitle(artefact)}`,
-        overview: artefact.overview ?? {},
-        summary: artefact.summary,
+        target: {
+          kind: 'artefact',
+          workspaceFolderFsPath,
+          selector:
+            artefact.symbolFqn && artefact.symbolFqn.trim().length > 0
+              ? {
+                  path: artefact.path,
+                  symbolFqn: artefact.symbolFqn,
+                }
+              : {
+                  path: artefact.path,
+                  lines: {
+                    start: artefact.startLine,
+                    end: artefact.endLine,
+                  },
+                },
+          title: artefactTitle(artefact),
+          subtitle: `${artefact.path}:${artefact.startLine}-${artefact.endLine}`,
+          preview: {
+            count: 1,
+            artefact,
+            overview: artefact.overview ?? {},
+            summary: artefact.summary,
+            embeddingRepresentations: artefact.embeddingRepresentations ?? [],
+          },
+        },
       };
 
       if (summaryTitle) {
         lenses.push(
           new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
             title: summaryTitle,
-            tooltip: commandArgs.title,
+            tooltip: artefact.summary ?? commandArgs.target.title,
             command: 'bitloops.showOverviewDetails',
             arguments: [commandArgs],
           }),
@@ -166,7 +208,7 @@ export class BitloopsOverviewCodeLensProvider implements vscode.CodeLensProvider
         lenses.push(
           new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
             title: formatOverviewCodeLensTitle(artefact.overview),
-            tooltip: commandArgs.title,
+            tooltip: `Bitloops artefact details · ${commandArgs.target.title}`,
             command: 'bitloops.showOverviewDetails',
             arguments: [commandArgs],
           }),

@@ -1,12 +1,9 @@
-import * as path from 'node:path';
-
 import * as vscode from 'vscode';
 
 import { BitloopsCliClient } from './bitloopsCli';
 import { BitloopsOverviewCodeLensProvider } from './codeLensProvider';
+import { openArtefactInEditor } from './editorNavigation';
 import { showBitloopsError } from './errorHandling';
-import { canonicalKindIconId, formatSearchResultDescription, toZeroBasedLineRange } from './navigation';
-import { formatOverviewDetailRows } from './overviewFormatter';
 import { BitloopsOverviewService } from './overviewService';
 import { BitloopsSearchService } from './searchService';
 import { BitloopsSearchView } from './searchView';
@@ -24,20 +21,23 @@ export async function activate(
   const overviewService = new BitloopsOverviewService(cliClient);
   const searchService = new BitloopsSearchService(cliClient);
   const codeLensProvider = new BitloopsOverviewCodeLensProvider(overviewService, outputChannel);
-  const searchView = new BitloopsSearchView(searchService, outputChannel);
-  const treeView = vscode.window.createTreeView('bitloopsSearchView', {
-    treeDataProvider: searchView,
-    showCollapseAll: false,
-  });
-
-  searchView.attachTreeView(treeView);
+  const searchView = new BitloopsSearchView(
+    context.extensionUri,
+    searchService,
+    overviewService,
+    outputChannel,
+  );
 
   context.subscriptions.push(
     outputChannel,
-    treeView,
+    vscode.window.registerWebviewViewProvider('bitloopsSearchView', searchView, {
+      webviewOptions: {
+        retainContextWhenHidden: true,
+      },
+    }),
     vscode.languages.registerCodeLensProvider({ scheme: 'file' }, codeLensProvider),
     vscode.commands.registerCommand('bitloops.searchArtefacts', async () => {
-      await searchView.promptAndSearch();
+      await searchView.focusSearch();
     }),
     vscode.commands.registerCommand(
       'bitloops.refreshActiveFileOverview',
@@ -52,15 +52,7 @@ export async function activate(
           return;
         }
 
-        const items = formatOverviewDetailRows(args.overview, args.summary).map((item) => ({
-          label: item.label,
-          description: item.description,
-        }));
-
-        await vscode.window.showQuickPick(items, {
-          ignoreFocusOut: true,
-          placeHolder: args.title,
-        });
+        await searchView.revealSelection(args.target, true);
       },
     ),
     vscode.commands.registerCommand(
@@ -71,17 +63,7 @@ export async function activate(
         }
 
         try {
-          const fileUri = vscode.Uri.file(
-            path.join(args.workspaceFolderFsPath, args.artefact.path),
-          );
-          const { startLine, endLine } = toZeroBasedLineRange(args.artefact);
-          const range = new vscode.Range(startLine, 0, endLine, 0);
-          const editor = await vscode.window.showTextDocument(fileUri, {
-            preview: false,
-          });
-
-          editor.selection = new vscode.Selection(range.start, range.end);
-          editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+          await openArtefactInEditor(args.workspaceFolderFsPath, args.artefact);
         } catch (error) {
           await showBitloopsError('Opening Bitloops search result failed.', error, outputChannel);
         }

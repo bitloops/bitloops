@@ -57,6 +57,13 @@ impl CanonicalKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum EmbeddingRepresentationKind {
+    Identity,
+    Code,
+    Summary,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, InputObject)]
 pub struct LineRangeInput {
     pub start: i32,
@@ -126,6 +133,7 @@ pub struct Artefact {
     pub modifiers: Vec<String>,
     pub docstring: Option<String>,
     pub summary: Option<String>,
+    pub embedding_representations: Vec<EmbeddingRepresentationKind>,
     pub content_hash: Option<String>,
     pub blob_sha: String,
     pub created_at: DateTimeScalar,

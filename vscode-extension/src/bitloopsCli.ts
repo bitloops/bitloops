@@ -58,6 +58,15 @@ export class BitloopsCliError extends Error {
   }
 }
 
+export function errorMentionsUnknownField(error: unknown, fieldName: string): boolean {
+  if (!(error instanceof BitloopsCliError)) {
+    return false;
+  }
+
+  const haystack = [error.message, error.userMessage, error.detail ?? ''].join('\n');
+  return haystack.includes(`Unknown field "${fieldName}"`);
+}
+
 class NodeCommandExecutor implements CommandExecutor {
   async execute(
     command: string,

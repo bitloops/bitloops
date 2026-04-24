@@ -418,6 +418,11 @@ pub(super) fn seed_graphql_clone_scoring_inputs(repo_root: &Path) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open clone scoring sqlite");
+    let embedding_setup = crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
+        crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+        "bge-m3",
+        3,
+    );
 
     conn.execute_batch(
         r#"
@@ -629,17 +634,18 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
         conn.execute(
             "INSERT OR REPLACE INTO symbol_embeddings_current (
                 artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
-                provider, model, dimension, embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'baseline', ?6, ?7, ?8, ?9, ?10)",
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'baseline', ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 artefact_id,
                 repo_id.as_str(),
                 path,
                 content_id,
                 symbol_id,
-                crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
-                "bge-m3",
-                3,
+                embedding_setup.setup_fingerprint.as_str(),
+                embedding_setup.provider.as_str(),
+                embedding_setup.model.as_str(),
+                i64::try_from(embedding_setup.dimension).expect("embedding dimension fits in i64"),
                 input_hash,
                 embedding,
             ],

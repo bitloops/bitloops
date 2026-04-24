@@ -1,4 +1,4 @@
-import { OverviewDetailRow, SelectionOverview } from './types';
+import { EmbeddingRepresentationKind, SidebarEmbeddingBadge, SelectionOverview } from './types';
 
 interface OverviewCounts {
   checkpoints: number;
@@ -83,63 +83,23 @@ export function formatSummaryCodeLensTitle(summary?: string | null): string | un
   return `Bitloops summary: ${truncateText(normalised, 110)}`;
 }
 
-export function formatOverviewDetailRows(
-  overview: SelectionOverview,
-  summary?: string | null,
-): OverviewDetailRow[] {
-  const counts = extractOverviewCounts(overview);
-  const checkpointAgents = overview.checkpoints?.overview?.agents ?? [];
-  const latestCheckpoint = overview.checkpoints?.overview?.latestAt ?? 'none';
-  const dependencyOverview = overview.dependencies?.overview?.dependencies;
-  const codeMatchCounts = overview.codeMatches?.overview?.counts ?? {};
-  const testsOverview = overview.tests?.overview;
-  const rows: OverviewDetailRow[] = [
+export function buildEmbeddingBadges(
+  embeddingRepresentations: EmbeddingRepresentationKind[] | undefined,
+): SidebarEmbeddingBadge[] {
+  const kinds = new Set(embeddingRepresentations ?? []);
+
+  return [
     {
-      label: 'Selected artefacts',
-      description: `${toInteger(overview.selectedArtefactCount)}`,
+      label: 'Name',
+      available: kinds.has('IDENTITY'),
+    },
+    {
+      label: 'Code',
+      available: kinds.has('CODE'),
+    },
+    {
+      label: 'Summary',
+      available: kinds.has('SUMMARY'),
     },
   ];
-  const normalisedSummary = normaliseSummaryText(summary);
-
-  const codeMatchKinds = Object.entries(codeMatchCounts)
-    .filter(([key, value]) => key !== 'total' && typeof value === 'number' && value > 0)
-    .map(([key, value]) => `${key.replace(/_/g, ' ')} ${value}`)
-    .join(', ');
-
-  const dependencyKindCounts = Object.entries(dependencyOverview?.kindCounts ?? {})
-    .filter(([, value]) => typeof value === 'number' && value > 0)
-    .map(([key, value]) => `${key} ${value}`)
-    .join(', ');
-
-  if (normalisedSummary) {
-    rows.push({
-      label: 'Summary',
-      description: normalisedSummary,
-    });
-  }
-
-  rows.push(
-    {
-      label: `Checkpoints: ${counts.checkpoints}`,
-      description: `Latest ${latestCheckpoint}; agents ${checkpointAgents.length > 0 ? checkpointAgents.join(', ') : 'none'}`,
-    },
-    {
-      label: `Dependencies: ${counts.dependencies}`,
-      description: `Incoming ${toInteger(dependencyOverview?.incoming)}, outgoing ${toInteger(
-        dependencyOverview?.outgoing,
-      )}${dependencyKindCounts ? `; ${dependencyKindCounts}` : ''}`,
-    },
-    {
-      label: `Code matches: ${counts.codeMatches}`,
-      description: codeMatchKinds || 'No code matches',
-    },
-    {
-      label: `Tests: ${counts.tests}`,
-      description: `Matched artefacts ${toInteger(
-        testsOverview?.matchedArtefactCount,
-      )}; total covering tests ${counts.tests}`,
-    },
-  );
-
-  return rows;
 }

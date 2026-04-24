@@ -37,6 +37,8 @@ Exactly one selector mode must be used.
     artefacts {
       path
       symbolFqn
+      summary
+      embeddingRepresentations
     }
   }
 }
@@ -53,6 +55,8 @@ This usually resolves to `0..1` logical artefacts, but callers should treat the 
     artefacts {
       path
       symbolFqn
+      summary
+      embeddingRepresentations
     }
   }
 }
@@ -74,6 +78,8 @@ Fuzzy hits are returned first, embedding-only hits follow, weak matches are drop
     artefacts {
       path
       symbolFqn
+      summary
+      embeddingRepresentations
       startLine
       endLine
     }
@@ -92,6 +98,8 @@ This resolves all current artefacts in that file whose ranges overlap the select
     artefacts {
       path
       symbolFqn
+      summary
+      embeddingRepresentations
     }
   }
 }
@@ -129,6 +137,7 @@ Use:
 
 - `count` to know how many artefacts matched
 - `artefacts(...)` when you want to inspect the matched set itself
+- each returned `Artefact` can expose semantic `summary` plus `embeddingRepresentations`
 - `overview` when you want one compact answer across all supported categories
 - stage fields when you want one category in more detail
 

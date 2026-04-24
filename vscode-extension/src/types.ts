@@ -3,9 +3,12 @@ export interface BitloopsArtefact {
   symbolFqn?: string | null;
   canonicalKind?: string | null;
   summary?: string | null;
+  embeddingRepresentations?: EmbeddingRepresentationKind[];
   startLine: number;
   endLine: number;
 }
+
+export type EmbeddingRepresentationKind = 'IDENTITY' | 'CODE' | 'SUMMARY';
 
 export interface LineRange {
   start: number;
@@ -84,15 +87,142 @@ export interface SearchSelectionData {
   artefacts: BitloopsArtefact[];
 }
 
-export interface OverviewDetailRow {
+export type SelectionKind = 'artefact' | 'file';
+export type StageKind = 'checkpoints' | 'dependencies' | 'codeMatches' | 'tests';
+
+export interface SelectionDetails {
+  count: number;
+  overview: SelectionOverview;
+  artefact?: BitloopsArtefact;
+  embeddingRepresentations: EmbeddingRepresentationKind[];
+}
+
+export interface SelectionPreview extends Partial<SelectionDetails> {
+  summary?: string | null;
+}
+
+export interface SelectionTarget {
+  kind: SelectionKind;
+  workspaceFolderFsPath: string;
+  selector: ArtefactSelector;
+  title: string;
+  subtitle?: string;
+  preview?: SelectionPreview;
+}
+
+export interface SidebarSearchResultItem {
+  id: string;
+  target: SelectionTarget;
+  title: string;
+  description: string;
+  summaryPreview?: string;
+}
+
+export interface SidebarStageChip {
+  id: string;
+  stage: StageKind;
   label: string;
+  count: number;
+  filterKey?: string;
+  active: boolean;
+  disabled: boolean;
+}
+
+export interface SidebarEmbeddingBadge {
+  label: string;
+  available: boolean;
+}
+
+export interface SidebarBreadcrumb {
+  id: string;
+  label: string;
+  active: boolean;
+}
+
+export interface SidebarCheckpointFile {
+  id: string;
+  label: string;
+  path: string;
+  changeKind?: string;
+}
+
+export interface EditorNavigationTarget {
+  path: string;
+  startLine: number;
+  endLine: number;
+  symbolFqn?: string | null;
+  canonicalKind?: string | null;
+}
+
+export interface SidebarCheckpointDetail {
+  id: string;
+  title: string;
   description?: string;
+  metadata: string[];
+  files: SidebarCheckpointFile[];
+}
+
+export interface SidebarStageRow {
+  id: string;
+  title: string;
+  description?: string;
+  detail?: string;
+  navigationTarget?: EditorNavigationTarget;
+  checkpointDetail?: SidebarCheckpointDetail;
+}
+
+export interface StageItemsResult {
+  stage: StageKind;
+  filterKey?: string;
+  rows: SidebarStageRow[];
+  emptyMessage: string;
+}
+
+export interface SidebarSelectionState {
+  target: SelectionTarget;
+  details: SelectionDetails;
+}
+
+export interface SidebarSelectionViewState {
+  title: string;
+  subtitle?: string;
+  summary?: string;
+  overviewTitle: string;
+  overviewSegments: string[];
+  badges: SidebarEmbeddingBadge[];
+  chips: SidebarStageChip[];
+  openInEditorLabel?: string;
+}
+
+export interface SidebarStageViewState {
+  title: string;
+  emptyMessage: string;
+  rows: SidebarStageRow[];
+}
+
+export interface SidebarCheckpointViewState {
+  id: string;
+  title: string;
+  description?: string;
+  metadata: string[];
+  files: SidebarCheckpointFile[];
+}
+
+export interface SidebarViewState {
+  query: string;
+  loading: boolean;
+  loadingLabel?: string;
+  statusMessage?: string;
+  results: SidebarSearchResultItem[];
+  totalCount: number;
+  breadcrumbs: SidebarBreadcrumb[];
+  selection?: SidebarSelectionViewState;
+  stage?: SidebarStageViewState;
+  checkpoint?: SidebarCheckpointViewState;
 }
 
 export interface OverviewCommandArgs {
-  title: string;
-  overview: SelectionOverview;
-  summary?: string | null;
+  target: SelectionTarget;
 }
 
 export interface OpenSearchResultArgs {

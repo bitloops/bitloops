@@ -53,7 +53,8 @@
           "id": "bitloopsSearchView",
           "name": "Search",
           "contextualTitle": "Bitloops",
-          "icon": "media/icon.svg"
+          "icon": "media/icon.svg",
+          "type": "webview"
         }
       ]
     },

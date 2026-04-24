@@ -1776,6 +1776,90 @@ async fn slim_select_artefacts_summary_falls_back_to_historical_rows_when_curren
 }
 
 #[tokio::test]
+async fn slim_select_artefacts_reports_embedding_representations_for_current_rows() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "packages/api/src/target.ts" }) {
+                artefacts {
+                  symbolFqn
+                  summary
+                  embeddingRepresentations
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    let target_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/target.ts::target")
+        .expect("target artefact");
+    assert_eq!(
+        target_artefact["summary"],
+        "Builds API response payload fields and returns the transformed target result."
+    );
+    assert_eq!(
+        target_artefact["embeddingRepresentations"],
+        json!(["IDENTITY", "CODE", "SUMMARY"])
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_reports_empty_embedding_representations_when_missing() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = slim_schema_for_repo(repo.path());
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "packages/api/src/caller.ts" }) {
+                artefacts {
+                  symbolFqn
+                  embeddingRepresentations
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    let caller_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller")
+        .expect("caller artefact");
+    assert_eq!(caller_artefact["embeddingRepresentations"], json!([]));
+}
+
+#[tokio::test]
 async fn slim_select_artefacts_search_prefers_fuzzy_hits_in_project_scope() {
     let repo = seed_graphql_monorepo_repo();
     let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
@@ -2228,6 +2312,7 @@ async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits()
                   path
                   symbolFqn
                   summary
+                  embeddingRepresentations
                 }
               }
             }
@@ -2262,8 +2347,16 @@ async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits()
         "Calls API target and web render helpers to build a response payload."
     );
     assert_eq!(
+        artefacts[0]["embeddingRepresentations"],
+        json!(["IDENTITY", "CODE"])
+    );
+    assert_eq!(
         artefacts[1]["summary"],
         "Builds API response payload fields and returns the transformed target result."
+    );
+    assert_eq!(
+        artefacts[1]["embeddingRepresentations"],
+        json!(["IDENTITY", "CODE", "SUMMARY"])
     );
 }
 

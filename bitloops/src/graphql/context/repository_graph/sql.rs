@@ -693,12 +693,59 @@ fn artefact_select_columns_sql(alias: &str, use_historical_tables: bool) -> Stri
              )"
         )
     };
+    let embedding_representations_expr = if use_historical_tables {
+        format!(
+            "CASE \
+               WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'symbol_embeddings') \
+               THEN COALESCE((SELECT json_group_array(representation_kind) \
+                   FROM (SELECT DISTINCT se.representation_kind AS representation_kind \
+                           FROM symbol_embeddings se \
+                          WHERE se.repo_id = {alias}.repo_id \
+                            AND se.artefact_id = {alias}.artefact_id \
+                            AND se.blob_sha = {alias}.blob_sha \
+                       ORDER BY CASE se.representation_kind \
+                           WHEN 'identity' THEN 0 \
+                           WHEN 'locator' THEN 0 \
+                           WHEN 'code' THEN 1 \
+                           WHEN 'baseline' THEN 1 \
+                           WHEN 'enriched' THEN 1 \
+                           WHEN 'summary' THEN 2 \
+                           ELSE 9 \
+                       END)), '[]') \
+               ELSE '[]' \
+             END"
+        )
+    } else {
+        format!(
+            "CASE \
+               WHEN EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'symbol_embeddings_current') \
+               THEN COALESCE((SELECT json_group_array(representation_kind) \
+                   FROM (SELECT DISTINCT se.representation_kind AS representation_kind \
+                           FROM symbol_embeddings_current se \
+                          WHERE se.repo_id = {alias}.repo_id \
+                            AND se.artefact_id = {alias}.artefact_id \
+                            AND se.content_id = {alias}.content_id \
+                       ORDER BY CASE se.representation_kind \
+                           WHEN 'identity' THEN 0 \
+                           WHEN 'locator' THEN 0 \
+                           WHEN 'code' THEN 1 \
+                           WHEN 'baseline' THEN 1 \
+                           WHEN 'enriched' THEN 1 \
+                           WHEN 'summary' THEN 2 \
+                           ELSE 9 \
+                       END)), '[]') \
+               ELSE '[]' \
+             END"
+        )
+    };
     format!(
         "{alias}.symbol_id, {alias}.artefact_id, {alias}.path, {alias}.language, \
          {alias}.canonical_kind, {alias}.language_kind, {alias}.symbol_fqn, \
          {alias}.parent_artefact_id, {alias}.start_line, {alias}.end_line, \
          {alias}.start_byte, {alias}.end_byte, {alias}.signature, {alias}.modifiers, \
-         {alias}.docstring, {summary_expr} AS summary, {blob_sha_expr}, {content_hash_expr}, {created_at_column}",
+         {alias}.docstring, {summary_expr} AS summary, \
+         {embedding_representations_expr} AS embedding_representations, \
+         {blob_sha_expr}, {content_hash_expr}, {created_at_column}",
     )
 }
 
@@ -786,6 +833,8 @@ mod tests {
         assert!(sql.contains("FROM symbol_semantics_current ss"));
         assert!(sql.contains("FROM symbol_semantics hs"));
         assert!(sql.contains("hs.blob_sha = a.content_id"));
+        assert!(sql.contains("FROM symbol_embeddings_current se"));
+        assert!(sql.contains("embedding_representations"));
     }
 
     #[test]

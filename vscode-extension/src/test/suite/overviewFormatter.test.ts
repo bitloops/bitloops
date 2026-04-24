@@ -2,9 +2,9 @@ import { strict as assert } from 'node:assert';
 import { suite, test } from 'mocha';
 
 import {
+  buildEmbeddingBadges,
   extractOverviewCounts,
   formatOverviewCodeLensTitle,
-  formatOverviewDetailRows,
   formatOverviewSegments,
   formatSummaryCodeLensTitle,
 } from '../../overviewFormatter';
@@ -78,19 +78,20 @@ suite('overviewFormatter', () => {
     );
   });
 
-  test('formatOverviewDetailRows exposes stable detail rows', () => {
-    const rows = formatOverviewDetailRows(
-      sampleOverview,
-      'Builds the API response payload for the route.',
-    );
-
-    assert.equal(rows[0].label, 'Selected artefacts');
-    assert.equal(rows[0].description, '2');
-    assert.equal(rows[1].label, 'Summary');
-    assert.equal(rows[1].description, 'Builds the API response payload for the route.');
-    assert.equal(rows[2].label, 'Checkpoints: 1');
-    assert.match(rows[3].description ?? '', /Incoming 1, outgoing 2/);
-    assert.match(rows[4].description ?? '', /similar implementation 4/);
-    assert.equal(rows[5].label, 'Tests: 5');
+  test('buildEmbeddingBadges marks the available representations', () => {
+    assert.deepEqual(buildEmbeddingBadges(['IDENTITY', 'SUMMARY']), [
+      {
+        label: 'Name',
+        available: true,
+      },
+      {
+        label: 'Code',
+        available: false,
+      },
+      {
+        label: 'Summary',
+        available: true,
+      },
+    ]);
   });
 });

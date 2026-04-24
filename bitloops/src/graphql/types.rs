@@ -21,7 +21,9 @@ pub mod temporal_scope;
 pub mod test_harness;
 
 pub use artefact::LineRangeInput;
-pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
+pub use artefact::{
+    Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind, EmbeddingRepresentationKind,
+};
 pub use artefact_selection::{
     ArtefactSelection, ArtefactSelectorInput, DirectoryEntry, DirectoryEntryKind,
 };
