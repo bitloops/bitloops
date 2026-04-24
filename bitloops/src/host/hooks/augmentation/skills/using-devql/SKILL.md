@@ -62,10 +62,10 @@ available, fall back to targeted repo search or file reads.
 
 ```bash
 # Use AUTO search first when the request is approximate or conceptual
-bitloops devql query '{ selectArtefacts(by: { search: "<distilled conceptual phrase>" }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score } searchBreakdown(first: 3) { lexical { path symbolFqn score } identity { path symbolFqn score } code { path symbolFqn score } summary { path symbolFqn score } } } }'
+bitloops devql query '{ selectArtefacts(by: { search: "<distilled conceptual phrase>" }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score summary } searchBreakdown(first: 3) { lexical { path symbolFqn score summary } identity { path symbolFqn score summary } code { path symbolFqn score summary } summary { path symbolFqn score summary } } } }'
 
 # Use LEXICAL search for identifiers, literals, paths, or snippets
-bitloops devql query '{ selectArtefacts(by: { search: "<identifier or snippet>", searchMode: LEXICAL }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score } } }'
+bitloops devql query '{ selectArtefacts(by: { search: "<identifier or snippet>", searchMode: LEXICAL }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score summary } } }'
 
 # Ask for overview once the selection is concrete
 bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { overview } }'

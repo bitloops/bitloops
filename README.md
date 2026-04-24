@@ -22,6 +22,7 @@
   </p>
 
 [![Fork](https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork)](https://github.com/bitloops/bitloops/network/) [![Star](https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star)](https://github.com/bitloops/bitloops/stargazers/) [![Commits](https://badgen.net/github/commits/bitloops/bitloops?color=6b7280)](https://github.com/bitloops/bitloops/commits/) [![Version](https://img.shields.io/github/v/tag/bitloops/bitloops?style=flat-square&color=7404e4)](https://github.com/bitloops/bitloops/tags/) [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/releases) [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827)](https://github.com/bitloops/bitloops/blob/main/LICENSE) [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/graphs/contributors) [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square)](https://github.com/bitloops/bitloops) [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
+
 </div>
     
 > [!WARNING]
@@ -43,10 +44,11 @@ AI agents don’t understand your codebase.
 They brute-force it.
 
 They:
-- run `grep`, `ls`, `cat`  
-- chain tool calls  
-- pull too much context  
-- burn tokens figuring out what matters  
+
+- run `grep`, `ls`, `cat`
+- chain tool calls
+- pull too much context
+- burn tokens figuring out what matters
 
 Bitloops replaces that.
 
@@ -55,15 +57,15 @@ It builds a **local, queryable model of your repository** so agents can fetch wh
 Powered by **DevQL**, a GraphQL-based query layer for your codebase.
 
 It also captures every agent interaction as **checkpoints**—giving you a trace of:
-- tool usage  
-- decisions  
-- reasoning  
-- and how changes evolved  
+
+- tool usage
+- decisions
+- reasoning
+- and how changes evolved
 
 So you don’t just get results—you can inspect how they were produced.
 
 ---
-
 
 ### Without vs With Bitloops
 
@@ -77,7 +79,6 @@ So you don’t just get results—you can inspect how they were produced.
 | AI reasoning disappears between sessions                     | Agent reasoning remains searchable                            |
 | Limited governance over AI-generated changes                 | Teams can review and audit AI reasoning through commits       |
 | Multiple iterations to reach a correct result                | Higher chance of getting it right the first time              |
-
 
 ## Installation
 
@@ -99,12 +100,6 @@ Windows CMD:
 
 ```cmd
 curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del install.cmd
-```
-
-### Homebrew (macOS/Linux)
-
-```bash
-brew install bitloops/tap/bitloops
 ```
 
 ## Getting Started
@@ -135,7 +130,6 @@ brew install bitloops/tap/bitloops
 To view your checkpoints, with the daemon running visit:
 [localhost:5667](http://127.0.0.1:5667)
 
-
 ## Uninstall
 
 Remove Bitloops-managed agent prompt surfaces from the current Bitloops project:
@@ -164,7 +158,6 @@ bitloops uninstall --full
 DevQL is a typed GraphQL interface for querying artefacts, checkpoints, dependencies, and knowledge — available as a CLI DSL, raw GraphQL, or dashboard endpoint.
 
 [Read more here](https://bitloops.com/docs/concepts/devql)
-
 
 ## FAQs
 

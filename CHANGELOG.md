@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-04-24
+
 ### Added
 
 - **Daemon-wide DuckDB analytics SQL query layer for Bitloops data**: added `bitloops devql analytics sql "<query>"` plus the dashboard GraphQL `analyticsSql(...)` field, both backed by a per-daemon DuckDB analytics cache. The new analytics surface exposes curated `analytics.*` views and broader `analytics_raw.*` mirrors across repository, current-state, and interaction data, supports current-repo, explicit multi-repo, and all-repo scopes, and derives `interaction_tool_invocations`, `interaction_subagent_runs`, and `shell_commands` consistently from raw interaction events across local DuckDB and remote ClickHouse backends.
