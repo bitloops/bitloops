@@ -32,7 +32,8 @@ input {
 .app,
 .search-shell,
 .content-shell,
-.selection-shell {
+.selection-shell,
+.search-results-shell {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -198,10 +199,17 @@ input {
   line-height: 1.35;
 }
 
+.panel__copy {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.45;
+}
+
 .meta,
 .selection-subtitle,
 .row-card__description,
 .result-card__description,
+.result-card__metrics,
 .checkpoint-copy,
 .empty-copy {
   color: var(--vscode-descriptionForeground);
@@ -329,6 +337,14 @@ input {
 .row-card__detail {
   color: var(--vscode-editorInfo-foreground, var(--vscode-descriptionForeground));
   line-height: 1.45;
+}
+
+.result-card__metrics {
+  line-height: 1.4;
+}
+
+.result-card__metrics--detail {
+  font-size: 12px;
 }
 
 .empty-state {

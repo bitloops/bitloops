@@ -32,12 +32,6 @@ const DEFAULT_MIN_SEMANTIC_SCORE: f32 = 0.72;
 const DEFAULT_RESULT_LIMIT: usize = 5;
 const ANN_PREFILTER_MULTIPLIER: usize = 4;
 const ANN_PREFILTER_MIN_LIMIT: usize = 32;
-const SEARCH_REPRESENTATION_KINDS: [SemanticEmbeddingRepresentationKind; 3] = [
-    SemanticEmbeddingRepresentationKind::Identity,
-    SemanticEmbeddingRepresentationKind::Code,
-    SemanticEmbeddingRepresentationKind::Summary,
-];
-
 #[derive(Debug, Clone)]
 struct SemanticArtefactCandidate {
     artefact: Artefact,
@@ -46,16 +40,34 @@ struct SemanticArtefactCandidate {
     setup: EmbeddingSetup,
 }
 
-pub(crate) async fn select_semantic_artefacts(
+pub(crate) async fn select_semantic_artefacts_for_representation(
     context: &DevqlGraphqlContext,
     scope: &ResolverScope,
     query: &str,
+    representation_kind: SemanticEmbeddingRepresentationKind,
 ) -> GraphqlResult<Vec<Artefact>> {
+    let mut hits_by_representation =
+        select_semantic_artefacts_by_representation(context, scope, query, &[representation_kind])
+            .await?;
+    Ok(hits_by_representation
+        .remove(&representation_kind)
+        .unwrap_or_default())
+}
+
+pub(crate) async fn select_semantic_artefacts_by_representation(
+    context: &DevqlGraphqlContext,
+    scope: &ResolverScope,
+    query: &str,
+    representation_kinds: &[SemanticEmbeddingRepresentationKind],
+) -> GraphqlResult<HashMap<SemanticEmbeddingRepresentationKind, Vec<Artefact>>> {
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
         return Err(bad_user_input_error(
             "`selectArtefacts(by: ...)` requires a non-empty `search`",
         ));
+    }
+    if representation_kinds.is_empty() {
+        return Ok(HashMap::new());
     }
 
     let repo_id = context.repo_id_for_scope(scope).map_err(|err| {
@@ -70,9 +82,10 @@ pub(crate) async fn select_semantic_artefacts(
     })?;
     let config = resolve_semantic_clones_config(&host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
     if !embeddings_enabled(&config) {
-        return Ok(Vec::new());
+        return Ok(HashMap::new());
     }
     let inference = host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
+    let representation_kinds = dedup_representation_kinds(representation_kinds);
 
     let repo_root = context.repo_root_for_scope(scope).map_err(|err| {
         backend_error(format!(
@@ -87,17 +100,24 @@ pub(crate) async fn select_semantic_artefacts(
         })?;
     let relational = relational_store.to_local_inner();
 
-    let candidates =
-        load_semantic_candidates(context, scope, &repo_id, &SEARCH_REPRESENTATION_KINDS)
-            .await
-            .map_err(|err| {
-                backend_error(format!(
-                    "failed to load candidate artefacts for search selection: {err:#}"
-                ))
-            })?;
+    let candidates = load_semantic_candidates(context, scope, &repo_id, &representation_kinds)
+        .await
+        .map_err(|err| {
+            backend_error(format!(
+                "failed to load candidate artefacts for search selection: {err:#}"
+            ))
+        })?;
+    let mut candidates_by_representation_setup =
+        group_semantic_candidates_by_representation_setup(candidates);
 
-    let mut embedding_hits = Vec::new();
-    for representation_kind in SEARCH_REPRESENTATION_KINDS {
+    let mut hits_by_representation = representation_kinds
+        .iter()
+        .copied()
+        .map(|representation_kind| (representation_kind, Vec::new()))
+        .collect::<HashMap<_, _>>();
+    let mut query_embeddings_by_setup = HashMap::<String, Vec<f32>>::new();
+
+    for representation_kind in representation_kinds {
         let selection = resolve_embedding_provider(
             &config,
             &inference,
@@ -131,22 +151,32 @@ pub(crate) async fn select_semantic_artefacts(
             continue;
         }
 
-        let compatible_candidates = compatible_candidates_for_representation_setup(
-            &candidates,
-            representation_kind,
-            &query_setup,
-        );
+        let compatible_candidates = candidates_by_representation_setup
+            .remove(&(representation_kind, query_setup.clone()))
+            .unwrap_or_default();
         if compatible_candidates.is_empty() {
             continue;
         }
 
-        let query_embedding = provider
-            .embed(trimmed_query, EmbeddingInputType::Query)
-            .map_err(|err| {
-                backend_error(format!(
-                    "failed to embed search query for {representation_kind}: {err:#}"
-                ))
-            })?;
+        let embedding_cache_key = format!(
+            "{}::{}",
+            provider.cache_key(),
+            query_setup.setup_fingerprint.as_str()
+        );
+        let query_embedding =
+            if let Some(query_embedding) = query_embeddings_by_setup.get(&embedding_cache_key) {
+                query_embedding.clone()
+            } else {
+                let query_embedding = provider
+                    .embed(trimmed_query, EmbeddingInputType::Query)
+                    .map_err(|err| {
+                        backend_error(format!(
+                            "failed to embed search query for {representation_kind}: {err:#}"
+                        ))
+                    })?;
+                query_embeddings_by_setup.insert(embedding_cache_key, query_embedding.clone());
+                query_embedding
+            };
         if query_embedding.is_empty() {
             return Err(backend_error(format!(
                 "{representation_kind} embedding provider returned an empty vector for search",
@@ -156,16 +186,17 @@ pub(crate) async fn select_semantic_artefacts(
             continue;
         }
 
-        embedding_hits.extend(rank_semantic_candidates(
+        let hits = rank_semantic_candidates(
             &query_embedding,
             compatible_candidates,
             VectorSearchMode::Auto,
             DEFAULT_MIN_SEMANTIC_SCORE,
             DEFAULT_RESULT_LIMIT,
-        ));
+        );
+        hits_by_representation.insert(representation_kind, hits);
     }
 
-    Ok(merge_semantic_hits(embedding_hits, DEFAULT_RESULT_LIMIT))
+    Ok(hits_by_representation)
 }
 
 async fn load_semantic_candidates(
@@ -218,6 +249,7 @@ async fn load_semantic_candidates(
     rows.into_iter().map(candidate_from_row).collect()
 }
 
+#[cfg(test)]
 fn compatible_candidates_for_representation_setup(
     candidates: &[SemanticArtefactCandidate],
     representation_kind: SemanticEmbeddingRepresentationKind,
@@ -232,6 +264,33 @@ fn compatible_candidates_for_representation_setup(
         .collect()
 }
 
+fn dedup_representation_kinds(
+    representation_kinds: &[SemanticEmbeddingRepresentationKind],
+) -> Vec<SemanticEmbeddingRepresentationKind> {
+    let mut deduped = Vec::new();
+    for representation_kind in representation_kinds.iter().copied() {
+        if !deduped.contains(&representation_kind) {
+            deduped.push(representation_kind);
+        }
+    }
+    deduped
+}
+
+fn group_semantic_candidates_by_representation_setup(
+    candidates: Vec<SemanticArtefactCandidate>,
+) -> HashMap<(SemanticEmbeddingRepresentationKind, EmbeddingSetup), Vec<SemanticArtefactCandidate>>
+{
+    let mut grouped = HashMap::new();
+    for candidate in candidates {
+        grouped
+            .entry((candidate.representation_kind, candidate.setup.clone()))
+            .or_insert_with(Vec::new)
+            .push(candidate);
+    }
+    grouped
+}
+
+#[cfg(test)]
 fn merge_semantic_hits(candidates: Vec<Artefact>, result_limit: usize) -> Vec<Artefact> {
     if candidates.is_empty() || result_limit == 0 {
         return Vec::new();
@@ -254,6 +313,7 @@ fn merge_semantic_hits(candidates: Vec<Artefact>, result_limit: usize) -> Vec<Ar
     merged
 }
 
+#[cfg(test)]
 fn compare_scored_artefacts(left: &Artefact, right: &Artefact) -> Ordering {
     right
         .score
@@ -402,6 +462,7 @@ fn artefact_from_value(row: &Value) -> Result<Artefact> {
         blob_sha: string_field(row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(row, "created_at")?.as_str())?,
         score: None,
+        search_score: None,
         scope: ResolverScope::default(),
     })
 }
@@ -577,6 +638,7 @@ mod tests {
             created_at: DateTimeScalar::from_rfc3339("2026-04-21T09:00:00Z")
                 .expect("valid timestamp"),
             score: None,
+            search_score: None,
             scope: ResolverScope::default(),
         }
     }

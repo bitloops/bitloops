@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 
 use super::row_access::{optional_row_string, row_i64, row_string};
 use super::types::AnalyticsDerivedTables;
+use crate::host::interactions::projection_ids::scope_tool_projection_id;
 use crate::host::interactions::types::{InteractionEvent, InteractionEventType};
 
 pub(super) fn derive_interaction_tables(events: &[Value]) -> AnalyticsDerivedTables {
@@ -203,16 +204,10 @@ fn interaction_event_from_row(row: &Value) -> Option<InteractionEvent> {
 
 fn event_tool_projection_id(event: &InteractionEvent) -> String {
     let tool_use_id = event_tool_use_id(event);
-    if !tool_use_id.trim().is_empty() {
-        if let Some(turn_id) = event.turn_id.as_deref().map(str::trim)
-            && !turn_id.is_empty()
-        {
-            return format!("{turn_id}:{tool_use_id}");
-        }
-        if !event.session_id.trim().is_empty() {
-            return format!("{}:{tool_use_id}", event.session_id.trim());
-        }
-        return tool_use_id;
+    let tool_projection_id =
+        scope_tool_projection_id(event.turn_id.as_deref(), &event.session_id, &tool_use_id);
+    if !tool_projection_id.is_empty() {
+        return tool_projection_id;
     }
     if !event.event_id.trim().is_empty() {
         return event.event_id.clone();
@@ -328,7 +323,7 @@ fn set_row_string(row: &mut Value, key: &str, value: String) {
 #[cfg(test)]
 mod tests {
     use super::derive_interaction_tables;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn tool_projection_ids_are_scoped_by_turn_when_tool_use_ids_repeat() {
@@ -377,5 +372,100 @@ mod tests {
 
         let derived = derive_interaction_tables(&events);
         assert_eq!(derived.interaction_tool_invocations.len(), 2);
+    }
+
+    #[test]
+    fn tool_projection_ids_preserve_already_scoped_turn_ids() {
+        let derived = derive_interaction_tables(&[json!({
+            "event_id": "event-1",
+            "event_time": "2026-04-23T21:00:00Z",
+            "repo_id": "repo-1",
+            "session_id": "session-1",
+            "turn_id": "turn-1",
+            "event_type": "tool_invocation_observed",
+            "source": "transcript_derivation",
+            "sequence_number": 1,
+            "agent_type": "opencode",
+            "model": "gpt-5.4",
+            "tool_use_id": "turn-1:tool:0002",
+            "tool_kind": "edit",
+            "task_description": "src/lib.rs",
+            "payload": {
+                "tool_name": "edit",
+                "input_summary": "src/lib.rs",
+                "transcript_path": "/tmp/one.jsonl"
+            }
+        })]);
+
+        assert_eq!(
+            derived.interaction_tool_invocations[0]
+                .get("tool_invocation_id")
+                .and_then(Value::as_str),
+            Some("turn-1:tool:0002")
+        );
+    }
+
+    #[test]
+    fn tool_projection_ids_fall_back_to_session_scope_without_double_prefixing() {
+        let derived = derive_interaction_tables(&[
+            json!({
+                "event_id": "event-1",
+                "event_time": "2026-04-23T21:00:00Z",
+                "repo_id": "repo-1",
+                "session_id": "session-1",
+                "turn_id": null,
+                "event_type": "tool_invocation_observed",
+                "source": "transcript_derivation",
+                "sequence_number": 1,
+                "agent_type": "opencode",
+                "model": "gpt-5.4",
+                "tool_use_id": "call-session",
+                "tool_kind": "read",
+                "task_description": "src/lib.rs",
+                "payload": {
+                    "tool_name": "read",
+                    "input_summary": "src/lib.rs",
+                    "transcript_path": "/tmp/one.jsonl"
+                }
+            }),
+            json!({
+                "event_id": "event-2",
+                "event_time": "2026-04-23T21:00:01Z",
+                "repo_id": "repo-1",
+                "session_id": "session-1",
+                "turn_id": null,
+                "event_type": "tool_invocation_observed",
+                "source": "transcript_derivation",
+                "sequence_number": 2,
+                "agent_type": "opencode",
+                "model": "gpt-5.4",
+                "tool_use_id": "session-1:tool:0002",
+                "tool_kind": "edit",
+                "task_description": "src/main.rs",
+                "payload": {
+                    "tool_name": "edit",
+                    "input_summary": "src/main.rs",
+                    "transcript_path": "/tmp/two.jsonl"
+                }
+            }),
+        ]);
+
+        let projection_id_for = |tool_use_id: &str| {
+            derived
+                .interaction_tool_invocations
+                .iter()
+                .find(|row| row.get("tool_use_id").and_then(Value::as_str) == Some(tool_use_id))
+                .and_then(|row| row.get("tool_invocation_id"))
+                .and_then(Value::as_str)
+        };
+
+        assert_eq!(
+            projection_id_for("call-session"),
+            Some("session-1:call-session")
+        );
+        assert_eq!(
+            projection_id_for("session-1:tool:0002"),
+            Some("session-1:tool:0002")
+        );
     }
 }

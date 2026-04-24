@@ -14,6 +14,8 @@ use super::{
     DepsSummary, DepsSummaryFilterInput, TestHarnessTestsResult, paginate_items,
 };
 
+const GRAPHQL_SCORE_PRECISION_SCALE: f64 = 10_000.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum CanonicalKind {
     File,
@@ -115,6 +117,41 @@ pub struct ArtefactCopyLineage {
 }
 
 #[derive(Debug, Clone, PartialEq, SimpleObject)]
+pub struct ArtefactSearchScore {
+    pub total: f64,
+    pub exact: f64,
+    pub full_text: f64,
+    pub fuzzy: f64,
+    pub semantic: f64,
+    pub literal_matches: i32,
+    pub exact_case_literal_matches: i32,
+    pub phrase_matches: i32,
+    pub exact_case_phrase_matches: i32,
+    pub body_literal_matches: i32,
+    pub signature_literal_matches: i32,
+    pub summary_literal_matches: i32,
+}
+
+impl ArtefactSearchScore {
+    pub(crate) fn rounded(&self) -> Self {
+        Self {
+            total: round_graphql_score(self.total),
+            exact: round_graphql_score(self.exact),
+            full_text: round_graphql_score(self.full_text),
+            fuzzy: round_graphql_score(self.fuzzy),
+            semantic: round_graphql_score(self.semantic),
+            literal_matches: self.literal_matches,
+            exact_case_literal_matches: self.exact_case_literal_matches,
+            phrase_matches: self.phrase_matches,
+            exact_case_phrase_matches: self.exact_case_phrase_matches,
+            body_literal_matches: self.body_literal_matches,
+            signature_literal_matches: self.signature_literal_matches,
+            summary_literal_matches: self.summary_literal_matches,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject)]
 #[graphql(complex)]
 pub struct Artefact {
     pub id: ID,
@@ -137,7 +174,10 @@ pub struct Artefact {
     pub content_hash: Option<String>,
     pub blob_sha: String,
     pub created_at: DateTimeScalar,
+    #[graphql(skip)]
     pub score: Option<f64>,
+    #[graphql(skip)]
+    pub search_score: Option<ArtefactSearchScore>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
@@ -154,6 +194,12 @@ impl Artefact {
 
     pub(crate) fn with_score(mut self, score: f64) -> Self {
         self.score = Some(score);
+        self
+    }
+
+    pub(crate) fn with_search_score(mut self, search_score: ArtefactSearchScore) -> Self {
+        self.score = Some(search_score.total);
+        self.search_score = Some(search_score);
         self
     }
 }
@@ -187,6 +233,15 @@ impl ArtefactCopyLineage {
 
 #[ComplexObject]
 impl Artefact {
+    async fn score(&self) -> Option<f64> {
+        self.score.map(round_graphql_score)
+    }
+
+    #[graphql(name = "searchScore")]
+    async fn search_score(&self) -> Option<ArtefactSearchScore> {
+        self.search_score.as_ref().map(ArtefactSearchScore::rounded)
+    }
+
     async fn parent(&self, ctx: &Context<'_>) -> Result<Option<Artefact>> {
         let Some(parent_id) = self.parent_artefact_id.as_ref() else {
             return Ok(None);
@@ -490,6 +545,10 @@ impl Artefact {
                 ))
             })
     }
+}
+
+fn round_graphql_score(value: f64) -> f64 {
+    (value * GRAPHQL_SCORE_PRECISION_SCALE).round() / GRAPHQL_SCORE_PRECISION_SCALE
 }
 
 fn stage_limit(first: i32) -> Result<usize> {

@@ -55,11 +55,22 @@ suite('queryBuilder', () => {
     const query = buildSearchQuery('  http handler  ', 10);
 
     assert.match(query, /search: "http handler"/);
+    assert.match(query, /searchMode: AUTO/);
+    assert.match(query, /searchBreakdown\(first: 3\)/);
     assert.match(query, /artefacts\(first: 10\)/);
+    assert.match(query, /score/);
+    assert.match(query, /searchScore \{/);
     assert.match(query, /startLine/);
     assert.match(query, /endLine/);
     assert.match(query, /summary/);
     assert.match(query, /embeddingRepresentations/);
+  });
+
+  test('buildSearchQuery routes code-like queries to lexical mode', () => {
+    const query = buildSearchQuery('  Method::HEAD  ', 5);
+
+    assert.match(query, /search: "Method::HEAD"/);
+    assert.match(query, /searchMode: LEXICAL/);
   });
 
   test('buildSelectionDetailsQuery requests artefact summaries and embeddings', () => {

@@ -4,11 +4,29 @@ export interface BitloopsArtefact {
   canonicalKind?: string | null;
   summary?: string | null;
   embeddingRepresentations?: EmbeddingRepresentationKind[];
+  score?: number;
+  searchScore?: ArtefactSearchScore;
   startLine: number;
   endLine: number;
 }
 
 export type EmbeddingRepresentationKind = 'IDENTITY' | 'CODE' | 'SUMMARY';
+export type SearchMode = 'AUTO' | 'IDENTITY' | 'CODE' | 'SUMMARY' | 'LEXICAL';
+
+export interface ArtefactSearchScore {
+  total: number;
+  exact: number;
+  fullText: number;
+  fuzzy: number;
+  semantic: number;
+  literalMatches: number;
+  exactCaseLiteralMatches: number;
+  phraseMatches: number;
+  exactCasePhraseMatches: number;
+  bodyLiteralMatches: number;
+  signatureLiteralMatches: number;
+  summaryLiteralMatches: number;
+}
 
 export interface LineRange {
   start: number;
@@ -82,9 +100,18 @@ export interface DocumentOverviewData {
   artefacts: DocumentArtefactOverview[];
 }
 
+export interface SearchBreakdownData {
+  lexical: BitloopsArtefact[];
+  identity: BitloopsArtefact[];
+  code: BitloopsArtefact[];
+  summary: BitloopsArtefact[];
+}
+
 export interface SearchSelectionData {
   count: number;
   artefacts: BitloopsArtefact[];
+  mode: SearchMode;
+  breakdown?: SearchBreakdownData;
 }
 
 export type SelectionKind = 'artefact' | 'file';
@@ -115,7 +142,17 @@ export interface SidebarSearchResultItem {
   target: SelectionTarget;
   title: string;
   description: string;
+  scoreLabel?: string;
+  scoreBreakdownLabel?: string;
+  matchBreakdownLabel?: string;
   summaryPreview?: string;
+}
+
+export interface SidebarSearchSection {
+  id: string;
+  title: string;
+  description?: string;
+  results: SidebarSearchResultItem[];
 }
 
 export interface SidebarStageChip {
@@ -213,7 +250,9 @@ export interface SidebarViewState {
   loading: boolean;
   loadingLabel?: string;
   statusMessage?: string;
+  searchMode?: SearchMode;
   results: SidebarSearchResultItem[];
+  searchSections: SidebarSearchSection[];
   totalCount: number;
   breadcrumbs: SidebarBreadcrumb[];
   selection?: SidebarSelectionViewState;

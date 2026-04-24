@@ -1,7 +1,7 @@
 {
   "name": "bitloops",
   "displayName": "Bitloops",
-  "description": "Bitloops DevQL overviews and artefact search for VS Code Extesnsion-compatible editors.",
+  "description": "Bitloops DevQL overviews and artefact search for VS Code Extension-compatible editors.",
   "version": "0.20.0",
   "publisher": "Bitloops",
   "license": "Apache-2.0",

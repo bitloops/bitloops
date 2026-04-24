@@ -5,7 +5,7 @@ Bitloops for VS Code surfaces current-state DevQL overviews directly in the edit
 ## Features
 
 - File-level and artefact-level Bitloops CodeLens
-- Bitloops sidebar search backed by `selectArtefacts(by: { search: ... })`
+- Bitloops sidebar search backed by typed DevQL search modes with unified results plus `AUTO` breakdown slices
 - CLI-based transport through the local `bitloops` binary
 
 ## Commands

@@ -311,6 +311,7 @@ mod tests {
             created_at: DateTimeScalar::from_rfc3339("2026-04-20T09:00:00Z")
                 .expect("valid timestamp"),
             score: None,
+            search_score: None,
             scope: ResolverScope::default(),
         }
     }

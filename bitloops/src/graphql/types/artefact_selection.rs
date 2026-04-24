@@ -17,17 +17,31 @@ use support::{dedup_strings, saturating_i32};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ArtefactSelectorMode {
     SymbolFqn(String),
-    Search(String),
+    Search {
+        query: String,
+        mode: SearchMode,
+    },
     Path {
         path: String,
         lines: Option<LineRangeInput>,
     },
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Enum)]
+pub enum SearchMode {
+    #[default]
+    Auto,
+    Identity,
+    Code,
+    Summary,
+    Lexical,
+}
+
 #[derive(Debug, Clone, InputObject)]
 pub struct ArtefactSelectorInput {
     pub symbol_fqn: Option<String>,
     pub search: Option<String>,
+    pub search_mode: Option<SearchMode>,
     pub path: Option<String>,
     pub lines: Option<LineRangeInput>,
 }
@@ -49,6 +63,7 @@ impl ArtefactSelectorInput {
             Some(value) => Some(value.trim().to_string()),
             None => None,
         };
+        let search_mode = self.search_mode.unwrap_or_default();
         let path = self
             .path
             .as_deref()
@@ -75,12 +90,20 @@ impl ArtefactSelectorInput {
                 "`selectArtefacts(by: ...)` requires `path` when `lines` is provided",
             ));
         }
+        if self.search_mode.is_some() && search.is_none() {
+            return Err(bad_user_input_error(
+                "`selectArtefacts(by: ...)` only allows `searchMode` when `search` is provided",
+            ));
+        }
 
         if let Some(symbol_fqn) = symbol_fqn {
             return Ok(ArtefactSelectorMode::SymbolFqn(symbol_fqn));
         }
         if let Some(search) = search {
-            return Ok(ArtefactSelectorMode::Search(search));
+            return Ok(ArtefactSelectorMode::Search {
+                query: search,
+                mode: search_mode,
+            });
         }
 
         let path = path.expect("selector_count ensures path selector exists");
@@ -114,6 +137,14 @@ enum ArtefactSelectionMode {
 }
 
 #[derive(Debug, Clone, SimpleObject)]
+pub struct SearchBreakdown {
+    pub lexical: Vec<Artefact>,
+    pub identity: Vec<Artefact>,
+    pub code: Vec<Artefact>,
+    pub summary: Vec<Artefact>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
 #[graphql(complex)]
 pub struct ArtefactSelection {
     pub count: IntCount,
@@ -123,6 +154,8 @@ pub struct ArtefactSelection {
     pub(crate) artefacts: Vec<Artefact>,
     #[graphql(skip)]
     pub(crate) directory_entries: Vec<DirectoryEntry>,
+    #[graphql(skip)]
+    pub(crate) search_breakdown: Option<SearchBreakdown>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
@@ -140,6 +173,22 @@ impl ArtefactSelection {
             mode: ArtefactSelectionMode::Artefacts,
             artefacts,
             directory_entries,
+            search_breakdown: None,
+            scope,
+        }
+    }
+
+    pub(crate) fn new_search(
+        artefacts: Vec<Artefact>,
+        search_breakdown: Option<SearchBreakdown>,
+        scope: ResolverScope,
+    ) -> Self {
+        Self {
+            count: saturating_i32(artefacts.len()),
+            mode: ArtefactSelectionMode::Artefacts,
+            artefacts,
+            directory_entries: Vec::new(),
+            search_breakdown,
             scope,
         }
     }
@@ -153,6 +202,7 @@ impl ArtefactSelection {
             mode: ArtefactSelectionMode::DirectoryEntries,
             artefacts: Vec::new(),
             directory_entries,
+            search_breakdown: None,
             scope,
         }
     }

@@ -10,10 +10,13 @@ import {
   SelectionDetails,
   SelectionKind,
   SelectionOverview,
+  SearchBreakdownData,
+  SearchMode,
   SelectionTarget,
   SidebarBreadcrumb,
   SidebarCheckpointDetail,
   SidebarSearchResultItem,
+  SidebarSearchSection,
   SidebarSelectionState,
   SidebarStageChip,
   SidebarStageRow,
@@ -31,12 +34,46 @@ interface SidebarInternalState {
   loading: boolean;
   loadingLabel?: string;
   statusMessage?: string;
+  searchMode?: SearchMode;
   totalCount: number;
   results: SidebarSearchResultItem[];
+  searchSections: SidebarSearchSection[];
   selection?: SidebarSelectionState;
   activeStage?: ActiveStageState;
   checkpoint?: SidebarCheckpointDetail;
 }
+
+const SEARCH_SECTION_ORDER: Array<keyof SearchBreakdownData> = [
+  'lexical',
+  'identity',
+  'code',
+  'summary',
+];
+
+const SEARCH_SECTION_METADATA: Record<
+  keyof SearchBreakdownData,
+  {
+    title: string;
+    description: string;
+  }
+> = {
+  lexical: {
+    title: 'Lexical',
+    description: 'Exact identifiers, literals, paths, and snippet candidates.',
+  },
+  identity: {
+    title: 'Identity',
+    description: 'Names, containers, and symbol identity matches.',
+  },
+  code: {
+    title: 'Code',
+    description: 'Signature and implementation-oriented semantic matches.',
+  },
+  summary: {
+    title: 'Summary',
+    description: 'Conceptual matches from generated summaries.',
+  },
+};
 
 function artefactTitle(artefact: Pick<BitloopsArtefact, 'path' | 'symbolFqn' | 'startLine' | 'endLine'>): string {
   if (artefact.symbolFqn && artefact.symbolFqn.trim().length > 0) {
@@ -195,6 +232,57 @@ function buildStageChips(
   return baseChips;
 }
 
+function formatSearchScoreValue(value: number | undefined): string | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+
+  return value.toFixed(value >= 100 ? 0 : 2);
+}
+
+function formatSearchScoreLabel(artefact: BitloopsArtefact): string | undefined {
+  const total = artefact.searchScore?.total ?? artefact.score;
+  const formatted = formatSearchScoreValue(total);
+  return formatted ? `score ${formatted}` : undefined;
+}
+
+function formatSearchScoreBreakdown(artefact: BitloopsArtefact): string | undefined {
+  const score = artefact.searchScore;
+  if (!score) {
+    return undefined;
+  }
+
+  const parts = [
+    score.exact > 0 ? `exact ${formatSearchScoreValue(score.exact)}` : undefined,
+    score.fullText > 0 ? `text ${formatSearchScoreValue(score.fullText)}` : undefined,
+    score.fuzzy > 0 ? `fuzzy ${formatSearchScoreValue(score.fuzzy)}` : undefined,
+    score.semantic > 0 ? `semantic ${formatSearchScoreValue(score.semantic)}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
+function formatMatchBreakdown(artefact: BitloopsArtefact): string | undefined {
+  const score = artefact.searchScore;
+  if (!score) {
+    return undefined;
+  }
+
+  const parts = [
+    score.literalMatches > 0 ? `literals ${score.literalMatches}` : undefined,
+    score.exactCaseLiteralMatches > 0
+      ? `exact-case ${score.exactCaseLiteralMatches}`
+      : undefined,
+    score.phraseMatches > 0 ? `phrases ${score.phraseMatches}` : undefined,
+    score.exactCasePhraseMatches > 0
+      ? `exact-case phrases ${score.exactCasePhraseMatches}`
+      : undefined,
+    score.bodyLiteralMatches > 0 ? `body ${score.bodyLiteralMatches}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.length > 0 ? parts.join(' · ') : undefined;
+}
+
 export class BitloopsSidebarController {
   private readonly resultLookup = new Map<string, SelectionTarget>();
   private readonly stageRowLookup = new Map<string, SidebarStageRow>();
@@ -204,6 +292,7 @@ export class BitloopsSidebarController {
     loading: false,
     totalCount: 0,
     results: [],
+    searchSections: [],
   };
 
   clear(): void {
@@ -214,6 +303,7 @@ export class BitloopsSidebarController {
       loading: false,
       totalCount: 0,
       results: [],
+      searchSections: [],
     };
   }
 
@@ -237,46 +327,36 @@ export class BitloopsSidebarController {
     workspaceFolderFsPath: string,
     artefacts: BitloopsArtefact[],
     totalCount: number,
+    mode?: SearchMode,
+    breakdown?: SearchBreakdownData,
   ): void {
     this.resultLookup.clear();
     this.state.currentQuery = query;
+    this.state.searchMode = mode;
     this.state.totalCount = totalCount;
-    this.state.results = artefacts.map((artefact, index) => {
-      const id = `result-${index}`;
-      const target: SelectionTarget = {
-        kind: 'artefact',
-        workspaceFolderFsPath,
-        selector:
-          artefact.symbolFqn && artefact.symbolFqn.trim().length > 0
-            ? {
-                path: artefact.path,
-                symbolFqn: artefact.symbolFqn,
-              }
-            : {
-                path: artefact.path,
-                lines: {
-                  start: artefact.startLine,
-                  end: artefact.endLine,
-                },
-              },
-        title: artefactTitle(artefact),
-        subtitle: formatSearchResultDescription(artefact),
-        preview: {
-          artefact,
-          summary: artefact.summary ?? undefined,
-          embeddingRepresentations: artefact.embeddingRepresentations ?? [],
-        },
-      };
+    this.state.results = artefacts.map((artefact, index) =>
+      this.buildSearchResultItem(`result-${index}`, workspaceFolderFsPath, artefact),
+    );
+    this.state.searchSections =
+      mode === 'AUTO' && breakdown
+        ? SEARCH_SECTION_ORDER.map((sectionKey) => {
+            const metadata = SEARCH_SECTION_METADATA[sectionKey];
+            const results = breakdown[sectionKey].map((artefact, index) =>
+              this.buildSearchResultItem(
+                `breakdown-${sectionKey}-${index}`,
+                workspaceFolderFsPath,
+                artefact,
+              ),
+            );
 
-      this.resultLookup.set(id, target);
-      return {
-        id,
-        target,
-        title: target.title,
-        description: target.subtitle ?? artefact.path,
-        summaryPreview: normaliseSummaryText(artefact.summary),
-      };
-    });
+            return {
+              id: `section-${sectionKey}`,
+              title: metadata.title,
+              description: metadata.description,
+              results,
+            };
+          }).filter((section) => section.results.length > 0)
+        : [];
     this.state.selection = undefined;
     this.state.activeStage = undefined;
     this.state.checkpoint = undefined;
@@ -285,6 +365,56 @@ export class BitloopsSidebarController {
         ? `No artefacts found for “${query}”.`
         : undefined;
     this.endLoading();
+  }
+
+  private buildSearchResultItem(
+    id: string,
+    workspaceFolderFsPath: string,
+    artefact: BitloopsArtefact,
+  ): SidebarSearchResultItem {
+    const target = this.buildSearchSelectionTarget(workspaceFolderFsPath, artefact);
+
+    this.resultLookup.set(id, target);
+    return {
+      id,
+      target,
+      title: target.title,
+      description: target.subtitle ?? artefact.path,
+      scoreLabel: formatSearchScoreLabel(artefact),
+      scoreBreakdownLabel: formatSearchScoreBreakdown(artefact),
+      matchBreakdownLabel: formatMatchBreakdown(artefact),
+      summaryPreview: normaliseSummaryText(artefact.summary),
+    };
+  }
+
+  private buildSearchSelectionTarget(
+    workspaceFolderFsPath: string,
+    artefact: BitloopsArtefact,
+  ): SelectionTarget {
+    return {
+      kind: 'artefact',
+      workspaceFolderFsPath,
+      selector:
+        artefact.symbolFqn && artefact.symbolFqn.trim().length > 0
+          ? {
+              path: artefact.path,
+              symbolFqn: artefact.symbolFqn,
+            }
+          : {
+              path: artefact.path,
+              lines: {
+                start: artefact.startLine,
+                end: artefact.endLine,
+              },
+            },
+      title: artefactTitle(artefact),
+      subtitle: formatSearchResultDescription(artefact),
+      preview: {
+        artefact,
+        summary: artefact.summary ?? undefined,
+        embeddingRepresentations: artefact.embeddingRepresentations ?? [],
+      },
+    };
   }
 
   getSearchResultTarget(id: string): SelectionTarget | undefined {
@@ -428,7 +558,9 @@ export class BitloopsSidebarController {
       loading: this.state.loading,
       loadingLabel: this.state.loadingLabel,
       statusMessage: this.state.statusMessage,
+      searchMode: this.state.searchMode,
       results: this.state.results,
+      searchSections: this.state.searchSections,
       totalCount: this.state.totalCount,
       breadcrumbs: buildBreadcrumbs(this.state),
       selection: selectionState,

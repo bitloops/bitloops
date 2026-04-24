@@ -663,3 +663,121 @@ fn tool_projection_ids_remain_distinct_when_tool_use_ids_repeat_across_turns() {
         })
         .expect("query distinct repeated tool projections");
 }
+
+#[test]
+fn tool_projection_ids_preserve_already_scoped_turn_ids() {
+    let (_dir, spool) = test_spool();
+    let session = sample_session();
+    let turn = sample_turn();
+
+    spool.record_session(&session).expect("record session");
+    spool.record_turn(&turn).expect("record turn");
+    spool
+        .record_event(&InteractionEvent {
+            event_id: "event-turn-scoped-tool-start".into(),
+            session_id: session.session_id.clone(),
+            turn_id: Some(turn.turn_id.clone()),
+            repo_id: spool.repo_id().to_string(),
+            event_type: InteractionEventType::ToolInvocationObserved,
+            event_time: "2026-04-05T10:00:01Z".into(),
+            source: "transcript_derivation".into(),
+            sequence_number: 1,
+            agent_type: "opencode".into(),
+            model: "gpt-5.4".into(),
+            tool_use_id: "turn-1:tool:0002".into(),
+            tool_kind: "edit".into(),
+            task_description: "Update src/lib.rs".into(),
+            payload: serde_json::json!({
+                "source": "transcript_derivation",
+                "tool_name": "edit",
+                "input_summary": "Update src/lib.rs",
+                "transcript_path": "/tmp/turn-1.jsonl"
+            }),
+            ..Default::default()
+        })
+        .expect("record turn-scoped tool start");
+
+    spool
+        .with_connection(|conn| {
+            let projection_id: String = conn
+                .query_row(
+                    "SELECT tool_invocation_id
+                     FROM interaction_tool_invocations
+                     WHERE repo_id = ?1 AND tool_use_id = 'turn-1:tool:0002'",
+                    rusqlite::params![spool.repo_id()],
+                    |row| row.get(0),
+                )
+                .expect("turn-scoped projection id");
+            assert_eq!(projection_id, "turn-1:tool:0002");
+
+            Ok(())
+        })
+        .expect("query turn-scoped tool projection");
+}
+
+#[test]
+fn tool_projection_ids_fall_back_to_session_scope_without_double_prefixing() {
+    let (_dir, spool) = test_spool();
+    let session = sample_session();
+
+    spool.record_session(&session).expect("record session");
+
+    for (event_id, event_time, sequence_number, tool_use_id, expected_projection_id) in [
+        (
+            "event-session-tool-start",
+            "2026-04-05T10:00:01Z",
+            1_i64,
+            "call-session",
+            "session-1:call-session",
+        ),
+        (
+            "event-session-scoped-tool-start",
+            "2026-04-05T10:00:02Z",
+            2_i64,
+            "session-1:tool:0002",
+            "session-1:tool:0002",
+        ),
+    ] {
+        spool
+            .record_event(&InteractionEvent {
+                event_id: event_id.into(),
+                session_id: session.session_id.clone(),
+                turn_id: None,
+                repo_id: spool.repo_id().to_string(),
+                event_type: InteractionEventType::ToolInvocationObserved,
+                event_time: event_time.into(),
+                source: "transcript_derivation".into(),
+                sequence_number,
+                agent_type: "opencode".into(),
+                model: "gpt-5.4".into(),
+                tool_use_id: tool_use_id.into(),
+                tool_kind: "read".into(),
+                task_description: "Read src/lib.rs".into(),
+                payload: serde_json::json!({
+                    "source": "transcript_derivation",
+                    "tool_name": "read",
+                    "input_summary": "Read src/lib.rs",
+                    "transcript_path": "/tmp/session.jsonl"
+                }),
+                ..Default::default()
+            })
+            .expect("record session-scoped tool start");
+
+        spool
+            .with_connection(|conn| {
+                let projection_id: String = conn
+                    .query_row(
+                        "SELECT tool_invocation_id
+                         FROM interaction_tool_invocations
+                         WHERE repo_id = ?1 AND tool_use_id = ?2",
+                        rusqlite::params![spool.repo_id(), tool_use_id],
+                        |row| row.get(0),
+                    )
+                    .expect("session-scoped projection id");
+                assert_eq!(projection_id, expected_projection_id);
+
+                Ok(())
+            })
+            .expect("query session-scoped tool projection");
+    }
+}

@@ -39,6 +39,7 @@ type Artefact {
 	blobSha: String!
 	createdAt: DateTime!
 	score: Float
+	searchScore: ArtefactSearchScore
 	parent: Artefact
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	outgoingDependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
@@ -79,6 +80,21 @@ input ArtefactFilterInput {
 	lines: LineRangeInput
 	agent: String
 	since: DateTime
+}
+
+type ArtefactSearchScore {
+	total: Float!
+	exact: Float!
+	fullText: Float!
+	fuzzy: Float!
+	semantic: Float!
+	literalMatches: Int!
+	exactCaseLiteralMatches: Int!
+	phraseMatches: Int!
+	exactCasePhraseMatches: Int!
+	bodyLiteralMatches: Int!
+	signatureLiteralMatches: Int!
+	summaryLiteralMatches: Int!
 }
 
 input AsOfInput {

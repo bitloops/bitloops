@@ -17,15 +17,62 @@ suite('sidebarController', () => {
           canonicalKind: 'FUNCTION',
           summary: 'Builds the main handler response.',
           embeddingRepresentations: ['IDENTITY'],
+          score: 4380,
+          searchScore: {
+            total: 4380,
+            exact: 4094,
+            fullText: 286,
+            fuzzy: 0,
+            semantic: 0,
+            literalMatches: 6,
+            exactCaseLiteralMatches: 6,
+            phraseMatches: 0,
+            exactCasePhraseMatches: 0,
+            bodyLiteralMatches: 6,
+            signatureLiteralMatches: 0,
+            summaryLiteralMatches: 0,
+          },
           startLine: 3,
           endLine: 9,
         },
       ],
       1,
+      'AUTO',
+      {
+        lexical: [
+          {
+            path: 'src/main.ts',
+            symbolFqn: 'src/main.ts::stripBody',
+            canonicalKind: 'FUNCTION',
+            summary: 'Strips the response body.',
+            score: 4380,
+            searchScore: {
+              total: 4380,
+              exact: 4094,
+              fullText: 286,
+              fuzzy: 0,
+              semantic: 0,
+              literalMatches: 6,
+              exactCaseLiteralMatches: 6,
+              phraseMatches: 0,
+              exactCasePhraseMatches: 0,
+              bodyLiteralMatches: 6,
+              signatureLiteralMatches: 0,
+              summaryLiteralMatches: 0,
+            },
+            startLine: 11,
+            endLine: 19,
+          },
+        ],
+        identity: [],
+        code: [],
+        summary: [],
+      },
     );
 
     const target = controller.getSearchResultTarget('result-0');
     assert.ok(target);
+    assert.ok(controller.getSearchResultTarget('breakdown-lexical-0'));
     controller.revealSelection(target!);
     controller.applySelectionDetails(target!, {
       count: 1,
@@ -54,6 +101,19 @@ suite('sidebarController', () => {
     });
 
     const selectionState = controller.viewState();
+    assert.equal(selectionState.searchMode, 'AUTO');
+    assert.equal(selectionState.searchSections.length, 1);
+    assert.equal(selectionState.searchSections[0].title, 'Lexical');
+    assert.equal(selectionState.searchSections[0].results[0].title, 'src/main.ts::stripBody');
+    assert.equal(selectionState.searchSections[0].results[0].scoreLabel, 'score 4380');
+    assert.equal(
+      selectionState.searchSections[0].results[0].scoreBreakdownLabel,
+      'exact 4094 · text 286',
+    );
+    assert.equal(
+      selectionState.searchSections[0].results[0].matchBreakdownLabel,
+      'literals 6 · exact-case 6 · body 6',
+    );
     assert.equal(selectionState.selection?.title, 'src/main.ts::main');
     assert.equal(selectionState.breadcrumbs.length, 2);
     assert.equal(selectionState.selection?.badges[0].available, true);

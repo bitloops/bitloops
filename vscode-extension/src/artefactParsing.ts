@@ -1,4 +1,5 @@
 import {
+  ArtefactSearchScore,
   BitloopsArtefact,
   EmbeddingRepresentationKind,
 } from './types';
@@ -25,6 +26,28 @@ export function normaliseEmbeddingRepresentations(
   return representations;
 }
 
+function normaliseSearchScore(value: unknown): ArtefactSearchScore | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    total: toNumber(record.total),
+    exact: toNumber(record.exact),
+    fullText: toNumber(record.fullText),
+    fuzzy: toNumber(record.fuzzy),
+    semantic: toNumber(record.semantic),
+    literalMatches: toNumber(record.literalMatches),
+    exactCaseLiteralMatches: toNumber(record.exactCaseLiteralMatches),
+    phraseMatches: toNumber(record.phraseMatches),
+    exactCasePhraseMatches: toNumber(record.exactCasePhraseMatches),
+    bodyLiteralMatches: toNumber(record.bodyLiteralMatches),
+    signatureLiteralMatches: toNumber(record.signatureLiteralMatches),
+    summaryLiteralMatches: toNumber(record.summaryLiteralMatches),
+  };
+}
+
 export function normaliseArtefact(value: unknown): BitloopsArtefact | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -46,6 +69,8 @@ export function normaliseArtefact(value: unknown): BitloopsArtefact | undefined 
     embeddingRepresentations: normaliseEmbeddingRepresentations(
       record.embeddingRepresentations,
     ),
+    score: toNumber(record.score),
+    searchScore: normaliseSearchScore(record.searchScore),
     startLine: toNumber(record.startLine),
     endLine: toNumber(record.endLine),
   };

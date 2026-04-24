@@ -18,6 +18,7 @@ pub mod types;
 pub(crate) mod workplane;
 
 mod stage_embeddings;
+mod stage_search_documents;
 mod stage_semantic_features;
 
 #[allow(unused_imports)]
@@ -34,6 +35,16 @@ pub(crate) use stage_embeddings::{
     load_semantic_summary_map, load_symbol_embedding_index_state, persist_active_embedding_setup,
     refresh_current_repo_symbol_embeddings_and_clone_edges, semantic_embeddings_sqlite_schema_sql,
     upsert_current_symbol_embedding_rows, upsert_symbol_embedding_rows,
+};
+#[allow(unused_imports)]
+pub(crate) use stage_search_documents::{
+    SearchDocumentRow, build_current_search_document_persist_sql,
+    build_delete_current_search_documents_fts_sql, build_delete_current_search_documents_sql,
+    build_search_document_from_semantic_rows, build_search_document_persist_sql,
+    clear_current_search_document_rows_for_path, ensure_search_documents_schema,
+    init_postgres_search_documents_schema, init_sqlite_search_documents_schema,
+    persist_current_search_document_row, persist_search_document_row,
+    search_documents_postgres_schema_sql, search_documents_sqlite_schema_sql,
 };
 #[allow(unused_imports)]
 pub(crate) use stage_semantic_features::{

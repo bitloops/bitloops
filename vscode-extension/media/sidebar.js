@@ -4,7 +4,9 @@
   let state = {
     query: '',
     loading: false,
+    searchMode: undefined,
     results: [],
+    searchSections: [],
     totalCount: 0,
     breadcrumbs: [],
   };
@@ -21,6 +23,14 @@
 
   function pluralise(count, singular, plural) {
     return `${count} ${count === 1 ? singular : plural || singular + 's'}`;
+  }
+
+  function formatSearchMode(mode) {
+    if (!mode || typeof mode !== 'string') {
+      return '';
+    }
+
+    return mode.charAt(0) + mode.slice(1).toLowerCase();
   }
 
   function renderBadge(badge) {
@@ -46,41 +56,83 @@
     </button>`;
   }
 
+  function renderResultCard(result) {
+    return `<button class="result-card" data-action="select-result" data-result-id="${escapeHtml(
+      result.id,
+    )}" type="button">
+      <span class="result-card__title">${escapeHtml(result.title)}</span>
+      <span class="result-card__description">${escapeHtml(result.description)}</span>
+      ${
+        result.scoreLabel
+          ? `<span class="result-card__metrics">${escapeHtml(result.scoreLabel)}</span>`
+          : ''
+      }
+      ${
+        result.scoreBreakdownLabel
+          ? `<span class="result-card__metrics result-card__metrics--detail">${escapeHtml(
+              result.scoreBreakdownLabel,
+            )}</span>`
+          : ''
+      }
+      ${
+        result.matchBreakdownLabel
+          ? `<span class="result-card__metrics result-card__metrics--detail">${escapeHtml(
+              result.matchBreakdownLabel,
+            )}</span>`
+          : ''
+      }
+      ${
+        result.summaryPreview
+          ? `<span class="result-card__summary">${escapeHtml(result.summaryPreview)}</span>`
+          : ''
+      }
+    </button>`;
+  }
+
+  function renderSearchSection(section) {
+    return `<section class="panel">
+      <div class="panel__header">
+        <h2>${escapeHtml(section.title)}</h2>
+        <span class="meta">${pluralise(section.results.length, 'result')}</span>
+      </div>
+      ${
+        section.description
+          ? `<p class="panel__copy">${escapeHtml(section.description)}</p>`
+          : ''
+      }
+      <div class="results-list">
+        ${section.results.map(renderResultCard).join('')}
+      </div>
+    </section>`;
+  }
+
   function renderResults() {
     if (!state.results || state.results.length === 0) {
       return `<div class="empty-state">
         <h2>Search Bitloops artefacts</h2>
-        <p>Use the search box to query fuzzy and embedding-backed matches in the active workspace folder.</p>
+        <p>Use the search box to query exact lexical and conceptual matches in the active workspace folder.</p>
       </div>`;
     }
 
-    return `<section class="panel">
-      <div class="panel__header">
-        <h2>Results</h2>
-        <span class="meta">${escapeHtml(
-          state.totalCount > state.results.length
-            ? `Showing ${state.results.length} of ${state.totalCount}`
-            : pluralise(state.totalCount, 'result'),
-        )}</span>
-      </div>
-      <div class="results-list">
-        ${state.results
-          .map(
-            (result) => `<button class="result-card" data-action="select-result" data-result-id="${escapeHtml(
-              result.id,
-            )}" type="button">
-            <span class="result-card__title">${escapeHtml(result.title)}</span>
-            <span class="result-card__description">${escapeHtml(result.description)}</span>
-            ${
-              result.summaryPreview
-                ? `<span class="result-card__summary">${escapeHtml(result.summaryPreview)}</span>`
-                : ''
-            }
-          </button>`,
-          )
-          .join('')}
-      </div>
-    </section>`;
+    const modeLabel = formatSearchMode(state.searchMode);
+    const resultMeta =
+      state.totalCount > state.results.length
+        ? `Showing ${state.results.length} of ${state.totalCount}`
+        : pluralise(state.totalCount, 'result');
+    const headerMeta = modeLabel ? `${resultMeta} · ${modeLabel}` : resultMeta;
+
+    return `<div class="search-results-shell">
+      <section class="panel">
+        <div class="panel__header">
+          <h2>Results</h2>
+          <span class="meta">${escapeHtml(headerMeta)}</span>
+        </div>
+        <div class="results-list">
+          ${state.results.map(renderResultCard).join('')}
+        </div>
+      </section>
+      ${(state.searchSections || []).map(renderSearchSection).join('')}
+    </div>`;
   }
 
   function renderSelection() {

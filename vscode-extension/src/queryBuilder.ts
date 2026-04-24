@@ -1,4 +1,4 @@
-import { ArtefactSelector, StageKind } from './types';
+import { ArtefactSelector, SearchMode, StageKind } from './types';
 
 export interface OverviewBatchAlias {
   alias: string;
@@ -25,6 +25,14 @@ export const DEFAULT_ARTEFACT_FIELD_SUPPORT: ArtefactFieldSupport = {
   summary: true,
   embeddingRepresentations: true,
 };
+
+const SEARCH_BREAKDOWN_FIRST = 3;
+const SNIPPET_TOKEN_PATTERN = /(::|->|=>|==|!=|<=|>=|\$|\(|\)|\[|\]|\{|\}|;)/;
+const PATH_TOKEN_PATTERN = /[\\/]/;
+const FILE_EXTENSION_PATTERN = /\.[A-Za-z0-9_-]{1,8}$/;
+const UNDERSCORE_PATTERN = /_/;
+const CAMEL_CASE_PATTERN = /\b[a-z]+[A-Z][A-Za-z0-9]*\b/;
+const UPPERCASE_TOKEN_PATTERN = /^[A-Z][A-Z0-9_]{1,}$/;
 
 function clampPositiveInteger(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
@@ -69,6 +77,33 @@ function artefactFieldList(fieldSupport: ArtefactFieldSupport): string[] {
   return fields;
 }
 
+function artefactSelection(fieldSupport: ArtefactFieldSupport): string {
+  return `{
+      ${artefactFieldList(fieldSupport).join('\n      ')}
+    }`;
+}
+
+function searchArtefactSelection(fieldSupport: ArtefactFieldSupport): string {
+  return `{
+      ${artefactFieldList(fieldSupport).join('\n      ')}
+      score
+      searchScore {
+        total
+        exact
+        fullText
+        fuzzy
+        semantic
+        literalMatches
+        exactCaseLiteralMatches
+        phraseMatches
+        exactCasePhraseMatches
+        bodyLiteralMatches
+        signatureLiteralMatches
+        summaryLiteralMatches
+      }
+    }`;
+}
+
 function nestedArtefactFields(): string {
   return `{
         path
@@ -97,6 +132,26 @@ function relationKindArgument(filterKey?: string): string {
 
 function optionalArgumentList(argument: string): string {
   return argument.trim().length > 0 ? `(${argument})` : '';
+}
+
+export function inferSearchMode(search: string): SearchMode {
+  const trimmed = search.trim();
+  if (!trimmed) {
+    return 'AUTO';
+  }
+
+  if (
+    SNIPPET_TOKEN_PATTERN.test(trimmed) ||
+    PATH_TOKEN_PATTERN.test(trimmed) ||
+    FILE_EXTENSION_PATTERN.test(trimmed) ||
+    UNDERSCORE_PATTERN.test(trimmed) ||
+    CAMEL_CASE_PATTERN.test(trimmed) ||
+    UPPERCASE_TOKEN_PATTERN.test(trimmed)
+  ) {
+    return 'LEXICAL';
+  }
+
+  return 'AUTO';
 }
 
 export function buildActiveFileQuery(
@@ -271,11 +326,36 @@ export function buildSearchQuery(
   resultLimit: number,
   fieldSupport: ArtefactFieldSupport = DEFAULT_ARTEFACT_FIELD_SUPPORT,
 ): string {
+  const trimmed = search.trim();
+  const mode = inferSearchMode(trimmed);
+  const fields = searchArtefactSelection(fieldSupport);
+
   return `{
-  selectArtefacts(by: { search: ${gqlString(search.trim())} }) {
+  selectArtefacts(by: { search: ${gqlString(trimmed)}, searchMode: ${mode} }) {
     count
+    searchBreakdown(first: ${SEARCH_BREAKDOWN_FIRST}) {
+      lexical ${fields}
+      identity ${fields}
+      code ${fields}
+      summary ${fields}
+    }
     artefacts(first: ${clampPositiveInteger(resultLimit)}) {
       ${artefactFieldList(fieldSupport).join('\n      ')}
+      score
+      searchScore {
+        total
+        exact
+        fullText
+        fuzzy
+        semantic
+        literalMatches
+        exactCaseLiteralMatches
+        phraseMatches
+        exactCasePhraseMatches
+        bodyLiteralMatches
+        signatureLiteralMatches
+        summaryLiteralMatches
+      }
     }
   }
 }`;

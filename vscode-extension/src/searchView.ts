@@ -308,6 +308,8 @@ export class BitloopsSearchView implements vscode.WebviewViewProvider {
         workspaceFolder.uri.fsPath,
         result.artefacts,
         result.count,
+        result.mode,
+        result.breakdown,
       );
       this.postState();
     } catch (error) {

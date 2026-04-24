@@ -39,6 +39,7 @@ type Artefact {
 	blobSha: String!
 	createdAt: DateTime!
 	score: Float
+	searchScore: ArtefactSearchScore
 	parent: Artefact
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	outgoingDependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
@@ -81,11 +82,27 @@ input ArtefactFilterInput {
 	since: DateTime
 }
 
+type ArtefactSearchScore {
+	total: Float!
+	exact: Float!
+	fullText: Float!
+	fuzzy: Float!
+	semantic: Float!
+	literalMatches: Int!
+	exactCaseLiteralMatches: Int!
+	phraseMatches: Int!
+	exactCasePhraseMatches: Int!
+	bodyLiteralMatches: Int!
+	signatureLiteralMatches: Int!
+	summaryLiteralMatches: Int!
+}
+
 type ArtefactSelection {
 	count: Int!
 	overview: JSON!
 	artefacts(first: Int! = 20): [Artefact!]!
 	entries(first: Int! = 20): [DirectoryEntry!]!
+	searchBreakdown(first: Int! = 3): SearchBreakdown
 	checkpoints(agent: String, since: DateTime): CheckpointStageResult!
 	codeMatches(relationKind: String, minScore: Float): CloneStageResult!
 	dependencies(kind: EdgeKind, direction: DependenciesDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
@@ -95,6 +112,7 @@ type ArtefactSelection {
 input ArtefactSelectorInput {
 	symbolFqn: String
 	search: String
+	searchMode: SearchMode
 	path: String
 	lines: LineRangeInput
 }
@@ -886,6 +904,21 @@ type RefreshKnowledgeResult {
 
 enum SaveSelector {
 	CURRENT
+}
+
+type SearchBreakdown {
+	lexical: [Artefact!]!
+	identity: [Artefact!]!
+	code: [Artefact!]!
+	summary: [Artefact!]!
+}
+
+enum SearchMode {
+	AUTO
+	IDENTITY
+	CODE
+	SUMMARY
+	LEXICAL
 }
 
 type SlimQueryRoot {

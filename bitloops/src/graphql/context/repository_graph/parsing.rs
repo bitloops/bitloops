@@ -45,6 +45,7 @@ pub(super) fn artefact_from_value(row: Value) -> Result<Artefact> {
         blob_sha: string_field(&row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(&row, "created_at")?.as_str())?,
         score: None,
+        search_score: None,
         scope: ResolverScope::default(),
     })
 }
