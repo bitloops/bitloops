@@ -15,6 +15,8 @@
 
 #[path = "init_runtime/coordinator.rs"]
 mod coordinator;
+#[path = "init_runtime/embedding_freshness.rs"]
+mod embedding_freshness;
 #[path = "init_runtime/lanes.rs"]
 mod lanes;
 #[path = "init_runtime/orchestration.rs"]

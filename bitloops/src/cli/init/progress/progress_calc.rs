@@ -123,15 +123,6 @@ fn progress_summary(
 ) -> Option<(f64, String)> {
     let counts = lane_progress_counts(lane.progress.as_ref()?)?;
     let ratio = (counts.visible_completed as f64 / counts.total as f64).clamp(0.0, 1.0);
-    let noun = if title == INIT_SUMMARIES_LANE_LABEL {
-        "summaries"
-    } else if title == INIT_CODE_EMBEDDINGS_LANE_LABEL {
-        "code embeddings"
-    } else if title == INIT_SUMMARY_EMBEDDINGS_LANE_LABEL {
-        "summary embeddings"
-    } else {
-        "items"
-    };
 
     if title == INIT_SUMMARIES_LANE_LABEL && counts.in_memory_completed > 0 {
         return Some((
@@ -149,14 +140,31 @@ fn progress_summary(
 
     Some((
         ratio,
-        format!(
-            " {:>3}% {} of {} {} ready · {} left",
-            (ratio * 100.0).round() as usize,
-            counts.completed,
-            counts.total,
-            noun,
-            counts.remaining
-        ),
+        if title == INIT_CODE_EMBEDDINGS_LANE_LABEL {
+            format!(
+                " {:>3}% {} of {} source artefacts indexed · {} left",
+                (ratio * 100.0).round() as usize,
+                counts.completed,
+                counts.total,
+                counts.remaining
+            )
+        } else {
+            let noun = if title == INIT_SUMMARIES_LANE_LABEL {
+                "summaries"
+            } else if title == INIT_SUMMARY_EMBEDDINGS_LANE_LABEL {
+                "summary embeddings"
+            } else {
+                "items"
+            };
+            format!(
+                " {:>3}% {} of {} {} ready · {} left",
+                (ratio * 100.0).round() as usize,
+                counts.completed,
+                counts.total,
+                noun,
+                counts.remaining
+            )
+        },
     ))
 }
 
@@ -173,6 +181,24 @@ pub(crate) fn lane_progress(
     }
     if lane.status.eq_ignore_ascii_case("skipped") {
         return (Some(1.0), " skipped ".to_string());
+    }
+    if lane.status.eq_ignore_ascii_case("waiting")
+        && lane
+            .waiting_reason
+            .as_deref()
+            .is_some_and(is_dependency_waiting_reason)
+    {
+        return (
+            None,
+            format!(
+                " {} ",
+                waiting_reason_label(
+                    lane.waiting_reason
+                        .as_deref()
+                        .unwrap_or(lane.status.as_str()),
+                )
+            ),
+        );
     }
     if let Some((ratio, summary)) = progress_summary(title, lane) {
         return (Some(ratio), summary);
@@ -210,6 +236,17 @@ pub(crate) fn lane_progress(
                     .unwrap_or(lane.status.as_str()),
             )
         ),
+    )
+}
+
+fn is_dependency_waiting_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "waiting_for_sync"
+            | "waiting_for_embeddings_bootstrap"
+            | "waiting_for_summary_bootstrap"
+            | "waiting_for_follow_up_sync"
+            | "waiting_for_summaries"
     )
 }
 
@@ -274,7 +311,12 @@ mod tests {
             activity_label: Some("Preparing the embeddings runtime".to_string()),
             task_id: None,
             run_id: None,
-            progress: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 2193,
+                in_memory_completed: 0,
+                total: 2243,
+                remaining: 50,
+            }),
             queue: RuntimeInitLaneQueueGraphqlRecord {
                 queued: 1,
                 running: 0,
@@ -324,7 +366,10 @@ mod tests {
 
         let ratio = ratio.expect("queue lanes with coverage should be determinate");
         assert!((ratio - (262.0 / 556.0)).abs() < f64::EPSILON);
-        assert_eq!(summary, "  47% 262 of 556 code embeddings ready · 294 left");
+        assert_eq!(
+            summary,
+            "  47% 262 of 556 source artefacts indexed · 294 left"
+        );
     }
 
     #[test]

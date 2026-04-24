@@ -19,6 +19,7 @@ use crate::daemon::{
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 use super::coordinator::InitRuntimeCoordinator;
+use super::embedding_freshness::EmbeddingFreshnessState;
 use super::lanes::{
     derive_code_embeddings_lane, derive_session_status, derive_summaries_lane, derive_sync_lane,
 };
@@ -233,6 +234,22 @@ fn summary_effective_work_item_count_uses_outstanding_repo_backfill_work() {
 }
 
 #[test]
+fn embedding_freshness_requires_identity_for_code_lane_completion() {
+    let freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: ["artefact-1".to_string(), "artefact-2".to_string()]
+            .into_iter()
+            .collect(),
+        fresh_code_artefact_ids: ["artefact-1".to_string(), "artefact-2".to_string()]
+            .into_iter()
+            .collect(),
+        fresh_identity_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
+        fresh_summary_artefact_ids: Default::default(),
+    };
+
+    assert_eq!(freshness.code_lane_completed_count(), 1);
+}
+
+#[test]
 fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
     let conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.execute_batch(
@@ -250,6 +267,7 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
              representation_kind TEXT NOT NULL,
              status TEXT NOT NULL,
              item_kind TEXT NOT NULL,
+             artefact_id TEXT,
              payload_json TEXT
          );",
     )
@@ -270,22 +288,22 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
     .expect("insert other session summary inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'code', 'pending', 'artefact', NULL)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'code', 'pending', 'artefact', 'artefact-1', NULL)",
         ("repo-1", "init-session-1"),
     )
     .expect("insert code embedding inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'identity', 'pending', 'artefact', NULL)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'identity', 'pending', 'artefact', 'artefact-2', NULL)",
         ("repo-1", "init-session-1"),
     )
     .expect("insert identity embedding inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'summary', 'leased', 'artefact', NULL)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'summary', 'leased', 'artefact', 'artefact-3', NULL)",
         ("repo-1", "init-session-1"),
     )
     .expect("insert summary embedding inbox row");
@@ -293,6 +311,18 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
     let freshness = SummaryFreshnessState {
         eligible_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
         fresh_model_backed_artefact_ids: Default::default(),
+    };
+    let embedding_freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: [
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "artefact-3".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        fresh_code_artefact_ids: Default::default(),
+        fresh_identity_artefact_ids: Default::default(),
+        fresh_summary_artefact_ids: Default::default(),
     };
     let mut stats = SessionWorkplaneStats::default();
 
@@ -304,8 +334,14 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
         &freshness,
     )
     .expect("load semantic summary mailbox counts");
-    load_semantic_embedding_session_mailbox_counts(&conn, &mut stats, "repo-1", "init-session-1")
-        .expect("load semantic embedding mailbox counts");
+    load_semantic_embedding_session_mailbox_counts(
+        &conn,
+        &mut stats,
+        "repo-1",
+        "init-session-1",
+        &embedding_freshness,
+    )
+    .expect("load semantic embedding mailbox counts");
     stats.refresh_lane_counts();
 
     assert_eq!(stats.summary_refresh_jobs.counts.pending, 1);
@@ -335,6 +371,7 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
              representation_kind TEXT NOT NULL,
              status TEXT NOT NULL,
              item_kind TEXT NOT NULL,
+             artefact_id TEXT,
              payload_json TEXT
          );",
     )
@@ -352,23 +389,23 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
     .expect("insert failed summary inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'code', 'pending', 'repo_backfill', ?3)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'code', 'pending', 'repo_backfill', NULL, ?3)",
         (
             "repo-1",
             "init-session-1",
-            json!(["embed-1", "embed-2", "embed-3", "embed-4"]).to_string(),
+            json!(["artefact-1", "artefact-2", "artefact-3", "artefact-4"]).to_string(),
         ),
     )
     .expect("insert pending code embedding inbox row");
     conn.execute(
         "INSERT INTO semantic_embedding_mailbox_items (
-             repo_id, init_session_id, representation_kind, status, item_kind, payload_json
-         ) VALUES (?1, ?2, 'summary', 'leased', 'repo_backfill', ?3)",
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'summary', 'leased', 'repo_backfill', NULL, ?3)",
         (
             "repo-1",
             "init-session-1",
-            json!(["summary-1", "summary-2"]).to_string(),
+            json!(["artefact-1", "artefact-2"]).to_string(),
         ),
     )
     .expect("insert running summary embedding inbox row");
@@ -384,6 +421,19 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
         .collect(),
         fresh_model_backed_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
     };
+    let embedding_freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: [
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "artefact-3".to_string(),
+            "artefact-4".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        fresh_code_artefact_ids: Default::default(),
+        fresh_identity_artefact_ids: Default::default(),
+        fresh_summary_artefact_ids: Default::default(),
+    };
     let mut stats = SessionWorkplaneStats::default();
 
     load_semantic_summary_session_mailbox_counts(
@@ -394,8 +444,14 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
         &freshness,
     )
     .expect("load semantic summary mailbox counts");
-    load_semantic_embedding_session_mailbox_counts(&conn, &mut stats, "repo-1", "init-session-1")
-        .expect("load semantic embedding mailbox counts");
+    load_semantic_embedding_session_mailbox_counts(
+        &conn,
+        &mut stats,
+        "repo-1",
+        "init-session-1",
+        &embedding_freshness,
+    )
+    .expect("load semantic embedding mailbox counts");
     stats.refresh_lane_counts();
 
     assert_eq!(stats.summary_refresh_jobs.counts.failed, 2);
@@ -404,6 +460,76 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
     assert_eq!(stats.summary_jobs.failed, 2);
     assert_eq!(stats.embedding_jobs.pending, 4);
     assert_eq!(stats.embedding_jobs.running, 2);
+}
+
+#[test]
+fn semantic_embedding_counts_only_include_unsatisfied_current_work() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute_batch(
+        "CREATE TABLE semantic_embedding_mailbox_items (
+             repo_id TEXT NOT NULL,
+             init_session_id TEXT,
+             representation_kind TEXT NOT NULL,
+             status TEXT NOT NULL,
+             item_kind TEXT NOT NULL,
+             artefact_id TEXT,
+             payload_json TEXT
+         );",
+    )
+    .expect("create semantic embedding inbox table");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'code', 'pending', 'artefact', 'artefact-1', NULL)",
+        ("repo-1", "init-session-1"),
+    )
+    .expect("insert code artefact row");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'identity', 'pending', 'artefact', 'artefact-2', NULL)",
+        ("repo-1", "init-session-1"),
+    )
+    .expect("insert identity artefact row");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, ?2, 'summary', 'failed', 'repo_backfill', NULL, ?3)",
+        (
+            "repo-1",
+            "init-session-1",
+            json!(["artefact-3", "artefact-4"]).to_string(),
+        ),
+    )
+    .expect("insert summary repo backfill row");
+
+    let mut stats = SessionWorkplaneStats::default();
+    let embedding_freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: [
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "artefact-3".to_string(),
+            "artefact-4".to_string(),
+        ]
+        .into_iter()
+        .collect(),
+        fresh_code_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
+        fresh_identity_artefact_ids: Default::default(),
+        fresh_summary_artefact_ids: ["artefact-3".to_string()].into_iter().collect(),
+    };
+
+    load_semantic_embedding_session_mailbox_counts(
+        &conn,
+        &mut stats,
+        "repo-1",
+        "init-session-1",
+        &embedding_freshness,
+    )
+    .expect("load semantic embedding mailbox counts");
+    stats.refresh_lane_counts();
+
+    assert_eq!(stats.code_embedding_jobs.counts.pending, 1);
+    assert_eq!(stats.summary_embedding_jobs.counts.failed, 1);
 }
 
 #[test]

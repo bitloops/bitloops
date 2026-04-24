@@ -9,27 +9,24 @@ use crate::config::resolve_semantic_clones_config_for_repo;
 use crate::daemon::types::InitSessionRecord;
 use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 
+use super::embedding_freshness::load_embedding_freshness_state;
 use super::stats::{RuntimeLaneProgressState, SessionWorkplaneStats, SummaryFreshnessState};
 use super::types::InitRuntimeLaneProgressView;
 
-const CURRENT_CODE_EMBEDDINGS_TABLE: &str = "symbol_embeddings_current";
 const CURRENT_SUMMARY_SEMANTICS_TABLE: &str = "symbol_semantics_current";
 
 pub(crate) fn load_runtime_lane_progress(
     repo_root: &Path,
     repo_id: &str,
     session: &InitSessionRecord,
-    stats: &SessionWorkplaneStats,
+    _stats: &SessionWorkplaneStats,
     summary_in_memory_completed: u64,
 ) -> Result<RuntimeLaneProgressState> {
     let relational =
         DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
-    let total_eligible = count_eligible_current_artefacts(&relational, repo_id)?;
+    let embedding_freshness = load_embedding_freshness_state(&relational, repo_id)?;
+    let total_eligible = embedding_freshness.eligible_artefact_ids.len() as u64;
     let summaries_completed = count_current_model_backed_summary_artefacts(&relational, repo_id)?;
-    let code_embeddings_completed =
-        count_current_embedding_artefacts(&relational, repo_id, "code")?;
-    let summary_embeddings_completed =
-        count_current_embedding_artefacts(&relational, repo_id, "summary")?;
     let semantic_clones = resolve_semantic_clones_config_for_repo(repo_root);
 
     let code_embeddings_enabled =
@@ -44,23 +41,18 @@ pub(crate) fn load_runtime_lane_progress(
     let summary_embeddings_total =
         u64::from(session.selections.run_summary_embeddings && summary_embeddings_enabled)
             * total_eligible;
-    let code_embeddings_completed = lane_completed_count(
-        code_embeddings_total,
-        code_embeddings_completed,
-        stats.code_embedding_jobs.counts,
-    );
+    let code_embeddings_completed = embedding_freshness
+        .code_lane_completed_count()
+        .min(code_embeddings_total);
     let summaries_total = if session.selections.run_summaries {
         total_eligible
     } else {
         0
     };
     let summaries_completed = summaries_completed.min(summaries_total);
-    let summary_embeddings_completed = summary_embeddings_completed_count(
-        summary_embeddings_total,
-        summary_embeddings_completed,
-        summaries_completed,
-        stats.summary_embedding_jobs.counts,
-    );
+    let summary_embeddings_completed = embedding_freshness
+        .summary_embeddings_completed_count()
+        .min(summary_embeddings_total);
     let summary_in_memory_completed =
         summary_in_memory_completed.min(summaries_total.saturating_sub(summaries_completed));
 
@@ -89,69 +81,6 @@ pub(crate) fn load_runtime_lane_progress(
                 remaining: summary_embeddings_total.saturating_sub(summary_embeddings_completed),
             }),
     })
-}
-
-fn lane_completed_count(
-    total: u64,
-    completed_current: u64,
-    counts: super::stats::StatusCounts,
-) -> u64 {
-    total
-        .saturating_sub(counts.pending + counts.running + counts.failed)
-        .max(completed_current.min(total))
-}
-
-fn summary_embeddings_completed_count(
-    total: u64,
-    completed_current: u64,
-    summaries_completed: u64,
-    counts: super::stats::StatusCounts,
-) -> u64 {
-    summaries_completed
-        .saturating_sub(counts.pending + counts.running + counts.failed)
-        .max(completed_current.min(total))
-        .min(total)
-        .min(summaries_completed)
-}
-
-fn count_eligible_current_artefacts(
-    relational: &DefaultRelationalStore,
-    repo_id: &str,
-) -> Result<u64> {
-    query_progress_count(
-        relational,
-        &format!(
-            "SELECT COUNT(DISTINCT a.artefact_id) AS total \
-             FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             WHERE a.repo_id = '{}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import'",
-            escape_sql_string(repo_id),
-        ),
-    )
-}
-
-fn count_current_embedding_artefacts(
-    relational: &DefaultRelationalStore,
-    repo_id: &str,
-    representation_kind: &str,
-) -> Result<u64> {
-    query_progress_count(
-        relational,
-        &format!(
-            "SELECT COUNT(DISTINCT a.artefact_id) AS total \
-             FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             JOIN {CURRENT_CODE_EMBEDDINGS_TABLE} e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id \
-             WHERE a.repo_id = '{}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
-               AND LOWER(COALESCE(e.representation_kind, 'code')) = '{}'",
-            escape_sql_string(repo_id),
-            escape_sql_string(representation_kind),
-        ),
-    )
 }
 
 fn count_current_model_backed_summary_artefacts(

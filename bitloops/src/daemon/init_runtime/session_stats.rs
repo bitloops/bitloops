@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 use rusqlite::{OptionalExtension, params};
 
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
@@ -15,6 +16,9 @@ use crate::capability_packs::semantic_clones::workplane::{
 use crate::host::relational_store::DefaultRelationalStore;
 use crate::host::runtime_store::{RepoSqliteRuntimeStore, SemanticMailboxItemKind};
 
+use super::embedding_freshness::{
+    EmbeddingFreshnessState, load_embedding_freshness_state, parse_embedding_representation_kind,
+};
 use super::progress::load_summary_freshness_state;
 use super::stats::{
     SessionWorkplaneStats, StatusCounts, SummaryFreshnessState, mailbox_stats_mut,
@@ -37,6 +41,14 @@ pub(crate) fn load_session_workplane_stats(
                 repo_root.display()
             );
             SummaryFreshnessState::default()
+        });
+    let embedding_freshness = load_embedding_freshness_state_for_repo(repo_root, repo_id)
+        .unwrap_or_else(|err| {
+            log::debug!(
+                "failed to load embedding freshness state for repo `{repo_id}` at `{}`: {err:#}",
+                repo_root.display()
+            );
+            EmbeddingFreshnessState::default()
         });
     sqlite.with_connection(|conn| {
         let mut stats = SessionWorkplaneStats::default();
@@ -106,6 +118,7 @@ pub(crate) fn load_session_workplane_stats(
                 status.as_str(),
                 &payload,
                 &summary_freshness,
+                &embedding_freshness,
             );
             match status.as_str() {
                 "pending" => target.counts.pending += count,
@@ -122,7 +135,13 @@ pub(crate) fn load_session_workplane_stats(
             init_session_id,
             &summary_freshness,
         )?;
-        load_semantic_embedding_session_mailbox_counts(conn, &mut stats, repo_id, init_session_id)?;
+        load_semantic_embedding_session_mailbox_counts(
+            conn,
+            &mut stats,
+            repo_id,
+            init_session_id,
+            &embedding_freshness,
+        )?;
         stats.refresh_lane_counts();
         stats.summary_refresh_jobs.latest_error = latest_mailbox_error(
             conn,
@@ -130,11 +149,14 @@ pub(crate) fn load_session_workplane_stats(
             init_session_id,
             SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
         )?;
-        stats.code_embedding_jobs.latest_error = latest_mailbox_error(
+        stats.code_embedding_jobs.latest_error = latest_mailbox_error_group(
             conn,
             repo_id,
             init_session_id,
-            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            &[
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+            ],
         )?;
         stats.summary_embedding_jobs.latest_error = latest_mailbox_error(
             conn,
@@ -186,32 +208,74 @@ fn latest_mailbox_error(
     init_session_id: &str,
     mailbox_name: &str,
 ) -> rusqlite::Result<Option<String>> {
-    let legacy = conn
-        .query_row(
-            "SELECT last_error, updated_at_unix
-             FROM capability_workplane_jobs
-             WHERE repo_id = ?1
-               AND init_session_id = ?2
-               AND status = 'failed'
-               AND mailbox_name = ?3
-             ORDER BY updated_at_unix DESC
-             LIMIT 1",
-            params![repo_id, init_session_id, mailbox_name],
-            |row| Ok((row.get::<_, i64>(1)?, row.get::<_, Option<String>>(0)?)),
-        )
-        .optional()?;
+    Ok(
+        latest_mailbox_error_entry(conn, repo_id, init_session_id, mailbox_name)?
+            .and_then(|(_, error)| error),
+    )
+}
+
+fn latest_mailbox_error_group(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    init_session_id: &str,
+    mailbox_names: &[&str],
+) -> rusqlite::Result<Option<String>> {
+    let mut latest = None;
+    for mailbox_name in mailbox_names {
+        if let Some(candidate) =
+            latest_mailbox_error_entry(conn, repo_id, init_session_id, mailbox_name)?
+        {
+            let replace = latest
+                .as_ref()
+                .is_none_or(|(updated_at, _)| candidate.0 >= *updated_at);
+            if replace {
+                latest = Some(candidate);
+            }
+        }
+    }
+    Ok(latest.and_then(|(_, error)| error))
+}
+
+fn latest_mailbox_error_entry(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    init_session_id: &str,
+    mailbox_name: &str,
+) -> rusqlite::Result<Option<(i64, Option<String>)>> {
+    let legacy = latest_legacy_mailbox_error(conn, repo_id, init_session_id, mailbox_name)?;
     let semantic = latest_semantic_mailbox_error(conn, repo_id, init_session_id, mailbox_name)?;
     Ok(match (legacy, semantic) {
         (Some((legacy_updated_at, legacy_error)), Some((semantic_updated_at, semantic_error))) => {
-            if semantic_updated_at >= legacy_updated_at {
-                semantic_error
+            Some(if semantic_updated_at >= legacy_updated_at {
+                (semantic_updated_at, semantic_error)
             } else {
-                legacy_error
-            }
+                (legacy_updated_at, legacy_error)
+            })
         }
-        (Some((_, error)), None) | (None, Some((_, error))) => error,
+        (Some(entry), None) | (None, Some(entry)) => Some(entry),
         (None, None) => None,
     })
+}
+
+fn latest_legacy_mailbox_error(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    init_session_id: &str,
+    mailbox_name: &str,
+) -> rusqlite::Result<Option<(i64, Option<String>)>> {
+    conn.query_row(
+        "SELECT last_error, updated_at_unix
+         FROM capability_workplane_jobs
+         WHERE repo_id = ?1
+           AND init_session_id = ?2
+           AND status = 'failed'
+           AND mailbox_name = ?3
+         ORDER BY updated_at_unix DESC
+         LIMIT 1",
+        params![repo_id, init_session_id, mailbox_name],
+        |row| Ok((row.get::<_, i64>(1)?, row.get::<_, Option<String>>(0)?)),
+    )
+    .optional()
 }
 
 fn latest_semantic_mailbox_error(
@@ -303,9 +367,10 @@ pub(crate) fn load_semantic_embedding_session_mailbox_counts(
     stats: &mut SessionWorkplaneStats,
     repo_id: &str,
     init_session_id: &str,
+    embedding_freshness: &EmbeddingFreshnessState,
 ) -> rusqlite::Result<()> {
     let mut stmt = conn.prepare(
-        "SELECT representation_kind, status, item_kind, payload_json
+        "SELECT representation_kind, status, item_kind, artefact_id, payload_json
          FROM semantic_embedding_mailbox_items
          WHERE repo_id = ?1 AND init_session_id = ?2",
     )?;
@@ -315,14 +380,21 @@ pub(crate) fn load_semantic_embedding_session_mailbox_counts(
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
         ))
     })?;
     for row in rows {
-        let (representation_kind, status, item_kind, payload_json) = row?;
+        let (representation_kind, status, item_kind, artefact_id, payload_json) = row?;
         let mailbox_name =
             semantic_embedding_mailbox_name_for_representation(representation_kind.as_str());
-        let count =
-            semantic_mailbox_item_work_item_count(item_kind.as_str(), payload_json.as_deref());
+        let count = effective_session_embedding_mailbox_item_count(
+            representation_kind.as_str(),
+            status.as_str(),
+            item_kind.as_str(),
+            artefact_id.as_deref(),
+            payload_json.as_deref(),
+            embedding_freshness,
+        );
         let target = mailbox_stats_mut(stats, mailbox_name);
         record_session_mailbox_count(&mut target.counts, status.as_str(), count);
     }
@@ -364,6 +436,46 @@ fn effective_session_summary_mailbox_item_count(
     }
 }
 
+fn effective_session_embedding_mailbox_item_count(
+    representation_kind: &str,
+    status: &str,
+    item_kind: &str,
+    artefact_id: Option<&str>,
+    payload_json: Option<&str>,
+    embedding_freshness: &EmbeddingFreshnessState,
+) -> u64 {
+    if !matches!(status, "pending" | "leased" | "failed") {
+        return semantic_mailbox_item_work_item_count(item_kind, payload_json);
+    }
+    let Some(representation_kind) = parse_embedding_representation_kind(representation_kind) else {
+        return semantic_mailbox_item_work_item_count(item_kind, payload_json);
+    };
+
+    match SemanticMailboxItemKind::parse(item_kind) {
+        SemanticMailboxItemKind::RepoBackfill => {
+            semantic_mailbox_payload_artefact_ids(payload_json)
+                .map(|artefact_ids| {
+                    embedding_freshness.outstanding_work_item_count_for_artefacts(
+                        representation_kind,
+                        &artefact_ids,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    embedding_freshness.outstanding_work_item_count(representation_kind)
+                })
+        }
+        SemanticMailboxItemKind::Artefact => semantic_mailbox_payload_artefact_id(payload_json)
+            .or(artefact_id.map(str::to_string))
+            .map(|artefact_id| {
+                u64::from(
+                    embedding_freshness
+                        .artefact_needs_representation_refresh(representation_kind, &artefact_id),
+                )
+            })
+            .unwrap_or(1),
+    }
+}
+
 fn semantic_mailbox_item_work_item_count(item_kind: &str, payload_json: Option<&str>) -> u64 {
     match SemanticMailboxItemKind::parse(item_kind) {
         SemanticMailboxItemKind::RepoBackfill => {
@@ -391,6 +503,11 @@ fn semantic_mailbox_payload_artefact_ids(payload_json: Option<&str>) -> Option<V
     payload_repo_backfill_artefact_ids(&payload)
 }
 
+fn semantic_mailbox_payload_artefact_id(payload_json: Option<&str>) -> Option<String> {
+    let payload = parse_semantic_mailbox_payload_json(payload_json)?;
+    payload_artefact_id(&payload)
+}
+
 fn load_summary_freshness_state_for_repo(
     repo_root: &Path,
     repo_id: &str,
@@ -400,19 +517,56 @@ fn load_summary_freshness_state_for_repo(
     load_summary_freshness_state(&relational, repo_id)
 }
 
+fn load_embedding_freshness_state_for_repo(
+    repo_root: &Path,
+    repo_id: &str,
+) -> Result<EmbeddingFreshnessState> {
+    let relational =
+        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
+    load_embedding_freshness_state(&relational, repo_id)
+}
+
 fn effective_session_work_item_count(
     mailbox_name: &str,
     status: &str,
     payload: &serde_json::Value,
     summary_freshness: &SummaryFreshnessState,
+    embedding_freshness: &EmbeddingFreshnessState,
 ) -> u64 {
-    if mailbox_name != SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX {
-        return payload_work_item_count(payload, mailbox_name);
-    }
-    match status {
-        "pending" | "running" | "failed" => {
-            summary_effective_work_item_count(payload, summary_freshness)
-        }
+    match mailbox_name {
+        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => match status {
+            "pending" | "running" | "failed" => {
+                summary_effective_work_item_count(payload, summary_freshness)
+            }
+            _ => payload_work_item_count(payload, mailbox_name),
+        },
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => match status {
+            "pending" | "running" | "failed" => embedding_effective_work_item_count(
+                payload,
+                EmbeddingRepresentationKind::Code,
+                embedding_freshness,
+                mailbox_name,
+            ),
+            _ => payload_work_item_count(payload, mailbox_name),
+        },
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => match status {
+            "pending" | "running" | "failed" => embedding_effective_work_item_count(
+                payload,
+                EmbeddingRepresentationKind::Identity,
+                embedding_freshness,
+                mailbox_name,
+            ),
+            _ => payload_work_item_count(payload, mailbox_name),
+        },
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => match status {
+            "pending" | "running" | "failed" => embedding_effective_work_item_count(
+                payload,
+                EmbeddingRepresentationKind::Summary,
+                embedding_freshness,
+                mailbox_name,
+            ),
+            _ => payload_work_item_count(payload, mailbox_name),
+        },
         _ => payload_work_item_count(payload, mailbox_name),
     }
 }
@@ -433,4 +587,30 @@ pub(crate) fn summary_effective_work_item_count(
         .unwrap_or_else(|| {
             payload_work_item_count(payload, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
         })
+}
+
+fn embedding_effective_work_item_count(
+    payload: &serde_json::Value,
+    representation_kind: EmbeddingRepresentationKind,
+    embedding_freshness: &EmbeddingFreshnessState,
+    mailbox_name: &str,
+) -> u64 {
+    if payload_is_repo_backfill(payload) {
+        return payload_repo_backfill_artefact_ids(payload)
+            .map(|artefact_ids| {
+                embedding_freshness
+                    .outstanding_work_item_count_for_artefacts(representation_kind, &artefact_ids)
+            })
+            .unwrap_or_else(|| {
+                embedding_freshness.outstanding_work_item_count(representation_kind)
+            });
+    }
+    payload_artefact_id(payload)
+        .map(|artefact_id| {
+            u64::from(
+                embedding_freshness
+                    .artefact_needs_representation_refresh(representation_kind, &artefact_id),
+            )
+        })
+        .unwrap_or_else(|| payload_work_item_count(payload, mailbox_name))
 }
