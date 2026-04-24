@@ -628,6 +628,35 @@ fn compile_slim_select_artefacts_search_selector() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_search_selector_with_search_mode() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(search:"Method::HEAD",search_mode:"lexical")->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let selector = parsed
+        .select_artefacts
+        .as_ref()
+        .expect("selection should be present");
+    assert_eq!(selector.search.as_deref(), Some("Method::HEAD"));
+    assert_eq!(selector.search_mode.as_deref(), Some("lexical"));
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { search: "Method::HEAD", searchMode: LEXICAL }) {
+    checkpoints {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_rejects_search_mixed_with_lines() {
     let parsed =
         parse_devql_query(r#"selectArtefacts(search:"payLater()",lines:20..25)->checkpoints()"#)
@@ -639,6 +668,23 @@ fn compile_slim_select_artefacts_rejects_search_mixed_with_lines() {
     assert!(
         err.to_string()
             .contains("allows exactly one of symbol_fqn:, search:, or path:/lines:"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_rejects_search_mode_without_search() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/main.rs",search_mode:"identity")->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("search mode without search should fail");
+
+    assert!(
+        err.to_string()
+            .contains("only allows search_mode: when search: is provided"),
         "unexpected error: {err:#}"
     );
 }

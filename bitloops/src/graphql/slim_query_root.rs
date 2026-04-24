@@ -1,11 +1,9 @@
 use async_graphql::{Context, Object, Result};
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::collections::HashSet;
 
-use crate::graphql::fuzzy_artefact_name::select_fuzzy_named_artefacts;
 use crate::graphql::pack_adapter::StageResolverAdapter;
-use crate::graphql::semantic_artefact_query::select_semantic_artefacts;
+use crate::graphql::search_artefact_query::select_search_artefacts;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_user_input_error};
 
 use super::types::artefact_selection::ArtefactSelectorMode;
@@ -25,30 +23,6 @@ use super::types::{
 
 #[derive(Default)]
 pub struct SlimQueryRoot;
-
-async fn select_search_artefacts(
-    context: &DevqlGraphqlContext,
-    scope: &crate::graphql::ResolverScope,
-    search: &str,
-) -> Result<Vec<Artefact>> {
-    let fuzzy_candidates = context
-        .list_artefacts(None, None, scope)
-        .await
-        .map_err(|err| {
-            backend_error(format!(
-                "failed to resolve selected artefacts by search: {err:#}"
-            ))
-        })?;
-    let fuzzy_hits = select_fuzzy_named_artefacts(search, fuzzy_candidates);
-    let embedding_hits = select_semantic_artefacts(context, scope, search).await?;
-
-    let mut seen_artefact_ids = HashSet::new();
-    Ok(fuzzy_hits
-        .into_iter()
-        .chain(embedding_hits)
-        .filter(|artefact| seen_artefact_ids.insert(artefact.id.to_string()))
-        .collect())
-}
 
 #[Object]
 impl SlimQueryRoot {
@@ -592,9 +566,9 @@ impl SlimQueryRoot {
                     })?;
                 ArtefactSelection::new(artefacts, Vec::new(), scope)
             }
-            ArtefactSelectorMode::Search(search) => {
-                let artefacts = select_search_artefacts(context, &scope, search).await?;
-                ArtefactSelection::new(artefacts, Vec::new(), scope)
+            ArtefactSelectorMode::Search { query, mode } => {
+                let bundle = select_search_artefacts(context, &scope, query, *mode).await?;
+                ArtefactSelection::new_search(bundle.unified, bundle.breakdown, scope)
             }
             ArtefactSelectorMode::Path { path, lines } => {
                 let normalized = context

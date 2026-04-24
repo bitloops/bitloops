@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use crate::graphql::ResolverScope;
 use crate::graphql::types::{
-    Artefact, CanonicalKind, DateTimeScalar, DependencyEdge, EdgeKind, FileContext,
+    Artefact, CanonicalKind, DateTimeScalar, DependencyEdge, EdgeKind, EmbeddingRepresentationKind,
+    FileContext,
 };
 
 pub(super) fn file_context_from_value(row: Value) -> Result<FileContext> {
@@ -35,10 +36,16 @@ pub(super) fn artefact_from_value(row: Value) -> Result<Artefact> {
         signature: optional_string_field(&row, "signature"),
         modifiers: parse_string_array_field(&row, "modifiers"),
         docstring: optional_string_field(&row, "docstring"),
+        summary: optional_string_field(&row, "summary"),
+        embedding_representations: parse_embedding_representation_field(
+            &row,
+            "embedding_representations",
+        ),
         content_hash: optional_string_field(&row, "content_hash"),
         blob_sha: string_field(&row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(&row, "created_at")?.as_str())?,
         score: None,
+        search_score: None,
         scope: ResolverScope::default(),
     })
 }
@@ -155,6 +162,35 @@ fn parse_canonical_kind(value: &str) -> Option<CanonicalKind> {
     }
 }
 
+fn parse_embedding_representation_field(
+    row: &Value,
+    key: &str,
+) -> Vec<EmbeddingRepresentationKind> {
+    let mut parsed = Vec::new();
+
+    for value in parse_string_array_field(row, key) {
+        let mapped = match value.trim().to_ascii_lowercase().as_str() {
+            "identity" | "locator" => Some(EmbeddingRepresentationKind::Identity),
+            "code" | "baseline" | "enriched" => Some(EmbeddingRepresentationKind::Code),
+            "summary" => Some(EmbeddingRepresentationKind::Summary),
+            _ => None,
+        };
+
+        if let Some(kind) = mapped
+            && !parsed.contains(&kind)
+        {
+            parsed.push(kind);
+        }
+    }
+
+    parsed.sort_by_key(|kind| match kind {
+        EmbeddingRepresentationKind::Identity => 0,
+        EmbeddingRepresentationKind::Code => 1,
+        EmbeddingRepresentationKind::Summary => 2,
+    });
+    parsed
+}
+
 fn parse_edge_kind(value: &str) -> Result<EdgeKind> {
     match value.trim().to_ascii_lowercase().as_str() {
         "imports" => Ok(EdgeKind::Imports),
@@ -189,6 +225,8 @@ mod tests {
             "signature": Value::Null,
             "modifiers": "[]",
             "docstring": Value::Null,
+            "summary": Value::Null,
+            "embedding_representations": [],
             "content_hash": Value::Null,
             "blob_sha": "blob-one",
             "created_at": "2026-03-26T09:00:00Z"
@@ -207,5 +245,35 @@ mod tests {
             artefact_from_value(artefact_row(Value::String("class_declaration".to_string())))
                 .expect("parse artefact");
         assert_eq!(artefact.canonical_kind, None);
+    }
+
+    #[test]
+    fn artefact_from_value_reads_semantic_summary() {
+        let mut row = artefact_row(Value::String("function".to_string()));
+        row["summary"] = Value::String("Normalises the HTTP response payload.".to_string());
+
+        let artefact = artefact_from_value(row).expect("parse artefact");
+
+        assert_eq!(
+            artefact.summary.as_deref(),
+            Some("Normalises the HTTP response payload.")
+        );
+    }
+
+    #[test]
+    fn artefact_from_value_reads_embedding_representations() {
+        let mut row = artefact_row(Value::String("function".to_string()));
+        row["embedding_representations"] = json!(["identity", "baseline", "summary", "identity"]);
+
+        let artefact = artefact_from_value(row).expect("parse artefact");
+
+        assert_eq!(
+            artefact.embedding_representations,
+            vec![
+                EmbeddingRepresentationKind::Identity,
+                EmbeddingRepresentationKind::Code,
+                EmbeddingRepresentationKind::Summary
+            ]
+        );
     }
 }

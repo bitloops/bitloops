@@ -276,3 +276,11 @@ fn TestAllProtectedDirs() {
         );
     }
 }
+
+#[test]
+fn builtin_registry_is_cached() {
+    let first = AgentRegistry::builtin();
+    let second = AgentRegistry::builtin();
+
+    assert!(std::ptr::eq(first, second));
+}

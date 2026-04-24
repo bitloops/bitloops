@@ -89,6 +89,9 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     crate::capability_packs::semantic_clones::init_sqlite_semantic_features_schema(sqlite_path)
         .await
         .context("creating SQLite semantic feature tables")?;
+    crate::capability_packs::semantic_clones::init_sqlite_search_documents_schema(sqlite_path)
+        .await
+        .context("creating SQLite search document tables")?;
     crate::capability_packs::semantic_clones::init_sqlite_semantic_embeddings_schema(sqlite_path)
         .await
         .context("creating SQLite semantic embedding tables")?;
@@ -529,6 +532,9 @@ async fn init_postgres_schema_with_policy(
     crate::capability_packs::semantic_clones::init_postgres_semantic_features_schema(pg_client)
         .await
         .context("creating Postgres semantic feature tables")?;
+    crate::capability_packs::semantic_clones::init_postgres_search_documents_schema(pg_client)
+        .await
+        .context("creating Postgres search document tables")?;
     crate::capability_packs::semantic_clones::init_postgres_semantic_embeddings_schema(pg_client)
         .await
         .context("creating Postgres semantic embedding tables")?;

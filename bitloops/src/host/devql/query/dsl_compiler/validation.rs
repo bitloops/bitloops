@@ -429,6 +429,11 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let search_mode = selector
+        .search_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     let path_selector_requested = path.is_some() || selector.lines.is_some();
     let selector_count = usize::from(symbol_fqn.is_some())
@@ -442,6 +447,24 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
     }
     if path_selector_requested && path.is_none() {
         bail!("selectArtefacts(...) requires path: when lines: is provided");
+    }
+    if selector
+        .search_mode
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        bail!("selectArtefacts(...) requires search_mode: to be non-empty");
+    }
+    if search_mode.is_some() && search.is_none() {
+        bail!("selectArtefacts(...) only allows search_mode: when search: is provided");
+    }
+    if let Some(search_mode) = search_mode {
+        match search_mode.to_ascii_lowercase().as_str() {
+            "auto" | "identity" | "code" | "summary" | "lexical" => {}
+            _ => bail!(
+                "selectArtefacts(search_mode:...) must be one of: auto, identity, code, summary, lexical"
+            ),
+        }
     }
 
     Ok(())

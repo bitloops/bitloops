@@ -180,6 +180,10 @@ pub trait Agent: Send + Sync {
     fn format_resume_command(&self, _session_id: &str) -> String {
         String::new()
     }
+
+    fn as_transcript_tool_event_deriver(&self) -> Option<&dyn TranscriptToolEventDeriver> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +260,15 @@ pub trait TranscriptAnalyzer: Agent {
 
     /// Extracts the last assistant message as a session summary.
     fn extract_summary(&self, session_ref: &str) -> Result<String>;
+}
+
+/// Provides transcript-derived tool observations for interaction capture.
+pub trait TranscriptToolEventDeriver: Agent {
+    fn derive_transcript_tool_event_observations(
+        &self,
+        turn_id: &str,
+        transcript_fragment: &str,
+    ) -> Result<Vec<crate::host::interactions::tool_events::TranscriptToolEventObservation>>;
 }
 
 /// Provides token usage calculation for a session.

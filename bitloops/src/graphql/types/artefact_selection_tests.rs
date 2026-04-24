@@ -8,7 +8,9 @@ use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineR
 use super::support::{
     build_clone_expand_hint, build_dependency_expand_hint, build_dependency_summary,
 };
-use super::{ArtefactSelectorInput, ArtefactSelectorMode, CloneExpandHint, DependencyExpandHint};
+use super::{
+    ArtefactSelectorInput, ArtefactSelectorMode, CloneExpandHint, DependencyExpandHint, SearchMode,
+};
 
 fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> DependencyEdge {
     DependencyEdge {
@@ -30,6 +32,7 @@ fn artefact_selector_accepts_symbol_fqn_or_path_modes() {
     let symbol = ArtefactSelectorInput {
         symbol_fqn: Some("src/main.rs::main".to_string()),
         search: None,
+        search_mode: None,
         path: None,
         lines: None,
     };
@@ -41,6 +44,7 @@ fn artefact_selector_accepts_symbol_fqn_or_path_modes() {
     let path = ArtefactSelectorInput {
         symbol_fqn: None,
         search: None,
+        search_mode: None,
         path: Some("src/main.rs".to_string()),
         lines: Some(LineRangeInput { start: 20, end: 25 }),
     };
@@ -58,13 +62,17 @@ fn artefact_selector_accepts_search_mode() {
     let search = ArtefactSelectorInput {
         symbol_fqn: None,
         search: Some("payLater()".to_string()),
+        search_mode: Some(SearchMode::Lexical),
         path: None,
         lines: None,
     };
 
     assert_eq!(
         search.selection_mode().expect("search selector"),
-        ArtefactSelectorMode::Search("payLater()".to_string())
+        ArtefactSelectorMode::Search {
+            query: "payLater()".to_string(),
+            mode: SearchMode::Lexical,
+        }
     );
 }
 
@@ -73,6 +81,7 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: Some("src/main.rs::main".to_string()),
         search: None,
+        search_mode: None,
         path: Some("src/main.rs".to_string()),
         lines: None,
     }
@@ -86,6 +95,7 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: None,
         search: None,
+        search_mode: None,
         path: None,
         lines: Some(LineRangeInput { start: 20, end: 25 }),
     }
@@ -99,6 +109,7 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: None,
         search: Some("  ".to_string()),
+        search_mode: None,
         path: None,
         lines: None,
     }
@@ -109,6 +120,7 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: None,
         search: Some("payLater".to_string()),
+        search_mode: None,
         path: Some("src/main.rs".to_string()),
         lines: None,
     }
@@ -122,6 +134,7 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: None,
         search: Some("payLater".to_string()),
+        search_mode: None,
         path: None,
         lines: Some(LineRangeInput { start: 20, end: 25 }),
     }
@@ -135,6 +148,7 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: Some("src/main.rs::main".to_string()),
         search: None,
+        search_mode: None,
         path: None,
         lines: Some(LineRangeInput { start: 20, end: 25 }),
     }
@@ -148,6 +162,7 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: None,
         search: None,
+        search_mode: None,
         path: None,
         lines: None,
     }
@@ -158,12 +173,27 @@ fn artefact_selector_rejects_invalid_combinations() {
     let err = ArtefactSelectorInput {
         symbol_fqn: None,
         search: Some("  ".to_string()),
+        search_mode: None,
         path: None,
         lines: None,
     }
     .selection_mode()
     .expect_err("blank search selector should fail");
     assert!(err.message.contains("non-empty `search`"));
+
+    let err = ArtefactSelectorInput {
+        symbol_fqn: None,
+        search: None,
+        search_mode: Some(SearchMode::Identity),
+        path: Some("src/main.rs".to_string()),
+        lines: None,
+    }
+    .selection_mode()
+    .expect_err("search mode without search should fail");
+    assert!(
+        err.message
+            .contains("only allows `searchMode` when `search` is provided")
+    );
 }
 
 #[test]

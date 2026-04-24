@@ -90,7 +90,7 @@ ON symbol_features_current (repo_id, artefact_id);
 "#
 }
 
-pub(super) fn semantic_features_sqlite_schema_sql() -> &'static str {
+pub(crate) fn semantic_features_sqlite_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics (
     artefact_id TEXT PRIMARY KEY,

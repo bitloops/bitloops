@@ -18,7 +18,7 @@ use super::support::{
 };
 use super::{
     ArtefactSelection, ArtefactSelectionMode, CheckpointStageResult, CloneStageResult,
-    DependencyStageResult, TestsStageResult,
+    DependencyStageResult, SearchBreakdown, TestsStageResult,
 };
 
 #[ComplexObject]
@@ -56,6 +56,24 @@ impl ArtefactSelection {
     ) -> Result<Vec<super::DirectoryEntry>> {
         self.ensure_directory_selection("entries")?;
         super::support::take_stage_items(&self.directory_entries, first)
+    }
+
+    #[graphql(name = "searchBreakdown")]
+    async fn search_breakdown(
+        &self,
+        #[graphql(default = 3)] first: i32,
+    ) -> Result<Option<SearchBreakdown>> {
+        self.ensure_artefact_selection("searchBreakdown")?;
+        let Some(search_breakdown) = self.search_breakdown.as_ref() else {
+            return Ok(None);
+        };
+
+        Ok(Some(SearchBreakdown {
+            lexical: super::support::take_stage_items(&search_breakdown.lexical, first)?,
+            identity: super::support::take_stage_items(&search_breakdown.identity, first)?,
+            code: super::support::take_stage_items(&search_breakdown.code, first)?,
+            summary: super::support::take_stage_items(&search_breakdown.summary, first)?,
+        }))
     }
 
     async fn checkpoints(

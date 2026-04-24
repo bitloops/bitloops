@@ -173,6 +173,12 @@ impl Agent for OpenCodeAgent {
             format!("opencode -s {session_id}")
         }
     }
+
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(self)
+    }
 }
 
 impl OpenCodeAgent {

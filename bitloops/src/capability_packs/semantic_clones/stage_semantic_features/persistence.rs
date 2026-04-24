@@ -11,6 +11,10 @@ use super::storage::{
 };
 use super::summary::ensure_required_llm_summary_output;
 use crate::capability_packs::semantic_clones::features as semantic;
+use crate::capability_packs::semantic_clones::{
+    clear_current_search_document_rows_for_path, ensure_search_documents_schema,
+    persist_current_search_document_row, persist_search_document_row,
+};
 use crate::host::devql::RelationalStorage;
 
 pub(crate) async fn upsert_semantic_feature_rows(
@@ -19,6 +23,8 @@ pub(crate) async fn upsert_semantic_feature_rows(
     summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
 ) -> Result<semantic::SemanticFeatureIngestionStats> {
     let mut stats = semantic::SemanticFeatureIngestionStats::default();
+    ensure_semantic_features_schema(relational).await?;
+    ensure_search_documents_schema(relational).await?;
 
     for input in inputs {
         let next_input_hash =
@@ -44,6 +50,7 @@ pub(crate) async fn upsert_semantic_feature_rows(
         ensure_required_llm_summary_output(&rows, summary_provider.as_ref())?;
         persist_semantic_feature_rows(relational, &rows).await?;
         persist_current_semantic_feature_rows_for_matching_input(relational, &input, &rows).await?;
+        persist_search_document_row(relational, &input, &rows).await?;
         stats.upserted += 1;
     }
 
@@ -59,19 +66,22 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
     summary_provider: Arc<dyn semantic::SemanticSummaryProvider>,
 ) -> Result<semantic::SemanticFeatureIngestionStats> {
     ensure_semantic_features_schema(relational).await?;
+    ensure_search_documents_schema(relational).await?;
     let Some(first) = inputs.first() else {
         return Ok(semantic::SemanticFeatureIngestionStats::default());
     };
 
     clear_current_semantic_feature_rows_for_path(relational, &first.repo_id, path).await?;
+    clear_current_search_document_rows_for_path(relational, &first.repo_id, path).await?;
 
     let mut stats = semantic::SemanticFeatureIngestionStats::default();
     for input in inputs {
         let symbol_id = input.symbol_id.clone();
         let input = input.clone();
         let summary_provider_for_row = Arc::clone(&summary_provider);
+        let input_for_row = input.clone();
         let rows = tokio::task::spawn_blocking(move || {
-            semantic::build_semantic_feature_rows(&input, summary_provider_for_row.as_ref())
+            semantic::build_semantic_feature_rows(&input_for_row, summary_provider_for_row.as_ref())
         })
         .await
         .context("building current semantic feature rows on blocking worker")?;
@@ -84,6 +94,7 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
             &rows,
         )
         .await?;
+        persist_current_search_document_row(relational, &input, &rows).await?;
         stats.upserted += 1;
     }
 
