@@ -243,10 +243,12 @@ fn is_dependency_waiting_reason(reason: &str) -> bool {
     matches!(
         reason,
         "waiting_for_sync"
+            | "waiting_for_current_state_consumer"
             | "waiting_for_embeddings_bootstrap"
             | "waiting_for_summary_bootstrap"
             | "waiting_for_follow_up_sync"
             | "waiting_for_summaries"
+            | "preparing_embedding_batches"
     )
 }
 
@@ -286,6 +288,22 @@ mod tests {
         assert_eq!(
             waiting_reason_label("waiting_for_summary_bootstrap"),
             "Waiting for summary generation to be ready"
+        );
+    }
+
+    #[test]
+    fn waiting_reason_includes_current_state_copy() {
+        assert_eq!(
+            waiting_reason_label("waiting_for_current_state_consumer"),
+            "Waiting for codebase updates to apply"
+        );
+    }
+
+    #[test]
+    fn waiting_reason_includes_embedding_preparation_copy() {
+        assert_eq!(
+            waiting_reason_label("preparing_embedding_batches"),
+            "Preparing embedding batches"
         );
     }
 
@@ -333,6 +351,72 @@ mod tests {
 
         assert!(ratio.is_none());
         assert_eq!(summary, " Waiting for the embeddings runtime to warm up ");
+    }
+
+    #[test]
+    fn current_state_waiting_reason_beats_ready_summary() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "waiting".to_string(),
+            waiting_reason: Some("waiting_for_current_state_consumer".to_string()),
+            detail: Some("current_state_consumer".to_string()),
+            activity_label: Some("Applying codebase updates".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 1200,
+                in_memory_completed: 0,
+                total: 2243,
+                remaining: 1043,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord {
+                queued: 20,
+                running: 2,
+                failed: 0,
+            },
+            warnings: Vec::new(),
+            pending_count: 20,
+            running_count: 2,
+            failed_count: 0,
+            completed_count: 0,
+        };
+
+        let (ratio, summary) = lane_progress(INIT_CODE_EMBEDDINGS_LANE_LABEL, &lane);
+
+        assert!(ratio.is_none());
+        assert_eq!(summary, " Waiting for codebase updates to apply ");
+    }
+
+    #[test]
+    fn embedding_preparation_waiting_reason_beats_zero_progress_summary() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "waiting".to_string(),
+            waiting_reason: Some("preparing_embedding_batches".to_string()),
+            detail: Some("Preparing embedding batches".to_string()),
+            activity_label: Some("Preparing embedding batches".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 0,
+                in_memory_completed: 0,
+                total: 2243,
+                remaining: 2243,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord {
+                queued: 2180,
+                running: 50,
+                failed: 0,
+            },
+            warnings: Vec::new(),
+            pending_count: 2180,
+            running_count: 50,
+            failed_count: 0,
+            completed_count: 0,
+        };
+
+        let (ratio, summary) = lane_progress(INIT_CODE_EMBEDDINGS_LANE_LABEL, &lane);
+
+        assert!(ratio.is_none());
+        assert_eq!(summary, " Preparing embedding batches ");
     }
 
     #[test]

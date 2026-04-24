@@ -294,10 +294,12 @@ fn preferred_compact_waiting_detail(
             matches!(
                 *reason,
                 "waiting_for_sync"
+                    | "waiting_for_current_state_consumer"
                     | "waiting_for_embeddings_bootstrap"
                     | "waiting_for_summary_bootstrap"
                     | "waiting_for_follow_up_sync"
                     | "waiting_for_summaries"
+                    | "preparing_embedding_batches"
             )
         })
         .and_then(|_| compact_lane_waiting_detail(lane))
@@ -436,6 +438,64 @@ mod tests {
         assert_eq!(
             compact_lane_detail(INIT_CODE_EMBEDDINGS_SECTION_TITLE, &lane),
             Some("Waiting for follow-up sync".to_string())
+        );
+    }
+
+    #[test]
+    fn compact_current_state_waiting_detail_beats_ready_summary() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "waiting".to_string(),
+            waiting_reason: Some("waiting_for_current_state_consumer".to_string()),
+            detail: None,
+            activity_label: Some("Applying codebase updates".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 2193,
+                in_memory_completed: 0,
+                total: 2243,
+                remaining: 50,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 0,
+        };
+
+        assert_eq!(
+            compact_lane_detail(INIT_CODE_EMBEDDINGS_SECTION_TITLE, &lane),
+            Some("Waiting for codebase updates to apply".to_string())
+        );
+    }
+
+    #[test]
+    fn compact_embedding_preparation_detail_beats_zero_progress_summary() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "waiting".to_string(),
+            waiting_reason: Some("preparing_embedding_batches".to_string()),
+            detail: None,
+            activity_label: Some("Preparing embedding batches".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 0,
+                in_memory_completed: 0,
+                total: 2243,
+                remaining: 2243,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 0,
+        };
+
+        assert_eq!(
+            compact_lane_detail(INIT_CODE_EMBEDDINGS_SECTION_TITLE, &lane),
+            Some("Preparing embedding batches".to_string())
         );
     }
 

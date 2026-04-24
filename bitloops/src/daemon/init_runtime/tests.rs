@@ -778,6 +778,185 @@ fn code_embeddings_lane_ignores_clone_rebuild_activity_and_warnings() {
 }
 
 #[test]
+fn code_embeddings_lane_waits_for_codebase_updates_after_sync_task_completion() {
+    let session = embeddings_only_session();
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        None,
+        StatusCounts {
+            pending: 1,
+            running: 1,
+            failed: 0,
+            completed: 0,
+        },
+        &SessionWorkplaneStats::default(),
+        Some(InitRuntimeLaneProgressView {
+            completed: 2193,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 50,
+        }),
+    );
+
+    assert_eq!(lane.status, "waiting");
+    assert_eq!(
+        lane.waiting_reason.as_deref(),
+        Some("waiting_for_current_state_consumer")
+    );
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Applying codebase updates")
+    );
+}
+
+#[test]
+fn code_embeddings_lane_waits_for_follow_up_sync_after_late_embeddings_bootstrap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: true,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        ingest_task_id: Some("ingest-task-1".to_string()),
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        summary_bootstrap_task_id: None,
+        follow_up_sync_required: true,
+        follow_up_sync_task_id: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let embeddings_task = DevqlTaskRecord {
+        task_id: "bootstrap-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::EmbeddingsBootstrap,
+        source: DevqlTaskSource::Init,
+        spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+            config_path: PathBuf::from("/tmp/config-1/config.toml"),
+            profile_name: "local_code".to_string(),
+            mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+            gateway_url_override: None,
+            api_key_env: None,
+        }),
+        status: DevqlTaskStatus::Completed,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 12,
+        completed_at_unix: Some(12),
+        queue_position: None,
+        tasks_ahead: None,
+        error: None,
+        progress: crate::daemon::DevqlTaskProgress::EmbeddingsBootstrap(
+            crate::daemon::EmbeddingsBootstrapProgress::default(),
+        ),
+        result: None,
+    };
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        Some(&embeddings_task),
+        StatusCounts::default(),
+        &SessionWorkplaneStats::default(),
+        Some(InitRuntimeLaneProgressView {
+            completed: 0,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 2243,
+        }),
+    );
+
+    assert_eq!(lane.status, "waiting");
+    assert_eq!(
+        lane.waiting_reason.as_deref(),
+        Some("waiting_for_follow_up_sync")
+    );
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Running a follow-up sync")
+    );
+}
+
+#[test]
+fn code_embeddings_lane_reports_preparing_batches_before_first_completed_work_item() {
+    let session = embeddings_only_session();
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let mut stats = SessionWorkplaneStats {
+        code_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 2184,
+                running: 50,
+                failed: 0,
+                completed: 0,
+            },
+            latest_error: None,
+        },
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        None,
+        StatusCounts::default(),
+        &stats,
+        Some(InitRuntimeLaneProgressView {
+            completed: 0,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 2243,
+        }),
+    );
+
+    assert_eq!(lane.status, "waiting");
+    assert_eq!(
+        lane.waiting_reason.as_deref(),
+        Some("preparing_embedding_batches")
+    );
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Preparing embedding batches")
+    );
+}
+
+#[test]
 fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embeddings() {
     let initial_sync = completed_sync_task("sync-task-1", 10);
     let session = InitSessionRecord {
