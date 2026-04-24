@@ -24,8 +24,8 @@ use super::lanes::{
     derive_code_embeddings_lane, derive_session_status, derive_summaries_lane, derive_sync_lane,
 };
 use super::orchestration::{
-    selected_session_workplane_stats, semantic_bootstrap_waiting_reason,
-    semantic_follow_up_ready_for_sync,
+    selected_session_workplane_stats, selected_sync_terminal, selected_top_level_terminal,
+    semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync,
 };
 use super::session_stats::{
     load_semantic_embedding_session_mailbox_counts, load_semantic_summary_session_mailbox_counts,
@@ -63,6 +63,44 @@ fn completed_sync_task(task_id: &str, completed_at_unix: u64) -> DevqlTaskRecord
         tasks_ahead: None,
         error: None,
         progress: crate::daemon::DevqlTaskProgress::Sync(Default::default()),
+        result: None,
+    }
+}
+
+fn running_ingest_task(task_id: &str, updated_at_unix: u64) -> DevqlTaskRecord {
+    DevqlTaskRecord {
+        task_id: task_id.to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::Ingest,
+        source: DevqlTaskSource::Init,
+        spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+            backfill: None,
+        }),
+        status: DevqlTaskStatus::Running,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix,
+        completed_at_unix: None,
+        queue_position: None,
+        tasks_ahead: None,
+        error: None,
+        progress: crate::daemon::DevqlTaskProgress::Ingest(
+            crate::host::devql::IngestionProgressUpdate {
+                phase: crate::host::devql::IngestionProgressPhase::Persisting,
+                commits_total: 10,
+                commits_processed: 7,
+                current_checkpoint_id: Some("checkpoint-7".to_string()),
+                current_commit_sha: Some("commit-7".to_string()),
+                counters: crate::host::devql::IngestionCounters::default(),
+            },
+        ),
         result: None,
     }
 }
@@ -1324,6 +1362,138 @@ fn summary_follow_up_can_start_before_embeddings_bootstrap_finishes() {
         None,
         Some(&embeddings_task),
         Some(&summary_run),
+    ));
+}
+
+#[test]
+fn sync_terminal_allows_follow_up_sync_before_ingest_finishes_after_late_embeddings_bootstrap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: true,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        ingest_task_id: Some("ingest-task-1".to_string()),
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        summary_bootstrap_task_id: None,
+        follow_up_sync_required: true,
+        follow_up_sync_task_id: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let embeddings_task = DevqlTaskRecord {
+        task_id: "bootstrap-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_name: "repo".to_string(),
+        repo_provider: "local".to_string(),
+        repo_organisation: "local".to_string(),
+        repo_identity: "repo".to_string(),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: Some("init-session-1".to_string()),
+        kind: DevqlTaskKind::EmbeddingsBootstrap,
+        source: DevqlTaskSource::Init,
+        spec: crate::daemon::DevqlTaskSpec::EmbeddingsBootstrap(EmbeddingsBootstrapTaskSpec {
+            config_path: PathBuf::from("/tmp/config-1/config.toml"),
+            profile_name: "local_code".to_string(),
+            mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+            gateway_url_override: None,
+            api_key_env: None,
+        }),
+        status: DevqlTaskStatus::Completed,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 12,
+        completed_at_unix: Some(12),
+        queue_position: None,
+        tasks_ahead: None,
+        error: None,
+        progress: crate::daemon::DevqlTaskProgress::EmbeddingsBootstrap(
+            crate::daemon::EmbeddingsBootstrapProgress::default(),
+        ),
+        result: None,
+    };
+
+    assert!(selected_sync_terminal(&session, Some(&initial_sync)));
+    assert!(semantic_follow_up_ready_for_sync(
+        &session,
+        Some(&initial_sync),
+        None,
+        Some(&embeddings_task),
+        None,
+    ));
+}
+
+#[test]
+fn top_level_terminal_still_waits_for_ingest_after_late_embeddings_bootstrap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: true,
+            run_code_embeddings: true,
+            run_summaries: false,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: None,
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        ingest_task_id: Some("ingest-task-1".to_string()),
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        summary_bootstrap_task_id: None,
+        follow_up_sync_required: true,
+        follow_up_sync_task_id: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: None,
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let ingest_task = running_ingest_task("ingest-task-1", 11);
+
+    assert!(!selected_top_level_terminal(
+        &session,
+        Some(&initial_sync),
+        Some(&ingest_task),
     ));
 }
 

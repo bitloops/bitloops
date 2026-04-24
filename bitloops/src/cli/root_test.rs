@@ -821,6 +821,40 @@ fn TestTelemetryAction_DaemonStartCanonicalCommandUsesSameEventName() {
 
 #[test]
 #[allow(non_snake_case)]
+fn TestTelemetryAction_InitStatusUsesDedicatedEventName() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "status",
+        "--json",
+        "--wait",
+        "--session-id",
+        "init-session-1",
+    ])
+    .expect("init status should parse");
+    let command = parsed.command.as_ref().expect("command");
+    let action = telemetry_action_for_command(command).expect("telemetry action");
+
+    assert_eq!(action.event, "bitloops init status");
+    assert_eq!(action.surface, "cli");
+    assert_eq!(
+        action.properties.get("flags"),
+        Some(&Value::Array(vec![
+            Value::String("json".to_string()),
+            Value::String("wait".to_string()),
+        ]))
+    );
+    assert_eq!(
+        action
+            .properties
+            .get("has_session_id")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn TestTelemetryAction_DevqlTasksEnqueueSyncTracksSafeProperties() {
     let parsed = Cli::try_parse_from([
         "bitloops", "devql", "tasks", "enqueue", "--kind", "sync", "--paths", "a,b", "--status",

@@ -254,13 +254,26 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         None => None,
     };
     let enrichment = enrichment_status().ok();
-    let current_repo_id = crate::utils::paths::repo_root()
-        .ok()
-        .and_then(|repo_root| crate::host::devql::resolve_repo_identity(&repo_root).ok())
-        .map(|repo| repo.repo_id);
-    let current_state_consumers = super::capability_event_status(current_repo_id.as_deref()).ok();
+    let current_repo = current_repo_scope();
+    let current_repo_snapshot = current_repo.as_ref().and_then(|(repo_root, repo)| {
+        current_repo_init_runtime_snapshot(repo_root, repo, runtime.as_ref(), service.as_ref())
+    });
+    let current_repo_id = current_repo_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.repo_id.clone())
+        .or_else(|| current_repo.as_ref().map(|(_, repo)| repo.repo_id.clone()));
+    let current_state_consumers = current_repo_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.current_state_consumer.clone())
+        .or_else(|| super::capability_event_status(current_repo_id.as_deref()).ok());
     let capability_events = current_state_consumers.clone();
-    let devql_tasks = super::devql_task_status(current_repo_id.as_deref()).ok();
+    let current_init_session = current_repo_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.current_init_session.clone());
+    let devql_tasks = current_repo_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.task_queue.clone())
+        .or_else(|| super::devql_task_status(current_repo_id.as_deref()).ok());
 
     Ok(DaemonStatusReport {
         runtime,
@@ -269,6 +282,7 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         health,
         current_state_consumers,
         capability_events,
+        current_init_session,
         enrichment,
         devql_tasks,
     })
@@ -296,4 +310,52 @@ pub(super) async fn wait_until_ready(timeout: Duration) -> Result<DaemonRuntimeS
 
 fn log_lifecycle_failure(action: &str, err: &anyhow::Error) {
     log::error!("{action} failed: {err:#}");
+}
+
+fn current_repo_scope() -> Option<(std::path::PathBuf, crate::host::devql::RepoIdentity)> {
+    let repo_root = crate::utils::paths::repo_root().ok()?;
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).ok()?;
+    Some((repo_root, repo))
+}
+
+fn current_repo_init_runtime_snapshot(
+    repo_root: &Path,
+    repo: &crate::host::devql::RepoIdentity,
+    runtime: Option<&DaemonRuntimeState>,
+    service: Option<&DaemonServiceMetadata>,
+) -> Option<crate::daemon::InitRuntimeSnapshot> {
+    let daemon_config_root = current_repo_daemon_config_root(repo_root, runtime, service)?;
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        daemon_config_root,
+        repo_root.to_path_buf(),
+        repo.clone(),
+    )
+    .ok()?;
+    match super::shared_init_runtime_coordinator().snapshot_for_repo(&cfg) {
+        Ok(snapshot) => Some(snapshot),
+        Err(err) => {
+            log::debug!(
+                "failed to load init runtime snapshot for repo `{}`: {err:#}",
+                repo.repo_id
+            );
+            None
+        }
+    }
+}
+
+fn current_repo_daemon_config_root(
+    repo_root: &Path,
+    runtime: Option<&DaemonRuntimeState>,
+    service: Option<&DaemonServiceMetadata>,
+) -> Option<std::path::PathBuf> {
+    crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)
+        .ok()
+        .or_else(|| {
+            crate::config::resolve_preferred_daemon_config_path_for_repo(repo_root)
+                .ok()
+                .and_then(|config_path| resolve_daemon_config(Some(config_path.as_path())).ok())
+                .map(|config| config.config_root)
+        })
+        .or_else(|| runtime.map(|state| state.config_root.clone()))
+        .or_else(|| service.map(|metadata| metadata.config_root.clone()))
 }

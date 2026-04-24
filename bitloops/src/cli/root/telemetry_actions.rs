@@ -359,6 +359,10 @@ fn reset_action(args: &ResetArgs) -> crate::telemetry::analytics::ActionDescript
 }
 
 fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics::ActionDescriptor {
+    if let Some(crate::cli::init::InitCommand::Status(status_args)) = args.command.as_ref() {
+        return init_status_action(status_args);
+    }
+
     let mut props = HashMap::new();
     let mut flags = Vec::new();
     if args.install_default_daemon {
@@ -386,6 +390,25 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     insert_bool_property(&mut props, "has_agent", !args.agent.is_empty());
     insert_bool_property(&mut props, "has_sync_choice", args.sync.is_some());
     new_action("bitloops init", props)
+}
+
+fn init_status_action(
+    args: &crate::cli::init::InitStatusArgs,
+) -> crate::telemetry::analytics::ActionDescriptor {
+    let mut props = HashMap::new();
+    let mut flags = Vec::new();
+    if args.json {
+        flags.push("json");
+    }
+    if args.wait {
+        flags.push("wait");
+    }
+    if args.watch {
+        flags.push("watch");
+    }
+    insert_flags(&mut props, flags);
+    insert_bool_property(&mut props, "has_session_id", args.session_id.is_some());
+    new_action("bitloops init status", props)
 }
 
 fn enable_action(

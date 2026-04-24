@@ -26,11 +26,12 @@ use super::lanes::{
     running_task,
 };
 use super::orchestration::{
-    record_task_completion_seq, selected_session_workplane_stats, selected_top_level_terminal,
-    semantic_bootstrap_still_outstanding_after_initial_sync, semantic_bootstrap_waiting_reason,
-    semantic_bootstraps_ready, semantic_bootstraps_terminal, semantic_follow_up_pending,
-    semantic_follow_up_ready_for_sync, session_fatal_failure_detail, session_has_remaining_work,
-    session_requires_semantic_follow_up, summary_run_failed, task_failed,
+    record_task_completion_seq, selected_session_workplane_stats, selected_sync_terminal,
+    selected_top_level_terminal, semantic_bootstrap_still_outstanding_after_initial_sync,
+    semantic_bootstrap_waiting_reason, semantic_bootstraps_ready, semantic_bootstraps_terminal,
+    semantic_follow_up_pending, semantic_follow_up_ready_for_sync, session_fatal_failure_detail,
+    session_has_remaining_work, session_requires_semantic_follow_up, summary_run_failed,
+    task_failed,
 };
 use super::progress::load_runtime_lane_progress;
 use super::session_stats::load_session_workplane_stats;
@@ -564,7 +565,7 @@ impl InitRuntimeCoordinator {
         let embeddings_task = load_task_by_id(session.embeddings_bootstrap_task_id.as_deref())?;
         let summary_task = load_summary_task_by_id(session.summary_bootstrap_task_id.as_deref())?;
         let summary_run = summary_task.as_ref().and_then(summary_run_from_task_ref);
-        if !selected_top_level_terminal(&session, initial_sync.as_ref(), ingest_task.as_ref()) {
+        if !selected_sync_terminal(&session, initial_sync.as_ref()) {
             return Ok(());
         }
         if task_failed(initial_sync.as_ref())

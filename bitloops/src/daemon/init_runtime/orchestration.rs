@@ -313,12 +313,11 @@ pub(crate) fn semantic_follow_up_pending(
         )
 }
 
-pub(crate) fn selected_top_level_terminal(
+pub(crate) fn selected_sync_terminal(
     session: &InitSessionRecord,
     initial_sync: Option<&DevqlTaskRecord>,
-    ingest_task: Option<&DevqlTaskRecord>,
 ) -> bool {
-    let sync_terminal = if session.selections.run_sync {
+    if session.selections.run_sync {
         initial_sync.is_some_and(|task| {
             matches!(
                 task.status,
@@ -327,7 +326,15 @@ pub(crate) fn selected_top_level_terminal(
         })
     } else {
         true
-    };
+    }
+}
+
+pub(crate) fn selected_top_level_terminal(
+    session: &InitSessionRecord,
+    initial_sync: Option<&DevqlTaskRecord>,
+    ingest_task: Option<&DevqlTaskRecord>,
+) -> bool {
+    let sync_terminal = selected_sync_terminal(session, initial_sync);
     let ingest_terminal = if session.selections.run_ingest {
         ingest_task.is_some_and(|task| {
             matches!(

@@ -11,6 +11,7 @@ mod embeddings_setup;
 mod final_setup;
 mod progress;
 mod repo_excludes;
+mod status;
 mod summary_setup;
 mod workflow;
 
@@ -18,7 +19,7 @@ mod workflow;
 mod tests;
 
 pub use agent_selection::{InitAgentSelection, detect_or_select_agent};
-pub use args::InitArgs;
+pub use args::{InitArgs, InitCommand, InitStatusArgs};
 
 pub(super) use args::{
     DEFAULT_INIT_INGEST_BACKFILL, normalize_cli_exclusions, normalize_exclude_from_paths,
@@ -93,5 +94,9 @@ async fn run_with_io_async_for_project_root(
     input: &mut dyn BufRead,
     select_fn: Option<&AgentSelector>,
 ) -> Result<()> {
+    if let Some(InitCommand::Status(status_args)) = args.command.clone() {
+        return status::run_for_project_root(status_args, project_root, out).await;
+    }
+
     workflow::run_for_project_root(args, project_root, out, input, select_fn).await
 }

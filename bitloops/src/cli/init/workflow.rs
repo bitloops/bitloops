@@ -807,7 +807,7 @@ async fn write_init_setup_handoff(
     }
     writeln!(out, "You can:")?;
     writeln!(out, "  • View progress: {dashboard_url}")?;
-    writeln!(out, "  • Check status anytime: bitloops status")?;
+    writeln!(out, "  • Check status anytime: bitloops init status")?;
     writeln!(
         out,
         "  • Close this terminal — setup will continue in the background"
