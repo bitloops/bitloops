@@ -310,14 +310,17 @@ pub(super) fn recompute_queue_positions(tasks: &mut [DevqlTaskRecord]) {
     }
 }
 
-pub(super) fn prune_terminal_tasks(tasks: &mut Vec<DevqlTaskRecord>) {
+pub(super) fn prune_terminal_tasks(
+    tasks: &mut Vec<DevqlTaskRecord>,
+    protected_task_ids: &HashSet<String>,
+) {
     let mut terminal = tasks
         .iter()
         .filter(|task| {
             matches!(
                 task.status,
                 DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
-            )
+            ) && !protected_task_ids.contains(&task.task_id)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -333,6 +336,7 @@ pub(super) fn prune_terminal_tasks(tasks: &mut Vec<DevqlTaskRecord>) {
             task.status,
             DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
         ) || terminal_ids.contains(&task.task_id)
+            || protected_task_ids.contains(&task.task_id)
     });
 }
 
@@ -655,5 +659,61 @@ fn task_lane(task: &DevqlTaskRecord) -> TaskLaneKey {
     TaskLaneKey {
         repo_id: task.repo_id.clone(),
         kind: task.kind,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::path::PathBuf;
+
+    use super::super::super::types::{
+        DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus,
+        SyncTaskMode, SyncTaskSpec,
+    };
+    use super::prune_terminal_tasks;
+
+    fn completed_sync_task(task_id: &str, updated_at_unix: u64) -> DevqlTaskRecord {
+        DevqlTaskRecord {
+            task_id: task_id.to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_name: "repo".to_string(),
+            repo_provider: "local".to_string(),
+            repo_organisation: "local".to_string(),
+            repo_identity: "repo".to_string(),
+            daemon_config_root: PathBuf::from("/tmp/config-1"),
+            repo_root: PathBuf::from("/tmp/repo-1"),
+            init_session_id: Some("init-session-1".to_string()),
+            kind: super::super::super::types::DevqlTaskKind::Sync,
+            source: DevqlTaskSource::Init,
+            spec: DevqlTaskSpec::Sync(SyncTaskSpec {
+                mode: SyncTaskMode::Full,
+                post_commit_snapshot: None,
+            }),
+            status: DevqlTaskStatus::Completed,
+            submitted_at_unix: updated_at_unix,
+            started_at_unix: Some(updated_at_unix),
+            updated_at_unix,
+            completed_at_unix: Some(updated_at_unix),
+            queue_position: None,
+            tasks_ahead: None,
+            progress: DevqlTaskProgress::Sync(Default::default()),
+            error: None,
+            result: None,
+        }
+    }
+
+    #[test]
+    fn prune_terminal_tasks_keeps_ids_referenced_by_active_init_sessions() {
+        let mut tasks = (0..66)
+            .map(|index| completed_sync_task(&format!("sync-task-{index}"), index as u64 + 1))
+            .collect::<Vec<_>>();
+        let protected = HashSet::from(["sync-task-0".to_string()]);
+
+        prune_terminal_tasks(&mut tasks, &protected);
+
+        assert_eq!(tasks.len(), 65);
+        assert!(tasks.iter().any(|task| task.task_id == "sync-task-0"));
+        assert!(!tasks.iter().any(|task| task.task_id == "sync-task-1"));
     }
 }

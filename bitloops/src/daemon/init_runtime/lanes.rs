@@ -9,6 +9,10 @@ use super::orchestration::{
     summaries_follow_up_pending, summary_bootstrap_outstanding_after_initial_sync, task_failed,
 };
 use super::stats::{SessionWorkplaneStats, StatusCounts};
+use super::tasks::{
+    effective_task_id, follow_up_sync_status, initial_sync_status, task_status_is_completed,
+    task_status_is_failed, task_status_is_terminal,
+};
 use super::types::{
     InitRuntimeLaneProgressView, InitRuntimeLaneQueueView, InitRuntimeLaneView,
     InitRuntimeLaneWarningView,
@@ -87,7 +91,39 @@ pub(crate) fn derive_sync_lane(
         return failed_lane(
             Some("Applying codebase updates failed".to_string()),
             current_state,
+            effective_task_id(
+                initial_sync,
+                session.initial_sync_terminal.as_ref(),
+                session.initial_sync_task_id.as_deref(),
+            ),
             None,
+            None,
+            Vec::new(),
+        );
+    }
+    if follow_up_sync_status(session, follow_up_sync).is_some_and(task_status_is_failed) {
+        return failed_lane(
+            Some("Running a follow-up sync failed".to_string()),
+            current_state,
+            effective_task_id(
+                follow_up_sync,
+                session.follow_up_sync_terminal.as_ref(),
+                session.follow_up_sync_task_id.as_deref(),
+            ),
+            None,
+            None,
+            Vec::new(),
+        );
+    }
+    if initial_sync_status(session, initial_sync).is_some_and(task_status_is_failed) {
+        return failed_lane(
+            Some("Syncing repository failed".to_string()),
+            current_state,
+            effective_task_id(
+                initial_sync,
+                session.initial_sync_terminal.as_ref(),
+                session.initial_sync_task_id.as_deref(),
+            ),
             None,
             None,
             Vec::new(),
@@ -131,12 +167,7 @@ pub(crate) fn derive_ingest_lane(
         );
     }
     if session.selections.run_sync
-        && !initial_sync.is_some_and(|task| {
-            matches!(
-                task.status,
-                DevqlTaskStatus::Completed | DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled
-            )
-        })
+        && !initial_sync_status(session, initial_sync).is_some_and(task_status_is_terminal)
     {
         return runtime_lane("waiting", None, StatusCounts::default(), Vec::new())
             .with_waiting_reason("waiting_for_sync")
@@ -211,7 +242,11 @@ pub(crate) fn derive_code_embeddings_lane(
             return failed_lane(
                 Some("Syncing repository failed".to_string()),
                 stats.code_embedding_jobs.counts,
-                initial_sync.map(|task| task.task_id.clone()),
+                effective_task_id(
+                    initial_sync,
+                    session.initial_sync_terminal.as_ref(),
+                    session.initial_sync_task_id.as_deref(),
+                ),
                 None,
                 progress,
                 warnings,
@@ -364,8 +399,20 @@ pub(crate) fn derive_summaries_lane(
             return failed_lane(
                 Some("Syncing repository failed".to_string()),
                 stats.summary_jobs,
-                initial_sync.map(|task| task.task_id.clone()),
-                summary_run.map(|run| run.run_id.clone()),
+                effective_task_id(
+                    initial_sync,
+                    session.initial_sync_terminal.as_ref(),
+                    session.initial_sync_task_id.as_deref(),
+                ),
+                summary_run
+                    .map(|run| run.run_id.clone())
+                    .or_else(|| {
+                        session
+                            .summary_bootstrap_terminal
+                            .as_ref()
+                            .map(|terminal| terminal.task_id.clone())
+                    })
+                    .or_else(|| session.summary_bootstrap_task_id.clone()),
                 progress,
                 warnings,
             );
@@ -484,8 +531,20 @@ pub(crate) fn derive_summary_embeddings_lane(
             return failed_lane(
                 Some("Syncing repository failed".to_string()),
                 stats.summary_embedding_jobs.counts,
-                initial_sync.map(|task| task.task_id.clone()),
-                summary_run.map(|run| run.run_id.clone()),
+                effective_task_id(
+                    initial_sync,
+                    session.initial_sync_terminal.as_ref(),
+                    session.initial_sync_task_id.as_deref(),
+                ),
+                summary_run
+                    .map(|run| run.run_id.clone())
+                    .or_else(|| {
+                        session
+                            .summary_bootstrap_terminal
+                            .as_ref()
+                            .map(|terminal| terminal.task_id.clone())
+                    })
+                    .or_else(|| session.summary_bootstrap_task_id.clone()),
                 progress,
                 warnings,
             );
@@ -738,10 +797,12 @@ fn sync_dependency_state(
         return SyncDependencyState::Ready;
     }
 
-    if task_failed(initial_sync) || current_state.failed > 0 {
+    if initial_sync_status(session, initial_sync).is_some_and(task_status_is_failed)
+        || current_state.failed > 0
+    {
         return SyncDependencyState::Failed;
     }
-    if !initial_sync.is_some_and(|task| task.status == DevqlTaskStatus::Completed) {
+    if !initial_sync_status(session, initial_sync).is_some_and(task_status_is_completed) {
         return SyncDependencyState::WaitingForInitialSync;
     }
     if current_state.pending > 0 || current_state.running > 0 {
