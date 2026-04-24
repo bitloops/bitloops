@@ -78,7 +78,7 @@ pub(crate) fn session_status_label(status: &str) -> &'static str {
 
 pub(crate) fn waiting_reason_label(reason: &str) -> &'static str {
     match reason {
-        "waiting_for_sync" => "Waiting for sync to finish",
+        "waiting_for_sync" => "Waiting for sync to complete",
         "waiting_for_embeddings_bootstrap" => "Waiting for the embeddings runtime to warm up",
         "waiting_for_summary_bootstrap" => "Waiting for summary generation to be ready",
         "waiting_for_summaries" => "Waiting for summaries to be ready",

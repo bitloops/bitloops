@@ -132,7 +132,7 @@ pub(crate) fn derive_ingest_lane(
     {
         return runtime_lane("waiting", None, StatusCounts::default(), Vec::new())
             .with_waiting_reason("waiting_for_sync")
-            .with_activity_label("Waiting for sync to finish before starting ingest");
+            .with_activity_label("Waiting for sync to complete before starting ingest");
     }
     if ingest_task.is_none() {
         return runtime_lane("waiting", None, StatusCounts::default(), Vec::new())
@@ -216,7 +216,7 @@ pub(crate) fn derive_code_embeddings_lane(
             warnings,
         )
         .with_waiting_reason("waiting_for_sync")
-        .with_activity_label("Waiting for sync to finish before creating code embeddings");
+        .with_activity_label("Waiting for sync to complete before creating code embeddings");
     }
     if let Some(reason) = stats.blocked_code_embedding_reason.clone() {
         return runtime_lane(
@@ -339,7 +339,7 @@ pub(crate) fn derive_summaries_lane(
     if session.selections.run_sync && !sync_dependency_ready(session, initial_sync, current_state) {
         return runtime_lane("waiting", progress, stats.summary_jobs, warnings)
             .with_waiting_reason("waiting_for_sync")
-            .with_activity_label("Waiting for sync to finish before generating summaries")
+            .with_activity_label("Waiting for sync to complete before generating summaries")
             .with_run_id_option(summary_run.map(|run| run.run_id.clone()));
     }
     if let Some(reason) = stats.blocked_summary_reason.clone() {
@@ -453,7 +453,7 @@ pub(crate) fn derive_summary_embeddings_lane(
             warnings,
         )
         .with_waiting_reason("waiting_for_sync")
-        .with_activity_label("Waiting for sync to finish before creating summary embeddings");
+        .with_activity_label("Waiting for sync to complete before creating summary embeddings");
     }
     if embeddings_bootstrap_outstanding_after_initial_sync(session, initial_sync, embeddings_task) {
         return runtime_lane(
