@@ -245,6 +245,14 @@ pub(super) fn upsert_subagent_run_from_event(
 fn event_tool_projection_id(event: &InteractionEvent) -> String {
     let tool_use_id = event_tool_use_id(event);
     if !tool_use_id.trim().is_empty() {
+        if let Some(turn_id) = event.turn_id.as_deref().map(str::trim)
+            && !turn_id.is_empty()
+        {
+            return format!("{turn_id}:{tool_use_id}");
+        }
+        if !event.session_id.trim().is_empty() {
+            return format!("{}:{tool_use_id}", event.session_id.trim());
+        }
         return tool_use_id;
     }
     if !event.event_id.trim().is_empty() {

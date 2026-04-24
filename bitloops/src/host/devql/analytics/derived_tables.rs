@@ -204,6 +204,14 @@ fn interaction_event_from_row(row: &Value) -> Option<InteractionEvent> {
 fn event_tool_projection_id(event: &InteractionEvent) -> String {
     let tool_use_id = event_tool_use_id(event);
     if !tool_use_id.trim().is_empty() {
+        if let Some(turn_id) = event.turn_id.as_deref().map(str::trim)
+            && !turn_id.is_empty()
+        {
+            return format!("{turn_id}:{tool_use_id}");
+        }
+        if !event.session_id.trim().is_empty() {
+            return format!("{}:{tool_use_id}", event.session_id.trim());
+        }
         return tool_use_id;
     }
     if !event.event_id.trim().is_empty() {
@@ -314,5 +322,60 @@ fn set_number(row: &mut Value, key: &str, value: i64) {
 fn set_row_string(row: &mut Value, key: &str, value: String) {
     if let Some(object) = row.as_object_mut() {
         object.insert(key.to_string(), Value::String(value));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_interaction_tables;
+    use serde_json::json;
+
+    #[test]
+    fn tool_projection_ids_are_scoped_by_turn_when_tool_use_ids_repeat() {
+        let events = vec![
+            json!({
+                "event_id": "event-1",
+                "event_time": "2026-04-23T21:00:00Z",
+                "repo_id": "repo-1",
+                "session_id": "session-1",
+                "turn_id": "turn-1",
+                "event_type": "tool_invocation_observed",
+                "source": "transcript_derivation",
+                "sequence_number": 1,
+                "agent_type": "opencode",
+                "model": "gpt-5.4",
+                "tool_use_id": "call_reused",
+                "tool_kind": "read",
+                "task_description": "src/lib.rs",
+                "payload": {
+                    "tool_name": "read",
+                    "input_summary": "src/lib.rs",
+                    "transcript_path": "/tmp/one.jsonl"
+                }
+            }),
+            json!({
+                "event_id": "event-2",
+                "event_time": "2026-04-23T21:00:01Z",
+                "repo_id": "repo-1",
+                "session_id": "session-2",
+                "turn_id": "turn-2",
+                "event_type": "tool_invocation_observed",
+                "source": "transcript_derivation",
+                "sequence_number": 1,
+                "agent_type": "opencode",
+                "model": "gpt-5.4",
+                "tool_use_id": "call_reused",
+                "tool_kind": "read",
+                "task_description": "src/main.rs",
+                "payload": {
+                    "tool_name": "read",
+                    "input_summary": "src/main.rs",
+                    "transcript_path": "/tmp/two.jsonl"
+                }
+            }),
+        ];
+
+        let derived = derive_interaction_tables(&events);
+        assert_eq!(derived.interaction_tool_invocations.len(), 2);
     }
 }

@@ -35,6 +35,7 @@ pub(super) fn artefact_from_value(row: Value) -> Result<Artefact> {
         signature: optional_string_field(&row, "signature"),
         modifiers: parse_string_array_field(&row, "modifiers"),
         docstring: optional_string_field(&row, "docstring"),
+        summary: optional_string_field(&row, "summary"),
         content_hash: optional_string_field(&row, "content_hash"),
         blob_sha: string_field(&row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(&row, "created_at")?.as_str())?,
@@ -189,6 +190,7 @@ mod tests {
             "signature": Value::Null,
             "modifiers": "[]",
             "docstring": Value::Null,
+            "summary": Value::Null,
             "content_hash": Value::Null,
             "blob_sha": "blob-one",
             "created_at": "2026-03-26T09:00:00Z"
@@ -207,5 +209,18 @@ mod tests {
             artefact_from_value(artefact_row(Value::String("class_declaration".to_string())))
                 .expect("parse artefact");
         assert_eq!(artefact.canonical_kind, None);
+    }
+
+    #[test]
+    fn artefact_from_value_reads_semantic_summary() {
+        let mut row = artefact_row(Value::String("function".to_string()));
+        row["summary"] = Value::String("Normalises the HTTP response payload.".to_string());
+
+        let artefact = artefact_from_value(row).expect("parse artefact");
+
+        assert_eq!(
+            artefact.summary.as_deref(),
+            Some("Normalises the HTTP response payload.")
+        );
     }
 }

@@ -44,8 +44,8 @@ pub(crate) use stage_semantic_features::{
     load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
     load_semantic_feature_inputs_for_artefacts, load_semantic_feature_inputs_for_current_artefacts,
     load_semantic_feature_inputs_for_current_repo, load_semantic_summary_snapshot,
-    parse_semantic_index_state_rows, upsert_current_semantic_feature_rows,
-    upsert_semantic_feature_rows,
+    parse_semantic_index_state_rows, semantic_features_sqlite_schema_sql,
+    upsert_current_semantic_feature_rows, upsert_semantic_feature_rows,
 };
 
 pub use pack::SemanticClonesPack;

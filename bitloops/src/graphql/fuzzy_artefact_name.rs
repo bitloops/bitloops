@@ -304,6 +304,7 @@ mod tests {
             signature: None,
             modifiers: Vec::new(),
             docstring: None,
+            summary: None,
             content_hash: None,
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-20T09:00:00Z")

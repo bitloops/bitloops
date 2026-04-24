@@ -607,6 +607,105 @@ fn claude_stop_persists_transcript_fragment_in_event_store() {
 }
 
 #[test]
+fn claude_stop_records_transcript_derived_tool_events_in_event_store() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let backend = LocalFileBackend::new(dir.path());
+    let transcript_dir = tempfile::tempdir().unwrap();
+    let transcript_path = transcript_dir.path().join("claude-tool-events.jsonl");
+
+    handle_session_start_with_profile(
+        SessionInfoInput {
+            session_id: "claude-tool-events".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+        },
+        &backend,
+        Some(dir.path()),
+        Some(CLAUDE_HOOK_AGENT_PROFILE),
+    )
+    .unwrap();
+
+    handle_user_prompt_submit_with_strategy_and_profile(
+        UserPromptSubmitInput {
+            session_id: "claude-tool-events".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+            prompt: "Inspect the repo".to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    fs::write(
+        &transcript_path,
+        concat!(
+            "{\"type\":\"user\",\"message\":{\"content\":\"Inspect the repo\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-1\",\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Bash\",\"input\":{\"command\":\"rg interaction_events src\"}}",
+            "]}}\n",
+            "{\"type\":\"user\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":\"found matches\"}",
+            "]}}\n"
+        ),
+    )
+    .unwrap();
+
+    handle_stop_with_profile(
+        SessionInfoInput {
+            session_id: "claude-tool-events".to_string(),
+            transcript_path: transcript_path.to_string_lossy().to_string(),
+        },
+        &backend,
+        &NoOpStrategy,
+        Some(dir.path()),
+        CLAUDE_HOOK_AGENT_PROFILE,
+    )
+    .unwrap();
+
+    let conn = open_events_duckdb(dir.path());
+    let rows = conn
+        .prepare(
+            "SELECT event_type, tool_use_id, tool_kind, task_description \
+             FROM interaction_events \
+             WHERE session_id = 'claude-tool-events' \
+               AND event_type IN ('tool_invocation_observed', 'tool_result_observed') \
+             ORDER BY sequence_number ASC",
+        )
+        .expect("prepare query")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .expect("query rows")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect rows");
+
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "tool_invocation_observed".to_string(),
+                "toolu_1".to_string(),
+                "Bash".to_string(),
+                "rg interaction_events src".to_string(),
+            ),
+            (
+                "tool_result_observed".to_string(),
+                "toolu_1".to_string(),
+                "Bash".to_string(),
+                "found matches".to_string(),
+            ),
+        ]
+    );
+}
+
+#[test]
 fn cursor_stop_persists_structured_transcript_fragment_in_event_store() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

@@ -18,6 +18,13 @@ pub trait LifecycleAgentAdapter: Send + Sync {
         None
     }
 
+    /// When present, used by turn-end interaction capture to derive tool events from transcript fragments.
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        None
+    }
+
     /// When present, used by handle_lifecycle_turn_end to include token usage in the saved step.
     fn as_token_calculator(&self) -> Option<&dyn crate::adapters::agents::TokenCalculator> {
         None

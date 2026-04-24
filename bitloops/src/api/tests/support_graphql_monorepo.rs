@@ -461,13 +461,14 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
     content_id TEXT NOT NULL,
     symbol_id TEXT,
     representation_kind TEXT NOT NULL DEFAULT 'baseline',
+    setup_fingerprint TEXT NOT NULL DEFAULT '',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     dimension INTEGER NOT NULL CHECK (dimension > 0),
     embedding_input_hash TEXT NOT NULL,
     embedding TEXT NOT NULL,
     generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (artefact_id, representation_kind)
+    PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint)
 );
 "#,
     )
@@ -645,6 +646,35 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
         )
         .expect("insert current clone scoring embeddings");
     }
+}
+
+pub(super) fn seed_graphql_historical_summary_inputs(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open historical summary sqlite");
+
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::semantic_features_sqlite_schema_sql(),
+    )
+    .expect("initialise historical summary schema");
+
+    conn.execute(
+        "INSERT OR REPLACE INTO symbol_semantics (
+            artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+            template_summary, summary, confidence, source_model
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            "artefact::api-target",
+            repo_id.as_str(),
+            "blob-api-target",
+            "semantic-hash-api-target",
+            "Target helper summary",
+            "Builds API response payload fields and returns the transformed target result.",
+            0.92_f64,
+            "bitloops:historical-test-model",
+        ],
+    )
+    .expect("insert historical summary row");
 }
 
 pub(super) fn seed_graphql_semantic_query_inputs(repo_root: &Path) {

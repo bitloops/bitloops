@@ -193,7 +193,7 @@ async fn load_semantic_candidates(
                 filtered.canonical_kind, filtered.language_kind, filtered.symbol_fqn, \
                 filtered.parent_artefact_id, filtered.start_line, filtered.end_line, \
                 filtered.start_byte, filtered.end_byte, filtered.signature, filtered.modifiers, \
-                filtered.docstring, filtered.blob_sha, filtered.content_hash, filtered.created_at, \
+                filtered.docstring, filtered.summary, filtered.blob_sha, filtered.content_hash, filtered.created_at, \
                 se.representation_kind AS representation_kind, \
                 se.setup_fingerprint, se.provider AS embedding_provider, \
                 se.model AS embedding_model, se.dimension AS embedding_dimension, \
@@ -388,6 +388,7 @@ fn artefact_from_value(row: &Value) -> Result<Artefact> {
         signature: optional_string_field(row, "signature"),
         modifiers: parse_string_array_field(row, "modifiers"),
         docstring: optional_string_field(row, "docstring"),
+        summary: optional_string_field(row, "summary"),
         content_hash: optional_string_field(row, "content_hash"),
         blob_sha: string_field(row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(row, "created_at")?.as_str())?,
@@ -531,6 +532,7 @@ mod tests {
             signature: None,
             modifiers: Vec::new(),
             docstring: None,
+            summary: None,
             content_hash: None,
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-21T09:00:00Z")

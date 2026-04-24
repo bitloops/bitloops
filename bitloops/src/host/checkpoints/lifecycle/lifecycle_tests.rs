@@ -2064,3 +2064,72 @@ fn test_tool_result_handler_records_live_hook_event() {
         assert_eq!(row.3, "clean");
     });
 }
+
+#[test]
+fn test_handle_lifecycle_turn_end_records_transcript_derived_tool_events() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("opencode-turn-end.jsonl");
+    std::fs::write(
+        &transcript_path,
+        concat!(
+            "{\"id\":\"msg-1\",\"role\":\"user\",\"content\":\"Inspect the repo\"}\n",
+            "{\"id\":\"msg-2\",\"role\":\"assistant\",\"content\":\"\",\"parts\":[",
+            "{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"call_bash\",",
+            "\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"rg interaction_events src\"},\"output\":\"found matches\"}}",
+            "]}\n"
+        ),
+    )
+    .unwrap();
+
+    let adapter = OpenCodeLifecycleAdapter;
+    let mut event = sample_event(LifecycleEventType::TurnEnd);
+    event.session_id = "opencode-turn-end".to_string();
+    event.session_ref = transcript_path.to_string_lossy().to_string();
+    event.prompt = "Inspect the repo".to_string();
+
+    with_cwd(dir.path(), || {
+        handle_lifecycle_turn_end(&adapter, &event)
+            .expect("turn end should derive transcript tool events");
+
+        let conn = open_events_duckdb(dir.path());
+        let rows = conn
+            .prepare(
+                "SELECT event_type, tool_use_id, tool_kind, task_description \
+                 FROM interaction_events \
+                 WHERE session_id = 'opencode-turn-end' \
+                   AND event_type IN ('tool_invocation_observed', 'tool_result_observed') \
+                 ORDER BY sequence_number ASC",
+            )
+            .expect("prepare query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .expect("query rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect rows");
+
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "tool_invocation_observed".to_string(),
+                    "call_bash".to_string(),
+                    "bash".to_string(),
+                    "rg interaction_events src".to_string(),
+                ),
+                (
+                    "tool_result_observed".to_string(),
+                    "call_bash".to_string(),
+                    "bash".to_string(),
+                    "found matches".to_string(),
+                ),
+            ]
+        );
+    });
+}

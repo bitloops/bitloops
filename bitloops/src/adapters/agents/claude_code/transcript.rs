@@ -4,15 +4,20 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::adapters::agents::TokenUsage;
+use crate::adapters::agents::{TokenUsage, TranscriptToolEventDeriver};
 use crate::host::checkpoints::transcript::parse::{parse_from_bytes, parse_from_file_at_line};
-use crate::host::checkpoints::transcript::types::{Line, TYPE_ASSISTANT, TYPE_USER};
+use crate::host::checkpoints::transcript::types::{
+    AssistantMessage, CONTENT_TYPE_TOOL_USE, Line, TYPE_ASSISTANT, TYPE_USER,
+};
 use crate::host::checkpoints::transcript::utils::{
     agent_transcript_path, extract_last_user_prompt as extract_last_user_prompt_shared,
     extract_modified_files as extract_modified_files_shared,
     find_checkpoint_uuid as find_checkpoint_uuid_shared,
     truncate_transcript_at_uuid as truncate_transcript_at_uuid_shared,
 };
+use crate::host::interactions::tool_events::TranscriptToolEventObservation;
+
+use super::agent::ClaudeCodeAgent;
 
 pub type TranscriptLine = Line;
 
@@ -58,6 +63,12 @@ struct TextContentBlock {
     kind: String,
     #[serde(default)]
     text: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PendingTool {
+    tool_name: String,
+    is_subagent_task: bool,
 }
 
 pub fn parse_transcript(content: &[u8]) -> Result<Vec<TranscriptLine>> {
@@ -131,6 +142,110 @@ pub fn calculate_token_usage(transcript: &[TranscriptLine]) -> TokenUsage {
     }
 
     usage
+}
+
+impl TranscriptToolEventDeriver for ClaudeCodeAgent {
+    fn derive_transcript_tool_event_observations(
+        &self,
+        turn_id: &str,
+        transcript_fragment: &str,
+    ) -> Result<Vec<TranscriptToolEventObservation>> {
+        derive_tool_event_observations(turn_id, transcript_fragment)
+    }
+}
+
+pub fn derive_tool_event_observations(
+    turn_id: &str,
+    transcript_fragment: &str,
+) -> Result<Vec<TranscriptToolEventObservation>> {
+    let lines = parse_from_bytes(transcript_fragment.as_bytes())?;
+    let mut tool_use_block_number = 1_i64;
+    let mut pending_tools = HashMap::<String, PendingTool>::new();
+    let mut observations = Vec::new();
+
+    for line in lines {
+        match line.r#type.as_str() {
+            TYPE_ASSISTANT => {
+                let Ok(message) = serde_json::from_value::<AssistantMessage>(line.message) else {
+                    continue;
+                };
+                for block in message.content {
+                    if block.r#type != CONTENT_TYPE_TOOL_USE {
+                        continue;
+                    }
+
+                    let tool_name = block.name.trim().to_string();
+                    if tool_name.is_empty() {
+                        continue;
+                    }
+
+                    let is_subagent_task = tool_name.eq_ignore_ascii_case("task");
+                    let fallback_tool_use_block_number = tool_use_block_number;
+                    tool_use_block_number += 1;
+                    let tool_use_id = if block.id.trim().is_empty() {
+                        format!("{turn_id}:tool:{fallback_tool_use_block_number:04}")
+                    } else {
+                        block.id.trim().to_string()
+                    };
+                    pending_tools.insert(
+                        tool_use_id.clone(),
+                        PendingTool {
+                            tool_name: tool_name.clone(),
+                            is_subagent_task,
+                        },
+                    );
+
+                    if is_subagent_task {
+                        continue;
+                    }
+
+                    observations.push(TranscriptToolEventObservation::Invocation {
+                        tool_use_id,
+                        tool_name,
+                        tool_input: block.input,
+                    });
+                }
+            }
+            TYPE_USER => {
+                let Ok(message) = serde_json::from_value::<ToolResultMessage>(line.message) else {
+                    continue;
+                };
+                let Ok(blocks) =
+                    serde_json::from_value::<Vec<ToolResultContentBlock>>(message.content)
+                else {
+                    continue;
+                };
+                for block in blocks {
+                    if block.kind != "tool_result" {
+                        continue;
+                    }
+                    let tool_use_id = block.tool_use_id.trim();
+                    if tool_use_id.is_empty() {
+                        continue;
+                    }
+
+                    let pending = pending_tools.get(tool_use_id);
+                    if pending.is_some_and(|tool| tool.is_subagent_task) {
+                        continue;
+                    }
+                    if pending.is_none() && looks_like_subagent_result_content(&block.content) {
+                        continue;
+                    }
+
+                    observations.push(TranscriptToolEventObservation::Result {
+                        tool_use_id: tool_use_id.to_string(),
+                        tool_name: pending
+                            .map(|tool| tool.tool_name.clone())
+                            .unwrap_or_default(),
+                        tool_output: block.content,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(observations)
 }
 
 pub fn calculate_token_usage_from_file(path: &str, start_line: usize) -> Result<TokenUsage> {
@@ -207,6 +322,21 @@ pub(crate) fn extract_agent_id_from_text(text: &str) -> String {
     }
 
     rest[..end].to_string()
+}
+
+fn looks_like_subagent_result_content(content: &Value) -> bool {
+    match content {
+        Value::String(text) => text.contains("agentId:"),
+        Value::Array(items) => items.iter().any(|item| {
+            item.as_str().is_some_and(|text| text.contains("agentId:"))
+                || item
+                    .as_object()
+                    .and_then(|value| value.get("text"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("agentId:"))
+        }),
+        _ => content.to_string().contains("agentId:"),
+    }
 }
 
 pub fn calculate_total_token_usage(
@@ -299,10 +429,11 @@ mod tests {
 
     use super::{
         TranscriptLine, calculate_token_usage, calculate_total_token_usage,
-        extract_agent_id_from_text, extract_all_modified_files, extract_last_user_prompt,
-        extract_modified_files, extract_spawned_agent_ids, find_checkpoint_uuid, parse_transcript,
-        serialize_transcript, truncate_at_uuid,
+        derive_tool_event_observations, extract_agent_id_from_text, extract_all_modified_files,
+        extract_last_user_prompt, extract_modified_files, extract_spawned_agent_ids,
+        find_checkpoint_uuid, parse_transcript, serialize_transcript, truncate_at_uuid,
     };
+    use crate::host::interactions::tool_events::TranscriptToolEventObservation;
 
     fn parse_lines(data: &str) -> Vec<TranscriptLine> {
         parse_transcript(data.as_bytes()).expect("failed to parse transcript lines")
@@ -960,5 +1091,89 @@ not valid json
         let mut expected = HashMap::new();
         expected.insert("abc1234".to_string(), "toolu_xyz".to_string());
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn derives_claude_tool_event_observations_from_transcript_fragment() {
+        let fragment = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/lib.rs\"}},",
+            "{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"Bash\",\"input\":{\"command\":\"rg interaction_events src\"}}",
+            "]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_2\",\"content\":\"found matches\"}",
+            "]}}\n"
+        );
+
+        let observations =
+            derive_tool_event_observations("turn-1", fragment).expect("derive observations");
+
+        assert_eq!(
+            observations,
+            vec![
+                TranscriptToolEventObservation::Invocation {
+                    tool_use_id: "toolu_1".to_string(),
+                    tool_name: "Read".to_string(),
+                    tool_input: json!({"file_path":"src/lib.rs"}),
+                },
+                TranscriptToolEventObservation::Invocation {
+                    tool_use_id: "toolu_2".to_string(),
+                    tool_name: "Bash".to_string(),
+                    tool_input: json!({"command":"rg interaction_events src"}),
+                },
+                TranscriptToolEventObservation::Result {
+                    tool_use_id: "toolu_2".to_string(),
+                    tool_name: "Bash".to_string(),
+                    tool_output: json!("found matches"),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_claude_subagent_task_observations() {
+        let fragment = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"id\":\"toolu_task\",\"name\":\"Task\",\"input\":{\"prompt\":\"delegate\"}}",
+            "]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_task\",\"content\":\"agentId: sub123\"}",
+            "]}}\n"
+        );
+
+        let observations =
+            derive_tool_event_observations("turn-1", fragment).expect("derive observations");
+        assert!(observations.is_empty());
+    }
+
+    #[test]
+    fn idless_claude_tool_uses_after_subagent_tasks_receive_unique_fallback_ids() {
+        let fragment = concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"prompt\":\"delegate\"}},",
+            "{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"src/lib.rs\"}}",
+            "]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
+            "{\"type\":\"tool_result\",\"tool_use_id\":\"turn-1:tool:0002\",\"content\":\"updated file\"}",
+            "]}}\n"
+        );
+
+        let observations =
+            derive_tool_event_observations("turn-1", fragment).expect("derive observations");
+        assert_eq!(
+            observations,
+            vec![
+                TranscriptToolEventObservation::Invocation {
+                    tool_use_id: "turn-1:tool:0002".to_string(),
+                    tool_name: "Edit".to_string(),
+                    tool_input: json!({"file_path":"src/lib.rs"}),
+                },
+                TranscriptToolEventObservation::Result {
+                    tool_use_id: "turn-1:tool:0002".to_string(),
+                    tool_name: "Edit".to_string(),
+                    tool_output: json!("updated file"),
+                },
+            ]
+        );
     }
 }

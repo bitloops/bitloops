@@ -24,8 +24,7 @@ use crate::host::checkpoints::transcript::metadata::{
 use crate::host::interactions::model::resolve_interaction_model_from_bytes;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::tool_events::{
-    DerivedToolEventContext, derive_tool_events_from_transcript_fragment,
-    transcript_derived_turn_end_sequence,
+    DerivedToolEventContext, derive_tool_events_with_deriver, transcript_derived_turn_end_sequence,
 };
 use crate::host::interactions::transcript_fragment::{
     transcript_fragment_from_bytes, transcript_position_from_bytes,
@@ -276,7 +275,8 @@ pub fn handle_lifecycle_turn_end(
         if let Err(err) = spool.record_turn(&turn) {
             eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
         }
-        let derived_tool_events = match derive_tool_events_from_transcript_fragment(
+        let derived_tool_events = match derive_tool_events_with_deriver(
+            agent.as_transcript_tool_event_deriver(),
             &DerivedToolEventContext {
                 repo_id: spool.repo_id(),
                 session_id: &session_id,

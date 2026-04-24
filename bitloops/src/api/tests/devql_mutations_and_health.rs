@@ -1678,6 +1678,7 @@ async fn slim_select_artefacts_resolves_symbol_selection_and_empty_checkpoint_sc
 #[tokio::test]
 async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
     let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
     let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
 
     let response = schema
@@ -1689,6 +1690,7 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
                 artefacts {
                   path
                   symbolFqn
+                  summary
                 }
               }
             }
@@ -1718,6 +1720,58 @@ async fn slim_select_artefacts_resolves_project_scoped_relative_paths() {
             .iter()
             .any(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller"),
         "expected project-scoped caller artefact, got {artefacts:?}"
+    );
+    let caller_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/caller.ts::caller")
+        .expect("caller artefact");
+    assert_eq!(
+        caller_artefact["summary"],
+        "Calls API target and web render helpers to build a response payload."
+    );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_summary_falls_back_to_historical_rows_when_current_is_empty() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_historical_summary_inputs(repo.path());
+    let schema = slim_schema_for_scope(repo.path(), Some("packages/api"));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { path: "src/target.ts" }) {
+                count
+                artefacts {
+                  path
+                  symbolFqn
+                  summary
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    assert_eq!(json["selectArtefacts"]["count"], 2);
+    let artefacts = json["selectArtefacts"]["artefacts"]
+        .as_array()
+        .expect("artefacts array");
+    let target_artefact = artefacts
+        .iter()
+        .find(|artefact| artefact["symbolFqn"] == "packages/api/src/target.ts::target")
+        .expect("target artefact");
+    assert_eq!(
+        target_artefact["summary"],
+        "Builds API response payload fields and returns the transformed target result."
     );
 }
 
@@ -2159,6 +2213,7 @@ async fn slim_select_artefacts_search_resolves_identity_path_terms() {
 #[tokio::test]
 async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits() {
     let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
     seed_graphql_semantic_query_inputs(repo.path());
     configure_graphql_semantic_query_runtime(repo.path());
     let schema = slim_schema_for_repo(repo.path());
@@ -2172,6 +2227,7 @@ async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits()
                 artefacts {
                   path
                   symbolFqn
+                  summary
                 }
               }
             }
@@ -2200,6 +2256,14 @@ async fn slim_select_artefacts_search_resolves_code_and_summary_embedding_hits()
     assert_eq!(
         artefacts[1]["symbolFqn"],
         "packages/api/src/target.ts::target"
+    );
+    assert_eq!(
+        artefacts[0]["summary"],
+        "Calls API target and web render helpers to build a response payload."
+    );
+    assert_eq!(
+        artefacts[1]["summary"],
+        "Builds API response payload fields and returns the transformed target result."
     );
 }
 

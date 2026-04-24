@@ -479,7 +479,7 @@ fn recording_tool_events_refreshes_tool_use_and_search_projections() {
                     "SELECT tool_name, input_summary, output_summary, session_id, started_at,
                             ended_at, source
                      FROM interaction_tool_invocations
-                     WHERE repo_id = ?1 AND tool_invocation_id = 'tool-1'",
+                     WHERE repo_id = ?1 AND tool_invocation_id = 'turn-1:tool-1'",
                     rusqlite::params![spool.repo_id()],
                     |row| {
                         Ok((
@@ -569,4 +569,97 @@ fn recording_tool_events_refreshes_tool_use_and_search_projections() {
             Ok(())
         })
         .expect("query projections");
+}
+
+#[test]
+fn tool_projection_ids_remain_distinct_when_tool_use_ids_repeat_across_turns() {
+    let (_dir, spool) = test_spool();
+    let session = sample_session();
+    let turn_one = sample_turn();
+    let mut turn_two = sample_turn();
+    turn_two.turn_id = "turn-2".into();
+    turn_two.turn_number = 2;
+    turn_two.started_at = "2026-04-05T10:00:03Z".into();
+    turn_two.ended_at = Some("2026-04-05T10:00:04Z".into());
+    turn_two.updated_at = "2026-04-05T10:00:04Z".into();
+
+    spool.record_session(&session).expect("record session");
+    spool.record_turn(&turn_one).expect("record first turn");
+    spool.record_turn(&turn_two).expect("record second turn");
+
+    for (event_id, turn_id, event_time, sequence_number, input_summary) in [
+        (
+            "event-turn-1-tool-start",
+            "turn-1",
+            "2026-04-05T10:00:01Z",
+            1_i64,
+            "Read src/lib.rs",
+        ),
+        (
+            "event-turn-2-tool-start",
+            "turn-2",
+            "2026-04-05T10:00:03Z",
+            1_i64,
+            "Read src/main.rs",
+        ),
+    ] {
+        spool
+            .record_event(&InteractionEvent {
+                event_id: event_id.into(),
+                session_id: session.session_id.clone(),
+                turn_id: Some(turn_id.into()),
+                repo_id: spool.repo_id().to_string(),
+                event_type: InteractionEventType::ToolInvocationObserved,
+                event_time: event_time.into(),
+                source: "transcript_derivation".into(),
+                sequence_number,
+                agent_type: "opencode".into(),
+                model: "gpt-5.4".into(),
+                tool_use_id: "call-reused".into(),
+                tool_kind: "read".into(),
+                task_description: input_summary.into(),
+                payload: serde_json::json!({
+                    "source": "transcript_derivation",
+                    "tool_name": "read",
+                    "input_summary": input_summary,
+                    "transcript_path": format!("/tmp/{turn_id}.jsonl")
+                }),
+                ..Default::default()
+            })
+            .expect("record tool start");
+    }
+
+    spool
+        .with_connection(|conn| {
+            let repeated_tool_use_count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*)
+                     FROM interaction_tool_invocations
+                     WHERE repo_id = ?1 AND tool_use_id = 'call-reused'",
+                    rusqlite::params![spool.repo_id()],
+                    |row| row.get(0),
+                )
+                .expect("reused tool count");
+            assert_eq!(repeated_tool_use_count, 2);
+
+            let mut stmt = conn
+                .prepare(
+                    "SELECT tool_invocation_id
+                     FROM interaction_tool_invocations
+                     WHERE repo_id = ?1 AND tool_use_id = 'call-reused'
+                     ORDER BY tool_invocation_id ASC",
+                )
+                .expect("prepare tool invocation ids");
+            let ids = stmt
+                .query_map(rusqlite::params![spool.repo_id()], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("query tool invocation ids")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("collect tool invocation ids");
+            assert_eq!(ids, vec!["turn-1:call-reused", "turn-2:call-reused"]);
+
+            Ok(())
+        })
+        .expect("query distinct repeated tool projections");
 }

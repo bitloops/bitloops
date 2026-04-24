@@ -125,6 +125,7 @@ pub struct Artefact {
     pub signature: Option<String>,
     pub modifiers: Vec<String>,
     pub docstring: Option<String>,
+    pub summary: Option<String>,
     pub content_hash: Option<String>,
     pub blob_sha: String,
     pub created_at: DateTimeScalar,
