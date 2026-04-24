@@ -28,24 +28,25 @@ mod tests {
     }
 
     #[test]
-    fn using_devql_skill_centers_search_overview_and_selector_choice() {
+    fn using_devql_skill_centers_search_modes_overview_and_selector_choice() {
         let body = using_devql_skill_body();
         assert!(body.contains("search"));
+        assert!(body.contains("searchMode: LEXICAL"));
+        assert!(body.contains("searchBreakdown(first: 3)"));
         assert!(body.contains("overview"));
         assert!(body.contains("Choosing The `by` Selector"));
         assert!(body.contains("path + lines"));
         assert!(body.contains("symbolFqn"));
         assert!(body.contains("expandHint"));
-        assert!(body.contains("<distilled phrase or approximate symbol>"));
+        assert!(body.contains("<distilled conceptual phrase>"));
     }
 
     #[test]
-    fn using_devql_skill_omits_stale_selector_names_and_summary_routing() {
+    fn using_devql_skill_omits_stale_selector_names_and_old_routing_terms() {
         let body = using_devql_skill_body();
         assert!(!body.contains("fuzzyName"));
         assert!(!body.contains("naturalLanguage"));
         assert!(!body.contains("semanticQuery"));
-        assert!(!body.contains("summary"));
         assert!(!body.contains("entries(first: ...)"));
         assert!(!body.contains("If the input clearly identifies a specific file"));
     }

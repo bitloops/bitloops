@@ -220,6 +220,12 @@ impl LifecycleAgentAdapter for ClaudeCodeLifecycleAdapter {
         String::from("claude")
     }
 
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(&CLAUDE_AGENT_FOR_LIFECYCLE)
+    }
+
     fn as_token_calculator(&self) -> Option<&dyn TokenCalculator> {
         Some(&CLAUDE_AGENT_FOR_LIFECYCLE)
     }
@@ -361,6 +367,12 @@ impl LifecycleAgentAdapter for OpenCodeLifecycleAdapter {
         }
     }
 
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(&OPENCODE_AGENT_FOR_LIFECYCLE)
+    }
+
     fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {
         Some(&OPENCODE_AGENT_FOR_LIFECYCLE)
     }
@@ -481,6 +493,12 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
         } else {
             format!("codex --resume {session_id}")
         }
+    }
+
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(&CODEX_AGENT_FOR_LIFECYCLE)
     }
 
     fn as_transcript_analyzer(&self) -> Option<&dyn TranscriptAnalyzer> {

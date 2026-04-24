@@ -31,6 +31,9 @@ pub(super) fn compile_select_artefacts_args(
     if let Some(search) = selector.search.as_deref() {
         fields.push(format!("search: {}", quote_graphql_string(search)));
     }
+    if let Some(search_mode) = selector.search_mode.as_deref() {
+        fields.push(format!("searchMode: {}", enum_literal(search_mode)));
+    }
     if let Some(path) = selector.path.as_deref() {
         fields.push(format!("path: {}", quote_graphql_string(path)));
     }

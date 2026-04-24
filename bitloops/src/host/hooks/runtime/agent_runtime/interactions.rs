@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::adapters::agents::TokenUsage;
+use crate::adapters::agents::{AgentRegistry, TokenUsage};
 use crate::host::checkpoints::lifecycle::interaction::{
     flush_interaction_spool_best_effort, resolve_interaction_spool,
 };
@@ -10,8 +10,8 @@ use crate::host::checkpoints::strategy::manual_commit::current_branch_name;
 use crate::host::interactions::model::resolve_interaction_model;
 use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::tool_events::{
-    DerivedToolEventContext, INTERACTION_SOURCE_LIVE_HOOK,
-    derive_tool_events_from_transcript_fragment, transcript_derived_turn_end_sequence,
+    DerivedToolEventContext, INTERACTION_SOURCE_LIVE_HOOK, derive_tool_events_with_deriver,
+    transcript_derived_turn_end_sequence,
 };
 use crate::host::interactions::transcript_fragment::read_transcript_fragment_from_path;
 use crate::host::interactions::types::{
@@ -386,7 +386,13 @@ pub(super) fn record_turn_end_interaction(ctx: TurnEndInteraction<'_>) {
         if let Err(err) = spool.record_turn(&turn) {
             eprintln!("[bitloops] Warning: failed to spool interaction turn end: {err}");
         }
-        let derived_tool_events = match derive_tool_events_from_transcript_fragment(
+        let agent_registry = AgentRegistry::builtin();
+        let transcript_tool_event_deriver = agent_registry
+            .get_by_agent_type(&agent_type)
+            .ok()
+            .and_then(|agent| agent.as_transcript_tool_event_deriver());
+        let derived_tool_events = match derive_tool_events_with_deriver(
+            transcript_tool_event_deriver,
             &DerivedToolEventContext {
                 repo_id: spool.repo_id(),
                 session_id,

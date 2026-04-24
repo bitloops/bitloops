@@ -21,6 +21,14 @@ pub fn init_database(db_path: &Path, seed: bool, commit_sha: &str) -> Result<()>
 
     conn.execute_batch(schema::SCHEMA_SQL)
         .context("failed to create schema")?;
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::semantic_features_sqlite_schema_sql(),
+    )
+    .context("failed to create semantic feature schema")?;
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::semantic_embeddings_sqlite_schema_sql(),
+    )
+    .context("failed to create semantic embedding schema")?;
 
     if seed {
         let seeded = seed::seed_database(&mut conn, commit_sha)?;

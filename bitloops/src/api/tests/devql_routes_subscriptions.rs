@@ -244,6 +244,12 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("chatHistory"));
     assert!(body.contains("selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!"));
     assert!(body.contains("search: String"));
+    assert!(body.contains("searchMode: SearchMode"));
+    assert!(body.contains("enum SearchMode"));
+    assert!(body.contains("searchBreakdown("));
+    assert!(body.contains("type SearchBreakdown"));
+    assert!(body.contains("searchScore: ArtefactSearchScore"));
+    assert!(body.contains("type ArtefactSearchScore"));
     assert!(!body.contains("fuzzyName: String"));
     assert!(!body.contains("naturalLanguage: String"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));

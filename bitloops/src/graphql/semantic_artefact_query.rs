@@ -9,14 +9,18 @@ use serde_json::Value;
 use crate::artefact_query_planner::plan_graphql_artefact_query;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::{
-    EmbeddingRepresentationKind, EmbeddingSetup, resolve_embedding_setup,
+    EmbeddingRepresentationKind as SemanticEmbeddingRepresentationKind, EmbeddingSetup,
+    resolve_embedding_setup,
 };
 use crate::capability_packs::semantic_clones::load_active_embedding_setup;
 use crate::capability_packs::semantic_clones::runtime_config::{
     EmbeddingProviderMode, embeddings_enabled, resolve_embedding_provider,
     resolve_semantic_clones_config,
 };
-use crate::graphql::types::{Artefact, CanonicalKind, DateTimeScalar};
+use crate::graphql::types::{
+    Artefact, CanonicalKind, DateTimeScalar,
+    EmbeddingRepresentationKind as GraphqlEmbeddingRepresentationKind,
+};
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
 use crate::host::devql::esc_pg;
@@ -28,30 +32,42 @@ const DEFAULT_MIN_SEMANTIC_SCORE: f32 = 0.72;
 const DEFAULT_RESULT_LIMIT: usize = 5;
 const ANN_PREFILTER_MULTIPLIER: usize = 4;
 const ANN_PREFILTER_MIN_LIMIT: usize = 32;
-const SEARCH_REPRESENTATION_KINDS: [EmbeddingRepresentationKind; 3] = [
-    EmbeddingRepresentationKind::Identity,
-    EmbeddingRepresentationKind::Code,
-    EmbeddingRepresentationKind::Summary,
-];
-
 #[derive(Debug, Clone)]
 struct SemanticArtefactCandidate {
     artefact: Artefact,
-    representation_kind: EmbeddingRepresentationKind,
+    representation_kind: SemanticEmbeddingRepresentationKind,
     embedding: Vec<f32>,
     setup: EmbeddingSetup,
 }
 
-pub(crate) async fn select_semantic_artefacts(
+pub(crate) async fn select_semantic_artefacts_for_representation(
     context: &DevqlGraphqlContext,
     scope: &ResolverScope,
     query: &str,
+    representation_kind: SemanticEmbeddingRepresentationKind,
 ) -> GraphqlResult<Vec<Artefact>> {
+    let mut hits_by_representation =
+        select_semantic_artefacts_by_representation(context, scope, query, &[representation_kind])
+            .await?;
+    Ok(hits_by_representation
+        .remove(&representation_kind)
+        .unwrap_or_default())
+}
+
+pub(crate) async fn select_semantic_artefacts_by_representation(
+    context: &DevqlGraphqlContext,
+    scope: &ResolverScope,
+    query: &str,
+    representation_kinds: &[SemanticEmbeddingRepresentationKind],
+) -> GraphqlResult<HashMap<SemanticEmbeddingRepresentationKind, Vec<Artefact>>> {
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
         return Err(bad_user_input_error(
             "`selectArtefacts(by: ...)` requires a non-empty `search`",
         ));
+    }
+    if representation_kinds.is_empty() {
+        return Ok(HashMap::new());
     }
 
     let repo_id = context.repo_id_for_scope(scope).map_err(|err| {
@@ -66,9 +82,10 @@ pub(crate) async fn select_semantic_artefacts(
     })?;
     let config = resolve_semantic_clones_config(&host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
     if !embeddings_enabled(&config) {
-        return Ok(Vec::new());
+        return Ok(HashMap::new());
     }
     let inference = host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
+    let representation_kinds = dedup_representation_kinds(representation_kinds);
 
     let repo_root = context.repo_root_for_scope(scope).map_err(|err| {
         backend_error(format!(
@@ -83,17 +100,24 @@ pub(crate) async fn select_semantic_artefacts(
         })?;
     let relational = relational_store.to_local_inner();
 
-    let candidates =
-        load_semantic_candidates(context, scope, &repo_id, &SEARCH_REPRESENTATION_KINDS)
-            .await
-            .map_err(|err| {
-                backend_error(format!(
-                    "failed to load candidate artefacts for search selection: {err:#}"
-                ))
-            })?;
+    let candidates = load_semantic_candidates(context, scope, &repo_id, &representation_kinds)
+        .await
+        .map_err(|err| {
+            backend_error(format!(
+                "failed to load candidate artefacts for search selection: {err:#}"
+            ))
+        })?;
+    let mut candidates_by_representation_setup =
+        group_semantic_candidates_by_representation_setup(candidates);
 
-    let mut embedding_hits = Vec::new();
-    for representation_kind in SEARCH_REPRESENTATION_KINDS {
+    let mut hits_by_representation = representation_kinds
+        .iter()
+        .copied()
+        .map(|representation_kind| (representation_kind, Vec::new()))
+        .collect::<HashMap<_, _>>();
+    let mut query_embeddings_by_setup = HashMap::<String, Vec<f32>>::new();
+
+    for representation_kind in representation_kinds {
         let selection = resolve_embedding_provider(
             &config,
             &inference,
@@ -127,22 +151,32 @@ pub(crate) async fn select_semantic_artefacts(
             continue;
         }
 
-        let compatible_candidates = compatible_candidates_for_representation_setup(
-            &candidates,
-            representation_kind,
-            &query_setup,
-        );
+        let compatible_candidates = candidates_by_representation_setup
+            .remove(&(representation_kind, query_setup.clone()))
+            .unwrap_or_default();
         if compatible_candidates.is_empty() {
             continue;
         }
 
-        let query_embedding = provider
-            .embed(trimmed_query, EmbeddingInputType::Query)
-            .map_err(|err| {
-                backend_error(format!(
-                    "failed to embed search query for {representation_kind}: {err:#}"
-                ))
-            })?;
+        let embedding_cache_key = format!(
+            "{}::{}",
+            provider.cache_key(),
+            query_setup.setup_fingerprint.as_str()
+        );
+        let query_embedding =
+            if let Some(query_embedding) = query_embeddings_by_setup.get(&embedding_cache_key) {
+                query_embedding.clone()
+            } else {
+                let query_embedding = provider
+                    .embed(trimmed_query, EmbeddingInputType::Query)
+                    .map_err(|err| {
+                        backend_error(format!(
+                            "failed to embed search query for {representation_kind}: {err:#}"
+                        ))
+                    })?;
+                query_embeddings_by_setup.insert(embedding_cache_key, query_embedding.clone());
+                query_embedding
+            };
         if query_embedding.is_empty() {
             return Err(backend_error(format!(
                 "{representation_kind} embedding provider returned an empty vector for search",
@@ -152,23 +186,24 @@ pub(crate) async fn select_semantic_artefacts(
             continue;
         }
 
-        embedding_hits.extend(rank_semantic_candidates(
+        let hits = rank_semantic_candidates(
             &query_embedding,
             compatible_candidates,
             VectorSearchMode::Auto,
             DEFAULT_MIN_SEMANTIC_SCORE,
             DEFAULT_RESULT_LIMIT,
-        ));
+        );
+        hits_by_representation.insert(representation_kind, hits);
     }
 
-    Ok(merge_semantic_hits(embedding_hits, DEFAULT_RESULT_LIMIT))
+    Ok(hits_by_representation)
 }
 
 async fn load_semantic_candidates(
     context: &DevqlGraphqlContext,
     scope: &ResolverScope,
     repo_id: &str,
-    representation_kinds: &[EmbeddingRepresentationKind],
+    representation_kinds: &[SemanticEmbeddingRepresentationKind],
 ) -> Result<Vec<SemanticArtefactCandidate>> {
     let spec = plan_graphql_artefact_query(
         repo_id,
@@ -193,7 +228,8 @@ async fn load_semantic_candidates(
                 filtered.canonical_kind, filtered.language_kind, filtered.symbol_fqn, \
                 filtered.parent_artefact_id, filtered.start_line, filtered.end_line, \
                 filtered.start_byte, filtered.end_byte, filtered.signature, filtered.modifiers, \
-                filtered.docstring, filtered.blob_sha, filtered.content_hash, filtered.created_at, \
+                filtered.docstring, filtered.summary, filtered.embedding_representations, \
+                filtered.blob_sha, filtered.content_hash, filtered.created_at, \
                 se.representation_kind AS representation_kind, \
                 se.setup_fingerprint, se.provider AS embedding_provider, \
                 se.model AS embedding_model, se.dimension AS embedding_dimension, \
@@ -213,9 +249,10 @@ async fn load_semantic_candidates(
     rows.into_iter().map(candidate_from_row).collect()
 }
 
+#[cfg(test)]
 fn compatible_candidates_for_representation_setup(
     candidates: &[SemanticArtefactCandidate],
-    representation_kind: EmbeddingRepresentationKind,
+    representation_kind: SemanticEmbeddingRepresentationKind,
     query_setup: &EmbeddingSetup,
 ) -> Vec<SemanticArtefactCandidate> {
     candidates
@@ -227,6 +264,33 @@ fn compatible_candidates_for_representation_setup(
         .collect()
 }
 
+fn dedup_representation_kinds(
+    representation_kinds: &[SemanticEmbeddingRepresentationKind],
+) -> Vec<SemanticEmbeddingRepresentationKind> {
+    let mut deduped = Vec::new();
+    for representation_kind in representation_kinds.iter().copied() {
+        if !deduped.contains(&representation_kind) {
+            deduped.push(representation_kind);
+        }
+    }
+    deduped
+}
+
+fn group_semantic_candidates_by_representation_setup(
+    candidates: Vec<SemanticArtefactCandidate>,
+) -> HashMap<(SemanticEmbeddingRepresentationKind, EmbeddingSetup), Vec<SemanticArtefactCandidate>>
+{
+    let mut grouped = HashMap::new();
+    for candidate in candidates {
+        grouped
+            .entry((candidate.representation_kind, candidate.setup.clone()))
+            .or_insert_with(Vec::new)
+            .push(candidate);
+    }
+    grouped
+}
+
+#[cfg(test)]
 fn merge_semantic_hits(candidates: Vec<Artefact>, result_limit: usize) -> Vec<Artefact> {
     if candidates.is_empty() || result_limit == 0 {
         return Vec::new();
@@ -249,6 +313,7 @@ fn merge_semantic_hits(candidates: Vec<Artefact>, result_limit: usize) -> Vec<Ar
     merged
 }
 
+#[cfg(test)]
 fn compare_scored_artefacts(left: &Artefact, right: &Artefact) -> Ordering {
     right
         .score
@@ -358,15 +423,15 @@ fn candidate_from_row(row: Value) -> Result<SemanticArtefactCandidate> {
     })
 }
 
-fn representation_kind_from_row(row: &Value) -> Result<EmbeddingRepresentationKind> {
+fn representation_kind_from_row(row: &Value) -> Result<SemanticEmbeddingRepresentationKind> {
     match string_field(row, "representation_kind")?
         .trim()
         .to_ascii_lowercase()
         .as_str()
     {
-        "code" | "baseline" | "enriched" => Ok(EmbeddingRepresentationKind::Code),
-        "summary" => Ok(EmbeddingRepresentationKind::Summary),
-        "identity" | "locator" => Ok(EmbeddingRepresentationKind::Identity),
+        "code" | "baseline" | "enriched" => Ok(SemanticEmbeddingRepresentationKind::Code),
+        "summary" => Ok(SemanticEmbeddingRepresentationKind::Summary),
+        "identity" | "locator" => Ok(SemanticEmbeddingRepresentationKind::Identity),
         other => Err(anyhow!("unknown representation kind `{other}`")),
     }
 }
@@ -388,10 +453,16 @@ fn artefact_from_value(row: &Value) -> Result<Artefact> {
         signature: optional_string_field(row, "signature"),
         modifiers: parse_string_array_field(row, "modifiers"),
         docstring: optional_string_field(row, "docstring"),
+        summary: optional_string_field(row, "summary"),
+        embedding_representations: parse_embedding_representation_field(
+            row,
+            "embedding_representations",
+        ),
         content_hash: optional_string_field(row, "content_hash"),
         blob_sha: string_field(row, "blob_sha")?,
         created_at: parse_storage_datetime(string_field(row, "created_at")?.as_str())?,
         score: None,
+        search_score: None,
         scope: ResolverScope::default(),
     })
 }
@@ -495,6 +566,35 @@ fn parse_string_array_field(row: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn parse_embedding_representation_field(
+    row: &Value,
+    key: &str,
+) -> Vec<GraphqlEmbeddingRepresentationKind> {
+    let mut parsed = Vec::new();
+
+    for value in parse_string_array_field(row, key) {
+        let mapped = match value.trim().to_ascii_lowercase().as_str() {
+            "identity" | "locator" => Some(GraphqlEmbeddingRepresentationKind::Identity),
+            "code" | "baseline" | "enriched" => Some(GraphqlEmbeddingRepresentationKind::Code),
+            "summary" => Some(GraphqlEmbeddingRepresentationKind::Summary),
+            _ => None,
+        };
+
+        if let Some(kind) = mapped
+            && !parsed.contains(&kind)
+        {
+            parsed.push(kind);
+        }
+    }
+
+    parsed.sort_by_key(|kind| match kind {
+        GraphqlEmbeddingRepresentationKind::Identity => 0,
+        GraphqlEmbeddingRepresentationKind::Code => 1,
+        GraphqlEmbeddingRepresentationKind::Summary => 2,
+    });
+    parsed
+}
+
 fn parse_storage_datetime(value: &str) -> Result<DateTimeScalar> {
     if let Ok(timestamp) = DateTimeScalar::from_rfc3339(value.to_string()) {
         return Ok(timestamp);
@@ -531,11 +631,14 @@ mod tests {
             signature: None,
             modifiers: Vec::new(),
             docstring: None,
+            summary: None,
+            embedding_representations: Vec::new(),
             content_hash: None,
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-21T09:00:00Z")
                 .expect("valid timestamp"),
             score: None,
+            search_score: None,
             scope: ResolverScope::default(),
         }
     }
@@ -548,7 +651,7 @@ mod tests {
     ) -> SemanticArtefactCandidate {
         SemanticArtefactCandidate {
             artefact: sample_artefact(id, path, symbol_fqn),
-            representation_kind: EmbeddingRepresentationKind::Identity,
+            representation_kind: SemanticEmbeddingRepresentationKind::Identity,
             embedding,
             setup: EmbeddingSetup::new("bitloops_embeddings_ipc", "semantic-query-test-model", 3),
         }
@@ -617,7 +720,7 @@ mod tests {
 
         let compatible = compatible_candidates_for_representation_setup(
             &[mismatched],
-            EmbeddingRepresentationKind::Identity,
+            SemanticEmbeddingRepresentationKind::Identity,
             &query_setup,
         );
 

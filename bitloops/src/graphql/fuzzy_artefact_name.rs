@@ -304,11 +304,14 @@ mod tests {
             signature: None,
             modifiers: Vec::new(),
             docstring: None,
+            summary: None,
+            embedding_representations: Vec::new(),
             content_hash: None,
             blob_sha: format!("blob::{id}"),
             created_at: DateTimeScalar::from_rfc3339("2026-04-20T09:00:00Z")
                 .expect("valid timestamp"),
             score: None,
+            search_score: None,
             scope: ResolverScope::default(),
         }
     }

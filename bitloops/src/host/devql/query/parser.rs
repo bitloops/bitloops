@@ -55,6 +55,7 @@ pub(crate) struct ArtefactFilter {
 pub(crate) struct SelectArtefactsFilter {
     pub(crate) symbol_fqn: Option<String>,
     pub(crate) search: Option<String>,
+    pub(crate) search_mode: Option<String>,
     pub(crate) path: Option<String>,
     pub(crate) lines: Option<(i32, i32)>,
 }
@@ -165,6 +166,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             parsed.select_artefacts = Some(SelectArtefactsFilter {
                 symbol_fqn: args.get("symbol_fqn").cloned(),
                 search: args.get("search").cloned(),
+                search_mode: args.get("search_mode").cloned(),
                 path: args.get("path").cloned(),
                 lines: args
                     .get("lines")
