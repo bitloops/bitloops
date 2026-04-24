@@ -294,12 +294,31 @@ pub async fn status() -> Result<DaemonStatusReport> {
     lifecycle::status().await
 }
 
+pub fn runtime_state() -> Result<Option<DaemonRuntimeState>> {
+    read_runtime_state(Path::new("."))
+}
+
+pub fn service_metadata() -> Result<Option<DaemonServiceMetadata>> {
+    read_service_metadata(Path::new("."))
+}
+
 pub fn enrichment_status() -> Result<EnrichmentQueueStatus> {
     enrichment::snapshot()
 }
 
 pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {
     CapabilityEventCoordinator::try_shared()?.snapshot(repo_id)
+}
+
+pub(crate) fn capability_event_status_for_config_root(
+    config_root: &Path,
+    repo_id: Option<&str>,
+) -> Result<CapabilityEventQueueStatus> {
+    let runtime_store = crate::host::runtime_store::DaemonSqliteRuntimeStore::open_at(
+        crate::config::resolve_repo_runtime_db_path_for_config_root(config_root),
+    )
+    .context("opening repo runtime workplane store for current-state consumers")?;
+    CapabilityEventCoordinator::new_shared_instance(runtime_store).snapshot(repo_id)
 }
 
 pub fn current_state_consumer_status(repo_id: Option<&str>) -> Result<CapabilityEventQueueStatus> {

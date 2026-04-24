@@ -236,7 +236,7 @@ impl InitProgressRenderer {
                     ),
                     None if checklist.show_sync && !checklist.sync_complete => {
                         format_init_task_state_status_line(
-                            "Waiting for sync to finish before starting ingest",
+                            "Waiting for sync to complete before starting ingest",
                             spinner.as_str(),
                             self.terminal_width,
                         )

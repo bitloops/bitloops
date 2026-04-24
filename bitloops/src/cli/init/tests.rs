@@ -155,6 +155,28 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .expect("runtime")
 }
 
+fn init_status_command_args(status_args: InitStatusArgs) -> InitArgs {
+    InitArgs {
+        command: Some(InitCommand::Status(status_args)),
+        install_default_daemon: false,
+        force: false,
+        disable_devql_guidance: false,
+        agent: Vec::new(),
+        telemetry: None,
+        no_telemetry: false,
+        skip_baseline: false,
+        sync: None,
+        ingest: None,
+        backfill: None,
+        exclude: Vec::new(),
+        exclude_from: Vec::new(),
+        embeddings_runtime: None,
+        no_embeddings: false,
+        embeddings_gateway_url: None,
+        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+    }
+}
+
 fn fake_logged_in_session() -> crate::daemon::WorkosSessionDetails {
     crate::daemon::WorkosSessionDetails {
         client_id: "client_test".to_string(),
@@ -207,6 +229,7 @@ fn render_install_default_daemon_handoff_with_mkcert(
                             runtime
                                 .block_on(run_with_io_async_for_project_root(
                                     InitArgs {
+                                        command: None,
                                         install_default_daemon: true,
                                         force: false,
                                         disable_devql_guidance: false,
@@ -580,6 +603,40 @@ fn init_args_supports_install_default_daemon_flag() {
 }
 
 #[test]
+fn init_args_support_status_subcommand_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "status",
+        "--json",
+        "--wait",
+        "--session-id",
+        "init-session",
+    ])
+    .expect("parse init status");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let Some(InitCommand::Status(status_args)) = args.command else {
+        panic!("expected init status subcommand");
+    };
+
+    assert!(status_args.json);
+    assert!(status_args.wait);
+    assert!(!status_args.watch);
+    assert_eq!(status_args.session_id.as_deref(), Some("init-session"));
+}
+
+#[test]
+fn init_args_reject_mixing_setup_flags_with_status_subcommand() {
+    let err = Cli::try_parse_from(["bitloops", "init", "--sync", "status"])
+        .err()
+        .expect("mixed init setup flags should fail");
+
+    assert!(err.to_string().contains("cannot be used with"));
+}
+
+#[test]
 fn init_args_leave_embeddings_choice_unset_when_flags_are_omitted() {
     let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
     let Some(Commands::Init(args)) = parsed.command else {
@@ -718,6 +775,250 @@ fn init_args_support_repeated_exclusion_flags() {
 }
 
 #[test]
+fn run_init_status_renders_only_selected_lanes_in_text_output() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert!(!query.contains("startInit("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+                Ok(runtime_snapshot_json(
+                    repo_id.as_str(),
+                    "init-session-status-text",
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        embeddings_selected: true,
+                        summaries_selected: true,
+                        embeddings_lane_status: "RUNNING",
+                        summaries_lane_status: "WAITING",
+                        summaries_lane_waiting_reason: Some("waiting_for_follow_up_sync"),
+                        ..RuntimeSessionSnapshotFixture::default()
+                    },
+                ))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs::default()),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let rendered = strip_ansi_escape_sequences(&String::from_utf8(out).expect("utf8"));
+            assert!(rendered.contains("Init session: init-session-status-text"));
+            assert!(rendered.contains("Code Embeddings:"));
+            assert!(rendered.contains("Summaries:"));
+            assert!(!rendered.contains("Sync:"));
+            assert!(!rendered.contains("Ingest:"));
+        },
+    );
+}
+
+#[test]
+fn run_init_status_outputs_selected_lanes_in_json() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    let session_id = "init-session-status-json";
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+                Ok(runtime_snapshot_json(
+                    repo_id.as_str(),
+                    session_id,
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        run_sync: true,
+                        top_lane_status: "RUNNING",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    },
+                ))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs {
+                        json: true,
+                        wait: false,
+                        watch: false,
+                        session_id: Some("init-session-status".to_string()),
+                    }),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let payload: serde_json::Value =
+                serde_json::from_slice(&out).expect("parse init status json");
+            assert_eq!(payload["repoId"], json!(repo_id));
+            assert_eq!(payload["currentInitSessionId"], json!(session_id));
+            assert_eq!(payload["session"]["initSessionId"], json!(session_id));
+            let lanes = payload["session"]["lanes"]
+                .as_array()
+                .expect("selected lanes array");
+            assert_eq!(lanes.len(), 1);
+            assert_eq!(lanes[0]["title"], json!("Sync"));
+        },
+    );
+}
+
+#[test]
+fn run_init_status_wait_outputs_final_terminal_json() {
+    let snapshot_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let repo = tempfile::tempdir().expect("temp repo");
+    let session_id = "init-session-status-wait";
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let snapshot_count = std::rc::Rc::clone(&snapshot_count);
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+
+                let mut count = snapshot_count.borrow_mut();
+                *count += 1;
+                let fixture = if *count == 1 {
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        run_sync: true,
+                        top_lane_status: "RUNNING",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                } else {
+                    RuntimeSessionSnapshotFixture {
+                        status: "COMPLETED",
+                        run_sync: true,
+                        top_lane_status: "COMPLETED",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                };
+                Ok(runtime_snapshot_json(repo_id.as_str(), session_id, fixture))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs {
+                        json: true,
+                        wait: true,
+                        watch: false,
+                        session_id: Some(session_id.to_string()),
+                    }),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let payload: serde_json::Value =
+                serde_json::from_slice(&out).expect("parse waited init status json");
+            assert_eq!(payload["session"]["status"], json!("COMPLETED"));
+        },
+    );
+
+    assert!(
+        *snapshot_count.borrow() >= 2,
+        "expected init status --wait to poll until the session completed"
+    );
+}
+
+#[test]
+fn run_init_status_watch_streams_updates_until_terminal_state() {
+    let snapshot_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let repo = tempfile::tempdir().expect("temp repo");
+    let session_id = "init-session-status-watch";
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let snapshot_count = std::rc::Rc::clone(&snapshot_count);
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+
+                let mut count = snapshot_count.borrow_mut();
+                *count += 1;
+                let fixture = if *count == 1 {
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        run_sync: true,
+                        top_lane_status: "RUNNING",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                } else {
+                    RuntimeSessionSnapshotFixture {
+                        status: "COMPLETED",
+                        run_sync: true,
+                        top_lane_status: "COMPLETED",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                };
+                Ok(runtime_snapshot_json(repo_id.as_str(), session_id, fixture))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs {
+                        json: false,
+                        wait: false,
+                        watch: true,
+                        session_id: None,
+                    }),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let rendered = String::from_utf8(out).expect("utf8 output");
+            assert!(rendered.contains("Status: Running"));
+            assert!(rendered.contains("Status: Completed"));
+        },
+    );
+
+    assert!(
+        *snapshot_count.borrow() >= 2,
+        "expected init status --watch to stream multiple snapshots"
+    );
+}
+
+#[test]
 fn init_embeddings_prompt_defaults_to_cloud_in_picker_mode() {
     let mut out = Vec::new();
     let mut input = Cursor::new(Vec::<u8>::new());
@@ -811,6 +1112,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
                 disable_devql_guidance: false,
@@ -876,6 +1178,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
 
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
                 disable_devql_guidance: false,
@@ -934,6 +1237,7 @@ keep = true
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
                 disable_devql_guidance: false,
@@ -988,6 +1292,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
                 disable_devql_guidance: false,
@@ -1053,6 +1358,7 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
                 let mut out = Vec::new();
                 run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
                         disable_devql_guidance: false,
@@ -1115,6 +1421,7 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
                 let mut out = Vec::new();
                 let err = run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
                         disable_devql_guidance: false,
@@ -1176,6 +1483,7 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
                 let mut out = Vec::new();
                 run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
                         disable_devql_guidance: false,
@@ -1240,6 +1548,7 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
                 let mut out = Vec::new();
                 let err = run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
                         disable_devql_guidance: false,
@@ -1292,6 +1601,7 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
         let mut out = Vec::new();
         let err = run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
                 disable_devql_guidance: false,
@@ -1342,6 +1652,7 @@ fn run_init_rewrites_existing_daemon_binding() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
                 disable_devql_guidance: false,
@@ -1400,6 +1711,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
                 disable_devql_guidance: false,
@@ -1454,6 +1766,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 let mut out = Vec::new();
                 run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: true,
                         disable_devql_guidance: false,
@@ -1508,6 +1821,7 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
             let mut out = Vec::new();
             run_with_writer_for_project_root(
                 InitArgs {
+                    command: None,
                     install_default_daemon: false,
                     force: true,
                     disable_devql_guidance: false,
@@ -1556,6 +1870,7 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
                 disable_devql_guidance: false,
@@ -1601,6 +1916,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
                 disable_devql_guidance: false,
@@ -1646,6 +1962,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
                 disable_devql_guidance: true,
@@ -1769,6 +2086,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
                 disable_devql_guidance: false,
@@ -1843,6 +2161,7 @@ fn run_init_with_invalid_explicit_agent_errors() {
         let mut out = Vec::new();
         let err = run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
                 disable_devql_guidance: false,
@@ -2216,6 +2535,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                 runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
                             disable_devql_guidance: false,
@@ -2276,6 +2596,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                 let err = runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
                             disable_devql_guidance: false,
@@ -2322,6 +2643,7 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
         let err = runtime
             .block_on(run_with_io_async_for_project_root(
                 InitArgs {
+                    command: None,
                     install_default_daemon: true,
                     force: false,
                     disable_devql_guidance: false,
@@ -2412,6 +2734,7 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
                                                             InitArgs {
+                                        command: None,
                                                                 install_default_daemon: true,
                                                                 force: false,
                                                                 disable_devql_guidance: false,
@@ -2544,6 +2867,7 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                 runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
                             disable_devql_guidance: false,
@@ -2619,6 +2943,7 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                         runtime
                             .block_on(run_with_io_async_for_project_root(
                                 InitArgs {
+                                    command: None,
                                     install_default_daemon: false,
                                     force: false,
                                     disable_devql_guidance: false,
@@ -2800,6 +3125,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                 runtime
                                                                     .block_on(run_with_io_async_for_project_root(
                                                                         InitArgs {
+                                        command: None,
                                                                             install_default_daemon: true,
                                                                             force: false,
                                                                             disable_devql_guidance: false,
@@ -2972,6 +3298,7 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: true,
                                             force: false,
                                             disable_devql_guidance: false,
@@ -3076,6 +3403,7 @@ fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when
                         let err = runtime
                             .block_on(run_with_io_async_for_project_root(
                                 InitArgs {
+                                    command: None,
                                     install_default_daemon: true,
                                     force: false,
                                     disable_devql_guidance: false,
@@ -3144,6 +3472,7 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                         let runtime = test_runtime();
                         let run_result = runtime.block_on(run_with_io_async_for_project_root(
                             InitArgs {
+                                command: None,
                                 install_default_daemon: true,
                                 force: false,
                                 disable_devql_guidance: false,
@@ -3369,6 +3698,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
                                                                 InitArgs {
+                                        command: None,
                                                                     install_default_daemon: true,
                                                                     force: false,
                                                                     disable_devql_guidance: false,
@@ -3561,6 +3891,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
                                                             InitArgs {
+                                        command: None,
                                                                 install_default_daemon: true,
                                                                 force: false,
                                                                 disable_devql_guidance: false,
@@ -3746,6 +4077,7 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
                                                                 InitArgs {
+                                        command: None,
                                                                     install_default_daemon: true,
                                                                     force: false,
                                                                     disable_devql_guidance: false,
@@ -3903,6 +4235,7 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                         runtime
                                             .block_on(run_with_io_async_for_project_root(
                                                 InitArgs {
+                                        command: None,
                                                     install_default_daemon: true,
                                                     force: false,
                                                     disable_devql_guidance: false,
@@ -4066,6 +4399,7 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                         runtime
                                             .block_on(run_with_io_async_for_project_root(
                                                 InitArgs {
+                                        command: None,
                                                     install_default_daemon: true,
                                                     force: false,
                                                     disable_devql_guidance: false,
@@ -4224,6 +4558,7 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                         runtime
                                             .block_on(run_with_io_async_for_project_root(
                                                 InitArgs {
+                                        command: None,
                                                     install_default_daemon: true,
                                                     force: false,
                                                     disable_devql_guidance: false,
@@ -4370,6 +4705,7 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                 runtime
                                                                     .block_on(run_with_io_async_for_project_root(
                                                                         InitArgs {
+                                        command: None,
                                                                             install_default_daemon: true,
                                                                             force: false,
                                                                             disable_devql_guidance: false,
@@ -4455,6 +4791,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                 runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
                             disable_devql_guidance: false,
@@ -4640,6 +4977,7 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: true,
                                             force: false,
                                             disable_devql_guidance: false,
@@ -4732,6 +5070,7 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: true,
                                             force: false,
                                             disable_devql_guidance: false,
@@ -4783,6 +5122,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
         let err = runtime
             .block_on(run_with_io_async_for_project_root(
                 InitArgs {
+                    command: None,
                     install_default_daemon: false,
                     force: false,
                     disable_devql_guidance: false,
@@ -4903,6 +5243,7 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: false,
                                             force: false,
                                             disable_devql_guidance: false,
@@ -5048,6 +5389,7 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: false,
                                             force: false,
                                             disable_devql_guidance: false,

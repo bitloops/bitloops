@@ -1,14 +1,43 @@
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Result, bail};
-use clap::Args;
+use clap::{Args, Subcommand};
 
 use crate::cli::embeddings::EmbeddingsRuntime;
 
 pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
 
-#[derive(Args)]
+#[derive(Subcommand, Debug, Clone)]
+pub enum InitCommand {
+    /// Show init status for the current repository.
+    Status(InitStatusArgs),
+}
+
+#[derive(Args, Debug, Clone, Default)]
+pub struct InitStatusArgs {
+    /// Output machine-readable JSON. With `--watch`, emits one JSON object per update.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+
+    /// Wait for the selected init session to reach a terminal state before printing.
+    #[arg(long, default_value_t = false, conflicts_with = "watch")]
+    pub wait: bool,
+
+    /// Stream status updates for the selected active init session until it reaches a terminal state.
+    #[arg(long, default_value_t = false)]
+    pub watch: bool,
+
+    /// Show only the matching active init session id (exact match or prefix).
+    #[arg(long, value_name = "SESSION_ID")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+#[command(args_conflicts_with_subcommands = true)]
 pub struct InitArgs {
+    #[command(subcommand)]
+    pub command: Option<InitCommand>,
+
     /// Bootstrap and start the default Bitloops daemon service if it is not already running.
     #[arg(long, default_value_t = false)]
     pub install_default_daemon: bool,

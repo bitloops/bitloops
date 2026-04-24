@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::daemon::InitRuntimeSessionView;
+
 use super::capability_events::CapabilityEventQueueStatus;
 use super::devql_task::DevqlTaskQueueStatus;
 use super::enrichment::EnrichmentQueueStatus;
@@ -15,6 +17,7 @@ pub struct DaemonStatusReport {
     pub health: Option<DaemonHealthSummary>,
     pub current_state_consumers: Option<CapabilityEventQueueStatus>,
     pub capability_events: Option<CapabilityEventQueueStatus>,
+    pub current_init_session: Option<InitRuntimeSessionView>,
     pub enrichment: Option<EnrichmentQueueStatus>,
     pub devql_tasks: Option<DevqlTaskQueueStatus>,
 }
