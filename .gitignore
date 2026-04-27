@@ -48,3 +48,4 @@ docs/superpowers/specs/*
 
 # Temporary add due to bitloops generating hooks there instead of /.git/hooks
 .githooks/
+.agents
