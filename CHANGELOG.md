@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **SQLite sync materialisation now waits cleanly for transient writer contention**: the batched sync writer now starts `IMMEDIATE` SQLite transactions for current-state materialisation, cache-touch completion, and removed-path cleanup instead of beginning deferred transactions and upgrading later during row deletes. This fixes transient `database is locked` failures during sync materialisation when another writer briefly holds the database lock.
+
 ## [0.0.19] - 2026-04-24
 
 ### Added
@@ -16,7 +20,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
-- **SQLite sync materialisation now waits cleanly for transient writer contention**: the batched sync writer now starts `IMMEDIATE` SQLite transactions for current-state materialisation, cache-touch completion, and removed-path cleanup instead of beginning deferred transactions and upgrading later during row deletes. This fixes transient `database is locked` failures during sync materialisation when another writer briefly holds the database lock.
 - **`bitloops init --sync=true` no longer waits on unselected semantic enrichment lanes before completing**: init session status now filters queued summary-refresh, code-embedding, and summary-embedding work down to the lanes actually selected for that session. This fixes sync-only runs getting stuck on "Waiting for queued enrichment work to finish" when repo-level semantic summary refresh remained active in the background
 - **Init semantic progress and waiting states now stay aligned with real indexing work**: the init runtime now measures code-embedding completion from fresh current-state coverage instead of optimistic queue arithmetic, counts the code lane as complete only when both `code` and `identity` embeddings are current, and suppresses misleading determinate progress while sync, follow-up sync, bootstrap, or current-state apply are still settling. This fixes the code-embeddings bar jumping to `100%` too early, growing denominators during sync, and `100%` progress coexisting with a still-active waiting state.
 - **Late semantic follow-up syncs and code embeddings no longer wait on ingest, and they no longer regress after task pruning**: init follow-up sync enqueue is now gated by sync terminality instead of ingest terminality, so code embeddings can proceed as soon as sync is ready even when commit-history ingest is still running. The init session also now persists terminal snapshots for its tracked DevQL tasks and protects active-session task IDs from queue pruning, which fixes `Ingest` and `Code Embeddings` regressing to `Waiting for sync to complete` after sync had already completed.
