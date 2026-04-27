@@ -48,6 +48,7 @@ type Artefact {
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
+	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
 	copyLineage: [ArtefactCopyLineage!]!
 }
 
@@ -887,6 +888,7 @@ type Project {
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
+	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
 }
 
@@ -948,6 +950,7 @@ type SlimQueryRoot {
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
+	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
 }
 
@@ -1173,6 +1176,36 @@ type TestHarnessCommitSummary {
 	commitSha: String!
 	counts: TestHarnessCommitCounts!
 	coveragePresent: Boolean!
+}
+
+type TestHarnessCoverage {
+	coverageSource: String!
+	lineCoveragePct: Float!
+	branchCoveragePct: Float!
+	lineDataAvailable: Boolean!
+	branchDataAvailable: Boolean!
+	uncoveredLines: [Int!]!
+	branches: [TestHarnessCoverageBranch!]!
+}
+
+type TestHarnessCoverageBranch {
+	line: Int!
+	block: Int!
+	branch: Int!
+	covered: Boolean!
+	hitCount: Int!
+}
+
+type TestHarnessCoverageResult {
+	artefact: TestHarnessArtefactRef!
+	coverage: TestHarnessCoverage!
+	summary: TestHarnessCoverageSummary!
+}
+
+type TestHarnessCoverageSummary {
+	uncoveredLineCount: Int!
+	uncoveredBranchCount: Int!
+	diagnosticCount: Int!
 }
 
 type TestHarnessCoveringTest {
