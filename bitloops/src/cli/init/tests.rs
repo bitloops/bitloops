@@ -688,6 +688,33 @@ fn init_args_support_no_summaries_flag() {
 }
 
 #[test]
+fn choose_summary_setup_during_init_skips_when_summary_mode_is_off() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        "[semantic_clones]\nsummary_mode = \"off\"\n",
+    )
+    .expect("write config");
+    let mut out = Vec::new();
+    let mut input = Cursor::new("");
+
+    let selection = test_runtime()
+        .block_on(choose_summary_setup_during_init(
+            repo.path(),
+            true,
+            false,
+            &mut out,
+            &mut input,
+        ))
+        .expect("choose summary setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::SummarySetupSelection::Skip
+    );
+}
+
+#[test]
 fn init_args_reject_conflicting_no_embeddings_and_runtime_flags() {
     let err = Cli::try_parse_from([
         "bitloops",
@@ -3081,7 +3108,7 @@ fn run_init_with_install_default_daemon_can_skip_summaries_via_flag() {
                                                         assert_eq!(variables["repoId"], repo_id);
                                                         assert_eq!(
                                                             variables["input"]["runCodeEmbeddings"],
-                                                            json!(false)
+                                                            json!(true)
                                                         );
                                                         assert_eq!(
                                                             variables["input"]["runSummaries"],
@@ -3127,7 +3154,7 @@ fn run_init_with_install_default_daemon_can_skip_summaries_via_flag() {
                                                     "--agent",
                                                     DEFAULT_AGENT,
                                                     "--telemetry=false",
-                                                    "--sync=false",
+                                                    "--sync=true",
                                                     "--ingest=false",
                                                     "--embeddings-runtime",
                                                     "local",
@@ -3151,6 +3178,26 @@ fn run_init_with_install_default_daemon_can_skip_summaries_via_flag() {
                                                         None,
                                                     ))
                                                     .expect("run init without summaries");
+
+                                                let rendered =
+                                                    String::from_utf8(out).expect("utf8 output");
+                                                assert!(
+                                                    !rendered
+                                                        .contains("Configure semantic summaries")
+                                                );
+
+                                                let repo_config_path =
+                                                    repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+                                                let repo_config = if repo_config_path.exists() {
+                                                    std::fs::read_to_string(&repo_config_path)
+                                                        .expect("read repo config")
+                                                } else {
+                                                    String::new()
+                                                };
+                                                assert!(
+                                                    !repo_config.contains("summary_mode = \"off\""),
+                                                    "no-summaries should match interactive skip without persisting summary_mode off:\n{repo_config}"
+                                                );
 
                                                 let daemon_config = ensure_daemon_config_exists()
                                                     .expect("resolve daemon config after init");

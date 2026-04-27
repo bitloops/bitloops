@@ -253,8 +253,28 @@ fn parse_range_header(header: &str) -> Option<DownloadByteRange> {
     })
 }
 
+fn localhost_bind_available(test_name: &str) -> bool {
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping {test_name}: loopback sockets are unavailable in this environment ({err})"
+            );
+            false
+        }
+        Err(err) => panic!("bind localhost for {test_name}: {err}"),
+    }
+}
+
 #[test]
 fn download_uses_parallel_ranges_when_server_supports_them() {
+    if !localhost_bind_available("download_uses_parallel_ranges_when_server_supports_them") {
+        return;
+    }
+
     let repo = TempDir::new().expect("tempdir");
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let asset_bytes = (0..4096)
@@ -311,6 +331,10 @@ fn download_uses_parallel_ranges_when_server_supports_them() {
 
 #[test]
 fn download_falls_back_to_serial_when_server_ignores_ranges() {
+    if !localhost_bind_available("download_falls_back_to_serial_when_server_ignores_ranges") {
+        return;
+    }
+
     let repo = TempDir::new().expect("tempdir");
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let asset_bytes = b"serial-download-body".to_vec();
@@ -350,6 +374,12 @@ fn download_falls_back_to_serial_when_server_ignores_ranges() {
 
 #[test]
 fn download_refetches_serially_when_asset_is_too_small_for_parallel_ranges() {
+    if !localhost_bind_available(
+        "download_refetches_serially_when_asset_is_too_small_for_parallel_ranges",
+    ) {
+        return;
+    }
+
     let repo = TempDir::new().expect("tempdir");
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let asset_bytes = b"small-parallel-probe".to_vec();
@@ -407,6 +437,10 @@ fn choose_parallel_download_ranges_covers_full_asset() {
 
 #[test]
 fn download_retries_straggling_parallel_range_serially() {
+    if !localhost_bind_available("download_retries_straggling_parallel_range_serially") {
+        return;
+    }
+
     let repo = TempDir::new().expect("tempdir");
     let _guard = enter_process_state(Some(repo.path()), &[]);
     let asset_bytes = (0..4096)

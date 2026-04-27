@@ -167,6 +167,45 @@ fn summary_setup_can_write_platform_profile() {
 }
 
 #[test]
+fn summary_setup_reenables_summary_mode_after_off_opt_out() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(
+        &config_path,
+        r#"
+[semantic_clones]
+summary_mode = "off"
+"#,
+    )
+    .expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || configure_cloud_summary_generation(&configure_root, None),
+    )
+    .expect("configure cloud summaries");
+
+    assert!(summary_generation_configured(&repo_root));
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("summary_mode = \"auto\""));
+    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+}
+
+#[test]
 fn summary_setup_can_write_platform_profile_with_url_override() {
     let repo = TempDir::new().expect("tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -425,6 +464,43 @@ max_output_tokens = 200
     assert!(
         !summary_generation_configured(&repo_root),
         "summary generation should require a defined runtime entry"
+    );
+}
+
+#[test]
+fn summary_generation_configured_respects_summary_mode_off() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(
+        &config_path,
+        r#"
+[semantic_clones]
+summary_mode = "off"
+
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+
+[inference.runtimes.bitloops_inference]
+command = "bitloops-inference"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    )
+    .expect("write config");
+
+    assert!(
+        !summary_generation_configured(&repo_root),
+        "summary generation should be disabled when summary_mode is off"
     );
 }
 

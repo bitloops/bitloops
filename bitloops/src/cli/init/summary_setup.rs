@@ -7,6 +7,7 @@ use crate::cli::inference::{
     SummarySetupSelection, prompt_summary_setup_selection, summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
+use crate::config::{SemanticSummaryMode, resolve_semantic_clones_config_for_repo};
 
 pub(crate) async fn choose_summary_setup_during_init(
     repo_root: &Path,
@@ -15,15 +16,19 @@ pub(crate) async fn choose_summary_setup_during_init(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<SummarySetupSelection> {
+    if no_summaries {
+        return Ok(SummarySetupSelection::Skip);
+    }
+
+    if resolve_semantic_clones_config_for_repo(repo_root).summary_mode == SemanticSummaryMode::Off {
+        return Ok(SummarySetupSelection::Skip);
+    }
+
     if summary_generation_configured(repo_root) {
         return Ok(SummarySetupSelection::Skip);
     }
 
     if !install_default_daemon {
-        return Ok(SummarySetupSelection::Skip);
-    }
-
-    if no_summaries {
         return Ok(SummarySetupSelection::Skip);
     }
 
