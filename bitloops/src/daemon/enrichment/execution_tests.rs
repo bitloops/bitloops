@@ -22,6 +22,47 @@ use tempfile::TempDir;
 
 const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
 
+#[test]
+fn repo_backfill_selection_distinguishes_empty_explicit_ids_from_full_repo() {
+    let full_repo_items = vec![selection_test_embedding_item(None)];
+    let full_repo = super::helpers::select_current_semantic_input_scope(&full_repo_items);
+    assert!(full_repo.requested_artefact_ids().is_none());
+
+    let empty_explicit_items = vec![selection_test_embedding_item(Some(serde_json::json!([])))];
+    let empty_explicit = super::helpers::select_current_semantic_input_scope(&empty_explicit_items);
+    assert!(
+        empty_explicit
+            .requested_artefact_ids()
+            .is_some_and(|ids| ids.is_empty())
+    );
+}
+
+fn selection_test_embedding_item(
+    payload_json: Option<serde_json::Value>,
+) -> SemanticEmbeddingMailboxItemRecord {
+    SemanticEmbeddingMailboxItemRecord {
+        item_id: "selection-test-item".to_string(),
+        repo_id: "repo-selection-test".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-selection-test"),
+        config_root: PathBuf::from("/tmp/repo-selection-test"),
+        init_session_id: None,
+        representation_kind: "code".to_string(),
+        item_kind: SemanticMailboxItemKind::RepoBackfill,
+        artefact_id: None,
+        payload_json,
+        dedupe_key: Some("selection-test-dedupe".to_string()),
+        status: SemanticMailboxItemStatus::Leased,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        leased_at_unix: Some(1),
+        lease_expires_at_unix: Some(301),
+        lease_token: Some("selection-test-lease".to_string()),
+        updated_at_unix: 1,
+        last_error: None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CurrentEmbeddingRow {
     symbol_fqn: String,
@@ -1751,8 +1792,16 @@ WHERE repo_id = '{}' AND artefact_id = '{}'",
             .commit
             .semantic_statements
             .iter()
+            .any(|sql| sql.contains("symbol_features_current")),
+        "expected current feature projection repair SQL"
+    );
+    assert!(
+        prepared
+            .commit
+            .semantic_statements
+            .iter()
             .any(|sql| sql.contains("symbol_semantics_current")),
-        "expected current projection repair SQL"
+        "expected current semantic projection repair SQL"
     );
     assert_eq!(prepared.commit.embedding_follow_ups.len(), 1);
     assert_eq!(

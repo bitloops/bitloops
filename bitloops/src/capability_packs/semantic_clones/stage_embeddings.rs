@@ -15,9 +15,10 @@ pub(crate) use self::orchestrator::{
     upsert_symbol_embedding_rows,
 };
 pub(crate) use self::persistence::{
-    clear_current_symbol_embedding_rows_for_path, clear_repo_active_embedding_setup,
-    clear_repo_active_embedding_setup_for_representation, clear_repo_symbol_embedding_rows,
-    clear_repo_symbol_embedding_rows_for_representation, persist_active_embedding_setup,
+    clear_current_symbol_embedding_rows_for_path, clear_current_symbol_embedding_rows_for_paths,
+    clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
+    clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
+    persist_active_embedding_setup,
 };
 pub(crate) use self::schema::{
     init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,

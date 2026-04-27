@@ -57,6 +57,63 @@ impl BitloopsEmbeddingsIpcService {
             shared_session,
         })
     }
+
+    fn embed_texts(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let vectors = self.shared_session.embed(texts).with_context(|| {
+            format!(
+                "requesting standalone `bitloops-local-embeddings` runtime for profile `{}`",
+                self.profile_name
+            )
+        })?;
+        self.validate_vectors(texts.len(), vectors)
+    }
+
+    fn embed_texts_individually_after_batch_error(
+        &self,
+        texts: &[String],
+        batch_error: anyhow::Error,
+    ) -> Result<Vec<Vec<f32>>> {
+        let batch_error = format!("{batch_error:#}");
+        let mut vectors = Vec::with_capacity(texts.len());
+        for text in texts {
+            let mut single = self
+                .embed_texts(std::slice::from_ref(text))
+                .with_context(|| {
+                    format!(
+                        "single-input fallback failed after batch embedding request failed: {batch_error}"
+                    )
+                })?;
+            vectors.append(&mut single);
+        }
+        Ok(vectors)
+    }
+
+    fn validate_vectors(
+        &self,
+        expected_count: usize,
+        vectors: Vec<Vec<f32>>,
+    ) -> Result<Vec<Vec<f32>>> {
+        if vectors.len() != expected_count {
+            bail!(
+                "standalone embeddings runtime returned {} vectors for {} inputs",
+                vectors.len(),
+                expected_count
+            );
+        }
+        for vector in &vectors {
+            if vector.is_empty() {
+                bail!("standalone embeddings runtime returned an empty vector");
+            }
+            if vector.len() != self.output_dimension {
+                bail!(
+                    "standalone embeddings runtime returned dimension {} but expected {}",
+                    vector.len(),
+                    self.output_dimension
+                );
+            }
+        }
+        Ok(vectors)
+    }
 }
 
 impl EmbeddingService for BitloopsEmbeddingsIpcService {
@@ -104,32 +161,12 @@ impl EmbeddingService for BitloopsEmbeddingsIpcService {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let vectors = self.shared_session.embed(&texts).with_context(|| {
-            format!(
-                "requesting standalone `bitloops-local-embeddings` runtime for profile `{}`",
-                self.profile_name
-            )
-        })?;
-
-        if vectors.len() != texts.len() {
-            bail!(
-                "standalone embeddings runtime returned {} vectors for {} inputs",
-                vectors.len(),
-                texts.len()
-            );
-        }
-        for vector in &vectors {
-            if vector.is_empty() {
-                bail!("standalone embeddings runtime returned an empty vector");
+        match self.embed_texts(&texts) {
+            Ok(vectors) => Ok(vectors),
+            Err(err) if texts.len() > 1 => {
+                self.embed_texts_individually_after_batch_error(&texts, err)
             }
-            if vector.len() != self.output_dimension {
-                bail!(
-                    "standalone embeddings runtime returned dimension {} but expected {}",
-                    vector.len(),
-                    self.output_dimension
-                );
-            }
+            Err(err) => Err(err),
         }
-        Ok(vectors)
     }
 }

@@ -691,6 +691,7 @@ mod tests {
                 content_id: "changed-content".to_string(),
             }],
             file_removals: Vec::new(),
+            affected_paths: Vec::new(),
             artefact_upserts: Vec::new(),
             artefact_removals: Vec::new(),
         };
@@ -754,6 +755,7 @@ mod tests {
                 content_id: "changed-content".to_string(),
             }],
             file_removals: Vec::new(),
+            affected_paths: Vec::new(),
             artefact_upserts: Vec::new(),
             artefact_removals: Vec::new(),
         };
@@ -818,6 +820,7 @@ mod tests {
             reconcile_mode: ReconcileMode::MergedDelta,
             file_upserts: Vec::new(),
             file_removals: Vec::new(),
+            affected_paths: Vec::new(),
             artefact_upserts: vec![ChangedArtefact {
                 artefact_id: "prod-artefact".to_string(),
                 symbol_id: "prod-symbol".to_string(),

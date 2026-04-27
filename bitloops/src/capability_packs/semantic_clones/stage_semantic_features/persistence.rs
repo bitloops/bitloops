@@ -6,7 +6,9 @@ use super::schema::ensure_semantic_features_schema;
 use super::storage::{
     build_conditional_current_semantic_persist_existing_rows_sql,
     build_conditional_current_semantic_persist_rows_sql, build_current_semantic_persist_rows_sql,
-    build_delete_current_symbol_features_sql, build_delete_current_symbol_semantics_sql,
+    build_delete_current_symbol_features_for_paths_sql, build_delete_current_symbol_features_sql,
+    build_delete_current_symbol_semantics_for_paths_sql, build_delete_current_symbol_semantics_sql,
+    build_repair_current_semantic_projection_from_historical_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
     parse_semantic_index_state_rows,
 };
@@ -36,6 +38,12 @@ pub(crate) async fn upsert_semantic_feature_rows(
             &next_input_hash,
             summary_provider.requires_model_output(),
         ) {
+            repair_current_semantic_feature_rows_from_historical(
+                relational,
+                &input.repo_id,
+                std::slice::from_ref(&input.artefact_id),
+            )
+            .await?;
             persist_existing_semantic_feature_rows_to_current_for_matching_input(
                 relational,
                 input,
@@ -123,6 +131,27 @@ pub(crate) async fn clear_current_semantic_feature_rows_for_path(
         .await
 }
 
+pub(crate) async fn clear_current_semantic_feature_rows_for_paths(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    paths: &[String],
+) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    ensure_semantic_features_schema(relational).await?;
+    let mut statements = Vec::new();
+    if let Some(sql) = build_delete_current_symbol_features_for_paths_sql(repo_id, paths) {
+        statements.push(sql);
+    }
+    if let Some(sql) = build_delete_current_symbol_semantics_for_paths_sql(repo_id, paths) {
+        statements.push(sql);
+    }
+    relational
+        .exec_serialized_batch_transactional(&statements)
+        .await
+}
+
 async fn load_semantic_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
@@ -145,6 +174,36 @@ async fn persist_semantic_feature_rows(
         .await
 }
 
+pub(crate) async fn repair_current_semantic_feature_rows_from_historical(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    artefact_ids: &[String],
+) -> Result<()> {
+    ensure_semantic_features_schema(relational).await?;
+    match relational
+        .exec_serialized(
+            &build_repair_current_semantic_projection_from_historical_sql(
+                repo_id,
+                artefact_ids,
+                relational.dialect(),
+            ),
+        )
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!("{err:#}");
+            if message.contains("no such table: artefacts_current")
+                || message.contains("no such table: current_file_state")
+                || message.contains("no such column: cfs.effective_content_id")
+            {
+                return Ok(());
+            }
+            Err(err).context("repairing current semantic projection from historical rows")
+        }
+    }
+}
+
 pub(super) async fn persist_existing_semantic_feature_rows_to_current_for_matching_input(
     relational: &RelationalStorage,
     input: &semantic::SemanticFeatureInput,
@@ -162,14 +221,14 @@ pub(super) async fn persist_existing_semantic_feature_rows_to_current_for_matchi
     {
         Ok(()) => Ok(()),
         Err(err) => {
-            let message = err.to_string();
+            let message = format!("{err:#}");
             if message.contains("no such table: artefacts_current")
                 || message.contains("no such table: current_file_state")
+                || message.contains("no such column: state.effective_content_id")
             {
                 return Ok(());
             }
-            Err(err)
-                .context("repairing current semantic feature rows from existing historical rows")
+            Err(err).context("repairing remapped current semantic projection from historical rows")
         }
     }
 }
@@ -192,6 +251,7 @@ pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
             let message = err.to_string();
             if message.contains("no such table: artefacts_current")
                 || message.contains("no such table: current_file_state")
+                || message.contains("no such column: state.effective_content_id")
             {
                 return Ok(());
             }

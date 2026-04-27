@@ -84,6 +84,44 @@ done
     .expect("write fake runtime script");
 }
 
+fn write_batch_rejecting_fake_runtime_script(script_path: &Path) {
+    fs::write(
+        script_path,
+        r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+printf '%s\n' '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}'
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true}\n' "$request_id"
+      exit 0
+      ;;
+    *'"cmd":"embed"'*)
+      case "$line" in
+        *'bitloops python embedding dimension probe'*)
+          printf '{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}\n' "$request_id"
+          ;;
+        *'first document'*'second document'*)
+          printf '{"id":"%s","ok":false,"error":{"message":"batch rejected"}}\n' "$request_id"
+          ;;
+        *'second document'*)
+          printf '{"id":"%s","ok":true,"vectors":[[3.0,4.0]]}\n' "$request_id"
+          ;;
+        *)
+          printf '{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}\n' "$request_id"
+          ;;
+      esac
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write batch rejecting fake runtime script");
+}
+
 fn fake_runtime_config(script_path: &Path, launch_log: &Path) -> InferenceRuntimeConfig {
     InferenceRuntimeConfig {
         command: "/bin/sh".to_string(),
@@ -226,6 +264,28 @@ fn bitloops_embeddings_ipc_service_supports_batch_embed() {
     assert_eq!(vectors.len(), 2);
     assert_eq!(vectors[0].len(), service.output_dimension().unwrap());
     assert_eq!(vectors[1].len(), service.output_dimension().unwrap());
+}
+
+#[test]
+fn bitloops_embeddings_ipc_service_falls_back_to_single_requests_when_batch_is_rejected() {
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_embeddings_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    write_batch_rejecting_fake_runtime_script(&script_path);
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let service =
+        BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+            .expect("build ipc service");
+
+    let vectors = service
+        .embed_batch(
+            &["first document".to_string(), "second document".to_string()],
+            EmbeddingInputType::Document,
+        )
+        .expect("batch embed with single-input fallback");
+
+    assert_eq!(vectors, vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
 }
 
 #[test]

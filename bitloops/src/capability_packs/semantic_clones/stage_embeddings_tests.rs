@@ -409,6 +409,97 @@ fn semantic_embedding_summary_lookup_sql_uses_all_ids() {
 }
 
 #[tokio::test]
+async fn current_summary_lookup_falls_back_to_fresh_historical_rows() {
+    let relational = sqlite_relational_with_schema(&format!(
+        "{}\nCREATE TABLE artefacts_current (
+            repo_id TEXT NOT NULL,
+            artefact_id TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            content_id TEXT NOT NULL,
+            symbol_id TEXT
+        );
+        CREATE TABLE current_file_state (
+            repo_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            analysis_mode TEXT NOT NULL
+        );
+        CREATE TABLE symbol_semantics_current (
+            artefact_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            content_id TEXT NOT NULL,
+            symbol_id TEXT,
+            semantic_features_input_hash TEXT NOT NULL,
+            docstring_summary TEXT,
+            llm_summary TEXT,
+            template_summary TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            source_model TEXT
+        );
+        CREATE TABLE symbol_semantics (
+            artefact_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            blob_sha TEXT NOT NULL,
+            semantic_features_input_hash TEXT NOT NULL,
+            docstring_summary TEXT,
+            llm_summary TEXT,
+            template_summary TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            source_model TEXT
+        );",
+        schema::semantic_embeddings_sqlite_schema_sql()
+    ))
+    .await;
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, content_id, symbol_id)
+             VALUES
+                ('repo-1', 'current-artefact', 'src/lib.rs', 'blob-1', 'sym-current'),
+                ('repo-1', 'historical-artefact', 'src/lib.rs', 'blob-1', 'sym-historical');
+             INSERT INTO current_file_state (repo_id, path, analysis_mode)
+             VALUES ('repo-1', 'src/lib.rs', 'code');
+             INSERT INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+             ) VALUES (
+                'current-artefact', 'repo-1', 'src/lib.rs', 'blob-1', 'sym-current', 'hash-current',
+                NULL, 'Current summary.', 'Current template.', 'Current summary.', 0.9, 'test:model'
+             );
+             INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+             ) VALUES (
+                'historical-artefact', 'repo-1', 'blob-1', 'hash-historical',
+                NULL, 'Historical summary.', 'Historical template.', 'Historical summary.', 0.9, 'test:model'
+             );",
+        )
+        .await
+        .expect("seed summary rows");
+
+    let summaries = load_current_semantic_summary_map(
+        &relational,
+        &[
+            "current-artefact".to_string(),
+            "historical-artefact".to_string(),
+        ],
+        embeddings::EmbeddingRepresentationKind::Summary,
+    )
+    .await
+    .expect("load current summary map");
+
+    assert_eq!(
+        summaries.get("current-artefact").map(String::as_str),
+        Some("Current summary.")
+    );
+    assert_eq!(
+        summaries.get("historical-artefact").map(String::as_str),
+        Some("Historical summary.")
+    );
+}
+
+#[tokio::test]
 async fn semantic_embedding_loads_index_state_from_relational_storage() {
     let setup_fingerprint = test_setup_fingerprint("voyage", "voyage-code-3", 1024);
     let relational = sqlite_relational_with_schema(&format!(

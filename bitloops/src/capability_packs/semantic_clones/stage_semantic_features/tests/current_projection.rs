@@ -7,11 +7,16 @@ use super::super::hydration::{
     current_semantic_artefact_key_from_row, remap_semantic_input_to_current_artefact,
 };
 use super::super::persistence::persist_current_semantic_feature_rows_for_matching_input;
-use super::super::upsert_semantic_feature_rows;
+use super::super::{
+    init_sqlite_semantic_features_schema, repair_current_semantic_feature_rows_from_historical,
+    upsert_semantic_feature_rows,
+};
 use super::support::{
     TestSummaryProvider, sample_semantic_input, sqlite_relational_with_current_projection_schema,
 };
 use crate::capability_packs::semantic_clones::features as semantic;
+use crate::host::devql::{RelationalStorage, sqlite_exec_path_allow_create};
+use tempfile::tempdir;
 
 #[tokio::test]
 async fn historical_semantic_upsert_mirrors_model_backed_rows_into_current_projection() {
@@ -26,8 +31,8 @@ async fn historical_semantic_upsert_mirrors_model_backed_rows_into_current_proje
                 'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'artefact-1', 'rust',
                 'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
             );
-            INSERT INTO current_file_state (repo_id, path, analysis_mode)
-            VALUES ('repo-1', 'src/lib.rs', 'code');",
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'content-1');",
         )
         .await
         .expect("seed current projection rows");
@@ -77,8 +82,8 @@ async fn historical_semantic_upsert_does_not_overwrite_diverged_current_projecti
                 'repo-1', 'src/lib.rs', 'content-new', 'symbol-artefact-1', 'artefact-1', 'rust',
                 'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
             );
-            INSERT INTO current_file_state (repo_id, path, analysis_mode)
-            VALUES ('repo-1', 'src/lib.rs', 'code');",
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'content-new');",
         )
         .await
         .expect("seed diverged current projection rows");
@@ -107,6 +112,173 @@ async fn historical_semantic_upsert_does_not_overwrite_diverged_current_projecti
 }
 
 #[tokio::test]
+async fn repair_current_projection_from_historical_rows_populates_missing_current_rows() {
+    let relational = sqlite_relational_with_current_projection_schema().await;
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                start_byte, end_byte, modifiers, updated_at
+            ) VALUES (
+                'repo-1', 'src/lib.rs', 'blob-1', 'symbol-1', 'artefact-1', 'rust',
+                NULL, 'impl_item', 'src/lib.rs::impl@12', 12, 20,
+                100, 220, '[]', datetime('now')
+            );
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'blob-1');
+            INSERT INTO symbol_features (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (
+                'artefact-1', 'repo-1', 'blob-1', 'hash-1',
+                'impl_12', 'impl Service for Handler', '[]', '[\"impl\"]',
+                '[\"handler\"]', 'struct_item', '[\"Service\"]'
+            );
+            INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES (
+                'artefact-1', 'repo-1', 'blob-1', 'hash-1',
+                NULL, 'Implements request handling.', 'Impl item impl.', 'Implements request handling.', 0.95, 'test:model'
+            );",
+        )
+        .await
+        .expect("seed stranded current artefact");
+
+    repair_current_semantic_feature_rows_from_historical(
+        &relational,
+        "repo-1",
+        &["artefact-1".to_string()],
+    )
+    .await
+    .expect("repair current projection");
+
+    let rows = relational
+        .query_rows(
+            "SELECT f.semantic_features_input_hash AS feature_hash,
+                    s.semantic_features_input_hash AS semantic_hash,
+                    s.summary
+             FROM symbol_features_current f
+             JOIN symbol_semantics_current s
+               ON s.repo_id = f.repo_id
+              AND s.artefact_id = f.artefact_id
+              AND s.content_id = f.content_id
+             WHERE f.repo_id = 'repo-1' AND f.artefact_id = 'artefact-1'",
+        )
+        .await
+        .expect("load repaired current rows");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].get("feature_hash").and_then(Value::as_str),
+        Some("hash-1")
+    );
+    assert_eq!(
+        rows[0].get("semantic_hash").and_then(Value::as_str),
+        Some("hash-1")
+    );
+    assert_eq!(
+        rows[0].get("summary").and_then(Value::as_str),
+        Some("Implements request handling.")
+    );
+}
+
+#[tokio::test]
+async fn sqlite_semantic_feature_schema_upgrade_repairs_stranded_current_projection() {
+    let temp = tempdir().expect("temp dir");
+    let db_path = temp.path().join("semantic.sqlite");
+    sqlite_exec_path_allow_create(
+        &db_path,
+        &format!(
+            "{}\nCREATE TABLE artefacts_current (
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    extraction_fingerprint TEXT,
+    canonical_kind TEXT,
+    language_kind TEXT,
+    symbol_fqn TEXT,
+    parent_symbol_id TEXT,
+    parent_artefact_id TEXT,
+    start_line INTEGER NOT NULL,
+    end_line INTEGER NOT NULL,
+    start_byte INTEGER NOT NULL,
+    end_byte INTEGER NOT NULL,
+    signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    docstring TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (repo_id, path, symbol_id),
+    UNIQUE (repo_id, artefact_id)
+);
+CREATE TABLE current_file_state (
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    analysis_mode TEXT NOT NULL,
+    effective_content_id TEXT NOT NULL,
+    PRIMARY KEY (repo_id, path)
+);",
+            super::super::semantic_features_sqlite_schema_sql(),
+        ),
+    )
+    .await
+    .expect("create schema");
+
+    let relational = RelationalStorage::local_only(db_path.clone());
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                start_byte, end_byte, modifiers, updated_at
+            ) VALUES (
+                'repo-1', 'src/lib.rs', 'blob-1', 'symbol-1', 'artefact-1', 'rust',
+                NULL, 'impl_item', 'src/lib.rs::impl@12', 12, 20,
+                100, 220, '[]', datetime('now')
+            );
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'blob-1');
+            INSERT INTO symbol_features (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (
+                'artefact-1', 'repo-1', 'blob-1', 'hash-1',
+                'impl_12', 'impl Service for Handler', '[]', '[\"impl\"]',
+                '[\"handler\"]', 'struct_item', '[\"Service\"]'
+            );
+            INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES (
+                'artefact-1', 'repo-1', 'blob-1', 'hash-1',
+                NULL, 'Implements request handling.', 'Impl item impl.', 'Implements request handling.', 0.95, 'test:model'
+            );",
+        )
+        .await
+        .expect("seed stranded rows");
+
+    init_sqlite_semantic_features_schema(&db_path)
+        .await
+        .expect("run schema upgrade");
+
+    let rows = relational
+        .query_rows(
+            "SELECT artefact_id
+             FROM symbol_semantics_current
+             WHERE artefact_id = 'artefact-1'",
+        )
+        .await
+        .expect("query repaired rows");
+    assert_eq!(rows.len(), 1);
+}
+
+#[tokio::test]
 async fn skipped_fresh_historical_semantics_repair_missing_current_projection() {
     let relational = sqlite_relational_with_current_projection_schema().await;
     let input = sample_semantic_input("artefact-1", "content-1");
@@ -123,8 +295,8 @@ async fn skipped_fresh_historical_semantics_repair_missing_current_projection() 
                 'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'artefact-1', 'rust',
                 'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
             );
-            INSERT INTO current_file_state (repo_id, path, analysis_mode)
-            VALUES ('repo-1', 'src/lib.rs', 'code');
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'content-1');
             INSERT INTO symbol_features (
                 artefact_id, repo_id, blob_sha, semantic_features_input_hash,
                 normalized_name, normalized_signature, modifiers, identifier_tokens,
@@ -185,6 +357,107 @@ async fn skipped_fresh_historical_semantics_repair_missing_current_projection() 
 }
 
 #[tokio::test]
+async fn skipped_fresh_historical_semantics_repair_remapped_current_projection() {
+    let relational = sqlite_relational_with_current_projection_schema().await;
+    let input = semantic::SemanticFeatureInput {
+        artefact_id: "historical-artefact".to_string(),
+        symbol_id: Some("historical-symbol".to_string()),
+        repo_id: "repo-1".to_string(),
+        blob_sha: "content-1".to_string(),
+        path: "src/render.ts".to_string(),
+        language: "typescript".to_string(),
+        canonical_kind: "function".to_string(),
+        language_kind: "function".to_string(),
+        symbol_fqn: "src/render.ts::renderInvoice".to_string(),
+        name: "renderInvoice".to_string(),
+        signature: Some("renderInvoice(orderId: string): string".to_string()),
+        modifiers: vec!["export".to_string()],
+        body: "return orderId;".to_string(),
+        docstring: None,
+        parent_kind: Some("file".to_string()),
+        dependency_signals: Vec::new(),
+        content_hash: Some("content-1".to_string()),
+    };
+    let provider = Arc::new(TestSummaryProvider);
+    let input_hash = semantic::build_semantic_feature_input_hash(&input, provider.as_ref());
+
+    relational
+        .exec(&format!(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                start_byte, end_byte, modifiers, updated_at
+            ) VALUES (
+                'repo-1', 'src/render.ts', 'content-1', 'current-symbol', 'current-artefact', 'typescript',
+                'function', 'function', 'src/render.ts::renderInvoice', 1, 3, 0, 64, '[]', datetime('now')
+            );
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/render.ts', 'code', 'content-1');
+            INSERT INTO symbol_features (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (
+                'historical-artefact', 'repo-1', 'content-1', '{input_hash}',
+                'renderinvoice', 'renderInvoice(orderId: string): string', '[\"export\"]',
+                '[\"render\", \"invoice\"]', '[\"return\", \"orderId\"]', 'file', '[]'
+            );
+            INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES (
+                'historical-artefact', 'repo-1', 'content-1', '{input_hash}',
+                NULL, 'Summarises the remapped symbol.', 'Template summary.', 'Summarises the remapped symbol.', 0.95, 'test:model'
+            );"
+        ))
+        .await
+        .expect("seed fresh remapped historical rows");
+
+    let stats = upsert_semantic_feature_rows(&relational, &[input], provider)
+        .await
+        .expect("repair remapped current projection");
+
+    assert_eq!(stats.skipped, 1);
+    let current = relational
+        .query_rows(
+            "SELECT f.artefact_id AS feature_artefact_id,
+                    s.artefact_id AS semantic_artefact_id,
+                    s.symbol_id,
+                    s.llm_summary
+             FROM symbol_features_current f
+             JOIN symbol_semantics_current s
+               ON s.repo_id = f.repo_id
+              AND s.artefact_id = f.artefact_id
+              AND s.content_id = f.content_id
+             WHERE f.repo_id = 'repo-1' AND f.path = 'src/render.ts'",
+        )
+        .await
+        .expect("load remapped current projection");
+
+    assert_eq!(current.len(), 1);
+    assert_eq!(
+        current[0]
+            .get("feature_artefact_id")
+            .and_then(Value::as_str),
+        Some("current-artefact")
+    );
+    assert_eq!(
+        current[0]
+            .get("semantic_artefact_id")
+            .and_then(Value::as_str),
+        Some("current-artefact")
+    );
+    assert_eq!(
+        current[0].get("symbol_id").and_then(Value::as_str),
+        Some("current-symbol")
+    );
+    assert_eq!(
+        current[0].get("llm_summary").and_then(Value::as_str),
+        Some("Summarises the remapped symbol.")
+    );
+}
+
+#[tokio::test]
 async fn historical_semantic_upsert_scopes_current_projection_matching_by_repo() {
     let relational = sqlite_relational_with_current_projection_schema().await;
     relational
@@ -202,10 +475,10 @@ async fn historical_semantic_upsert_scopes_current_projection_matching_by_repo()
                 'repo-2', 'src/lib.rs', 'content-1', 'current-symbol-2', 'current-artefact-2', 'rust',
                 'function', 'function', 'src/lib.rs::shared', 1, 3, 0, 24, '[]', datetime('now')
             );
-            INSERT INTO current_file_state (repo_id, path, analysis_mode)
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
             VALUES
-            ('repo-1', 'src/lib.rs', 'code'),
-            ('repo-2', 'src/lib.rs', 'code');",
+            ('repo-1', 'src/lib.rs', 'code', 'content-1'),
+            ('repo-2', 'src/lib.rs', 'code', 'content-1');",
         )
         .await
         .expect("seed repo-scoped current projection rows");
@@ -277,8 +550,8 @@ async fn historical_semantic_upsert_mirrors_into_current_projection_with_current
                 'repo-1', 'src/render.ts', 'content-1', 'current-symbol', 'current-artefact', 'typescript',
                 'function', 'function', 'src/render.ts::renderInvoice', 1, 3, 0, 64, '[]', datetime('now')
             );
-            INSERT INTO current_file_state (repo_id, path, analysis_mode)
-            VALUES ('repo-1', 'src/render.ts', 'code');",
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/render.ts', 'code', 'content-1');",
         )
         .await
         .expect("seed current projection rows");
@@ -354,8 +627,8 @@ async fn conditional_current_semantic_persist_skips_missing_live_target() {
                 'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'artefact-1', 'rust',
                 'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
             );
-            INSERT INTO current_file_state (repo_id, path, analysis_mode)
-            VALUES ('repo-1', 'src/lib.rs', 'code');
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'content-1');
             DELETE FROM artefacts_current WHERE repo_id = 'repo-1' AND path = 'src/lib.rs';",
         )
         .await

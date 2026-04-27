@@ -118,6 +118,7 @@ pub struct CurrentStateConsumerRequest {
     pub reconcile_mode: ReconcileMode,
     pub file_upserts: Vec<ChangedFile>,
     pub file_removals: Vec<RemovedFile>,
+    pub affected_paths: Vec<String>,
     pub artefact_upserts: Vec<ChangedArtefact>,
     pub artefact_removals: Vec<RemovedArtefact>,
 }

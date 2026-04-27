@@ -97,15 +97,13 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                 let requested_ids = item
                     .payload_json
                     .as_ref()
-                    .map(payload_artefact_ids_from_value)
-                    .unwrap_or_default();
-                let mut selected = if requested_ids.is_empty() {
-                    current_inputs.clone()
-                } else {
-                    requested_ids
+                    .map(payload_artefact_ids_from_value);
+                let mut selected = match requested_ids {
+                    Some(requested_ids) => requested_ids
                         .iter()
                         .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
+                    None => current_inputs.clone(),
                 };
                 if selected.len() > SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE {
                     let remaining_ids = selected

@@ -110,6 +110,31 @@ WHERE artefact_id IN ({})",
     )
 }
 
+pub(super) fn build_current_semantic_summary_lookup_sql(artefact_ids: &[String]) -> String {
+    format!(
+        "SELECT a.artefact_id AS artefact_id, \
+                COALESCE(sc.docstring_summary, sh.docstring_summary) AS docstring_summary, \
+                COALESCE(sc.llm_summary, sh.llm_summary) AS llm_summary, \
+                COALESCE(sc.template_summary, sh.template_summary) AS template_summary, \
+                COALESCE(sc.summary, sh.summary) AS summary, \
+                COALESCE(sc.source_model, sh.source_model) AS source_model \
+         FROM artefacts_current a \
+         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         LEFT JOIN symbol_semantics_current sc \
+           ON sc.repo_id = a.repo_id \
+          AND sc.artefact_id = a.artefact_id \
+          AND sc.content_id = a.content_id \
+         LEFT JOIN symbol_semantics sh \
+           ON sh.repo_id = a.repo_id \
+          AND sh.artefact_id = a.artefact_id \
+          AND sh.blob_sha = a.content_id \
+         WHERE a.artefact_id IN ({}) \
+           AND cfs.analysis_mode = 'code' \
+           AND (sc.artefact_id IS NOT NULL OR sh.artefact_id IS NOT NULL)",
+        sql_string_list_pg(artefact_ids),
+    )
+}
+
 pub(crate) fn build_active_embedding_setup_persist_sql(
     repo_id: &str,
     active_state: &embeddings::ActiveEmbeddingRepresentationState,

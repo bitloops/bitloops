@@ -26,13 +26,14 @@ pub(crate) use stage_embeddings::{
     RepoEmbeddingSyncAction, build_active_embedding_setup_persist_sql,
     build_current_symbol_embedding_persist_sql, build_embedding_setup_persist_sql,
     build_sqlite_symbol_embedding_persist_sql, clear_current_symbol_embedding_rows_for_path,
-    clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
-    clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
-    determine_repo_embedding_sync_action, ensure_semantic_embeddings_schema,
-    init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,
-    load_active_embedding_setup, load_current_repo_embedding_states,
-    load_current_semantic_summary_map, load_current_symbol_embedding_index_state,
-    load_semantic_summary_map, load_symbol_embedding_index_state, persist_active_embedding_setup,
+    clear_current_symbol_embedding_rows_for_paths, clear_repo_active_embedding_setup,
+    clear_repo_active_embedding_setup_for_representation, clear_repo_symbol_embedding_rows,
+    clear_repo_symbol_embedding_rows_for_representation, determine_repo_embedding_sync_action,
+    ensure_semantic_embeddings_schema, init_postgres_semantic_embeddings_schema,
+    init_sqlite_semantic_embeddings_schema, load_active_embedding_setup,
+    load_current_repo_embedding_states, load_current_semantic_summary_map,
+    load_current_symbol_embedding_index_state, load_semantic_summary_map,
+    load_symbol_embedding_index_state, persist_active_embedding_setup,
     refresh_current_repo_symbol_embeddings_and_clone_edges, semantic_embeddings_sqlite_schema_sql,
     upsert_current_symbol_embedding_rows, upsert_symbol_embedding_rows,
 };
@@ -48,16 +49,18 @@ pub(crate) use stage_search_documents::{
 };
 #[allow(unused_imports)]
 pub(crate) use stage_semantic_features::{
-    build_conditional_current_semantic_persist_existing_rows_sql,
-    build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
-    build_semantic_persist_rows_sql, clear_current_semantic_feature_rows_for_path,
+    build_conditional_current_semantic_persist_rows_sql,
+    build_repair_current_semantic_projection_from_historical_sql,
+    build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
+    clear_current_semantic_feature_rows_for_path, clear_current_semantic_feature_rows_for_paths,
     ensure_required_llm_summary_output, ensure_semantic_features_schema,
     init_postgres_semantic_features_schema, init_sqlite_semantic_features_schema,
     load_pre_stage_artefacts_for_blob, load_pre_stage_dependencies_for_blob,
     load_semantic_feature_inputs_for_artefacts, load_semantic_feature_inputs_for_current_artefacts,
     load_semantic_feature_inputs_for_current_repo, load_semantic_summary_snapshot,
-    parse_semantic_index_state_rows, semantic_features_sqlite_schema_sql,
-    upsert_current_semantic_feature_rows, upsert_semantic_feature_rows,
+    parse_semantic_index_state_rows, repair_current_semantic_feature_rows_from_historical,
+    semantic_features_sqlite_schema_sql, upsert_current_semantic_feature_rows,
+    upsert_semantic_feature_rows,
 };
 
 pub use pack::SemanticClonesPack;

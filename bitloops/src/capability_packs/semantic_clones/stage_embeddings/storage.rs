@@ -11,8 +11,8 @@ use crate::host::devql::RelationalStorage;
 use super::ensure_semantic_embeddings_schema;
 use super::sql::{
     build_active_embedding_setup_lookup_sql, build_current_repo_embedding_states_sql,
-    build_current_repo_semantic_clone_coverage_sql, build_semantic_summary_lookup_sql,
-    build_symbol_embedding_index_state_sql,
+    build_current_repo_semantic_clone_coverage_sql, build_current_semantic_summary_lookup_sql,
+    build_semantic_summary_lookup_sql, build_symbol_embedding_index_state_sql,
 };
 
 pub(crate) async fn load_active_embedding_setup(
@@ -137,13 +137,30 @@ pub(crate) async fn load_current_semantic_summary_map(
     artefact_ids: &[String],
     representation_kind: embeddings::EmbeddingRepresentationKind,
 ) -> Result<HashMap<String, String>> {
-    load_semantic_summary_map_from_table(
+    if representation_kind != embeddings::EmbeddingRepresentationKind::Summary {
+        return Ok(HashMap::new());
+    }
+
+    let current = load_semantic_summary_map_from_sql(
         relational,
         artefact_ids,
-        "symbol_semantics_current",
+        build_current_semantic_summary_lookup_sql(artefact_ids),
         representation_kind,
     )
-    .await
+    .await;
+    match current {
+        Ok(summary_map) => Ok(summary_map),
+        Err(err) if missing_current_summary_projection_table(&err) => {
+            load_semantic_summary_map_from_table(
+                relational,
+                artefact_ids,
+                "symbol_semantics_current",
+                representation_kind,
+            )
+            .await
+        }
+        Err(err) => Err(err),
+    }
 }
 
 pub(crate) fn parse_symbol_embedding_index_state_rows(
@@ -198,9 +215,26 @@ async fn load_semantic_summary_map_from_table(
         return Ok(HashMap::new());
     }
 
-    let rows = relational
-        .query_rows(&build_semantic_summary_lookup_sql(artefact_ids, table))
-        .await?;
+    load_semantic_summary_map_from_sql(
+        relational,
+        artefact_ids,
+        build_semantic_summary_lookup_sql(artefact_ids, table),
+        _representation_kind,
+    )
+    .await
+}
+
+async fn load_semantic_summary_map_from_sql(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+    sql: String,
+    _representation_kind: embeddings::EmbeddingRepresentationKind,
+) -> Result<HashMap<String, String>> {
+    if artefact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = relational.query_rows(&sql).await?;
     let mut out = HashMap::with_capacity(rows.len());
     for row in rows {
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
@@ -272,6 +306,14 @@ fn parse_active_embedding_state_rows(
             },
         )
         .collect()
+}
+
+fn missing_current_summary_projection_table(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    message.contains("no such table: artefacts_current")
+        || message.contains("no such table: current_file_state")
+        || (message.contains("no such table: symbol_semantics")
+            && !message.contains("no such table: symbol_semantics_current"))
 }
 
 fn value_as_positive_usize(value: &Value) -> Option<usize> {

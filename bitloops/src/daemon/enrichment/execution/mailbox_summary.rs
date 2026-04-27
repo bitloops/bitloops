@@ -14,10 +14,10 @@ use crate::capability_packs::semantic_clones::runtime_config::{
 };
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX;
 use crate::capability_packs::semantic_clones::{
-    build_conditional_current_semantic_persist_existing_rows_sql,
-    build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
-    build_semantic_persist_rows_sql, ensure_required_llm_summary_output,
-    parse_semantic_index_state_rows,
+    build_conditional_current_semantic_persist_rows_sql,
+    build_repair_current_semantic_projection_from_historical_sql,
+    build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
+    ensure_required_llm_summary_output, parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -102,15 +102,13 @@ where
                 let requested_ids = item
                     .payload_json
                     .as_ref()
-                    .map(payload_artefact_ids_from_value)
-                    .unwrap_or_default();
-                let mut selected = if requested_ids.is_empty() {
-                    current_inputs.clone()
-                } else {
-                    requested_ids
+                    .map(payload_artefact_ids_from_value);
+                let mut selected = match requested_ids {
+                    Some(requested_ids) => requested_ids
                         .iter()
                         .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
+                    None => current_inputs.clone(),
                 };
                 if selected.len() > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE {
                     let remaining_ids = selected
@@ -156,11 +154,11 @@ where
             summary_provider.provider.requires_model_output(),
         ) {
             semantic_statements.push(
-                build_conditional_current_semantic_persist_existing_rows_sql(
-                    input,
-                    &next_input_hash,
+                build_repair_current_semantic_projection_from_historical_sql(
+                    &input.repo_id,
+                    std::slice::from_ref(&input.artefact_id),
                     relational.dialect(),
-                )?,
+                ),
             );
             if summary_embeddings_enabled {
                 embedding_follow_ups.push(summary_embedding_follow_up_for(input));

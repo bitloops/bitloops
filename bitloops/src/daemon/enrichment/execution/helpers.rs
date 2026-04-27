@@ -90,14 +90,13 @@ where
                 }
             }
             SemanticMailboxItemKind::RepoBackfill => {
-                let requested_ids = item
-                    .payload_json()
-                    .map(payload_artefact_ids_from_value)
-                    .unwrap_or_default();
-                if requested_ids.is_empty() {
-                    requires_full_current_inputs = true;
-                } else {
-                    explicit_current_artefact_ids.extend(requested_ids);
+                match item.payload_json().map(payload_artefact_ids_from_value) {
+                    Some(requested_ids) => {
+                        explicit_current_artefact_ids.extend(requested_ids);
+                    }
+                    None => {
+                        requires_full_current_inputs = true;
+                    }
                 }
             }
         }

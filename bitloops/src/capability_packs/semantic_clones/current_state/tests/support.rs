@@ -170,6 +170,7 @@ pub(super) fn request(
         reconcile_mode,
         file_upserts,
         file_removals,
+        affected_paths: Vec::new(),
         artefact_upserts,
         artefact_removals,
     }
@@ -325,14 +326,11 @@ pub(super) async fn seed_current_rows(
 
 pub(super) async fn seed_current_artefact_ids(sqlite_path: &Path, repo_id: &str, count: usize) {
     let conn = Connection::open(sqlite_path).expect("open sqlite for current artefacts");
-    conn.execute(
-        "INSERT OR IGNORE INTO repositories (
-            repo_id, provider, organization, name, default_branch
-        ) VALUES (?1, 'test', 'test', 'test', 'main')",
-        rusqlite::params![repo_id],
-    )
-    .expect("insert repository row");
+    seed_repository_row(&conn, repo_id);
     for index in 0..count {
+        let path = format!("src/file-{index}.ts");
+        let content_id = format!("content-{index}");
+        seed_current_file_state_row(&conn, repo_id, &path, "code", "typescript", &content_id);
         conn.execute(
             "INSERT INTO artefacts_current (
                 repo_id, path, content_id, symbol_id, artefact_id, language,
@@ -344,8 +342,8 @@ pub(super) async fn seed_current_artefact_ids(sqlite_path: &Path, repo_id: &str,
             )",
             rusqlite::params![
                 repo_id,
-                format!("src/file-{index}.ts"),
-                format!("content-{index}"),
+                path,
+                content_id,
                 format!("symbol-{index}"),
                 format!("artefact-{index:03}"),
                 format!("src/file-{index}.ts::fn_{index}"),
@@ -353,6 +351,93 @@ pub(super) async fn seed_current_artefact_ids(sqlite_path: &Path, repo_id: &str,
         )
         .expect("insert current artefact");
     }
+}
+
+pub(super) fn seed_current_file_state(
+    sqlite_path: &Path,
+    repo_id: &str,
+    path: &str,
+    analysis_mode: &str,
+    language: &str,
+) {
+    let conn = Connection::open(sqlite_path).expect("open sqlite for current file state");
+    seed_repository_row(&conn, repo_id);
+    seed_current_file_state_row(
+        &conn,
+        repo_id,
+        path,
+        analysis_mode,
+        language,
+        &format!("content-{path}"),
+    );
+}
+
+pub(super) fn seed_current_artefact(
+    sqlite_path: &Path,
+    repo_id: &str,
+    path: &str,
+    artefact_id: &str,
+    canonical_kind: &str,
+) {
+    let conn = Connection::open(sqlite_path).expect("open sqlite for current artefact");
+    seed_repository_row(&conn, repo_id);
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language,
+            canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+            start_byte, end_byte, modifiers, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, 'rust',
+            ?6, ?6, ?7, 1, 3, 0, 24, '[]', datetime('now')
+        )",
+        rusqlite::params![
+            repo_id,
+            path,
+            format!("content-{path}"),
+            format!("symbol-{artefact_id}"),
+            artefact_id,
+            canonical_kind,
+            format!("{path}::{artefact_id}"),
+        ],
+    )
+    .expect("insert current artefact");
+}
+
+fn seed_repository_row(conn: &Connection, repo_id: &str) {
+    conn.execute(
+        "INSERT OR IGNORE INTO repositories (
+            repo_id, provider, organization, name, default_branch
+        ) VALUES (?1, 'test', 'test', 'test', 'main')",
+        rusqlite::params![repo_id],
+    )
+    .expect("insert repository row");
+}
+
+fn seed_current_file_state_row(
+    conn: &Connection,
+    repo_id: &str,
+    path: &str,
+    analysis_mode: &str,
+    language: &str,
+    content_id: &str,
+) {
+    conn.execute(
+        "INSERT INTO current_file_state (
+            repo_id, path, analysis_mode, language, effective_content_id,
+            effective_source, parser_version, extractor_version, exists_in_head,
+            exists_in_index, exists_in_worktree, last_synced_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            'head', 'test-parser', 'test-extractor', 1,
+            1, 1, datetime('now')
+        )
+        ON CONFLICT (repo_id, path) DO UPDATE SET
+            analysis_mode = excluded.analysis_mode,
+            language = excluded.language,
+            effective_content_id = excluded.effective_content_id",
+        rusqlite::params![repo_id, path, analysis_mode, language, content_id],
+    )
+    .expect("insert current file state");
 }
 
 pub(super) fn count_rows(sqlite_path: &Path, sql: &str, repo_id: &str, path: Option<&str>) -> i64 {

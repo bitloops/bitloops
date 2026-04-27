@@ -42,7 +42,7 @@ pub(super) fn repo_backfill_jobs(
         return Ok(vec![repo_backfill_job(
             mailbox_name,
             Some(0),
-            None,
+            Some(Vec::new()),
             repo_backfill_dedupe_key(mailbox_name),
         )?]);
     }
@@ -65,4 +65,18 @@ pub(super) fn repo_backfill_jobs(
     }
 
     Ok(jobs)
+}
+
+pub(super) fn embedding_jobs_for_artefacts(
+    mailbox_name: &str,
+    artefact_ids: &[String],
+) -> anyhow::Result<Vec<CapabilityWorkplaneJob>> {
+    if artefact_ids.len() > REPO_BACKFILL_MAILBOX_CHUNK_SIZE {
+        return repo_backfill_jobs(mailbox_name, artefact_ids);
+    }
+
+    artefact_ids
+        .iter()
+        .map(|artefact_id| artefact_job(mailbox_name, artefact_id))
+        .collect()
 }

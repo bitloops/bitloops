@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::capability_packs::semantic_clones::features as semantic;
-use crate::host::devql::{RelationalDialect, esc_pg};
+use crate::host::devql::{RelationalDialect, esc_pg, sql_string_list_pg};
 
 pub(super) fn semantic_features_postgres_schema_sql() -> &'static str {
     r#"
@@ -193,6 +193,39 @@ BEGIN
         WHERE docstring_summary IS NULL AND doc_comment_summary IS NOT NULL;
     END IF;
 END $$;
+
+DO $$
+BEGIN
+    IF to_regclass('artefacts_current') IS NOT NULL
+       AND to_regclass('current_file_state') IS NOT NULL THEN
+        INSERT INTO symbol_features_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, normalized_name, normalized_signature, modifiers, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens)
+        SELECT a.artefact_id, a.repo_id, a.path, a.content_id, a.symbol_id, f.semantic_features_input_hash, f.normalized_name, f.normalized_signature, f.modifiers, f.identifier_tokens, f.normalized_body_tokens, f.parent_kind, f.context_tokens
+        FROM artefacts_current a
+        JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path AND cfs.effective_content_id = a.content_id
+        JOIN symbol_features f
+          ON f.repo_id = a.repo_id
+         AND f.artefact_id = a.artefact_id
+         AND f.blob_sha = a.content_id
+        WHERE cfs.analysis_mode = 'code'
+        ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, modifiers = EXCLUDED.modifiers, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = now();
+
+        INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model)
+        SELECT a.artefact_id, a.repo_id, a.path, a.content_id, a.symbol_id, s.semantic_features_input_hash, s.docstring_summary, s.llm_summary, s.template_summary, s.summary, s.confidence, s.source_model
+        FROM artefacts_current a
+        JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path AND cfs.effective_content_id = a.content_id
+        JOIN symbol_features f
+          ON f.repo_id = a.repo_id
+         AND f.artefact_id = a.artefact_id
+         AND f.blob_sha = a.content_id
+        JOIN symbol_semantics s
+          ON s.repo_id = f.repo_id
+         AND s.artefact_id = f.artefact_id
+         AND s.blob_sha = f.blob_sha
+         AND s.semantic_features_input_hash = f.semantic_features_input_hash
+        WHERE cfs.analysis_mode = 'code'
+        ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = now();
+    END IF;
+END $$;
 "#
 }
 
@@ -230,10 +263,37 @@ WHERE docstring_summary IS NULL AND doc_comment_summary IS NOT NULL",
             .context("adding symbol_features.modifiers column")?;
         }
 
+        if sqlite_table_exists(&conn, "artefacts_current")?
+            && sqlite_table_exists(&conn, "current_file_state")?
+            && sqlite_table_has_column(&conn, "current_file_state", "effective_content_id")?
+        {
+            conn.execute_batch(
+                &build_repair_all_current_semantic_projection_from_historical_sql(
+                    RelationalDialect::Sqlite,
+                ),
+            )
+            .context("repairing stranded current semantic projection rows")?;
+        }
+
         Ok(())
     })
     .await
     .context("joining SQLite semantic feature upgrade task")?
+}
+
+fn sqlite_table_exists(conn: &rusqlite::Connection, table_name: &str) -> Result<bool> {
+    let exists = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = ?1
+            )",
+            [table_name],
+            |row| row.get::<_, i64>(0),
+        )
+        .with_context(|| format!("checking whether SQLite table {table_name} exists"))?;
+    Ok(exists != 0)
 }
 
 fn sqlite_table_has_column(
@@ -435,6 +495,34 @@ pub(super) fn build_delete_current_symbol_features_sql(repo_id: &str, path: &str
     )
 }
 
+pub(super) fn build_delete_current_symbol_semantics_for_paths_sql(
+    repo_id: &str,
+    paths: &[String],
+) -> Option<String> {
+    if paths.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "DELETE FROM symbol_semantics_current WHERE repo_id = '{}' AND path IN ({})",
+        esc_pg(repo_id),
+        sql_string_list_pg(paths),
+    ))
+}
+
+pub(super) fn build_delete_current_symbol_features_for_paths_sql(
+    repo_id: &str,
+    paths: &[String],
+) -> Option<String> {
+    if paths.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "DELETE FROM symbol_features_current WHERE repo_id = '{}' AND path IN ({})",
+        esc_pg(repo_id),
+        sql_string_list_pg(paths),
+    ))
+}
+
 pub(crate) fn parse_semantic_index_state_rows(
     rows: &[Value],
 ) -> semantic::SemanticFeatureIndexState {
@@ -611,7 +699,33 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
     ))
 }
 
-pub(crate) fn build_conditional_current_semantic_persist_existing_rows_sql(
+pub(crate) fn build_repair_current_semantic_projection_from_historical_sql(
+    repo_id: &str,
+    artefact_ids: &[String],
+    dialect: RelationalDialect,
+) -> String {
+    let repo_filter = format!("a.repo_id = '{}'", esc_pg(repo_id));
+    let artefact_filter = if artefact_ids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " AND a.artefact_id IN ({})",
+            artefact_ids
+                .iter()
+                .map(|artefact_id| format!("'{}'", esc_pg(artefact_id)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+
+    build_repair_current_semantic_projection_from_historical_sql_with_filter(
+        &repo_filter,
+        &artefact_filter,
+        dialect,
+    )
+}
+
+pub(super) fn build_conditional_current_semantic_persist_existing_rows_sql(
     input: &semantic::SemanticFeatureInput,
     semantic_features_input_hash: &str,
     dialect: RelationalDialect,
@@ -647,6 +761,52 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
         input_hash = esc_pg(semantic_features_input_hash),
         generated_at = generated_at_sql,
     ))
+}
+
+fn build_repair_all_current_semantic_projection_from_historical_sql(
+    dialect: RelationalDialect,
+) -> String {
+    build_repair_current_semantic_projection_from_historical_sql_with_filter("1 = 1", "", dialect)
+}
+
+fn build_repair_current_semantic_projection_from_historical_sql_with_filter(
+    repo_filter: &str,
+    artefact_filter: &str,
+    dialect: RelationalDialect,
+) -> String {
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
+    format!(
+        "INSERT INTO symbol_features_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, normalized_name, normalized_signature, modifiers, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
+SELECT a.artefact_id, a.repo_id, a.path, a.content_id, a.symbol_id, f.semantic_features_input_hash, f.normalized_name, f.normalized_signature, f.modifiers, f.identifier_tokens, f.normalized_body_tokens, f.parent_kind, f.context_tokens \
+FROM artefacts_current a \
+JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path AND cfs.effective_content_id = a.content_id \
+JOIN symbol_features f \
+  ON f.repo_id = a.repo_id \
+ AND f.artefact_id = a.artefact_id \
+ AND f.blob_sha = a.content_id \
+WHERE {repo_filter} \
+  AND cfs.analysis_mode = 'code'{artefact_filter} \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, modifiers = EXCLUDED.modifiers, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = {generated_at}; \
+INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
+SELECT a.artefact_id, a.repo_id, a.path, a.content_id, a.symbol_id, s.semantic_features_input_hash, s.docstring_summary, s.llm_summary, s.template_summary, s.summary, s.confidence, s.source_model \
+FROM artefacts_current a \
+JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path AND cfs.effective_content_id = a.content_id \
+JOIN symbol_features f \
+  ON f.repo_id = a.repo_id \
+ AND f.artefact_id = a.artefact_id \
+ AND f.blob_sha = a.content_id \
+JOIN symbol_semantics s \
+  ON s.repo_id = f.repo_id \
+ AND s.artefact_id = f.artefact_id \
+ AND s.blob_sha = f.blob_sha \
+ AND s.semantic_features_input_hash = f.semantic_features_input_hash \
+WHERE {repo_filter} \
+  AND cfs.analysis_mode = 'code'{artefact_filter} \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}",
+        repo_filter = repo_filter,
+        artefact_filter = artefact_filter,
+        generated_at = generated_at_sql,
+    )
 }
 
 pub(super) fn build_semantic_persist_summary_sql(
@@ -688,6 +848,7 @@ WHERE current.repo_id = '{repo_id}' \
   AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) = '{canonical_kind}' \
   AND COALESCE(current.symbol_fqn, current.path) = '{symbol_fqn}' \
   AND state.analysis_mode = 'code' \
+  AND state.effective_content_id = current.content_id \
 ORDER BY coalesce(current.start_line, 0), current.symbol_id, coalesce(current.start_byte, 0), current.artefact_id \
 LIMIT 1",
         repo_id = esc_pg(&input.repo_id),
