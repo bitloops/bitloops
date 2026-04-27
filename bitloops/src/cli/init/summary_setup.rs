@@ -11,6 +11,7 @@ use crate::cli::telemetry_consent;
 pub(crate) async fn choose_summary_setup_during_init(
     repo_root: &Path,
     install_default_daemon: bool,
+    no_summaries: bool,
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<SummarySetupSelection> {
@@ -19,6 +20,10 @@ pub(crate) async fn choose_summary_setup_during_init(
     }
 
     if !install_default_daemon {
+        return Ok(SummarySetupSelection::Skip);
+    }
+
+    if no_summaries {
         return Ok(SummarySetupSelection::Skip);
     }
 
