@@ -173,7 +173,10 @@ pub(crate) fn derive_post_commit_falls_back_to_local_spool_when_flush_fails() {
 
     std::fs::write(dir.path().join("change.txt"), "hello from local spool\n").unwrap();
     git_ok(dir.path(), &["add", "change.txt"]);
-    git_ok(dir.path(), &["commit", "-m", "derive checkpoint from local spool"]);
+    git_ok(
+        dir.path(),
+        &["commit", "-m", "derive checkpoint from local spool"],
+    );
     let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
     let committed_files = files_changed_in_commit(dir.path(), &head).expect("committed files");
 
@@ -201,7 +204,11 @@ pub(crate) fn derive_post_commit_falls_back_to_local_spool_when_flush_fails() {
     let sequence = operations.lock().expect("lock operations").clone();
     assert_eq!(
         sequence[..3],
-        ["spool.flush", "spool.list_uncheckpointed_turns", "spool.load_session"],
+        [
+            "spool.flush",
+            "spool.list_uncheckpointed_turns",
+            "spool.load_session"
+        ],
         "post_commit should fall back to the local spool when the event store flush fails"
     );
 }

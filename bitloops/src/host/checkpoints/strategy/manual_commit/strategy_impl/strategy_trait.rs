@@ -566,8 +566,13 @@ impl ManualCommitStrategy {
         {
             if let Some(spool) = interaction_spool {
                 let pending_work = spool_has_pending_work(spool);
-                let context =
-                    format_post_commit_derivation_context(head, None, None, &[], Some(pending_work));
+                let context = format_post_commit_derivation_context(
+                    head,
+                    None,
+                    None,
+                    &[],
+                    Some(pending_work),
+                );
                 if pending_work {
                     eprintln!(
                         "[bitloops] Warning: falling back to the local interaction spool for post_commit derivation after event repository flush failure ({context})"

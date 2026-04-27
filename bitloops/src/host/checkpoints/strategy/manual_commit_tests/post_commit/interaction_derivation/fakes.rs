@@ -254,7 +254,12 @@ impl InteractionSpool for FakeInteractionSpool {
         assigned_at: &str,
     ) -> Result<()> {
         for turn_id in turn_ids {
-            if let Some(turn) = self.turns.lock().expect("lock spool turns").get_mut(turn_id) {
+            if let Some(turn) = self
+                .turns
+                .lock()
+                .expect("lock spool turns")
+                .get_mut(turn_id)
+            {
                 turn.checkpoint_id = Some(checkpoint_id.to_string());
                 turn.updated_at = assigned_at.to_string();
             }

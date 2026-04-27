@@ -43,6 +43,47 @@ jobs:
 
       - name: Run QAT acceptance suites
         run: cargo qat
+      - name: Show recent QAT diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d target/qat-runs ]; then
+            echo "No QAT run directory found at target/qat-runs"
+            exit 0
+          fi
+
+          echo "Recent QAT suite roots:"
+          find target/qat-runs -mindepth 1 -maxdepth 1 -type d | sort | tail -n 10
+
+          if [ -f target/qat-runs/.last-run ]; then
+            latest_run="$(tr -d '\r\n' < target/qat-runs/.last-run)"
+            echo "Latest QAT suite root: ${latest_run}"
+          fi
+
+          mapfile -t recent_logs < <(
+            find target/qat-runs -type f \
+              \( -name 'run.json' -o -name 'terminal.log' -o -name 'daemon.stderr.log' \) \
+              | sort | tail -n 30
+          )
+
+          if [ "${#recent_logs[@]}" -eq 0 ]; then
+            echo "No QAT log files found under target/qat-runs"
+            exit 0
+          fi
+
+          for log_path in "${recent_logs[@]}"; do
+            echo "::group::${log_path}"
+            tail -n 200 "${log_path}" || true
+            echo "::endgroup::"
+          done
+      - name: Upload QAT artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: qat-runs-ci-${{ github.run_attempt }}
+          path: target/qat-runs
+          if-no-files-found: warn
   test:
     name: Test compile (Ubuntu)
     runs-on: self-hosted
