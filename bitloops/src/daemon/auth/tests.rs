@@ -32,6 +32,22 @@ struct AuthServerState {
     refresh_count: Arc<Mutex<usize>>,
 }
 
+fn localhost_bind_available(test_name: &str) -> bool {
+    match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!(
+                "skipping {test_name}: loopback sockets are unavailable in this environment ({err})"
+            );
+            false
+        }
+        Err(err) => panic!("bind localhost for {test_name}: {err}"),
+    }
+}
+
 #[test]
 fn workos_auth_settings_default_to_built_in_values() {
     let _guard = enter_env_vars(&[(WORKOS_CLIENT_ID_ENV, None), (WORKOS_BASE_URL_ENV, None)]);
@@ -62,6 +78,10 @@ fn workos_auth_settings_allow_base_url_override() {
 
 #[test]
 fn workos_device_login_persists_session_to_runtime_store() {
+    if !localhost_bind_available("workos_device_login_persists_session_to_runtime_store") {
+        return;
+    }
+
     let temp = tempfile::tempdir().expect("temp dir");
     let store = Arc::new(MemoryCredentialStore::default());
 
@@ -111,6 +131,11 @@ fn workos_device_login_persists_session_to_runtime_store() {
 
 #[test]
 fn prepare_workos_login_invalidates_session_for_different_client_id() {
+    if !localhost_bind_available("prepare_workos_login_invalidates_session_for_different_client_id")
+    {
+        return;
+    }
+
     let temp = tempfile::tempdir().expect("temp dir");
     let store = Arc::new(MemoryCredentialStore::default());
 
@@ -193,6 +218,10 @@ fn prepare_workos_login_invalidates_session_for_different_client_id() {
 
 #[test]
 fn workos_session_status_refreshes_expired_tokens() {
+    if !localhost_bind_available("workos_session_status_refreshes_expired_tokens") {
+        return;
+    }
+
     let temp = tempfile::tempdir().expect("temp dir");
     let store = Arc::new(MemoryCredentialStore::default());
 
