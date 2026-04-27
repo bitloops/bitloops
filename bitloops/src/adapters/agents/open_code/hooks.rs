@@ -3,9 +3,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use serde_json::to_string;
 
+use crate::host::hooks::augmentation::devql_guidance::{
+    DEVQL_CODE_REFERENCE_MARKERS, DEVQL_EXECUTION_TERMS, DEVQL_REPO_UNDERSTANDING_TERMS,
+};
+
 use super::plugin::{
-    BITLOOPS_CMD_PLACEHOLDER, BOOTSTRAP_CONTEXT_PLACEHOLDER, PLUGIN_TEMPLATE,
-    TURN_GUIDANCE_CONTEXT_PLACEHOLDER, session_bootstrap_text, turn_guidance_text,
+    BITLOOPS_CMD_PLACEHOLDER, BOOTSTRAP_CONTEXT_PLACEHOLDER,
+    DEVQL_CODE_REFERENCE_MARKERS_PLACEHOLDER, DEVQL_EXECUTION_TERMS_PLACEHOLDER,
+    DEVQL_REPO_UNDERSTANDING_TERMS_PLACEHOLDER, PLUGIN_TEMPLATE, TURN_GUIDANCE_CONTEXT_PLACEHOLDER,
+    session_bootstrap_text, turn_guidance_text,
 };
 
 pub const PLUGIN_FILE_NAME: &str = "bitloops.ts";
@@ -35,6 +41,21 @@ pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<Strin
             "plugin template missing turn guidance context placeholder"
         ));
     }
+    if !PLUGIN_TEMPLATE.contains(DEVQL_REPO_UNDERSTANDING_TERMS_PLACEHOLDER) {
+        return Err(anyhow!(
+            "plugin template missing DevQL repo-understanding terms placeholder"
+        ));
+    }
+    if !PLUGIN_TEMPLATE.contains(DEVQL_EXECUTION_TERMS_PLACEHOLDER) {
+        return Err(anyhow!(
+            "plugin template missing DevQL execution terms placeholder"
+        ));
+    }
+    if !PLUGIN_TEMPLATE.contains(DEVQL_CODE_REFERENCE_MARKERS_PLACEHOLDER) {
+        return Err(anyhow!(
+            "plugin template missing DevQL code-reference markers placeholder"
+        ));
+    }
 
     let bitloops_cmd = if local_dev {
         "cargo run --"
@@ -46,11 +67,26 @@ pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<Strin
         .map_err(|err| anyhow!("failed to serialize bootstrap context: {err}"))?;
     let turn_guidance_context = to_string(&turn_guidance_text(repo_root))
         .map_err(|err| anyhow!("failed to serialize turn guidance context: {err}"))?;
+    let repo_understanding_terms = to_string(DEVQL_REPO_UNDERSTANDING_TERMS)
+        .map_err(|err| anyhow!("failed to serialize DevQL repo-understanding terms: {err}"))?;
+    let execution_terms = to_string(DEVQL_EXECUTION_TERMS)
+        .map_err(|err| anyhow!("failed to serialize DevQL execution terms: {err}"))?;
+    let code_reference_markers = to_string(DEVQL_CODE_REFERENCE_MARKERS)
+        .map_err(|err| anyhow!("failed to serialize DevQL code-reference markers: {err}"))?;
 
     Ok(PLUGIN_TEMPLATE
         .replace(BITLOOPS_CMD_PLACEHOLDER, bitloops_cmd)
         .replace(BOOTSTRAP_CONTEXT_PLACEHOLDER, &bootstrap_context)
-        .replace(TURN_GUIDANCE_CONTEXT_PLACEHOLDER, &turn_guidance_context))
+        .replace(TURN_GUIDANCE_CONTEXT_PLACEHOLDER, &turn_guidance_context)
+        .replace(
+            DEVQL_REPO_UNDERSTANDING_TERMS_PLACEHOLDER,
+            &repo_understanding_terms,
+        )
+        .replace(DEVQL_EXECUTION_TERMS_PLACEHOLDER, &execution_terms)
+        .replace(
+            DEVQL_CODE_REFERENCE_MARKERS_PLACEHOLDER,
+            &code_reference_markers,
+        ))
 }
 
 #[cfg(test)]
@@ -87,6 +123,20 @@ mod tests {
             .unwrap_or_else(|| panic!("rendered plugin should contain {name}"));
 
         serde_json::from_str(line).unwrap_or_else(|err| panic!("failed to parse {name}: {err}"))
+    }
+
+    fn rendered_string_array(rendered: &str, name: &str) -> Vec<String> {
+        let prefix = format!("const {name} = ");
+        let line = rendered
+            .lines()
+            .find_map(|line| line.trim_start().strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("rendered plugin should contain {name}"));
+
+        serde_json::from_str(line).unwrap_or_else(|err| panic!("failed to parse {name}: {err}"))
+    }
+
+    fn expected_string_array(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
     }
 
     fn text_from_parts(parts: &[String]) -> String {
@@ -212,9 +262,12 @@ enabled = true
             rendered.contains("await Bun.file(repoSkillPath).exists()"),
             "plugin should re-check skill presence before injecting bootstrap text"
         );
-        assert!(rendered.contains(
-            r#"const TURN_GUIDANCE_CONTEXT = "Use DevQL first for this repo-aware request"#
-        ));
+        let turn_guidance_context = rendered_const(&rendered, "TURN_GUIDANCE_CONTEXT");
+        assert!(!turn_guidance_context.is_empty());
+        assert!(turn_guidance_context.contains(OPEN_CODE_SKILL_RELATIVE_PATH));
+        assert!(turn_guidance_context.contains("searchMode: LEXICAL"));
+        assert!(turn_guidance_context.contains("overview"));
+        assert!(turn_guidance_context.contains("fall back to targeted repo search or file reads"));
         assert!(rendered.contains("const latestUserPromptByMessageID = new Map<string, string>()"));
         assert!(rendered.contains("\"chat.message\": async"));
         assert!(rendered.contains("promptWarrantsDevql(prompt)"));
@@ -222,6 +275,25 @@ enabled = true
             "latestUser.parts.unshift({ ...ref, type: \"text\", text: TURN_GUIDANCE_CONTEXT })"
         ));
         assert!(!rendered.contains("\"experimental.chat.system.transform\""));
+    }
+
+    #[test]
+    fn render_plugin_template_uses_rust_devql_prompt_heuristic_terms() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        assert_eq!(
+            rendered_string_array(&rendered, "DEVQL_REPO_UNDERSTANDING_TERMS"),
+            expected_string_array(DEVQL_REPO_UNDERSTANDING_TERMS)
+        );
+        assert_eq!(
+            rendered_string_array(&rendered, "DEVQL_EXECUTION_TERMS"),
+            expected_string_array(DEVQL_EXECUTION_TERMS)
+        );
+        assert_eq!(
+            rendered_string_array(&rendered, "DEVQL_CODE_REFERENCE_MARKERS"),
+            expected_string_array(DEVQL_CODE_REFERENCE_MARKERS)
+        );
     }
 
     #[test]
@@ -240,11 +312,10 @@ devql_guidance_enabled = false
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
-        assert!(rendered.contains(r#"const BOOTSTRAP_CONTEXT = ""#));
-        assert!(rendered.contains(r#"const TURN_GUIDANCE_CONTEXT = ""#));
+        assert_eq!(rendered_const(&rendered, "BOOTSTRAP_CONTEXT"), "");
+        assert_eq!(rendered_const(&rendered, "TURN_GUIDANCE_CONTEXT"), "");
         assert!(!rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH));
         assert!(!rendered.contains("DevQL-capable guidance surface"));
-        assert!(!rendered.contains("Use DevQL first for this repo-aware request"));
         assert!(!rendered.contains("<EXTREMELY_IMPORTANT>"));
     }
 
@@ -268,6 +339,11 @@ enabled = true
         );
         install_repo_skill(dir.path()).expect("install skill");
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+        let turn_guidance_context = rendered_const(&rendered, "TURN_GUIDANCE_CONTEXT");
+        let turn_guidance_marker = turn_guidance_context
+            .split(" when ")
+            .next()
+            .expect("turn guidance should have marker");
 
         let mut messages = vec![
             rendered_message("first-user", "user", &["Initial request"]),
@@ -297,11 +373,11 @@ enabled = true
             1
         );
         assert_eq!(
-            count_parts_containing(&messages[2], "Use DevQL first for this repo-aware request"),
+            count_parts_containing(&messages[2], turn_guidance_marker),
             1
         );
         assert_eq!(
-            count_parts_containing(&messages[0], "Use DevQL first for this repo-aware request"),
+            count_parts_containing(&messages[0], turn_guidance_marker),
             0
         );
         assert_eq!(
@@ -322,6 +398,7 @@ enabled = true
         );
         install_repo_skill(dir.path()).expect("install skill");
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+        let turn_guidance_context = rendered_const(&rendered, "TURN_GUIDANCE_CONTEXT");
 
         let mut messages = vec![
             rendered_message("first-user", "user", &["Initial request"]),
@@ -340,7 +417,7 @@ enabled = true
             1
         );
         assert_eq!(
-            count_parts_containing(&messages[1], "Use DevQL first for this repo-aware request"),
+            count_parts_containing(&messages[1], &turn_guidance_context),
             0
         );
     }

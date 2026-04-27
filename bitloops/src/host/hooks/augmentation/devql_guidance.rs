@@ -30,38 +30,43 @@ Read `{surface_path}` before broad search."
     )
 }
 
+pub const DEVQL_REPO_UNDERSTANDING_TERMS: &[&str] = &[
+    "what does this repo do",
+    "understand",
+    "explain",
+    "architecture",
+    "where is",
+    "find",
+    "inspect",
+    "caller",
+    "usage",
+    "import",
+    "dependency",
+    "test covering",
+];
+
+pub const DEVQL_EXECUTION_TERMS: &[&str] = &[
+    "fix ",
+    "implement ",
+    "edit ",
+    "write ",
+    "run ",
+    "build ",
+    "test ",
+    "format ",
+];
+
+pub const DEVQL_CODE_REFERENCE_MARKERS: &[&str] = &["/", "::", "`", ":"];
+
 pub fn prompt_warrants_devql(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
-    let repo_understanding_terms = [
-        "what does this repo do",
-        "understand",
-        "explain",
-        "architecture",
-        "where is",
-        "find",
-        "inspect",
-        "caller",
-        "usage",
-        "import",
-        "dependency",
-        "test covering",
-    ];
-    let execution_terms = [
-        "fix ",
-        "implement ",
-        "edit ",
-        "write ",
-        "run ",
-        "build ",
-        "test ",
-        "format ",
-    ];
-    let looks_like_code_reference = prompt.contains('/')
-        || prompt.contains("::")
-        || prompt.contains('`')
-        || prompt.contains(':');
-    let looks_like_edit_or_execution = execution_terms.iter().any(|needle| lower.contains(needle));
-    let looks_like_repo_understanding = repo_understanding_terms
+    let looks_like_code_reference = DEVQL_CODE_REFERENCE_MARKERS
+        .iter()
+        .any(|marker| prompt.contains(marker));
+    let looks_like_edit_or_execution = DEVQL_EXECUTION_TERMS
+        .iter()
+        .any(|needle| lower.contains(needle));
+    let looks_like_repo_understanding = DEVQL_REPO_UNDERSTANDING_TERMS
         .iter()
         .any(|needle| lower.contains(needle));
 

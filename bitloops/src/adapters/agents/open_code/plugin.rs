@@ -9,6 +9,9 @@ use crate::host::hooks::augmentation::prompt_surface_presence::installed_prompt_
 pub const BITLOOPS_CMD_PLACEHOLDER: &str = "__BITLOOPS_CMD__";
 pub const BOOTSTRAP_CONTEXT_PLACEHOLDER: &str = "__BOOTSTRAP_CONTEXT__";
 pub const TURN_GUIDANCE_CONTEXT_PLACEHOLDER: &str = "__TURN_GUIDANCE_CONTEXT__";
+pub const DEVQL_REPO_UNDERSTANDING_TERMS_PLACEHOLDER: &str = "__DEVQL_REPO_UNDERSTANDING_TERMS__";
+pub const DEVQL_EXECUTION_TERMS_PLACEHOLDER: &str = "__DEVQL_EXECUTION_TERMS__";
+pub const DEVQL_CODE_REFERENCE_MARKERS_PLACEHOLDER: &str = "__DEVQL_CODE_REFERENCE_MARKERS__";
 
 pub(crate) fn session_bootstrap_text(repo_root: &Path) -> String {
     let Some(surface_path) =
@@ -42,6 +45,9 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
   const BITLOOPS_CMD = "__BITLOOPS_CMD__"
   const BOOTSTRAP_CONTEXT = __BOOTSTRAP_CONTEXT__
   const TURN_GUIDANCE_CONTEXT = __TURN_GUIDANCE_CONTEXT__
+  const DEVQL_REPO_UNDERSTANDING_TERMS = __DEVQL_REPO_UNDERSTANDING_TERMS__
+  const DEVQL_EXECUTION_TERMS = __DEVQL_EXECUTION_TERMS__
+  const DEVQL_CODE_REFERENCE_MARKERS = __DEVQL_CODE_REFERENCE_MARKERS__
   // Store transcripts in a temp directory - these are ephemeral handoff files
   // between the plugin and the hook handler. Once checkpointed, the data
   // lives on git refs and the file is disposable.
@@ -88,37 +94,9 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
   /** Decide whether a user prompt is repo-aware understanding work. */
   function promptWarrantsDevql(prompt: string): boolean {
     const lower = prompt.toLowerCase()
-    const repoUnderstandingTerms = [
-      "what does this repo do",
-      "understand",
-      "explain",
-      "architecture",
-      "where is",
-      "find",
-      "inspect",
-      "caller",
-      "usage",
-      "import",
-      "dependency",
-      "test covering",
-    ]
-    const executionTerms = [
-      "fix ",
-      "implement ",
-      "edit ",
-      "write ",
-      "run ",
-      "build ",
-      "test ",
-      "format ",
-    ]
-    const looksLikeCodeReference =
-      prompt.includes("/") ||
-      prompt.includes("::") ||
-      prompt.includes("`") ||
-      prompt.includes(":")
-    const looksLikeEditOrExecution = executionTerms.some((needle) => lower.includes(needle))
-    const looksLikeRepoUnderstanding = repoUnderstandingTerms.some((needle) => lower.includes(needle))
+    const looksLikeCodeReference = DEVQL_CODE_REFERENCE_MARKERS.some((needle) => prompt.includes(needle))
+    const looksLikeEditOrExecution = DEVQL_EXECUTION_TERMS.some((needle) => lower.includes(needle))
+    const looksLikeRepoUnderstanding = DEVQL_REPO_UNDERSTANDING_TERMS.some((needle) => lower.includes(needle))
 
     return (looksLikeCodeReference || looksLikeRepoUnderstanding) && !looksLikeEditOrExecution
   }
