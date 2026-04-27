@@ -175,6 +175,8 @@ pub(crate) struct FakeInteractionSpool {
     pub(crate) pending_mutations: bool,
     pub(crate) flush_error: Option<String>,
     pub(crate) operations: Arc<Mutex<Vec<&'static str>>>,
+    sessions: Mutex<HashMap<String, InteractionSession>>,
+    turns: Mutex<HashMap<String, InteractionTurn>>,
 }
 
 impl FakeInteractionSpool {
@@ -184,6 +186,40 @@ impl FakeInteractionSpool {
             ..Default::default()
         }
     }
+
+    pub(crate) fn with_pending_mutations(mut self, pending_mutations: bool) -> Self {
+        self.pending_mutations = pending_mutations;
+        self
+    }
+
+    pub(crate) fn with_flush_error(mut self, message: impl Into<String>) -> Self {
+        self.flush_error = Some(message.into());
+        self
+    }
+
+    pub(crate) fn with_session(self, session: InteractionSession) -> Self {
+        self.sessions
+            .lock()
+            .expect("lock spool sessions")
+            .insert(session.session_id.clone(), session);
+        self
+    }
+
+    pub(crate) fn with_turn(self, turn: InteractionTurn) -> Self {
+        self.turns
+            .lock()
+            .expect("lock spool turns")
+            .insert(turn.turn_id.clone(), turn);
+        self
+    }
+
+    pub(crate) fn checkpoint_id_for(&self, turn_id: &str) -> Option<String> {
+        self.turns
+            .lock()
+            .expect("lock spool turns")
+            .get(turn_id)
+            .and_then(|turn| turn.checkpoint_id.clone())
+    }
 }
 
 impl InteractionSpool for FakeInteractionSpool {
@@ -192,10 +228,18 @@ impl InteractionSpool for FakeInteractionSpool {
     }
 
     fn record_session(&self, _session: &InteractionSession) -> Result<()> {
+        self.sessions
+            .lock()
+            .expect("lock spool sessions")
+            .insert(_session.session_id.clone(), _session.clone());
         Ok(())
     }
 
-    fn record_turn(&self, _turn: &InteractionTurn) -> Result<()> {
+    fn record_turn(&self, turn: &InteractionTurn) -> Result<()> {
+        self.turns
+            .lock()
+            .expect("lock spool turns")
+            .insert(turn.turn_id.clone(), turn.clone());
         Ok(())
     }
 
@@ -205,10 +249,16 @@ impl InteractionSpool for FakeInteractionSpool {
 
     fn assign_checkpoint_to_turns(
         &self,
-        _turn_ids: &[String],
-        _checkpoint_id: &str,
-        _assigned_at: &str,
+        turn_ids: &[String],
+        checkpoint_id: &str,
+        assigned_at: &str,
     ) -> Result<()> {
+        for turn_id in turn_ids {
+            if let Some(turn) = self.turns.lock().expect("lock spool turns").get_mut(turn_id) {
+                turn.checkpoint_id = Some(checkpoint_id.to_string());
+                turn.updated_at = assigned_at.to_string();
+            }
+        }
         Ok(())
     }
 
@@ -232,23 +282,56 @@ impl InteractionSpool for FakeInteractionSpool {
         _agent: Option<&str>,
         _limit: usize,
     ) -> Result<Vec<InteractionSession>> {
-        Ok(Vec::new())
+        Ok(self
+            .sessions
+            .lock()
+            .expect("lock spool sessions")
+            .values()
+            .cloned()
+            .collect())
     }
 
-    fn load_session(&self, _session_id: &str) -> Result<Option<InteractionSession>> {
-        Ok(None)
+    fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
+        self.operations
+            .lock()
+            .expect("lock spool operations")
+            .push("spool.load_session");
+        Ok(self
+            .sessions
+            .lock()
+            .expect("lock spool sessions")
+            .get(session_id)
+            .cloned())
     }
 
     fn list_turns_for_session(
         &self,
-        _session_id: &str,
+        session_id: &str,
         _limit: usize,
     ) -> Result<Vec<InteractionTurn>> {
-        Ok(Vec::new())
+        Ok(self
+            .turns
+            .lock()
+            .expect("lock spool turns")
+            .values()
+            .filter(|turn| turn.session_id == session_id)
+            .cloned()
+            .collect())
     }
 
     fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
-        Ok(Vec::new())
+        self.operations
+            .lock()
+            .expect("lock spool operations")
+            .push("spool.list_uncheckpointed_turns");
+        Ok(self
+            .turns
+            .lock()
+            .expect("lock spool turns")
+            .values()
+            .filter(|turn| turn.checkpoint_id.as_deref().unwrap_or("").is_empty())
+            .cloned()
+            .collect())
     }
 
     fn list_events(

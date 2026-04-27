@@ -561,7 +561,33 @@ impl ManualCommitStrategy {
         interaction_repository: &dyn InteractionEventRepository,
         interaction_spool: Option<&dyn InteractionSpool>,
     ) -> Result<Option<String>> {
-        flush_interaction_spool_or_fail(head, interaction_spool, interaction_repository)?;
+        if let Err(err) =
+            flush_interaction_spool_or_fail(head, interaction_spool, interaction_repository)
+        {
+            if let Some(spool) = interaction_spool {
+                let pending_work = spool_has_pending_work(spool);
+                let context =
+                    format_post_commit_derivation_context(head, None, None, &[], Some(pending_work));
+                if pending_work {
+                    eprintln!(
+                        "[bitloops] Warning: falling back to the local interaction spool for post_commit derivation after event repository flush failure ({context})"
+                    );
+                    let spool_repository = SpoolBackedInteractionRepository { spool };
+                    return self
+                        .derive_post_commit_from_interaction_sources(
+                            head,
+                            committed_files_set,
+                            is_rebase_in_progress,
+                            &spool_repository,
+                            None,
+                        )
+                        .context(format!(
+                            "deriving post_commit from local interaction spool after event repository flush failure ({context})"
+                        ));
+                }
+            }
+            return Err(err);
+        }
 
         let uncheckpointed_turns = interaction_repository
             .list_uncheckpointed_turns()
