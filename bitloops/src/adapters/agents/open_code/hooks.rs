@@ -117,15 +117,13 @@ mod tests {
             return;
         }
 
-        if !bootstrap_context.is_empty() {
-            if let Some(first_user) = messages
+        if !bootstrap_context.is_empty()
+            && let Some(first_user) = messages
                 .iter_mut()
                 .find(|message| message.role == "user" && !message.parts.is_empty())
-            {
-                if !has_text_part_containing(first_user, "EXTREMELY_IMPORTANT") {
-                    first_user.parts.insert(0, bootstrap_context);
-                }
-            }
+            && !has_text_part_containing(first_user, "EXTREMELY_IMPORTANT")
+        {
+            first_user.parts.insert(0, bootstrap_context);
         }
 
         let Some(latest_user_message_id) = latest_user_message_id else {
