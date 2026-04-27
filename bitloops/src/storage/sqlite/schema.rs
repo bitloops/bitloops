@@ -29,7 +29,7 @@ impl SqliteConnectionPool {
     }
 
     pub fn initialise_runtime_checkpoint_schema(&self) -> Result<()> {
-        let schema_lock = checkpoint_schema_lock_for(self.db_path());
+        let schema_lock = sqlite_schema_lock_for(self.db_path());
         let _guard = schema_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -61,7 +61,7 @@ impl SqliteConnectionPool {
     }
 
     pub fn initialise_relational_checkpoint_schema(&self) -> Result<()> {
-        let schema_lock = checkpoint_schema_lock_for(self.db_path());
+        let schema_lock = sqlite_schema_lock_for(self.db_path());
         let _guard = schema_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -71,6 +71,11 @@ impl SqliteConnectionPool {
     }
 
     pub fn initialise_devql_schema(&self) -> Result<()> {
+        let schema_lock = sqlite_schema_lock_for(self.db_path());
+        let _guard = schema_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         self.migrate_workspace_revisions_uniqueness()
             .context("migrating SQLite workspace_revisions uniqueness (pre-schema)")?;
         self.execute_batch(DEVQL_LEGACY_BOOTSTRAP_SQL)
@@ -215,7 +220,7 @@ fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Res
     Ok(false)
 }
 
-fn checkpoint_schema_lock_for(db_path: &Path) -> Arc<Mutex<()>> {
+fn sqlite_schema_lock_for(db_path: &Path) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
     let canonical = db_path
         .canonicalize()
