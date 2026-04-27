@@ -418,6 +418,11 @@ pub(super) fn seed_graphql_clone_scoring_inputs(repo_root: &Path) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     let conn = rusqlite::Connection::open(&sqlite_path).expect("open clone scoring sqlite");
+    let embedding_setup = crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup::new(
+        crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+        "bge-m3",
+        3,
+    );
 
     conn.execute_batch(
         r#"
@@ -461,13 +466,14 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
     content_id TEXT NOT NULL,
     symbol_id TEXT,
     representation_kind TEXT NOT NULL DEFAULT 'baseline',
+    setup_fingerprint TEXT NOT NULL DEFAULT '',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     dimension INTEGER NOT NULL CHECK (dimension > 0),
     embedding_input_hash TEXT NOT NULL,
     embedding TEXT NOT NULL,
     generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (artefact_id, representation_kind)
+    PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint)
 );
 "#,
     )
@@ -628,23 +634,367 @@ CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
         conn.execute(
             "INSERT OR REPLACE INTO symbol_embeddings_current (
                 artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
-                provider, model, dimension, embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'baseline', ?6, ?7, ?8, ?9, ?10)",
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+            ) VALUES (?1, ?2, ?3, ?4, ?5, 'baseline', ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 artefact_id,
                 repo_id.as_str(),
                 path,
                 content_id,
                 symbol_id,
-                crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
-                "bge-m3",
-                3,
+                embedding_setup.setup_fingerprint.as_str(),
+                embedding_setup.provider.as_str(),
+                embedding_setup.model.as_str(),
+                i64::try_from(embedding_setup.dimension).expect("embedding dimension fits in i64"),
                 input_hash,
                 embedding,
             ],
         )
         .expect("insert current clone scoring embeddings");
     }
+}
+
+pub(super) fn seed_graphql_search_quality_inputs(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open search quality sqlite");
+
+    fs::write(
+        repo_root.join("packages/api/src/http.ts"),
+        "export function stripBodyForHead(method: Method) {\n  return response.strip_body($method == Method::HEAD);\n}\n\nexport function routeByMethod(method: Method) {\n  if (method == Method::HEAD) return headHandler(Method::HEAD);\n  return method == Method::HEAD ? mirrorHead(Method::HEAD, Method::HEAD, Method::HEAD) : otherHandler();\n}\n\nexport function headers() {\n  return self.inner.headers();\n}\n",
+    )
+    .expect("write api http.ts");
+
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::semantic_features_sqlite_schema_sql(),
+    )
+    .expect("initialise semantic features schema for search quality");
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::search_documents_sqlite_schema_sql(),
+    )
+    .expect("initialise search documents schema for search quality");
+
+    conn.execute(
+        "INSERT OR REPLACE INTO file_state (repo_id, commit_sha, path, blob_sha)
+         VALUES (?1, (SELECT commit_sha FROM commits WHERE repo_id = ?1 ORDER BY committed_at DESC LIMIT 1), ?2, ?3)",
+        rusqlite::params![
+            repo_id.as_str(),
+            "packages/api/src/http.ts",
+            "blob-api-http",
+        ],
+    )
+    .expect("insert search quality file_state row");
+    conn.execute(
+        "INSERT OR REPLACE INTO current_file_state (
+            repo_id, path, language,
+            head_content_id, index_content_id, worktree_content_id,
+            effective_content_id, effective_source,
+            parser_version, extractor_version,
+            exists_in_head, exists_in_index, exists_in_worktree,
+            last_synced_at
+        ) VALUES (?1, ?2, 'typescript', ?3, ?3, ?3, ?3, 'head', 'test', 'test', 1, 1, 1, '2026-03-26T10:00:00Z')",
+        rusqlite::params![repo_id.as_str(), "packages/api/src/http.ts", "blob-api-http"],
+    )
+    .expect("insert search quality current_file_state row");
+
+    for (
+        symbol_id,
+        artefact_id,
+        canonical_kind,
+        language_kind,
+        symbol_fqn,
+        parent_symbol_id,
+        parent_artefact_id,
+        start_line,
+        end_line,
+        modifiers,
+        docstring,
+    ) in [
+        (
+            "file::api-http",
+            "artefact::file-api-http",
+            "file",
+            "source_file",
+            "packages/api/src/http.ts",
+            Option::<&str>::None,
+            Option::<&str>::None,
+            1_i64,
+            12_i64,
+            "[]",
+            Option::<&str>::None,
+        ),
+        (
+            "sym::strip-head",
+            "artefact::strip-head",
+            "function",
+            "function_declaration",
+            "packages/api/src/http.ts::stripBodyForHead",
+            Some("file::api-http"),
+            Some("artefact::file-api-http"),
+            1_i64,
+            3_i64,
+            "[\"export\"]",
+            Some("Strips response bodies for HEAD requests."),
+        ),
+        (
+            "sym::route-by-method",
+            "artefact::route-by-method",
+            "function",
+            "function_declaration",
+            "packages/api/src/http.ts::routeByMethod",
+            Some("file::api-http"),
+            Some("artefact::file-api-http"),
+            5_i64,
+            8_i64,
+            "[\"export\"]",
+            Some("Routes requests by method with repeated HEAD branches."),
+        ),
+        (
+            "sym::headers",
+            "artefact::headers",
+            "function",
+            "function_declaration",
+            "packages/api/src/http.ts::headers",
+            Some("file::api-http"),
+            Some("artefact::file-api-http"),
+            10_i64,
+            12_i64,
+            "[\"export\"]",
+            Some("Returns the current header map."),
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO artefacts (
+                artefact_id, symbol_id, repo_id, language, canonical_kind,
+                language_kind, symbol_fqn, signature, modifiers, docstring, content_hash, created_at
+            ) VALUES (
+                ?1, ?2, ?3, 'typescript', ?4, ?5, ?6, NULL, ?7, ?8, ?9, '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                artefact_id,
+                symbol_id,
+                repo_id.as_str(),
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                modifiers,
+                docstring,
+                format!("hash-{artefact_id}"),
+            ],
+        )
+        .expect("insert search quality artefact");
+        conn.execute(
+            "INSERT OR REPLACE INTO artefact_snapshots (
+                repo_id, blob_sha, path, artefact_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, created_at
+            ) VALUES (
+                ?1, 'blob-api-http', 'packages/api/src/http.ts', ?2, ?3,
+                ?4, ?5, 0, ?6, '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                artefact_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+            ],
+        )
+        .expect("insert search quality artefact snapshot");
+        conn.execute(
+            "INSERT OR REPLACE INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id, parent_artefact_id,
+                start_line, end_line, start_byte, end_byte, signature, modifiers, docstring, updated_at
+            ) VALUES (
+                ?1, 'packages/api/src/http.ts', 'blob-api-http', ?2, ?3, 'typescript', ?4, ?5, ?6,
+                ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13, ?14, '2026-03-26T10:00:00Z'
+            )",
+            rusqlite::params![
+                repo_id.as_str(),
+                symbol_id,
+                artefact_id,
+                canonical_kind,
+                language_kind,
+                symbol_fqn,
+                parent_symbol_id,
+                parent_artefact_id,
+                start_line,
+                end_line,
+                end_line * 10,
+                if artefact_id == "artefact::strip-head" {
+                    Some("function stripBodyForHead(method: Method)")
+                } else if artefact_id == "artefact::route-by-method" {
+                    Some("function routeByMethod(method: Method)")
+                } else if artefact_id == "artefact::headers" {
+                    Some("function headers()")
+                } else {
+                    Option::<&str>::None
+                },
+                modifiers,
+                docstring,
+            ],
+        )
+        .expect("insert search quality artefact current row");
+    }
+
+    for (
+        artefact_id,
+        symbol_id,
+        semantic_hash,
+        normalized_name,
+        normalized_signature,
+        identifier_tokens,
+        body_tokens,
+        summary,
+        body_text,
+        signature_text,
+        summary_text,
+    ) in [
+        (
+            "artefact::strip-head",
+            "sym::strip-head",
+            "semantic-hash-strip-head",
+            "strip_body_for_head",
+            Some("function stripBodyForHead(method: Method)"),
+            r#"["strip","body","for","head","method"]"#,
+            r#"["strip","body","method","head","response"]"#,
+            "Strips response bodies for HEAD requests.",
+            "response.strip_body($method == Method::HEAD);",
+            Some("function stripBodyForHead(method: Method)"),
+            Some("Strips response bodies for HEAD requests."),
+        ),
+        (
+            "artefact::route-by-method",
+            "sym::route-by-method",
+            "semantic-hash-route-by-method",
+            "route_by_method",
+            Some("function routeByMethod(method: Method)"),
+            r#"["route","by","method"]"#,
+            r#"["method","head","head_handler","mirror_head","other_handler"]"#,
+            "Routes requests by method with repeated HEAD branches.",
+            "if (method == Method::HEAD) return headHandler(Method::HEAD); return method == Method::HEAD ? mirrorHead(Method::HEAD, Method::HEAD, Method::HEAD) : otherHandler();",
+            Some("function routeByMethod(method: Method)"),
+            Some("Routes requests by method with repeated HEAD branches."),
+        ),
+        (
+            "artefact::headers",
+            "sym::headers",
+            "semantic-hash-headers",
+            "headers",
+            Some("function headers()"),
+            r#"["headers"]"#,
+            r#"["inner","headers"]"#,
+            "Returns the current header map.",
+            "self.inner.headers()",
+            Some("function headers()"),
+            Some("Returns the current header map."),
+        ),
+    ] {
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                template_summary, summary, confidence
+            ) VALUES (?1, ?2, 'packages/api/src/http.ts', 'blob-api-http', ?3, ?4, ?5, ?5, 0.9)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                symbol_id,
+                semantic_hash,
+                summary,
+            ],
+        )
+        .expect("insert search quality semantics");
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (?1, ?2, 'packages/api/src/http.ts', 'blob-api-http', ?3, ?4, ?5, ?6, '[\"export\"]', ?7, ?8, 'module', '[\"packages\",\"api\",\"src\",\"http\"]')",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                symbol_id,
+                semantic_hash,
+                normalized_name,
+                normalized_signature,
+                identifier_tokens,
+                body_tokens,
+            ],
+        )
+        .expect("insert search quality features");
+        let searchable_text = [signature_text, summary_text, Some(body_text)]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        conn.execute(
+            "INSERT OR REPLACE INTO symbol_search_documents_current (
+                artefact_id, repo_id, path, content_id, symbol_id, signature_text,
+                summary_text, body_text, searchable_text
+            ) VALUES (?1, ?2, 'packages/api/src/http.ts', 'blob-api-http', ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                symbol_id,
+                signature_text,
+                summary_text,
+                body_text,
+                searchable_text.as_str(),
+            ],
+        )
+        .expect("insert search quality search document");
+        conn.execute(
+            "DELETE FROM symbol_search_documents_current_fts WHERE artefact_id = ?1",
+            rusqlite::params![artefact_id],
+        )
+        .expect("clear stale search quality fts row");
+        conn.execute(
+            "INSERT INTO symbol_search_documents_current_fts (
+                artefact_id, repo_id, content_id, path, symbol_id, signature_text,
+                summary_text, body_text, searchable_text
+            ) VALUES (?1, ?2, 'blob-api-http', 'packages/api/src/http.ts', ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                artefact_id,
+                repo_id.as_str(),
+                symbol_id,
+                signature_text,
+                summary_text,
+                body_text,
+                searchable_text.as_str(),
+            ],
+        )
+        .expect("insert search quality fts row");
+    }
+}
+
+pub(super) fn seed_graphql_historical_summary_inputs(repo_root: &Path) {
+    let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("open historical summary sqlite");
+
+    conn.execute_batch(
+        crate::capability_packs::semantic_clones::semantic_features_sqlite_schema_sql(),
+    )
+    .expect("initialise historical summary schema");
+
+    conn.execute(
+        "INSERT OR REPLACE INTO symbol_semantics (
+            artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+            template_summary, summary, confidence, source_model
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            "artefact::api-target",
+            repo_id.as_str(),
+            "blob-api-target",
+            "semantic-hash-api-target",
+            "Target helper summary",
+            "Builds API response payload fields and returns the transformed target result.",
+            0.92_f64,
+            "bitloops:historical-test-model",
+        ],
+    )
+    .expect("insert historical summary row");
 }
 
 pub(super) fn seed_graphql_semantic_query_inputs(repo_root: &Path) {
@@ -709,57 +1059,114 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
         ],
     )
     .expect("insert semantic query setup");
-    conn.execute(
-        "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
-            repo_id, representation_kind, provider, model, dimension, setup_fingerprint
-        ) VALUES (?1, 'identity', ?2, ?3, ?4, ?5)",
-        rusqlite::params![
-            repo_id.as_str(),
-            crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
-            "semantic-query-test-model",
-            3,
-            setup.setup_fingerprint,
-        ],
-    )
-    .expect("insert semantic query active setup");
+    for representation_kind in ["identity", "code", "summary"] {
+        conn.execute(
+            "INSERT OR REPLACE INTO semantic_clone_embedding_setup_state (
+                repo_id, representation_kind, provider, model, dimension, setup_fingerprint
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                repo_id.as_str(),
+                representation_kind,
+                crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
+                "semantic-query-test-model",
+                3,
+                setup.setup_fingerprint,
+            ],
+        )
+        .expect("insert semantic query active setup");
+    }
 
-    for (artefact_id, path, content_id, symbol_id, input_hash, embedding) in [
+    for (representation_kind, (artefact_id, path, content_id, symbol_id, input_hash, embedding)) in [
         (
-            "artefact::api-caller",
-            "packages/api/src/caller.ts",
-            "blob-api-caller",
-            "sym::api-caller",
-            "semantic-query-hash-api-caller-identity",
-            "[0.0,-1.0,0.0]",
+            "identity",
+            (
+                "artefact::api-caller",
+                "packages/api/src/caller.ts",
+                "blob-api-caller",
+                "sym::api-caller",
+                "semantic-query-hash-api-caller-identity",
+                "[0.0,-1.0,0.0]",
+            ),
         ),
         (
-            "artefact::api-target",
-            "packages/api/src/target.ts",
-            "blob-api-target",
-            "sym::api-target",
-            "semantic-query-hash-api-target-identity",
-            "[0.0,0.0,-1.0]",
+            "identity",
+            (
+                "artefact::api-target",
+                "packages/api/src/target.ts",
+                "blob-api-target",
+                "sym::api-target",
+                "semantic-query-hash-api-target-identity",
+                "[0.0,0.0,-1.0]",
+            ),
         ),
         (
-            "artefact::web-render",
-            "packages/web/src/page.ts",
-            "blob-web-page",
-            "sym::web-render",
-            "semantic-query-hash-web-render-identity",
-            "[0.0,0.0,1.0]",
+            "identity",
+            (
+                "artefact::web-render",
+                "packages/web/src/page.ts",
+                "blob-web-page",
+                "sym::web-render",
+                "semantic-query-hash-web-render-identity",
+                "[0.0,0.0,1.0]",
+            ),
+        ),
+        (
+            "code",
+            (
+                "artefact::api-caller",
+                "packages/api/src/caller.ts",
+                "blob-api-caller",
+                "sym::api-caller",
+                "semantic-query-hash-api-caller-code",
+                "[1.0,0.0,0.0]",
+            ),
+        ),
+        (
+            "code",
+            (
+                "artefact::web-render",
+                "packages/web/src/page.ts",
+                "blob-web-page",
+                "sym::web-render",
+                "semantic-query-hash-web-render-code",
+                "[0.0,1.0,0.0]",
+            ),
+        ),
+        (
+            "summary",
+            (
+                "artefact::api-target",
+                "packages/api/src/target.ts",
+                "blob-api-target",
+                "sym::api-target",
+                "semantic-query-hash-api-target-summary",
+                "[0.98,0.02,0.0]",
+            ),
+        ),
+        (
+            "summary",
+            (
+                "artefact::web-render",
+                "packages/web/src/page.ts",
+                "blob-web-page",
+                "sym::web-render",
+                "semantic-query-hash-web-render-summary",
+                "[0.0,0.95,0.05]",
+            ),
         ),
     ] {
         conn.execute(
             "INSERT OR REPLACE INTO symbol_embeddings_current (
                 artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
                 setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
-            ) VALUES (?1, ?2, ?3, ?4, ?5, 'identity', ?6, ?7, ?8, ?9, ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 artefact_id,
                 repo_id.as_str(),
                 path,
                 content_id,
                 symbol_id,
+                representation_kind,
                 setup.setup_fingerprint,
                 crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER,
                 "semantic-query-test-model",
@@ -772,19 +1179,28 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
     }
 }
 
+pub(super) fn semantic_query_runtime_log_path(repo_root: &Path) -> std::path::PathBuf {
+    repo_root.join(".bitloops/test-bin/fake-semantic-query-runtime.log")
+}
+
 #[cfg(unix)]
 fn fake_semantic_query_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
     use std::os::unix::fs::PermissionsExt;
 
     let script_path = repo_root.join(".bitloops/test-bin/fake-semantic-query-runtime.sh");
+    let log_path = semantic_query_runtime_log_path(repo_root);
     if let Some(parent) = script_path.parent() {
         fs::create_dir_all(parent).expect("create fake semantic query runtime dir");
     }
     fs::write(
         &script_path,
         r#"#!/bin/sh
+log_path="$1"
 printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
 while IFS= read -r line; do
+  if [ -n "$log_path" ]; then
+    printf '%s\n' "$line" >> "$log_path"
+  fi
   req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
     *'"cmd":"embed"'*'"texts":["build response payload"]'*)
@@ -794,6 +1210,9 @@ while IFS= read -r line; do
       vector='[[0.0,1.0,0.0]]'
       ;;
     *'"cmd":"embed"'*'"texts":["caller in caller ts"]'*)
+      vector='[[0.0,-1.0,0.0]]'
+      ;;
+    *'"cmd":"embed"'*'"texts":["caller"]'*)
       vector='[[0.0,-1.0,0.0]]'
       ;;
     *'"cmd":"embed"'*'"texts":["render in page ts"]'*)
@@ -824,23 +1243,31 @@ done
         .expect("chmod fake semantic query runtime script");
     (
         "/bin/sh".to_string(),
-        vec![script_path.to_string_lossy().into_owned()],
+        vec![
+            script_path.to_string_lossy().into_owned(),
+            log_path.to_string_lossy().into_owned(),
+        ],
     )
 }
 
 #[cfg(windows)]
 fn fake_semantic_query_runtime_command_and_args(repo_root: &Path) -> (String, Vec<String>) {
     let script_path = repo_root.join(".bitloops/test-bin/fake-semantic-query-runtime.ps1");
+    let log_path = semantic_query_runtime_log_path(repo_root);
     if let Some(parent) = script_path.parent() {
         fs::create_dir_all(parent).expect("create fake semantic query runtime dir");
     }
     fs::write(
         &script_path,
         r#"
+$logPath = $args[0]
 $ready = @{ event = "ready"; protocol = 1; capabilities = @("embed", "shutdown") }
 $ready | ConvertTo-Json -Compress
 while (($line = [Console]::In.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
+  if (-not [string]::IsNullOrWhiteSpace($logPath)) {
+    Add-Content -Path $logPath -Value $line
+  }
   $request = $line | ConvertFrom-Json
   switch ($request.cmd) {
     "embed" {
@@ -850,6 +1277,8 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
       } elseif ($text -eq "render payload fragment") {
         $vector = @(@(0.0, 1.0, 0.0))
       } elseif ($text -eq "caller in caller ts") {
+        $vector = @(@(0.0, -1.0, 0.0))
+      } elseif ($text -eq "caller") {
         $vector = @(@(0.0, -1.0, 0.0))
       } elseif ($text -eq "render in page ts") {
         $vector = @(@(0.0, 0.0, 1.0))
@@ -894,12 +1323,18 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
             "Bypass".to_string(),
             "-File".to_string(),
             script_path.to_string_lossy().into_owned(),
+            log_path.to_string_lossy().into_owned(),
         ],
     )
 }
 
 pub(super) fn configure_graphql_semantic_query_runtime(repo_root: &Path) {
     let sqlite_path = checkpoint_sqlite_path(repo_root);
+    let log_path = semantic_query_runtime_log_path(repo_root);
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent).expect("create semantic query runtime log dir");
+    }
+    fs::write(&log_path, "").expect("reset semantic query runtime log");
     let (command, args) = fake_semantic_query_runtime_command_and_args(repo_root);
     let runtime_args = args
         .iter()
@@ -917,7 +1352,8 @@ pub(super) fn configure_graphql_semantic_query_runtime(repo_root: &Path) {
                 "summary_mode": "off",
                 "embedding_mode": "deterministic",
                 "inference": {
-                    "code_embeddings": "semantic_query_test"
+                    "code_embeddings": "semantic_query_test",
+                    "summary_embeddings": "semantic_query_test"
                 }
             },
             "inference": {

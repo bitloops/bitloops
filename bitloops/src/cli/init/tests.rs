@@ -155,6 +155,28 @@ fn test_runtime() -> tokio::runtime::Runtime {
         .expect("runtime")
 }
 
+fn init_status_command_args(status_args: InitStatusArgs) -> InitArgs {
+    InitArgs {
+        command: Some(InitCommand::Status(status_args)),
+        install_default_daemon: false,
+        force: false,
+        disable_devql_guidance: false,
+        agent: Vec::new(),
+        telemetry: None,
+        no_telemetry: false,
+        skip_baseline: false,
+        sync: None,
+        ingest: None,
+        backfill: None,
+        exclude: Vec::new(),
+        exclude_from: Vec::new(),
+        embeddings_runtime: None,
+        no_embeddings: false,
+        embeddings_gateway_url: None,
+        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+    }
+}
+
 fn fake_logged_in_session() -> crate::daemon::WorkosSessionDetails {
     crate::daemon::WorkosSessionDetails {
         client_id: "client_test".to_string(),
@@ -207,9 +229,10 @@ fn render_install_default_daemon_handoff_with_mkcert(
                             runtime
                                 .block_on(run_with_io_async_for_project_root(
                                     InitArgs {
+                                        command: None,
                                         install_default_daemon: true,
                                         force: false,
-                                        disable_bitloops_skill: false,
+                                        disable_devql_guidance: false,
                                         agent: vec![DEFAULT_AGENT.to_string()],
                                         telemetry: Some(false),
                                         no_telemetry: false,
@@ -580,6 +603,40 @@ fn init_args_supports_install_default_daemon_flag() {
 }
 
 #[test]
+fn init_args_support_status_subcommand_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "status",
+        "--json",
+        "--wait",
+        "--session-id",
+        "init-session",
+    ])
+    .expect("parse init status");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let Some(InitCommand::Status(status_args)) = args.command else {
+        panic!("expected init status subcommand");
+    };
+
+    assert!(status_args.json);
+    assert!(status_args.wait);
+    assert!(!status_args.watch);
+    assert_eq!(status_args.session_id.as_deref(), Some("init-session"));
+}
+
+#[test]
+fn init_args_reject_mixing_setup_flags_with_status_subcommand() {
+    let err = Cli::try_parse_from(["bitloops", "init", "--sync", "status"])
+        .err()
+        .expect("mixed init setup flags should fail");
+
+    assert!(err.to_string().contains("cannot be used with"));
+}
+
+#[test]
 fn init_args_leave_embeddings_choice_unset_when_flags_are_omitted() {
     let parsed = Cli::try_parse_from(["bitloops", "init"]).expect("parse init");
     let Some(Commands::Init(args)) = parsed.command else {
@@ -718,6 +775,250 @@ fn init_args_support_repeated_exclusion_flags() {
 }
 
 #[test]
+fn run_init_status_renders_only_selected_lanes_in_text_output() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert!(!query.contains("startInit("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+                Ok(runtime_snapshot_json(
+                    repo_id.as_str(),
+                    "init-session-status-text",
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        embeddings_selected: true,
+                        summaries_selected: true,
+                        embeddings_lane_status: "RUNNING",
+                        summaries_lane_status: "WAITING",
+                        summaries_lane_waiting_reason: Some("waiting_for_follow_up_sync"),
+                        ..RuntimeSessionSnapshotFixture::default()
+                    },
+                ))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs::default()),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let rendered = strip_ansi_escape_sequences(&String::from_utf8(out).expect("utf8"));
+            assert!(rendered.contains("Init session: init-session-status-text"));
+            assert!(rendered.contains("Code Embeddings:"));
+            assert!(rendered.contains("Summaries:"));
+            assert!(!rendered.contains("Sync:"));
+            assert!(!rendered.contains("Ingest:"));
+        },
+    );
+}
+
+#[test]
+fn run_init_status_outputs_selected_lanes_in_json() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    let session_id = "init-session-status-json";
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+                Ok(runtime_snapshot_json(
+                    repo_id.as_str(),
+                    session_id,
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        run_sync: true,
+                        top_lane_status: "RUNNING",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    },
+                ))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs {
+                        json: true,
+                        wait: false,
+                        watch: false,
+                        session_id: Some("init-session-status".to_string()),
+                    }),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let payload: serde_json::Value =
+                serde_json::from_slice(&out).expect("parse init status json");
+            assert_eq!(payload["repoId"], json!(repo_id));
+            assert_eq!(payload["currentInitSessionId"], json!(session_id));
+            assert_eq!(payload["session"]["initSessionId"], json!(session_id));
+            let lanes = payload["session"]["lanes"]
+                .as_array()
+                .expect("selected lanes array");
+            assert_eq!(lanes.len(), 1);
+            assert_eq!(lanes[0]["title"], json!("Sync"));
+        },
+    );
+}
+
+#[test]
+fn run_init_status_wait_outputs_final_terminal_json() {
+    let snapshot_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let repo = tempfile::tempdir().expect("temp repo");
+    let session_id = "init-session-status-wait";
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let snapshot_count = std::rc::Rc::clone(&snapshot_count);
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+
+                let mut count = snapshot_count.borrow_mut();
+                *count += 1;
+                let fixture = if *count == 1 {
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        run_sync: true,
+                        top_lane_status: "RUNNING",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                } else {
+                    RuntimeSessionSnapshotFixture {
+                        status: "COMPLETED",
+                        run_sync: true,
+                        top_lane_status: "COMPLETED",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                };
+                Ok(runtime_snapshot_json(repo_id.as_str(), session_id, fixture))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs {
+                        json: true,
+                        wait: true,
+                        watch: false,
+                        session_id: Some(session_id.to_string()),
+                    }),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let payload: serde_json::Value =
+                serde_json::from_slice(&out).expect("parse waited init status json");
+            assert_eq!(payload["session"]["status"], json!("COMPLETED"));
+        },
+    );
+
+    assert!(
+        *snapshot_count.borrow() >= 2,
+        "expected init status --wait to poll until the session completed"
+    );
+}
+
+#[test]
+fn run_init_status_watch_streams_updates_until_terminal_state() {
+    let snapshot_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let repo = tempfile::tempdir().expect("temp repo");
+    let session_id = "init-session-status-watch";
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let snapshot_count = std::rc::Rc::clone(&snapshot_count);
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+
+                let mut count = snapshot_count.borrow_mut();
+                *count += 1;
+                let fixture = if *count == 1 {
+                    RuntimeSessionSnapshotFixture {
+                        status: "RUNNING",
+                        run_sync: true,
+                        top_lane_status: "RUNNING",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                } else {
+                    RuntimeSessionSnapshotFixture {
+                        status: "COMPLETED",
+                        run_sync: true,
+                        top_lane_status: "COMPLETED",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    }
+                };
+                Ok(runtime_snapshot_json(repo_id.as_str(), session_id, fixture))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs {
+                        json: false,
+                        wait: false,
+                        watch: true,
+                        session_id: None,
+                    }),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let rendered = String::from_utf8(out).expect("utf8 output");
+            assert!(rendered.contains("Status: Running"));
+            assert!(rendered.contains("Status: Completed"));
+        },
+    );
+
+    assert!(
+        *snapshot_count.borrow() >= 2,
+        "expected init status --watch to stream multiple snapshots"
+    );
+}
+
+#[test]
 fn init_embeddings_prompt_defaults_to_cloud_in_picker_mode() {
     let mut out = Vec::new();
     let mut input = Cursor::new(Vec::<u8>::new());
@@ -811,9 +1112,10 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![DEFAULT_AGENT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -847,7 +1149,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             .join(".claude/skills/bitloops/using-devql/SKILL.md");
         assert!(
             repo_skill.exists(),
-            "expected repo-local DevQL skill to be installed at {}",
+            "expected repo-local DevQL Guidance to be installed at {}",
             repo_skill.display()
         );
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
@@ -869,16 +1171,17 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
     with_temp_app_dirs(&app_dirs, false, true, || {
         let mut out = Vec::new();
         let select = |_choices: &[String],
-                      _enable_bitloops_skill: bool|
+                      _enable_devql_guidance: bool|
          -> std::result::Result<InitAgentSelection, String> {
             panic!("selector should not run when --agent is provided")
         };
 
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![
                     "Cursor".to_string(),
                     AGENT_CURSOR.to_string(),
@@ -934,9 +1237,10 @@ keep = true
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -988,9 +1292,10 @@ fn run_init_binds_repo_to_running_daemon_config() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -1053,9 +1358,10 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
                 let mut out = Vec::new();
                 run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1115,9 +1421,10 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
                 let mut out = Vec::new();
                 let err = run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1176,9 +1483,10 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
                 let mut out = Vec::new();
                 run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1222,7 +1530,7 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
     setup_git_repo(&repo);
     let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
     let select_fn = |_available: &[String],
-                     _enable_bitloops_skill: bool|
+                     _enable_devql_guidance: bool|
      -> std::result::Result<InitAgentSelection, String> {
         Err("selector refused to choose an agent".to_string())
     };
@@ -1240,9 +1548,10 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
                 let mut out = Vec::new();
                 let err = run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: false,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: Vec::new(),
                         telemetry: None,
                         no_telemetry: false,
@@ -1292,9 +1601,10 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
         let mut out = Vec::new();
         let err = run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -1342,9 +1652,10 @@ fn run_init_rewrites_existing_daemon_binding() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: Vec::new(),
                 telemetry: None,
                 no_telemetry: false,
@@ -1400,9 +1711,10 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_CURSOR.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1454,9 +1766,10 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 let mut out = Vec::new();
                 run_with_writer_for_project_root(
                     InitArgs {
+                        command: None,
                         install_default_daemon: false,
                         force: true,
-                        disable_bitloops_skill: false,
+                        disable_devql_guidance: false,
                         agent: vec![AGENT_CODEX.to_string()],
                         telemetry: None,
                         no_telemetry: false,
@@ -1508,9 +1821,10 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
             let mut out = Vec::new();
             run_with_writer_for_project_root(
                 InitArgs {
+                    command: None,
                     install_default_daemon: false,
                     force: true,
-                    disable_bitloops_skill: false,
+                    disable_devql_guidance: false,
                     agent: vec![AGENT_GEMINI.to_string()],
                     telemetry: None,
                     no_telemetry: false,
@@ -1556,9 +1870,10 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_NAME_COPILOT.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1601,9 +1916,10 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_NAME_OPEN_CODE.to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1637,7 +1953,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
 }
 
 #[test]
-fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfaces() {
+fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfaces() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     setup_git_repo(&repo);
@@ -1646,9 +1962,10 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
         let mut out = Vec::new();
         run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: true,
-                disable_bitloops_skill: true,
+                disable_devql_guidance: true,
                 agent: vec![
                     AGENT_CLAUDE_CODE.to_string(),
                     AGENT_CODEX.to_string(),
@@ -1719,6 +2036,9 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
                 .join(".opencode/skills/bitloops/using-devql/SKILL.md")
                 .exists()
         );
+        let local_policy =
+            std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME)).unwrap();
+        assert!(local_policy.contains("devql_guidance_enabled = false"));
 
         let state_dir = repo.path().join(".route-test-state");
         let state_dir_str = state_dir.to_string_lossy().to_string();
@@ -1746,13 +2066,88 @@ fn run_init_with_disable_bitloops_skill_keeps_hooks_and_skips_repo_prompt_surfac
         .expect("codex session-start route");
         assert!(
             outcome.stdout.is_none(),
-            "disable-bitloops-skill should suppress session-start stdout when the repo-local skill is absent"
+            "disable-devql-guidance should suppress session-start stdout when the repo-local guidance surface is absent"
         );
 
         let plugin = std::fs::read_to_string(repo.path().join(".opencode/plugins/bitloops.ts"))
             .expect("read OpenCode plugin");
         assert!(!plugin.contains("name: using-devql"));
         assert!(!plugin.contains("bitloops devql query"));
+    });
+}
+
+#[test]
+fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_session_guidance() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        let mut out = Vec::new();
+        run_with_writer_for_project_root(
+            InitArgs {
+                command: None,
+                install_default_daemon: false,
+                force: true,
+                disable_devql_guidance: false,
+                agent: vec![AGENT_CODEX.to_string()],
+                telemetry: None,
+                no_telemetry: false,
+                skip_baseline: true,
+                sync: Some(false),
+                ingest: Some(false),
+                backfill: None,
+                exclude: Vec::new(),
+                exclude_from: Vec::new(),
+                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                no_embeddings: false,
+                embeddings_gateway_url: None,
+                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+            },
+            repo.path(),
+            &mut out,
+            None,
+        )
+        .expect("run init");
+
+        let repo_skill = repo
+            .path()
+            .join(".agents/skills/bitloops/using-devql/SKILL.md");
+        assert!(repo.path().join(".codex/hooks.json").exists());
+        assert!(
+            repo_skill.exists(),
+            "expected repo-local Codex DevQL Guidance to be installed at {}",
+            repo_skill.display()
+        );
+
+        let state_dir = repo.path().join(".route-test-state");
+        let state_dir_str = state_dir.to_string_lossy().to_string();
+        let outcome = with_process_state(
+            Some(repo.path()),
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_dir_str.as_str()),
+            )],
+            || {
+                crate::test_support::git_fixtures::ensure_test_store_backends(repo.path());
+                crate::host::checkpoints::lifecycle::adapters::route_hook_command_to_lifecycle(
+                    repo.path(),
+                    AGENT_CODEX,
+                    crate::adapters::agents::codex::lifecycle::HOOK_NAME_SESSION_START,
+                    &json!({
+                        "session_id": "codex-session-start",
+                        "transcript_path": "",
+                        "model": "gpt-5.4"
+                    })
+                    .to_string(),
+                )
+            },
+        )
+        .expect("codex session-start route");
+        let stdout = outcome.stdout.expect("stdout");
+        assert!(stdout.contains("This repo has DevQL"));
+        assert!(stdout.contains("use DevQL first"));
+        assert!(stdout.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
     });
 }
 
@@ -1766,9 +2161,10 @@ fn run_init_with_invalid_explicit_agent_errors() {
         let mut out = Vec::new();
         let err = run_with_writer_for_project_root(
             InitArgs {
+                command: None,
                 install_default_daemon: false,
                 force: false,
-                disable_bitloops_skill: false,
+                disable_devql_guidance: false,
                 agent: vec![AGENT_CURSOR.to_string(), "not-a-real-agent".to_string()],
                 telemetry: None,
                 no_telemetry: false,
@@ -1807,7 +2203,7 @@ fn detect_or_select_agent_no_detection_no_tty_falls_back_to_default() {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, true, None).unwrap();
             assert_eq!(selected.agents, vec![DEFAULT_AGENT.to_string()]);
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1837,7 +2233,7 @@ fn detect_or_select_agent_prefers_local_supported_agents_over_shared_and_detecte
                 selected.agents,
                 vec![AGENT_CODEX.to_string(), AGENT_GEMINI.to_string()]
             );
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1862,7 +2258,7 @@ fn detect_or_select_agent_prefers_shared_supported_agents_over_detected_agents()
                 selected.agents,
                 vec![AGENT_CURSOR.to_string(), AGENT_GEMINI.to_string()]
             );
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1903,7 +2299,7 @@ fn detect_or_select_agent_agent_detected() {
             let mut out = Vec::new();
             let selected = detect_or_select_agent(dir.path(), &mut out, true, None).unwrap();
             assert_eq!(selected.agents, vec![AGENT_CLAUDE_CODE.to_string()]);
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1915,11 +2311,11 @@ fn detect_or_select_agent_single_detected_with_tty_uses_selector() {
     std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
 
     let select = |_available: &[String],
-                  enable_bitloops_skill: bool|
+                  enable_devql_guidance: bool|
      -> std::result::Result<InitAgentSelection, String> {
         Ok(InitAgentSelection {
             agents: vec![AGENT_CURSOR.to_string()],
-            enable_bitloops_skill,
+            enable_devql_guidance,
         })
     };
 
@@ -1931,7 +2327,7 @@ fn detect_or_select_agent_single_detected_with_tty_uses_selector() {
             let selected =
                 detect_or_select_agent(dir.path(), &mut out, true, Some(&select)).unwrap();
             assert_eq!(selected.agents, vec![AGENT_CURSOR.to_string()]);
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -1941,7 +2337,7 @@ fn detect_or_select_agent_selection_cancelled() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let select =
-        |_available: &[String], _enable_bitloops_skill: bool| Err("user cancelled".to_string());
+        |_available: &[String], _enable_devql_guidance: bool| Err("user cancelled".to_string());
     with_process_state(
         Some(dir.path()),
         &[("BITLOOPS_TEST_TTY", Some("1"))],
@@ -1958,10 +2354,10 @@ fn detect_or_select_agent_selection_cancelled() {
 fn detect_or_select_agent_none_selected_errors() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
-    let select = |_available: &[String], _enable_bitloops_skill: bool| {
+    let select = |_available: &[String], _enable_devql_guidance: bool| {
         Ok(InitAgentSelection {
             agents: vec![],
-            enable_bitloops_skill: true,
+            enable_devql_guidance: true,
         })
     };
     with_process_state(
@@ -1991,7 +2387,7 @@ fn detect_or_select_agent_no_tty_returns_all_detected() {
             assert_eq!(selected.agents.len(), 2);
             assert!(selected.agents.contains(&AGENT_CLAUDE_CODE.to_string()));
             assert!(selected.agents.contains(&AGENT_GEMINI.to_string()));
-            assert!(selected.enable_bitloops_skill);
+            assert!(selected.enable_devql_guidance);
         },
     );
 }
@@ -2003,7 +2399,7 @@ fn detect_or_select_agent_multiple_with_selector() {
     std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
     std::fs::create_dir_all(dir.path().join(".gemini")).unwrap();
     let select = |_available: &[String],
-                  _enable_bitloops_skill: bool|
+                  _enable_devql_guidance: bool|
      -> std::result::Result<InitAgentSelection, String> {
         Ok(InitAgentSelection {
             agents: vec![
@@ -2011,7 +2407,7 @@ fn detect_or_select_agent_multiple_with_selector() {
                 AGENT_CODEX.to_string(),
                 AGENT_CLAUDE_CODE.to_string(),
             ],
-            enable_bitloops_skill: false,
+            enable_devql_guidance: false,
         })
     };
     with_process_state(
@@ -2029,7 +2425,7 @@ fn detect_or_select_agent_multiple_with_selector() {
                     AGENT_CLAUDE_CODE.to_string()
                 ]
             );
-            assert!(!selected.enable_bitloops_skill);
+            assert!(!selected.enable_devql_guidance);
         },
     );
 }
@@ -2055,13 +2451,31 @@ fn init_args_support_no_telemetry_flag() {
 }
 
 #[test]
-fn init_args_support_disable_bitloops_skill_flag() {
-    let parsed = Cli::try_parse_from(["bitloops", "init", "--disable-bitloops-skill"])
-        .expect("parse init disable Bitloops Skill flag");
+fn init_args_support_disable_devql_guidance_flag() {
+    let parsed = Cli::try_parse_from(["bitloops", "init", "--disable-devql-guidance"])
+        .expect("parse init disable DevQL Guidance flag");
     let Some(Commands::Init(args)) = parsed.command else {
         panic!("expected init command");
     };
-    assert!(args.disable_bitloops_skill);
+    assert!(args.disable_devql_guidance);
+}
+
+#[test]
+fn init_args_reject_legacy_disable_devql_skill_flag() {
+    let err = match Cli::try_parse_from(["bitloops", "init", "--disable-devql-skill"]) {
+        Ok(_) => panic!("legacy init flag should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+}
+
+#[test]
+fn init_args_reject_legacy_disable_bitloops_skill_flag() {
+    let err = match Cli::try_parse_from(["bitloops", "init", "--disable-bitloops-skill"]) {
+        Ok(_) => panic!("legacy init alias should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
 }
 
 #[test]
@@ -2111,19 +2525,20 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
             || {
                 let mut out = Vec::new();
                 let mut input = Cursor::new("3\n");
-                let select = |_items: &[String], enable_bitloops_skill: bool| {
+                let select = |_items: &[String], enable_devql_guidance: bool| {
                     Ok(InitAgentSelection {
                         agents: vec!["claude-code".to_string()],
-                        enable_bitloops_skill,
+                        enable_devql_guidance,
                     })
                 };
                 let runtime = test_runtime();
                 runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
@@ -2181,9 +2596,10 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                 let err = runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: None,
                             no_telemetry: false,
@@ -2227,9 +2643,10 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
         let err = runtime
             .block_on(run_with_io_async_for_project_root(
                 InitArgs {
+                    command: None,
                     install_default_daemon: true,
                     force: false,
-                    disable_bitloops_skill: false,
+                    disable_devql_guidance: false,
                     agent: Vec::new(),
                     telemetry: None,
                     no_telemetry: false,
@@ -2317,9 +2734,10 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
                                                             InitArgs {
+                                        command: None,
                                                                 install_default_daemon: true,
                                                                 force: false,
-                                                                disable_bitloops_skill: false,
+                                                                disable_devql_guidance: false,
                                                                 agent: vec![DEFAULT_AGENT.to_string()],
                                                                 telemetry: Some(false),
                                                                 no_telemetry: false,
@@ -2449,9 +2867,10 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                 runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
@@ -2514,19 +2933,20 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                     || {
                         let mut out = Vec::new();
                         let mut input = Cursor::new("");
-                        let select = |_items: &[String], enable_bitloops_skill: bool| {
+                        let select = |_items: &[String], enable_devql_guidance: bool| {
                             Ok(InitAgentSelection {
                                 agents: vec!["claude-code".to_string()],
-                                enable_bitloops_skill,
+                                enable_devql_guidance,
                             })
                         };
                         let runtime = test_runtime();
                         runtime
                             .block_on(run_with_io_async_for_project_root(
                                 InitArgs {
+                                    command: None,
                                     install_default_daemon: false,
                                     force: false,
-                                    disable_bitloops_skill: false,
+                                    disable_devql_guidance: false,
                                     agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
@@ -2692,22 +3112,23 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                 let mut input =
                                                                     Cursor::new("3\n\n");
                                                                 let select = |_items: &[String],
-                                                                              enable_bitloops_skill: bool| {
+                                                                              enable_devql_guidance: bool| {
                                                                     Ok(InitAgentSelection {
                                                                         agents: vec![
                                                                             "claude-code"
                                                                                 .to_string(),
                                                                         ],
-                                                                        enable_bitloops_skill,
+                                                                        enable_devql_guidance,
                                                                     })
                                                                 };
                                                                 let runtime = test_runtime();
                                                                 runtime
                                                                     .block_on(run_with_io_async_for_project_root(
                                                                         InitArgs {
+                                        command: None,
                                                                             install_default_daemon: true,
                                                                             force: false,
-                                                                            disable_bitloops_skill: false,
+                                                                            disable_devql_guidance: false,
                                                                             agent: Vec::new(),
                                                                             telemetry: Some(false),
                                                                             no_telemetry: false,
@@ -2877,9 +3298,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: true,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -2981,9 +3403,10 @@ fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when
                         let err = runtime
                             .block_on(run_with_io_async_for_project_root(
                                 InitArgs {
+                                    command: None,
                                     install_default_daemon: true,
                                     force: false,
-                                    disable_bitloops_skill: false,
+                                    disable_devql_guidance: false,
                                     agent: Vec::new(),
                                     telemetry: Some(false),
                                     no_telemetry: false,
@@ -3049,9 +3472,10 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                         let runtime = test_runtime();
                         let run_result = runtime.block_on(run_with_io_async_for_project_root(
                             InitArgs {
+                                command: None,
                                 install_default_daemon: true,
                                 force: false,
-                                disable_bitloops_skill: false,
+                                disable_devql_guidance: false,
                                 agent: vec![DEFAULT_AGENT.to_string()],
                                 telemetry: Some(false),
                                 no_telemetry: false,
@@ -3274,9 +3698,10 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
                                                                 InitArgs {
+                                        command: None,
                                                                     install_default_daemon: true,
                                                                     force: false,
-                                                                    disable_bitloops_skill: false,
+                                                                    disable_devql_guidance: false,
                                                                     agent: vec![DEFAULT_AGENT.to_string()],
                                                                     telemetry: Some(false),
                                                                     no_telemetry: false,
@@ -3466,9 +3891,10 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
                                                             InitArgs {
+                                        command: None,
                                                                 install_default_daemon: true,
                                                                 force: false,
-                                                                disable_bitloops_skill: false,
+                                                                disable_devql_guidance: false,
                                                                 agent: vec![DEFAULT_AGENT.to_string()],
                                                                 telemetry: Some(false),
                                                                 no_telemetry: false,
@@ -3651,9 +4077,10 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
                                                                 InitArgs {
+                                        command: None,
                                                                     install_default_daemon: true,
                                                                     force: false,
-                                                                    disable_bitloops_skill: false,
+                                                                    disable_devql_guidance: false,
                                                                     agent: vec![DEFAULT_AGENT.to_string()],
                                                                     telemetry: Some(false),
                                                                     no_telemetry: false,
@@ -3808,9 +4235,10 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                         runtime
                                             .block_on(run_with_io_async_for_project_root(
                                                 InitArgs {
+                                        command: None,
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    disable_bitloops_skill: false,
+                                                    disable_devql_guidance: false,
                                                     agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
@@ -3971,9 +4399,10 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                         runtime
                                             .block_on(run_with_io_async_for_project_root(
                                                 InitArgs {
+                                        command: None,
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    disable_bitloops_skill: false,
+                                                    disable_devql_guidance: false,
                                                     agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
@@ -4129,9 +4558,10 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                         runtime
                                             .block_on(run_with_io_async_for_project_root(
                                                 InitArgs {
+                                        command: None,
                                                     install_default_daemon: true,
                                                     force: false,
-                                                    disable_bitloops_skill: false,
+                                                    disable_devql_guidance: false,
                                                     agent: Vec::new(),
                                                     telemetry: Some(false),
                                                     no_telemetry: false,
@@ -4275,9 +4705,10 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                 runtime
                                                                     .block_on(run_with_io_async_for_project_root(
                                                                         InitArgs {
+                                        command: None,
                                                                             install_default_daemon: true,
                                                                             force: false,
-                                                                            disable_bitloops_skill: false,
+                                                                            disable_devql_guidance: false,
                                                                             agent: Vec::new(),
                                                                             telemetry: Some(false),
                                                                             no_telemetry: false,
@@ -4360,9 +4791,10 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                 runtime
                     .block_on(run_with_io_async_for_project_root(
                         InitArgs {
+                            command: None,
                             install_default_daemon: false,
                             force: false,
-                            disable_bitloops_skill: false,
+                            disable_devql_guidance: false,
                             agent: Vec::new(),
                             telemetry: Some(false),
                             no_telemetry: false,
@@ -4535,19 +4967,20 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                             || {
                                 let mut out = Vec::new();
                                 let mut input = Cursor::new("\n");
-                                let select = |_items: &[String], enable_bitloops_skill: bool| {
+                                let select = |_items: &[String], enable_devql_guidance: bool| {
                                     Ok(InitAgentSelection {
                                         agents: vec!["claude-code".to_string()],
-                                        enable_bitloops_skill,
+                                        enable_devql_guidance,
                                     })
                                 };
                                 let runtime = test_runtime();
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: true,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -4627,19 +5060,20 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                             || {
                                 let mut out = Vec::new();
                                 let mut input = Cursor::new("none\n");
-                                let select = |_items: &[String], enable_bitloops_skill: bool| {
+                                let select = |_items: &[String], enable_devql_guidance: bool| {
                                     Ok(InitAgentSelection {
                                         agents: vec!["claude-code".to_string()],
-                                        enable_bitloops_skill,
+                                        enable_devql_guidance,
                                     })
                                 };
                                 let runtime = test_runtime();
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: true,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -4688,9 +5122,10 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
         let err = runtime
             .block_on(run_with_io_async_for_project_root(
                 InitArgs {
+                    command: None,
                     install_default_daemon: false,
                     force: false,
-                    disable_bitloops_skill: false,
+                    disable_devql_guidance: false,
                     agent: Vec::new(),
                     telemetry: Some(false),
                     no_telemetry: false,
@@ -4808,9 +5243,10 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: false,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,
@@ -4953,9 +5389,10 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                 runtime
                                     .block_on(run_with_io_async_for_project_root(
                                         InitArgs {
+                                            command: None,
                                             install_default_daemon: false,
                                             force: false,
-                                            disable_bitloops_skill: false,
+                                            disable_devql_guidance: false,
                                             agent: Vec::new(),
                                             telemetry: Some(false),
                                             no_telemetry: false,

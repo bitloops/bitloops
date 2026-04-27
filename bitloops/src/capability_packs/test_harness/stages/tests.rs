@@ -3,7 +3,9 @@ use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
 
 use crate::capability_packs::test_harness::storage::TestHarnessQueryRepository;
-use crate::capability_packs::test_harness::types::test_harness_relational_store_unavailable_stage_response;
+use crate::capability_packs::test_harness::types::{
+    test_harness_relational_store_unavailable_stage_response, test_harness_tests_expand_hint_json,
+};
 use crate::host::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
 };
@@ -162,6 +164,7 @@ fn execute_tests_stage<R: TestHarnessQueryRepository + ?Sized>(
             "cross_cutting": false,
             "data_sources": ["static_source"],
             "diagnostic_count": 0,
+            "expand_hint": test_harness_tests_expand_hint_json(),
         });
 
         out.push(json!({
@@ -500,6 +503,20 @@ mod guardrail_tests {
         assert_eq!(rows[0]["covering_tests"].as_array().unwrap().len(), 1);
         assert_eq!(rows[0]["covering_tests"][0]["start_line"], 3);
         assert_eq!(rows[0]["covering_tests"][0]["end_line"], 6);
+        assert_eq!(
+            rows[0]["summary"]["expand_hint"]["intent"],
+            crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_INTENT
+        );
+        assert!(
+            rows[0]["summary"]["expand_hint"].get("devql").is_none(),
+            "expand hint should expose `template`, not `devql`: {:#}",
+            rows[0]["summary"]["expand_hint"]
+        );
+        let template = rows[0]["summary"]["expand_hint"]["template"]
+            .as_str()
+            .expect("expand hint template");
+        assert!(template.contains("coveringTests"));
+        assert!(!template.contains("artefact {"));
         assert_eq!(repo.calls().len(), 1);
         assert_eq!(repo.calls()[0].production_symbol_id, "symbol-a");
     }

@@ -53,18 +53,18 @@ pub(crate) async fn execute_devql_query(
         log_devql_validation_failure(
             parsed,
             "deps_with_chat_history",
-            "deps() cannot be combined with chatHistory() stage",
+            "dependencies() cannot be combined with chatHistory() stage",
         );
-        bail!("deps() cannot be combined with chatHistory() stage");
+        bail!("dependencies() cannot be combined with chatHistory() stage");
     }
 
     if parsed.has_clones_stage && parsed.has_deps_stage {
         log_devql_validation_failure(
             parsed,
             "clones_with_deps",
-            "clones() cannot be combined with deps() stage",
+            "clones() cannot be combined with dependencies() stage",
         );
-        bail!("clones() cannot be combined with deps() stage");
+        bail!("clones() cannot be combined with dependencies() stage");
     }
 
     if parsed.has_chat_history_stage && (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
@@ -95,9 +95,9 @@ pub(crate) async fn execute_devql_query(
         log_devql_validation_failure(
             parsed,
             "deps_summary_graphql_only",
-            "summary(deps:true, ...) is only supported by the GraphQL compiler path",
+            "summary(dependencies:true, ...) is only supported by the GraphQL compiler path",
         );
-        bail!("summary(deps:true, ...) is only supported by the GraphQL compiler path");
+        bail!("summary(dependencies:true, ...) is only supported by the GraphQL compiler path");
     }
 
     if has_clone_summary_stage && !parsed.has_clones_stage {
@@ -133,9 +133,9 @@ pub(crate) async fn execute_devql_query(
         log_devql_validation_failure(
             parsed,
             "tests_with_deps",
-            "tests() cannot be combined with deps() stage",
+            "tests() cannot be combined with dependencies() stage",
         );
-        bail!("tests() cannot be combined with deps() stage");
+        bail!("tests() cannot be combined with dependencies() stage");
     }
 
     if has_tests_stage && parsed.has_clones_stage {
@@ -189,9 +189,9 @@ pub(crate) async fn execute_devql_query(
         log_devql_validation_failure(
             parsed,
             "coverage_with_deps",
-            "coverage() cannot be combined with deps() stage",
+            "coverage() cannot be combined with dependencies() stage",
         );
-        bail!("coverage() cannot be combined with deps() stage");
+        bail!("coverage() cannot be combined with dependencies() stage");
     }
 
     if has_coverage_stage && parsed.has_clones_stage {
@@ -289,7 +289,7 @@ pub(crate) fn has_registered_coverage_stage(parsed: &ParsedDevqlQuery) -> bool {
 
 pub(crate) fn has_registered_clone_summary_stage(parsed: &ParsedDevqlQuery) -> bool {
     parsed.registered_stages.iter().any(|stage| {
-        is_clone_summary_stage_name(&stage.stage_name) && !stage.args.contains_key("deps")
+        is_clone_summary_stage_name(&stage.stage_name) && !stage.args.contains_key("dependencies")
     })
 }
 
@@ -299,19 +299,19 @@ pub(crate) fn has_registered_deps_summary_stage(parsed: &ParsedDevqlQuery) -> Re
             continue;
         }
 
-        let Some(deps_arg) = stage.args.get("deps") else {
+        let Some(deps_arg) = stage.args.get("dependencies") else {
             continue;
         };
-        let deps_enabled = super::super::parse_bool_literal("summary deps", deps_arg)?;
+        let deps_enabled = super::super::parse_bool_literal("summary dependencies", deps_arg)?;
         if !deps_enabled {
-            bail!("summary(deps:...) requires deps:true");
+            bail!("summary(dependencies:...) requires dependencies:true");
         }
         for key in stage.args.keys() {
             match key.as_str() {
-                "deps" | "kind" | "direction" | "unresolved" => {}
+                "dependencies" | "kind" | "direction" | "unresolved" => {}
                 _ => {
                     bail!(
-                        "summary(deps:true, ...) received unsupported argument `{key}`; allowed args: deps, kind, direction, unresolved"
+                        "summary(dependencies:true, ...) received unsupported argument `{key}`; allowed args: dependencies, kind, direction, unresolved"
                     );
                 }
             }

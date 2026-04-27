@@ -33,19 +33,21 @@ type Artefact {
 	signature: String
 	modifiers: [String!]!
 	docstring: String
+	summary: String
+	embeddingRepresentations: [EmbeddingRepresentationKind!]!
 	contentHash: String
 	blobSha: String!
 	createdAt: DateTime!
 	score: Float
+	searchScore: ArtefactSearchScore
 	parent: Artefact
 	children(first: Int, after: String, last: Int, before: String): ArtefactConnection!
-	outgoingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
-	incomingDeps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
-	depsSummary(filter: DepsSummaryFilterInput): DepsSummary!
+	outgoingDependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	incomingDependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	dependenciesSummary(filter: DependenciesSummaryFilterInput): DependenciesSummary!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
-	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
 	copyLineage: [ArtefactCopyLineage!]!
 }
 
@@ -78,6 +80,21 @@ input ArtefactFilterInput {
 	lines: LineRangeInput
 	agent: String
 	since: DateTime
+}
+
+type ArtefactSearchScore {
+	total: Float!
+	exact: Float!
+	fullText: Float!
+	fuzzy: Float!
+	semantic: Float!
+	literalMatches: Int!
+	exactCaseLiteralMatches: Int!
+	phraseMatches: Int!
+	exactCasePhraseMatches: Int!
+	bodyLiteralMatches: Int!
+	signatureLiteralMatches: Int!
+	summaryLiteralMatches: Int!
 }
 
 input AsOfInput {
@@ -228,6 +245,12 @@ type CloneEdge {
 	cursor: String!
 }
 
+type CloneExpandHint implements ExpandHint {
+	intent: String!
+	template: String!
+	parameters: [ExpandHintParameter!]!
+}
+
 type CloneSummary {
 	totalCount: Int!
 	groups: [CloneSummaryGroup!]!
@@ -269,6 +292,40 @@ type CommitEdge {
 
 scalar DateTime
 
+enum DependenciesDirection {
+	OUT
+	IN
+	BOTH
+}
+
+input DependenciesFilterInput {
+	kind: EdgeKind
+	direction: DependenciesDirection! = OUT
+	includeUnresolved: Boolean! = true
+}
+
+type DependenciesSummary {
+	totalCount: Int!
+	incomingCount: Int!
+	outgoingCount: Int!
+	kindCounts: DependenciesSummaryKindCounts!
+}
+
+input DependenciesSummaryFilterInput {
+	kind: EdgeKind
+	direction: DependenciesDirection
+	unresolved: Boolean! = false
+}
+
+type DependenciesSummaryKindCounts {
+	imports: Int!
+	calls: Int!
+	references: Int!
+	extends: Int!
+	implements: Int!
+	exports: Int!
+}
+
 type DependencyConnectionEdge {
 	node: DependencyEdge!
 	cursor: String!
@@ -294,38 +351,10 @@ type DependencyEdgeConnection {
 	totalCount: Int!
 }
 
-enum DepsDirection {
-	OUT
-	IN
-	BOTH
-}
-
-input DepsFilterInput {
-	kind: EdgeKind
-	direction: DepsDirection! = OUT
-	includeUnresolved: Boolean! = true
-}
-
-type DepsSummary {
-	totalCount: Int!
-	incomingCount: Int!
-	outgoingCount: Int!
-	kindCounts: DepsSummaryKindCounts!
-}
-
-input DepsSummaryFilterInput {
-	kind: EdgeKind
-	direction: DepsDirection
-	unresolved: Boolean! = false
-}
-
-type DepsSummaryKindCounts {
-	imports: Int!
-	calls: Int!
-	references: Int!
-	extends: Int!
-	implements: Int!
-	exports: Int!
+type DependencyExpandHint implements ExpandHint {
+	intent: String!
+	template: String!
+	parameters: [ExpandHintParameter!]!
 }
 
 enum EdgeKind {
@@ -335,6 +364,12 @@ enum EdgeKind {
 	EXTENDS
 	IMPLEMENTS
 	EXPORTS
+}
+
+enum EmbeddingRepresentationKind {
+	IDENTITY
+	CODE
+	SUMMARY
 }
 
 type EmbeddingsBootstrapProgress {
@@ -384,12 +419,24 @@ type EnqueueTaskResult {
 	merged: Boolean!
 }
 
+interface ExpandHint {
+	intent: String!
+	template: String!
+	parameters: [ExpandHintParameter!]!
+}
+
+type ExpandHintParameter {
+	name: String!
+	intent: String!
+	supportedValues: [String!]!
+}
+
 type FileContext {
 	path: String!
 	language: String
 	blobSha: String
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
-	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 }
 
@@ -783,13 +830,12 @@ type Project {
 	file(path: String!): FileContext!
 	files(path: String!): [FileContext!]!
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
-	deps(filter: DepsFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
+	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
-	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
 }
 
@@ -1068,36 +1114,6 @@ type TestHarnessCommitSummary {
 	coveragePresent: Boolean!
 }
 
-type TestHarnessCoverage {
-	coverageSource: String!
-	lineCoveragePct: Float!
-	branchCoveragePct: Float!
-	lineDataAvailable: Boolean!
-	branchDataAvailable: Boolean!
-	uncoveredLines: [Int!]!
-	branches: [TestHarnessCoverageBranch!]!
-}
-
-type TestHarnessCoverageBranch {
-	line: Int!
-	block: Int!
-	branch: Int!
-	covered: Boolean!
-	hitCount: Int!
-}
-
-type TestHarnessCoverageResult {
-	artefact: TestHarnessArtefactRef!
-	coverage: TestHarnessCoverage!
-	summary: TestHarnessCoverageSummary!
-}
-
-type TestHarnessCoverageSummary {
-	uncoveredLineCount: Int!
-	uncoveredBranchCount: Int!
-	diagnosticCount: Int!
-}
-
 type TestHarnessCoveringTest {
 	testId: String!
 	testName: String!
@@ -1121,6 +1137,12 @@ type TestHarnessLastRun {
 	commitSha: String!
 }
 
+type TestHarnessTestsExpandHint implements ExpandHint {
+	intent: String!
+	template: String!
+	parameters: [ExpandHintParameter!]!
+}
+
 type TestHarnessTestsResult {
 	artefact: TestHarnessArtefactRef!
 	coveringTests: [TestHarnessCoveringTest!]!
@@ -1132,6 +1154,7 @@ type TestHarnessTestsSummary {
 	crossCutting: Boolean!
 	dataSources: [String!]!
 	diagnosticCount: Int!
+	expandHint: TestHarnessTestsExpandHint!
 }
 
 type UpdateCliTelemetryConsentResult {

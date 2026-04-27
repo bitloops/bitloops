@@ -75,18 +75,13 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^I run EnableCLI for (\S+)$"),
-            step_fn(given_enable_cli),
+            regex(r"^I run bitloops enable --capture in (\S+)$"),
+            step_fn(given_enable_capture),
         )
         .given(
             None,
-            regex(r"^I run bitloops enable in (\S+)$"),
-            step_fn(given_enable),
-        )
-        .given(
-            None,
-            regex(r"^I run bitloops disable in (\S+)$"),
-            step_fn(given_disable),
+            regex(r"^I run bitloops disable --capture --devql-guidance in (\S+)$"),
+            step_fn(given_disable_capture_and_devql_guidance),
         )
         .given(
             None,
@@ -675,6 +670,16 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL artefacts query returns results in (\S+)$"),
             step_fn(then_devql_artefacts_returns_results),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL selectArtefacts search for \"([^\"]+)\" returns symbol \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_select_artefacts_search_returns_symbol),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL selectArtefacts search for \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
+            step_fn(then_devql_select_artefacts_search_returns_at_least),
         )
         .then(
             None,

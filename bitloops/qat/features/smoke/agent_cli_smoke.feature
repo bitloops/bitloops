@@ -10,7 +10,6 @@ Feature: Bitloops unified Agent Smoke suite
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent <agent> --sync=false in bitloops
-    And I run bitloops enable in bitloops
     And I make a first change using <agent> to bitloops
     And I committed today in bitloops
     Then bitloops stores exist in bitloops
@@ -51,7 +50,6 @@ Feature: Bitloops unified Agent Smoke suite
     And I create a Vite app project in bitloops
     And I run InitCommit for bitloops
     And I run bitloops init --agent <agent> --sync=false in bitloops
-    And I run bitloops enable in bitloops
     And I make a first change using <agent> to bitloops
     And I committed today in bitloops
     And I make a second change using <agent> to bitloops

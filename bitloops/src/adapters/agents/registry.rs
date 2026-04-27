@@ -2,6 +2,7 @@ use super::Agent;
 use super::adapters::AgentAdapterRegistry;
 use anyhow::{Result, anyhow};
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 /// Immutable registry of known agents, constructed once at startup.
 pub struct AgentRegistry {
@@ -19,8 +20,10 @@ impl AgentRegistry {
     }
 
     /// Build the default registry containing all built-in agents.
-    pub fn builtin() -> Self {
-        Self::new(AgentAdapterRegistry::builtin().create_all_agents())
+    pub fn builtin() -> &'static Self {
+        static BUILTIN: OnceLock<AgentRegistry> = OnceLock::new();
+        BUILTIN
+            .get_or_init(|| AgentRegistry::new(AgentAdapterRegistry::builtin().create_all_agents()))
     }
 
     pub fn get(&self, name: &str) -> Result<&(dyn Agent + Send + Sync)> {

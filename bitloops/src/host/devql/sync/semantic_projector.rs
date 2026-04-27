@@ -7,8 +7,9 @@ use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
-    clear_current_semantic_feature_rows_for_path, clear_current_symbol_embedding_rows_for_path,
-    upsert_current_semantic_feature_rows, upsert_current_symbol_embedding_rows,
+    clear_current_search_document_rows_for_path, clear_current_semantic_feature_rows_for_path,
+    clear_current_symbol_embedding_rows_for_path, upsert_current_semantic_feature_rows,
+    upsert_current_symbol_embedding_rows,
 };
 use crate::host::devql::sync::content_cache::CachedExtraction;
 use crate::host::devql::sync::materializer::{
@@ -144,6 +145,7 @@ pub(crate) async fn remove_path(
     path: &str,
 ) -> Result<()> {
     clear_current_symbol_embedding_rows_for_path(relational, &cfg.repo.repo_id, path).await?;
+    clear_current_search_document_rows_for_path(relational, &cfg.repo.repo_id, path).await?;
     clear_current_semantic_feature_rows_for_path(relational, &cfg.repo.repo_id, path).await
 }
 

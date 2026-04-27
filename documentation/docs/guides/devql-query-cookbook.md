@@ -67,7 +67,7 @@ For the full selector contract and stage semantics, see [selectArtefacts](/guide
 
 ```graphql
 {
-  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+  selectArtefacts(by: { search: "payLater()" }) {
     artefacts(first: 10) {
       path
       symbolFqn
@@ -80,7 +80,7 @@ The `summary` payload includes one entry per available category, currently:
 
 - `checkpoints`
 - `clones`
-- `deps`
+- `dependencies`
 - `tests`
 
 Each category includes its default `summary` payload and, when results exist, a stage-local `schema` string.
@@ -92,8 +92,16 @@ When a category summary shows something interesting, ask that stage for typed de
 ```graphql
 {
   selectArtefacts(by: { path: "rust-app/src/main.rs" }) {
-    deps {
+    dependencies {
       summary
+      expandHint {
+        intent
+        template
+        parameters {
+          direction
+          kind
+        }
+      }
       schema
       items(first: 10) {
         id

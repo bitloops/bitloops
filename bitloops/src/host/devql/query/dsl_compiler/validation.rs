@@ -46,26 +46,26 @@ pub(super) fn resolve_registered_stage(
 }
 
 fn resolve_summary_stage_kind(stage: &RegisteredStageCall) -> Result<RegisteredStageKind<'_>> {
-    let Some(deps_arg) = stage.args.get("deps") else {
+    let Some(deps_arg) = stage.args.get("dependencies") else {
         if !stage.args.is_empty() {
             bail!(
-                "summary() for clones does not accept arguments; use summary(deps:true, ...) for dependency summary"
+                "summary() for clones does not accept arguments; use summary(dependencies:true, ...) for dependency summary"
             );
         }
         return Ok(RegisteredStageKind::CloneSummary);
     };
 
-    let deps_enabled = super::super::parse_bool_literal("summary deps", deps_arg)?;
+    let deps_enabled = super::super::parse_bool_literal("summary dependencies", deps_arg)?;
     if !deps_enabled {
-        bail!("summary(deps:...) requires deps:true");
+        bail!("summary(dependencies:...) requires dependencies:true");
     }
 
     for key in stage.args.keys() {
         match key.as_str() {
-            "deps" | "kind" | "direction" | "unresolved" => {}
+            "dependencies" | "kind" | "direction" | "unresolved" => {}
             _ => {
                 bail!(
-                    "summary(deps:true, ...) received unsupported argument `{key}`; allowed args: deps, kind, direction, unresolved"
+                    "summary(dependencies:true, ...) received unsupported argument `{key}`; allowed args: dependencies, kind, direction, unresolved"
                 );
             }
         }
@@ -154,7 +154,9 @@ pub(super) fn validate_graphql_compiler_support(
                 Some(RegisteredStageKind::Tests(_))
             ));
         if terminal_stage_count == 0 {
-            bail!("selectArtefacts(...) requires checkpoints(), clones(), deps(), or tests()");
+            bail!(
+                "selectArtefacts(...) requires checkpoints(), clones(), dependencies(), or tests()"
+            );
         }
         if terminal_stage_count > 1 {
             bail!("selectArtefacts(...) supports exactly one terminal stage in v1");
@@ -197,11 +199,11 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     if parsed.has_deps_stage && parsed.has_chat_history_stage {
-        bail!("deps() cannot be combined with chatHistory() stage");
+        bail!("dependencies() cannot be combined with chatHistory() stage");
     }
 
     if parsed.has_clones_stage && parsed.has_deps_stage {
-        bail!("clones() cannot be combined with deps() stage");
+        bail!("clones() cannot be combined with dependencies() stage");
     }
 
     if parsed.has_chat_history_stage && (parsed.has_checkpoints_stage || parsed.has_telemetry_stage)
@@ -231,15 +233,15 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     if has_deps_summary_stage && !parsed.has_artefacts_stage {
-        bail!("summary(deps:true, ...) requires an artefacts() stage in the query");
+        bail!("summary(dependencies:true, ...) requires an artefacts() stage in the query");
     }
 
     if has_deps_summary_stage && parsed.has_deps_stage {
-        bail!("summary(deps:true, ...) cannot be combined with deps() stage");
+        bail!("summary(dependencies:true, ...) cannot be combined with dependencies() stage");
     }
 
     if has_deps_summary_stage && parsed.has_clones_stage {
-        bail!("summary(deps:true, ...) cannot be combined with clones() stage");
+        bail!("summary(dependencies:true, ...) cannot be combined with clones() stage");
     }
 
     if has_tests_stage && !parsed.has_artefacts_stage {
@@ -247,7 +249,7 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     if has_tests_stage && parsed.has_deps_stage {
-        bail!("tests() cannot be combined with deps() stage");
+        bail!("tests() cannot be combined with dependencies() stage");
     }
 
     if has_tests_stage && parsed.has_clones_stage {
@@ -267,7 +269,7 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     if has_coverage_stage && parsed.has_deps_stage {
-        bail!("coverage() cannot be combined with deps() stage");
+        bail!("coverage() cannot be combined with dependencies() stage");
     }
 
     if has_coverage_stage && parsed.has_clones_stage {
@@ -283,7 +285,7 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     if has_tests_summary_stage && parsed.has_deps_stage {
-        bail!("test_harness_tests_summary() cannot be combined with deps() stage");
+        bail!("test_harness_tests_summary() cannot be combined with dependencies() stage");
     }
 
     if has_tests_summary_stage && parsed.has_clones_stage {
@@ -299,7 +301,7 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     if parsed.has_deps_stage && parsed.has_artefacts_stage {
-        bail!("deps() after artefacts() is not yet supported by the GraphQL compiler");
+        bail!("dependencies() after artefacts() is not yet supported by the GraphQL compiler");
     }
 
     if mode == GraphqlCompileMode::Global
@@ -323,7 +325,7 @@ pub(super) fn validate_graphql_compiler_support(
         && parsed.file.is_none()
         && parsed.files_path.is_none()
     {
-        bail!("deps() requires project(), file(), or files() when compiling to GraphQL");
+        bail!("dependencies() requires project(), file(), or files() when compiling to GraphQL");
     }
 
     if parsed.has_deps_stage
@@ -332,7 +334,7 @@ pub(super) fn validate_graphql_compiler_support(
         && parsed.files_path.is_none()
     {
         bail!(
-            "deps() with asOf(...) is only supported when further scoped through file() or files()"
+            "dependencies() with asOf(...) is only supported when further scoped through file() or files()"
         );
     }
 
@@ -410,38 +412,59 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let fuzzy_name = selector
-        .fuzzy_name
+    let search = selector
+        .search
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if selector
-        .fuzzy_name
+        .search
         .as_deref()
         .is_some_and(|value| value.trim().is_empty())
     {
-        bail!("selectArtefacts(...) requires fuzzy_name: to be non-empty");
+        bail!("selectArtefacts(...) requires search: to be non-empty");
     }
     let path = selector
         .path
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let search_mode = selector
+        .search_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
     let path_selector_requested = path.is_some() || selector.lines.is_some();
     let selector_count = usize::from(symbol_fqn.is_some())
-        + usize::from(fuzzy_name.is_some())
+        + usize::from(search.is_some())
         + usize::from(path_selector_requested);
     if selector_count == 0 {
-        bail!("selectArtefacts(...) requires symbol_fqn:, fuzzy_name:, or path:");
+        bail!("selectArtefacts(...) requires symbol_fqn:, search:, or path:");
     }
     if selector_count > 1 {
-        bail!(
-            "selectArtefacts(...) allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"
-        );
+        bail!("selectArtefacts(...) allows exactly one of symbol_fqn:, search:, or path:/lines:");
     }
     if path_selector_requested && path.is_none() {
         bail!("selectArtefacts(...) requires path: when lines: is provided");
+    }
+    if selector
+        .search_mode
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        bail!("selectArtefacts(...) requires search_mode: to be non-empty");
+    }
+    if search_mode.is_some() && search.is_none() {
+        bail!("selectArtefacts(...) only allows search_mode: when search: is provided");
+    }
+    if let Some(search_mode) = search_mode {
+        match search_mode.to_ascii_lowercase().as_str() {
+            "auto" | "identity" | "code" | "summary" | "lexical" => {}
+            _ => bail!(
+                "selectArtefacts(search_mode:...) must be one of: auto, identity, code, summary, lexical"
+            ),
+        }
     }
 
     Ok(())

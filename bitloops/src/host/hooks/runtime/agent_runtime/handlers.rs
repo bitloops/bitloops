@@ -233,8 +233,7 @@ pub fn handle_user_prompt_submit_with_strategy_and_profile_and_model(
 /// third-party tools, reinstall them before the turn proceeds.
 fn ensure_hook_setup(repo_root: &Path, agent_name: &str) -> Result<()> {
     let registry = crate::adapters::agents::AgentAdapterRegistry::builtin();
-    let policy_start = std::env::current_dir().unwrap_or_else(|_| repo_root.to_path_buf());
-    let local_dev = settings::load_settings(&policy_start)
+    let local_dev = settings::load_settings(repo_root)
         .map(|s| s.local_dev)
         .unwrap_or(false);
 
@@ -247,7 +246,7 @@ fn ensure_hook_setup(repo_root: &Path, agent_name: &str) -> Result<()> {
             agent_name,
             local_dev,
             false,
-            crate::adapters::agents::AgentHookInstallOptions::default(),
+            settings::agent_hook_install_options_for_policy(repo_root),
         );
     }
     if !git_hooks::is_git_hook_installed(repo_root) {

@@ -28,6 +28,12 @@ impl Agent for ClaudeCodeAgent {
     fn protected_dirs(&self) -> Vec<String> {
         vec![".claude".to_string()]
     }
+
+    fn as_transcript_tool_event_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
+        Some(self)
+    }
 }
 
 impl TokenCalculator for ClaudeCodeAgent {

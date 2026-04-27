@@ -1,14 +1,9 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use serde::Deserialize;
 use serde_json::Value;
 
-use crate::host::checkpoints::transcript::parse::parse_from_bytes;
-use crate::host::checkpoints::transcript::types::{
-    AssistantMessage, CONTENT_TYPE_TOOL_USE, TYPE_ASSISTANT, TYPE_USER,
-};
+use crate::adapters::agents::TranscriptToolEventDeriver;
 use crate::host::interactions::types::{InteractionEvent, InteractionEventType};
 
 pub(crate) const INTERACTION_SOURCE_LIVE_HOOK: &str = "live_hook";
@@ -31,37 +26,30 @@ pub(crate) struct DerivedToolEventContext<'a> {
     pub(crate) transcript_path: &'a str,
 }
 
-#[derive(Debug, Clone, Default)]
-struct DerivedToolInput {
-    summary: String,
-    command: String,
-    command_binary: String,
-    command_argv: Vec<String>,
+#[derive(Debug, Clone, PartialEq)]
+pub enum TranscriptToolEventObservation {
+    Invocation {
+        tool_use_id: String,
+        tool_name: String,
+        tool_input: Value,
+    },
+    Result {
+        tool_use_id: String,
+        tool_name: String,
+        tool_output: Value,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
-struct PendingTool {
-    tool_name: String,
-    is_subagent_task: bool,
+pub(crate) struct DerivedToolInput {
+    pub(crate) summary: String,
+    pub(crate) command: String,
+    pub(crate) command_binary: String,
+    pub(crate) command_argv: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
-struct ToolResultMessage {
-    #[serde(default)]
-    content: Value,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct ToolResultBlock {
-    #[serde(rename = "type", default)]
-    kind: String,
-    #[serde(default)]
-    tool_use_id: String,
-    #[serde(default)]
-    content: Value,
-}
-
-pub(crate) fn derive_tool_events_from_transcript_fragment(
+pub(crate) fn derive_tool_events_with_deriver(
+    deriver: Option<&dyn TranscriptToolEventDeriver>,
     ctx: &DerivedToolEventContext<'_>,
     transcript_fragment: &str,
 ) -> Result<Vec<InteractionEvent>> {
@@ -69,164 +57,124 @@ pub(crate) fn derive_tool_events_from_transcript_fragment(
         return Ok(Vec::new());
     }
 
-    let lines = parse_from_bytes(transcript_fragment.as_bytes())?;
+    let Some(deriver) = deriver else {
+        return Ok(Vec::new());
+    };
+
+    let observations =
+        deriver.derive_transcript_tool_event_observations(ctx.turn_id, transcript_fragment)?;
     let mut sequence_number = 1_i64;
-    let mut tool_use_block_number = 1_i64;
-    let mut pending_tools = HashMap::<String, PendingTool>::new();
     let mut events = Vec::new();
 
-    for line in lines {
-        match line.r#type.as_str() {
-            TYPE_ASSISTANT => {
-                let Ok(message) = serde_json::from_value::<AssistantMessage>(line.message) else {
-                    continue;
-                };
-                for block in message.content {
-                    if block.r#type != CONTENT_TYPE_TOOL_USE {
-                        continue;
-                    }
-
-                    let tool_name = block.name.trim().to_string();
-                    if tool_name.is_empty() {
-                        continue;
-                    }
-
-                    let is_subagent_task = tool_name.eq_ignore_ascii_case("task");
-                    // Fallback correlation ids must be unique per observed tool_use block,
-                    // not per emitted event. Task blocks are skipped as events, but they
-                    // still consume a position in the transcript.
-                    let fallback_tool_use_block_number = tool_use_block_number;
-                    tool_use_block_number += 1;
-                    let tool_use_id = if block.id.trim().is_empty() {
-                        format!("{}:tool:{fallback_tool_use_block_number:04}", ctx.turn_id)
-                    } else {
-                        block.id.trim().to_string()
-                    };
-                    let input = derive_tool_input(&tool_name, &block.input);
-                    pending_tools.insert(
-                        tool_use_id.clone(),
-                        PendingTool {
-                            tool_name: tool_name.clone(),
-                            is_subagent_task,
-                        },
-                    );
-
-                    if is_subagent_task {
-                        continue;
-                    }
-
-                    let event = InteractionEvent {
-                        event_id: transcript_derived_event_id(
-                            ctx.turn_id,
-                            "tool-invocation",
-                            sequence_number,
-                            &tool_use_id,
-                        ),
-                        session_id: ctx.session_id.to_string(),
-                        turn_id: Some(ctx.turn_id.to_string()),
-                        repo_id: ctx.repo_id.to_string(),
-                        branch: ctx.branch.to_string(),
-                        actor_id: ctx.actor_id.to_string(),
-                        actor_name: ctx.actor_name.to_string(),
-                        actor_email: ctx.actor_email.to_string(),
-                        actor_source: ctx.actor_source.to_string(),
-                        event_type: InteractionEventType::ToolInvocationObserved,
-                        event_time: ctx.event_time.to_string(),
-                        source: INTERACTION_SOURCE_TRANSCRIPT_DERIVATION.to_string(),
-                        sequence_number,
-                        agent_type: ctx.agent_type.to_string(),
-                        model: ctx.model.to_string(),
-                        tool_use_id: tool_use_id.clone(),
-                        tool_kind: tool_name.clone(),
-                        task_description: input.summary.clone(),
-                        subagent_id: String::new(),
-                        payload: serde_json::json!({
-                            "source": INTERACTION_SOURCE_TRANSCRIPT_DERIVATION,
-                            "sequence_number": sequence_number,
-                            "tool_name": tool_name,
-                            "tool_input": block.input,
-                            "input_summary": input.summary,
-                            "command": input.command,
-                            "command_binary": input.command_binary,
-                            "command_argv": input.command_argv,
-                            "transcript_path": ctx.transcript_path,
-                        }),
-                    };
-                    events.push(event);
-                    sequence_number += 1;
-                }
-            }
-            TYPE_USER => {
-                let Ok(message) = serde_json::from_value::<ToolResultMessage>(line.message) else {
-                    continue;
-                };
-                let Ok(blocks) = serde_json::from_value::<Vec<ToolResultBlock>>(message.content)
-                else {
-                    continue;
-                };
-                for block in blocks {
-                    if block.kind != "tool_result" {
-                        continue;
-                    }
-                    let tool_use_id = block.tool_use_id.trim();
-                    if tool_use_id.is_empty() {
-                        continue;
-                    }
-                    let pending = pending_tools.get(tool_use_id);
-                    if pending.is_some_and(|tool| tool.is_subagent_task) {
-                        continue;
-                    }
-
-                    let output_summary = summarise_tool_result(&block.content);
-                    if pending.is_none() && looks_like_subagent_result(&output_summary) {
-                        continue;
-                    }
-
-                    let tool_name = pending
-                        .map(|tool| tool.tool_name.clone())
-                        .unwrap_or_default();
-                    let event = InteractionEvent {
-                        event_id: transcript_derived_event_id(
-                            ctx.turn_id,
-                            "tool-result",
-                            sequence_number,
-                            tool_use_id,
-                        ),
-                        session_id: ctx.session_id.to_string(),
-                        turn_id: Some(ctx.turn_id.to_string()),
-                        repo_id: ctx.repo_id.to_string(),
-                        branch: ctx.branch.to_string(),
-                        actor_id: ctx.actor_id.to_string(),
-                        actor_name: ctx.actor_name.to_string(),
-                        actor_email: ctx.actor_email.to_string(),
-                        actor_source: ctx.actor_source.to_string(),
-                        event_type: InteractionEventType::ToolResultObserved,
-                        event_time: ctx.event_time.to_string(),
-                        source: INTERACTION_SOURCE_TRANSCRIPT_DERIVATION.to_string(),
-                        sequence_number,
-                        agent_type: ctx.agent_type.to_string(),
-                        model: ctx.model.to_string(),
-                        tool_use_id: tool_use_id.to_string(),
-                        tool_kind: tool_name.clone(),
-                        task_description: output_summary.clone(),
-                        subagent_id: String::new(),
-                        payload: serde_json::json!({
-                            "source": INTERACTION_SOURCE_TRANSCRIPT_DERIVATION,
-                            "sequence_number": sequence_number,
-                            "tool_name": tool_name,
-                            "output_summary": output_summary,
-                            "transcript_path": ctx.transcript_path,
-                        }),
-                    };
-                    events.push(event);
-                    sequence_number += 1;
-                }
-            }
-            _ => {}
-        }
+    for observation in observations {
+        let Some(event) = interaction_event_from_observation(ctx, sequence_number, observation)
+        else {
+            continue;
+        };
+        events.push(event);
+        sequence_number += 1;
     }
 
     Ok(events)
+}
+
+fn interaction_event_from_observation(
+    ctx: &DerivedToolEventContext<'_>,
+    sequence_number: i64,
+    observation: TranscriptToolEventObservation,
+) -> Option<InteractionEvent> {
+    match observation {
+        TranscriptToolEventObservation::Invocation {
+            tool_use_id,
+            tool_name,
+            tool_input,
+        } => {
+            if tool_use_id.trim().is_empty() || tool_name.trim().is_empty() {
+                return None;
+            }
+            let input = derive_tool_input(&tool_name, &tool_input);
+            Some(InteractionEvent {
+                event_id: transcript_derived_event_id(
+                    ctx.turn_id,
+                    "tool-invocation",
+                    sequence_number,
+                    &tool_use_id,
+                ),
+                session_id: ctx.session_id.to_string(),
+                turn_id: Some(ctx.turn_id.to_string()),
+                repo_id: ctx.repo_id.to_string(),
+                branch: ctx.branch.to_string(),
+                actor_id: ctx.actor_id.to_string(),
+                actor_name: ctx.actor_name.to_string(),
+                actor_email: ctx.actor_email.to_string(),
+                actor_source: ctx.actor_source.to_string(),
+                event_type: InteractionEventType::ToolInvocationObserved,
+                event_time: ctx.event_time.to_string(),
+                source: INTERACTION_SOURCE_TRANSCRIPT_DERIVATION.to_string(),
+                sequence_number,
+                agent_type: ctx.agent_type.to_string(),
+                model: ctx.model.to_string(),
+                tool_use_id,
+                tool_kind: tool_name.clone(),
+                task_description: input.summary.clone(),
+                subagent_id: String::new(),
+                payload: serde_json::json!({
+                    "source": INTERACTION_SOURCE_TRANSCRIPT_DERIVATION,
+                    "sequence_number": sequence_number,
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                    "input_summary": input.summary,
+                    "command": input.command,
+                    "command_binary": input.command_binary,
+                    "command_argv": input.command_argv,
+                    "transcript_path": ctx.transcript_path,
+                }),
+            })
+        }
+        TranscriptToolEventObservation::Result {
+            tool_use_id,
+            tool_name,
+            tool_output,
+        } => {
+            if tool_use_id.trim().is_empty() {
+                return None;
+            }
+            let output_summary = summarise_tool_result(&tool_output);
+            Some(InteractionEvent {
+                event_id: transcript_derived_event_id(
+                    ctx.turn_id,
+                    "tool-result",
+                    sequence_number,
+                    &tool_use_id,
+                ),
+                session_id: ctx.session_id.to_string(),
+                turn_id: Some(ctx.turn_id.to_string()),
+                repo_id: ctx.repo_id.to_string(),
+                branch: ctx.branch.to_string(),
+                actor_id: ctx.actor_id.to_string(),
+                actor_name: ctx.actor_name.to_string(),
+                actor_email: ctx.actor_email.to_string(),
+                actor_source: ctx.actor_source.to_string(),
+                event_type: InteractionEventType::ToolResultObserved,
+                event_time: ctx.event_time.to_string(),
+                source: INTERACTION_SOURCE_TRANSCRIPT_DERIVATION.to_string(),
+                sequence_number,
+                agent_type: ctx.agent_type.to_string(),
+                model: ctx.model.to_string(),
+                tool_use_id,
+                tool_kind: tool_name.clone(),
+                task_description: output_summary.clone(),
+                subagent_id: String::new(),
+                payload: serde_json::json!({
+                    "source": INTERACTION_SOURCE_TRANSCRIPT_DERIVATION,
+                    "sequence_number": sequence_number,
+                    "tool_name": tool_name,
+                    "output_summary": output_summary,
+                    "transcript_path": ctx.transcript_path,
+                }),
+            })
+        }
+    }
 }
 
 pub(crate) fn transcript_derived_turn_end_sequence(events: &[InteractionEvent]) -> i64 {
@@ -238,7 +186,7 @@ pub(crate) fn transcript_derived_turn_end_sequence(events: &[InteractionEvent]) 
         + 1
 }
 
-fn derive_tool_input(tool_name: &str, input: &Value) -> DerivedToolInput {
+pub(crate) fn derive_tool_input(tool_name: &str, input: &Value) -> DerivedToolInput {
     let command = value_string_field(input, &["command"]);
     let command_argv = parse_shell_words(&command);
     let command_binary = command_argv
@@ -249,10 +197,18 @@ fn derive_tool_input(tool_name: &str, input: &Value) -> DerivedToolInput {
     let summary = match tool_name.trim().to_ascii_lowercase().as_str() {
         "read" => first_non_empty_value(
             input,
-            &["file_path", "path", "notebook_path", "url", "pattern"],
+            &[
+                "file_path",
+                "filePath",
+                "path",
+                "notebook_path",
+                "notebookPath",
+                "url",
+                "pattern",
+            ],
         ),
         "write" | "edit" | "multiedit" => {
-            first_non_empty_value(input, &["file_path", "path", "description"])
+            first_non_empty_value(input, &["file_path", "filePath", "path", "description"])
         }
         "bash" => first_non_empty_value(input, &["command", "description"]),
         "grep" | "glob" => first_non_empty_value(input, &["pattern", "path", "description"]),
@@ -261,8 +217,10 @@ fn derive_tool_input(tool_name: &str, input: &Value) -> DerivedToolInput {
             input,
             &[
                 "description",
+                "name",
                 "command",
                 "file_path",
+                "filePath",
                 "path",
                 "pattern",
                 "url",
@@ -314,7 +272,7 @@ fn value_string_field(value: &Value, keys: &[&str]) -> String {
     String::new()
 }
 
-fn summarise_tool_result(content: &Value) -> String {
+pub(crate) fn summarise_tool_result(content: &Value) -> String {
     match content {
         Value::String(text) => truncate_summary(normalise_text(text)),
         Value::Array(items) => {
@@ -343,10 +301,6 @@ fn summarise_tool_result(content: &Value) -> String {
         Value::Null => String::new(),
         _ => truncate_summary(normalise_text(content.to_string())),
     }
-}
-
-fn looks_like_subagent_result(output_summary: &str) -> bool {
-    output_summary.contains("agentId:")
 }
 
 fn transcript_derived_event_id(
@@ -431,10 +385,52 @@ fn parse_shell_words(command: &str) -> Vec<String> {
 mod tests {
     use super::{
         DerivedToolEventContext, INTERACTION_SOURCE_TRANSCRIPT_DERIVATION,
-        derive_tool_events_from_transcript_fragment, parse_shell_words,
+        TranscriptToolEventObservation, derive_tool_events_with_deriver, parse_shell_words,
         transcript_derived_turn_end_sequence,
     };
+    use crate::adapters::agents::{Agent, TranscriptToolEventDeriver};
     use crate::host::interactions::types::InteractionEventType;
+    use anyhow::Result;
+    use serde_json::json;
+
+    #[derive(Debug, Default, Clone, Copy)]
+    struct MockDeriver;
+
+    impl Agent for MockDeriver {
+        fn name(&self) -> String {
+            "mock".to_string()
+        }
+
+        fn agent_type(&self) -> String {
+            "mock".to_string()
+        }
+    }
+
+    impl TranscriptToolEventDeriver for MockDeriver {
+        fn derive_transcript_tool_event_observations(
+            &self,
+            _turn_id: &str,
+            _transcript_fragment: &str,
+        ) -> Result<Vec<TranscriptToolEventObservation>> {
+            Ok(vec![
+                TranscriptToolEventObservation::Invocation {
+                    tool_use_id: "toolu_1".to_string(),
+                    tool_name: "Read".to_string(),
+                    tool_input: json!({"file_path":"src/lib.rs"}),
+                },
+                TranscriptToolEventObservation::Invocation {
+                    tool_use_id: "toolu_2".to_string(),
+                    tool_name: "Bash".to_string(),
+                    tool_input: json!({"command":"rg interaction_events src"}),
+                },
+                TranscriptToolEventObservation::Result {
+                    tool_use_id: "toolu_2".to_string(),
+                    tool_name: "Bash".to_string(),
+                    tool_output: json!("found matches"),
+                },
+            ])
+        }
+    }
 
     fn context<'a>() -> DerivedToolEventContext<'a> {
         DerivedToolEventContext {
@@ -454,18 +450,9 @@ mod tests {
     }
 
     #[test]
-    fn derives_tool_invocation_and_result_events_from_transcript_fragment() {
-        let fragment = concat!(
-            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
-            "{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{\"file_path\":\"src/lib.rs\"}},",
-            "{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"Bash\",\"input\":{\"command\":\"rg interaction_events src\"}}",
-            "]}}\n",
-            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
-            "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_2\",\"content\":\"found matches\"}",
-            "]}}\n"
-        );
-
-        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+    fn derives_tool_events_with_deriver_materialises_canonical_observations() {
+        let deriver = MockDeriver;
+        let events = derive_tool_events_with_deriver(Some(&deriver), &context(), "ignored")
             .expect("derive transcript tool events");
         assert_eq!(events.len(), 3);
         assert_eq!(
@@ -503,48 +490,44 @@ mod tests {
     }
 
     #[test]
-    fn ignores_subagent_task_tool_usage_when_deriving_ordinary_tool_events() {
-        let fragment = concat!(
-            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
-            "{\"type\":\"tool_use\",\"id\":\"toolu_task\",\"name\":\"Task\",\"input\":{\"prompt\":\"delegate\"}}",
-            "]}}\n",
-            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
-            "{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_task\",\"content\":\"agentId: sub123\"}",
-            "]}}\n"
-        );
-
-        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+    fn derive_tool_events_with_deriver_returns_empty_without_deriver() {
+        let events = derive_tool_events_with_deriver(None, &context(), "ignored")
             .expect("derive transcript tool events");
         assert!(events.is_empty());
     }
 
     #[test]
-    fn idless_tool_uses_after_subagent_tasks_receive_unique_fallback_ids() {
-        let fragment = concat!(
-            "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"content\":[",
-            "{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"prompt\":\"delegate\"}},",
-            "{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"src/lib.rs\"}}",
-            "]}}\n",
-            "{\"type\":\"user\",\"uuid\":\"u1\",\"message\":{\"content\":[",
-            "{\"type\":\"tool_result\",\"tool_use_id\":\"turn-1:tool:0002\",\"content\":\"updated file\"}",
-            "]}}\n"
-        );
+    fn derive_tool_events_with_deriver_skips_empty_tool_use_ids() {
+        struct EmptyIdDeriver;
 
-        let events = derive_tool_events_from_transcript_fragment(&context(), fragment)
+        impl Agent for EmptyIdDeriver {
+            fn name(&self) -> String {
+                "empty-id".to_string()
+            }
+
+            fn agent_type(&self) -> String {
+                "empty-id".to_string()
+            }
+        }
+
+        impl TranscriptToolEventDeriver for EmptyIdDeriver {
+            fn derive_transcript_tool_event_observations(
+                &self,
+                _turn_id: &str,
+                _transcript_fragment: &str,
+            ) -> Result<Vec<TranscriptToolEventObservation>> {
+                Ok(vec![TranscriptToolEventObservation::Result {
+                    tool_use_id: String::new(),
+                    tool_name: "Bash".to_string(),
+                    tool_output: json!("ignored"),
+                }])
+            }
+        }
+
+        let deriver = EmptyIdDeriver;
+        let events = derive_tool_events_with_deriver(Some(&deriver), &context(), "ignored")
             .expect("derive transcript tool events");
-        assert_eq!(events.len(), 2);
-        assert_eq!(
-            events[0].event_type,
-            InteractionEventType::ToolInvocationObserved
-        );
-        assert_eq!(events[0].tool_use_id, "turn-1:tool:0002");
-        assert_eq!(events[0].tool_kind, "Edit");
-        assert_eq!(
-            events[1].event_type,
-            InteractionEventType::ToolResultObserved
-        );
-        assert_eq!(events[1].tool_use_id, "turn-1:tool:0002");
-        assert_eq!(events[1].tool_kind, "Edit");
+        assert!(events.is_empty());
     }
 
     #[test]

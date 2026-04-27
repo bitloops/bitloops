@@ -21,7 +21,7 @@ pub fn run_clean_command(args: &CleanArgs) -> Result<()> {
 pub fn run_disable_command(args: &DisableArgs) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
     let mut out = io::stdout();
-    enable::run_disable(&cwd, &mut out, args.project)
+    enable::run_disable_with_args(&cwd, &mut out, args)
 }
 
 pub fn run_doctor_command(args: &DoctorArgs) -> Result<()> {

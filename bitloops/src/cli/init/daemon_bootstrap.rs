@@ -60,8 +60,7 @@ pub(crate) async fn maybe_install_default_daemon(
         return Ok(());
     }
 
-    let status = crate::daemon::status().await?;
-    if status.runtime.is_some() {
+    if crate::daemon::runtime_state()?.is_some() {
         return Ok(());
     }
 
@@ -95,18 +94,18 @@ pub(crate) async fn maybe_enable_default_daemon_service(
 
     #[cfg(not(test))]
     {
-        let status = crate::daemon::status().await?;
-        let already_service_managed = status
-            .runtime
+        let runtime = crate::daemon::runtime_state()?;
+        let service = crate::daemon::service_metadata()?;
+        let already_service_managed = runtime
             .as_ref()
             .is_some_and(|runtime| runtime.mode == crate::daemon::DaemonMode::Service)
-            || status.service.is_some();
+            || service.is_some();
         if already_service_managed {
             return Ok(());
         }
 
-        let config = daemon_server_config_from_status(status.runtime.as_ref());
-        if status.runtime.is_some() {
+        let config = daemon_server_config_from_status(runtime.as_ref());
+        if runtime.is_some() {
             crate::daemon::stop().await?;
         }
 

@@ -196,41 +196,32 @@ pub(super) fn given_init_bitloops_with_agent_sync_false_ingest_true_backfill(
     })
 }
 
-pub(super) fn given_enable_cli(
+pub(super) fn given_enable_capture(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run EnableCLI",
-            helpers::run_enable_cli_for_repo(world, &repo_name),
+            "I run bitloops enable --capture",
+            helpers::run_bitloops_enable_with_flags(world, &repo_name, &["--capture"]),
         );
     })
 }
 
-pub(super) fn given_enable(
+pub(super) fn given_disable_capture_and_devql_guidance(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
 ) -> LocalBoxFuture<'_, ()> {
     Box::pin(async move {
         let repo_name = ctx.matches[1].1.clone();
         run_step(
-            "I run bitloops enable",
-            helpers::run_bitloops_enable_with_flags(world, &repo_name, &[]),
-        );
-    })
-}
-
-pub(super) fn given_disable(
-    world: &mut QatWorld,
-    ctx: cucumber::step::Context,
-) -> LocalBoxFuture<'_, ()> {
-    Box::pin(async move {
-        let repo_name = ctx.matches[1].1.clone();
-        run_step(
-            "I run bitloops disable",
-            helpers::run_bitloops_disable(world, &repo_name),
+            "I run bitloops disable --capture --devql-guidance",
+            helpers::run_bitloops_disable_with_flags(
+                world,
+                &repo_name,
+                &["--capture", "--devql-guidance"],
+            ),
         );
     })
 }

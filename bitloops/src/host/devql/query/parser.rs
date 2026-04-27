@@ -54,7 +54,8 @@ pub(crate) struct ArtefactFilter {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SelectArtefactsFilter {
     pub(crate) symbol_fqn: Option<String>,
-    pub(crate) fuzzy_name: Option<String>,
+    pub(crate) search: Option<String>,
+    pub(crate) search_mode: Option<String>,
     pub(crate) path: Option<String>,
     pub(crate) lines: Option<(i32, i32)>,
 }
@@ -164,7 +165,8 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             }
             parsed.select_artefacts = Some(SelectArtefactsFilter {
                 symbol_fqn: args.get("symbol_fqn").cloned(),
-                fuzzy_name: args.get("fuzzy_name").cloned(),
+                search: args.get("search").cloned(),
+                search_mode: args.get("search_mode").cloned(),
                 path: args.get("path").cloned(),
                 lines: args
                     .get("lines")
@@ -245,7 +247,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
         }
 
         if let Some(inner) = stage
-            .strip_prefix("deps(")
+            .strip_prefix("dependencies(")
             .and_then(|s| s.strip_suffix(')'))
         {
             let args = parse_named_args(inner)?;
@@ -253,7 +255,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             if let Some(kind) = args.get("kind") {
                 parsed.deps.kind = Some(DepsKind::from_str(kind).ok_or_else(|| {
                     anyhow!(
-                        "deps(kind:...) must be one of: {}",
+                        "dependencies(kind:...) must be one of: {}",
                         DepsKind::all_names().join(", ")
                     )
                 })?);
@@ -261,7 +263,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             if let Some(direction) = args.get("direction") {
                 parsed.deps.direction = DepsDirection::from_str(direction).ok_or_else(|| {
                     anyhow!(
-                        "deps(direction:...) must be one of: {}",
+                        "dependencies(direction:...) must be one of: {}",
                         DepsDirection::all_names().join(", ")
                     )
                 })?;
@@ -275,7 +277,7 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             continue;
         }
 
-        if stage == "deps()" {
+        if stage == "dependencies()" {
             parsed.has_deps_stage = true;
             continue;
         }

@@ -2,6 +2,27 @@ type DashboardAgent {
 	key: String!
 }
 
+type DashboardAnalyticsColumn {
+	name: String!
+	logicalType: String!
+}
+
+input DashboardAnalyticsSqlInput {
+	sql: String!
+	repoIds: [String!]
+	allRepos: Boolean
+}
+
+type DashboardAnalyticsSqlResult {
+	columns: [DashboardAnalyticsColumn!]!
+	rows: JSON!
+	rowCount: Int!
+	truncated: Boolean!
+	durationMs: Int!
+	repoIds: [String!]!
+	warnings: [String!]!
+}
+
 type DashboardBranchSummary {
 	branch: String!
 	checkpointCommits: Int!
@@ -309,6 +330,7 @@ type DashboardMutationRoot {
 type DashboardQueryRoot {
 	health: HealthStatus!
 	repositories: [DashboardRepository!]!
+	analyticsSql(input: DashboardAnalyticsSqlInput!): DashboardAnalyticsSqlResult!
 	kpis(repoId: String, branch: String!, from: String, to: String, user: String, agent: String): DashboardKpis!
 	commits(repoId: String, branch: String!, from: String, to: String, user: String, agent: String, limit: Int, offset: Int): [DashboardCommitRow!]!
 	branches(repoId: String, from: String, to: String): [DashboardBranchSummary!]!

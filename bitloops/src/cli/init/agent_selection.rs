@@ -15,7 +15,7 @@ use super::agent_hooks::{DEFAULT_AGENT, agent_display, available_agents, detect_
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InitAgentSelection {
     pub agents: Vec<String>,
-    pub enable_bitloops_skill: bool,
+    pub enable_devql_guidance: bool,
 }
 
 pub fn can_prompt_interactively() -> bool {
@@ -64,7 +64,7 @@ fn executable_with_extensions(dir: &Path, program: &str) -> [PathBuf; 3] {
 pub fn detect_or_select_agent(
     repo_root: &Path,
     out: &mut dyn Write,
-    default_enable_bitloops_skill: bool,
+    default_enable_devql_guidance: bool,
     select_fn: Option<&super::AgentSelector>,
 ) -> Result<InitAgentSelection> {
     let policy_agents = policy_supported_agents(repo_root)?;
@@ -86,7 +86,7 @@ pub fn detect_or_select_agent(
 
                 return Ok(InitAgentSelection {
                     agents: configured,
-                    enable_bitloops_skill: default_enable_bitloops_skill,
+                    enable_devql_guidance: default_enable_devql_guidance,
                 });
             }
             PolicySupportedAgents::PolicyWithoutSupported if !detected.is_empty() => {
@@ -100,14 +100,14 @@ pub fn detect_or_select_agent(
         if !detected.is_empty() {
             return Ok(InitAgentSelection {
                 agents: detected,
-                enable_bitloops_skill: default_enable_bitloops_skill,
+                enable_devql_guidance: default_enable_devql_guidance,
             });
         }
         writeln!(out, "Agent: {} (default)", agent_display(DEFAULT_AGENT))?;
         writeln!(out)?;
         return Ok(InitAgentSelection {
             agents: vec![DEFAULT_AGENT.to_string()],
-            enable_bitloops_skill: default_enable_bitloops_skill,
+            enable_devql_guidance: default_enable_devql_guidance,
         });
     }
 
@@ -126,9 +126,9 @@ pub fn detect_or_select_agent(
 
     let mut selected = match select_fn {
         Some(select) => {
-            select(&available, default_enable_bitloops_skill).map_err(|e| anyhow!(e))?
+            select(&available, default_enable_devql_guidance).map_err(|e| anyhow!(e))?
         }
-        None => prompt_select_agents(&available, &defaults, default_enable_bitloops_skill, out)?,
+        None => prompt_select_agents(&available, &defaults, default_enable_devql_guidance, out)?,
     };
 
     if selected.agents.is_empty() {
@@ -156,7 +156,7 @@ enum PolicySupportedAgents {
 fn prompt_select_agents(
     available: &[String],
     defaults: &[String],
-    default_enable_bitloops_skill: bool,
+    default_enable_devql_guidance: bool,
     out: &mut dyn Write,
 ) -> Result<InitAgentSelection> {
     let default_set: BTreeSet<&str> = defaults.iter().map(String::as_str).collect();
@@ -171,11 +171,11 @@ fn prompt_select_agents(
         .collect();
 
     let mut cursor = 0usize;
-    let mut enable_bitloops_skill = default_enable_bitloops_skill;
+    let mut enable_devql_guidance = default_enable_devql_guidance;
     let mut tty_in = fs::OpenOptions::new().read(true).open("/dev/tty")?;
     let _raw_mode = SttyRawMode::enter()?;
     let mut rendered_lines =
-        render_agent_picker(out, &labels, &selected, enable_bitloops_skill, cursor, None)?;
+        render_agent_picker(out, &labels, &selected, enable_devql_guidance, cursor, None)?;
 
     loop {
         match read_key(&mut tty_in)? {
@@ -189,7 +189,7 @@ fn prompt_select_agents(
             }
             Key::Toggle => {
                 if cursor == labels.len() {
-                    enable_bitloops_skill = !enable_bitloops_skill;
+                    enable_devql_guidance = !enable_devql_guidance;
                 } else if !selected.is_empty() {
                     selected[cursor] = !selected[cursor];
                 }
@@ -206,7 +206,7 @@ fn prompt_select_agents(
             out,
             &labels,
             &selected,
-            enable_bitloops_skill,
+            enable_devql_guidance,
             cursor,
             Some(rendered_lines),
         )?;
@@ -232,7 +232,7 @@ fn prompt_select_agents(
     }
     Ok(InitAgentSelection {
         agents: selected_agents,
-        enable_bitloops_skill,
+        enable_devql_guidance,
     })
 }
 
@@ -322,7 +322,7 @@ fn render_agent_picker(
     out: &mut dyn Write,
     labels: &[String],
     selected: &[bool],
-    enable_bitloops_skill: bool,
+    enable_devql_guidance: bool,
     cursor: usize,
     previous_lines: Option<usize>,
 ) -> Result<usize> {
@@ -354,15 +354,15 @@ fn render_agent_picker(
     } else {
         " ".to_string()
     };
-    let checkbox = if enable_bitloops_skill {
+    let checkbox = if enable_devql_guidance {
         selected_picker_checkbox()
     } else {
         "[ ]".to_string()
     };
-    let label = if enable_bitloops_skill {
-        selected_picker_label("Enable Bitloops Skill")
+    let label = if enable_devql_guidance {
+        selected_picker_label("Enable DevQL Guidance")
     } else {
-        "Enable Bitloops Skill".to_string()
+        "Enable DevQL Guidance".to_string()
     };
     lines.push(format!("{pointer} {checkbox} {label}"));
     lines.push(String::new());

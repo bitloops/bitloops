@@ -6,6 +6,7 @@ pub mod clone;
 pub mod commit;
 pub mod connection;
 pub mod dependency_edge;
+pub mod expand_hint;
 pub mod file_context;
 pub mod health;
 pub mod ingestion;
@@ -20,9 +21,13 @@ pub mod temporal_scope;
 pub mod test_harness;
 
 pub use artefact::LineRangeInput;
-pub use artefact::{Artefact, ArtefactCopyLineage, ArtefactFilterInput, CanonicalKind};
+pub use artefact::{
+    Artefact, ArtefactCopyLineage, ArtefactFilterInput, ArtefactSearchScore, CanonicalKind,
+    EmbeddingRepresentationKind,
+};
 pub use artefact_selection::{
-    ArtefactSelection, ArtefactSelectorInput, DirectoryEntry, DirectoryEntryKind,
+    ArtefactSelection, ArtefactSelectorInput, DirectoryEntry, DirectoryEntryKind, SearchBreakdown,
+    SearchMode,
 };
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
@@ -40,6 +45,7 @@ pub use connection::{
 pub use dependency_edge::{
     DependencyEdge, DepsDirection, DepsFilterInput, DepsSummary, DepsSummaryFilterInput, EdgeKind,
 };
+pub use expand_hint::{ExpandHint, ExpandHintParameter};
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};
 pub use ingestion::IngestionProgressEvent;
@@ -61,6 +67,7 @@ pub use sync::{
 };
 pub use telemetry::TelemetryEvent;
 pub use temporal_scope::{AsOfInput, TemporalScope};
+#[allow(unused_imports)]
 pub use test_harness::{
     TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
 };

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::{Result, anyhow, bail};
 
 use crate::graphql::Checkpoint;
@@ -398,11 +400,13 @@ impl DevqlTaskCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow!("DevQL task coordinator lock poisoned"))?;
+        let protected_task_ids = self.active_init_session_task_ids()?;
         let (result, tasks_to_publish) =
             self.runtime_store.mutate_devql_task_queue_state(|state| {
                 let previous_tasks = state.tasks.clone();
                 let result = mutate(state)?;
-                let tasks_to_publish = Self::save_state(state, &previous_tasks)?;
+                let tasks_to_publish =
+                    Self::save_state(state, &previous_tasks, &protected_task_ids)?;
                 Ok((result, tasks_to_publish))
             })?;
         drop(guard);
@@ -414,12 +418,39 @@ impl DevqlTaskCoordinator {
     fn save_state(
         state: &mut PersistedDevqlTaskQueueState,
         previous_tasks: &[DevqlTaskRecord],
+        protected_task_ids: &HashSet<String>,
     ) -> Result<Vec<DevqlTaskRecord>> {
         state.version = 1;
         state.updated_at_unix = unix_timestamp_now();
         recompute_queue_positions(&mut state.tasks);
-        prune_terminal_tasks(&mut state.tasks);
+        prune_terminal_tasks(&mut state.tasks, protected_task_ids);
         Ok(changed_tasks(previous_tasks, &state.tasks))
+    }
+
+    fn active_init_session_task_ids(&self) -> Result<HashSet<String>> {
+        let init_state = self
+            .runtime_store
+            .load_init_session_state()?
+            .unwrap_or_default();
+        let mut protected = HashSet::new();
+        for session in init_state
+            .sessions
+            .into_iter()
+            .filter(|session| session.terminal_status.is_none())
+        {
+            protected.extend(
+                [
+                    session.initial_sync_task_id,
+                    session.ingest_task_id,
+                    session.embeddings_bootstrap_task_id,
+                    session.summary_bootstrap_task_id,
+                    session.follow_up_sync_task_id,
+                ]
+                .into_iter()
+                .flatten(),
+            );
+        }
+        Ok(protected)
     }
 
     fn publish_tasks(&self, tasks: Vec<DevqlTaskRecord>) {

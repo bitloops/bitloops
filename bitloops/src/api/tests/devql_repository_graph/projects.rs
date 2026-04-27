@@ -27,7 +27,7 @@ async fn devql_project_queries_scope_paths_and_isolate_cross_project_resolution(
                       node {
                         symbolFqn
                         path
-                        outgoingDeps {
+                        outgoingDependencies {
                           totalCount
                           edges {
                             node {
@@ -42,7 +42,7 @@ async fn devql_project_queries_scope_paths_and_isolate_cross_project_resolution(
                       }
                     }
                   }
-                  deps(filter: { direction: OUT }, first: 10) {
+                  dependencies(filter: { direction: OUT }, first: 10) {
                     totalCount
                     edges {
                       node {
@@ -102,25 +102,27 @@ async fn devql_project_queries_scope_paths_and_isolate_cross_project_resolution(
         "packages/api/src/target.ts::target"
     );
     assert_eq!(
-        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["totalCount"],
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]["totalCount"],
         2
     );
     assert_eq!(
-        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["edges"][0]["node"]["toArtefact"]
-            ["symbolFqn"],
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]["edges"][0]["node"]
+            ["toArtefact"]["symbolFqn"],
         "packages/api/src/target.ts::target"
     );
     assert_eq!(
-        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["edges"][1]["node"]["toSymbolRef"],
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]["edges"][1]["node"]
+            ["toSymbolRef"],
         "packages/web/src/page.ts::render"
     );
     assert_eq!(
-        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]["edges"][1]["node"]["toArtefact"],
+        json["repo"]["api"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]["edges"][1]["node"]
+            ["toArtefact"],
         serde_json::Value::Null
     );
-    assert_eq!(json["repo"]["api"]["deps"]["totalCount"], 2);
+    assert_eq!(json["repo"]["api"]["dependencies"]["totalCount"], 2);
     assert_eq!(
-        json["repo"]["api"]["deps"]["edges"][1]["node"]["toArtefact"],
+        json["repo"]["api"]["dependencies"]["edges"][1]["node"]["toArtefact"],
         serde_json::Value::Null
     );
     assert_eq!(json["repo"]["web"]["path"], "packages/web");
@@ -159,7 +161,7 @@ async fn devql_temporal_queries_resolve_historical_scope_once_and_propagate_to_c
                         edges {{
                           node {{
                             symbolFqn
-                            outgoingDeps {{
+                            outgoingDependencies {{
                               totalCount
                               edges {{
                                 node {{
@@ -183,7 +185,7 @@ async fn devql_temporal_queries_resolve_historical_scope_once_and_propagate_to_c
                         }}
                       }}
                     }}
-                    deps(filter: {{ direction: OUT }}, first: 10) {{
+                    dependencies(filter: {{ direction: OUT }}, first: 10) {{
                       totalCount
                       edges {{
                         node {{
@@ -270,21 +272,21 @@ async fn devql_temporal_queries_resolve_historical_scope_once_and_propagate_to_c
         "packages/api/src/caller.ts::caller"
     );
     assert_eq!(
-        json["repo"]["repoScoped"]["project"]["file"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]
+        json["repo"]["repoScoped"]["project"]["file"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]
             ["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["repoScoped"]["project"]["file"]["artefacts"]["edges"][0]["node"]["outgoingDeps"]
+        json["repo"]["repoScoped"]["project"]["file"]["artefacts"]["edges"][0]["node"]["outgoingDependencies"]
             ["edges"][0]["node"]["toArtefact"]["symbolFqn"],
         "packages/api/src/target.ts::target"
     );
     assert_eq!(
-        json["repo"]["repoScoped"]["project"]["deps"]["totalCount"],
+        json["repo"]["repoScoped"]["project"]["dependencies"]["totalCount"],
         1
     );
     assert_eq!(
-        json["repo"]["repoScoped"]["project"]["deps"]["edges"][0]["node"]["toArtefact"]["symbolFqn"],
+        json["repo"]["repoScoped"]["project"]["dependencies"]["edges"][0]["node"]["toArtefact"]["symbolFqn"],
         "packages/api/src/target.ts::target"
     );
     assert_eq!(

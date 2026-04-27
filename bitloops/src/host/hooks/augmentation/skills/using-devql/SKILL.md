@@ -1,62 +1,89 @@
 ---
 name: using-devql
 description: >
-  Use when understanding code structure, resolving artefacts by path or line
-  range, resolving approximate symbol names with fuzzy lookup, resolving
-  conceptual requests with semanticQuery, finding
-  callers/usages/imports/tests/checkpoints/clones/dependencies,
-  or answering architecture questions in a repo with DevQL enabled.
+  Use when answering repo-understanding questions in a Bitloops repo with DevQL
+  guidance enabled, especially when you need to locate code by path, line
+  range, exact symbol, or approximate/conceptual search before reading files.
 ---
 
 # Using DevQL
 
-## Prime Directive
+## Overview
 
-This repo has DevQL, a semantic code index. For code understanding and repo
-exploration, you MUST use DevQL first before falling back to broad repo search,
-file reads, or directory crawling.
+DevQL is Bitloops's typed repo-intelligence surface. In repos where this
+guidance is enabled, use DevQL first for repo-understanding questions when it
+is available in the current session. If DevQL returns nothing useful or is not
+available, fall back to targeted repo search or file reads.
 
-Use `summary` only for first-pass orientation when you do not yet know whether
-the selector matched anything or which stage to expand. If the artefact or
-question is already known, query concrete rows with `artefacts(first: ...)` or
-stage `items(first: ...)`.
-
-If DevQL returns no useful artefacts or stage rows, fall back to targeted repo
-search or file reads.
-
-## Use DevQL When
+## When to Use
 
 - understanding what a file, function, module, class, or symbol does
 - resolving the concrete artefacts matched by a path or line range
-- resolving a likely symbol name when the human-entered name may be approximate or misspelled
-- finding callers, usages, imports, tests, checkpoints, clones, or dependencies
-- getting a structured overview of a file or area
-- answering architecture questions
+- looking up an exact symbol with `symbolFqn`
+- looking up identifiers, literals, paths, or snippets with `search` plus `searchMode: LEXICAL`
+- looking up an approximate name or conceptual behavior with `search` in the default `AUTO` mode
+- answering architecture questions after selecting a concrete area
 
-## Agent Flow
+## Choosing The `by` Selector
 
-1. Select the target with `symbolFqn`, `fuzzyName`, `semanticQuery`, `path`, or `path + lines`.
-   Use `semanticQuery` when the request is conceptual rather than tied to a known file or symbol.
-2. Ask for `summary` only if you need orientation or to discover which stage to expand.
-3. Rerun with `artefacts(first: ...)` or the relevant stage `items(first: ...)`.
-4. Return the concrete rows. Summaries are optional follow-up, not substitutes.
-5. If DevQL returns nothing useful, fall back to targeted repo search or file reads.
+- `path`: use this when the starting point is one file; Bitloops selects
+  artefacts from that file.
+- `path + lines`: use this when the starting point is a specific region inside
+  a file; Bitloops limits the seed artefacts to that line range.
+- `symbolFqn`: use this when the starting point is one exact artefact or symbol.
+- `search`: use this when you do not yet have an exact seed.
+  Use `searchMode: LEXICAL` for identifiers, literals, file-ish strings, and
+  snippets. Keep the default `AUTO` mode for approximate or conceptual search.
+  Use `IDENTITY`, `CODE`, or `SUMMARY` only when you need advanced narrowing.
 
-## Selector Routing
+## Process
 
-- If the prompt contains a path, line range, scoped symbol, backticked identifier, function-like token, or other code-ish artefact clue, prefer a structured selector first.
-- Use `path` or `path + lines` for file references, `symbolFqn` for exact symbol references, and `fuzzyName` when the user likely named a symbol approximately or misspelled it.
-- Use `semanticQuery` for conceptual behaviour or responsibility queries such as `build invoice pdf`, `validate webhook signature`, or `render checkout summary`.
-- Do not pass the whole conversational prompt into `semanticQuery` when it contains extra wrapper text such as `can you help`, `fix this`, or `help me understand the codebase`.
-- Distill semantic lookup into a short intent phrase instead of removing stopwords mechanically. Preserve meaningful qualifiers and drop conversational filler.
-- For mixed prompts, try structured lookup first and use `semanticQuery` as a fallback or supplement when the artefact clue is weak.
+1. Choose the most specific selector available: `path`, `path + lines`, or
+   `symbolFqn` when the request is exact; `search` when you need lookup rather
+   than direct addressing.
+2. If the request is an identifier, literal, path-like string, or snippet,
+   distill it and run `search` with `searchMode: LEXICAL`.
+3. If the request is approximate or conceptual, distill it to a short phrase
+   and run `search` in the default `AUTO` mode first. Inspect
+   `artefacts(first: 10)` and, when useful, `searchBreakdown(first: 3)` to see
+   which retrieval mode is carrying the result.
+4. Reserve `searchMode: IDENTITY`, `CODE`, or `SUMMARY` for advanced narrowing
+   when `AUTO` is broad but you already know which representation is likely to
+   matter.
+5. Once you have a concrete file or artefact, run `overview`.
+6. If the response includes `expandHint`, `schema`, or another typed follow-up
+   hint, read that hint before composing the next query.
+7. Expand only one relevant stage or `artefacts(first: ...)` if the overview
+   shows that more detail is needed.
+8. If DevQL returns nothing useful, fall back to targeted repo search or file
+   reads.
 
-Examples:
+## Query Templates
 
-- `renderInvoicePdf is broken` -> prefer `fuzzyName` or `symbolFqn`
-- `src/payments/invoice.ts:42` -> prefer `path + lines`
-- `find the code that builds invoice PDFs` -> prefer `semanticQuery`
-- `help me understand the codebase` -> do not use `semanticQuery` first; start with scoped `summary` or a concrete project/file selector
+```bash
+# Use AUTO search first when the request is approximate or conceptual
+bitloops devql query '{ selectArtefacts(by: { search: "<distilled conceptual phrase>" }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score summary } searchBreakdown(first: 3) { lexical { path symbolFqn score summary } identity { path symbolFqn score summary } code { path symbolFqn score summary } summary { path symbolFqn score summary } } } }'
+
+# Use LEXICAL search for identifiers, literals, paths, or snippets
+bitloops devql query '{ selectArtefacts(by: { search: "<identifier or snippet>", searchMode: LEXICAL }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score summary } } }'
+
+# Ask for overview once the selection is concrete
+bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { overview } }'
+
+# Same overview shape for file or file+line selectors
+bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", lines: { start: <start>, end: <end> } }) { overview } }'
+```
+
+## Reading Response Hints
+
+- Treat `overview` as the compact first pass.
+- Treat `searchBreakdown` as an `AUTO`-only widening tool when the unified top
+  hits are relevant but you want to see which lexical or semantic mode is also
+  surfacing candidates.
+- When DevQL returns `expandHint`, `schema`, or another typed follow-up hint,
+  read it before composing the next query.
+- Prefer the hint's suggested parameters and drill-down shape over guessing
+  the next stage call.
 
 ## Sandbox Execution
 
@@ -64,37 +91,22 @@ Examples:
 - These commands rely on Bitloops-managed daemon and runtime state under platform app directories, so they can fail inside a workspace-only sandbox even when DevQL is healthy.
 - If your platform requires approval or escalation for out-of-sandbox commands, request it immediately before running `bitloops devql ...`.
 
-## Core Commands
+## Common Mistakes
 
-```bash
-# Orientation only
-bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>" }) { summary } }'
+- Do not reintroduce obsolete selector names from older DevQL guidance.
+- Do not dump the full conversational prompt into `search`; distill it.
+- Do not use conceptual `AUTO` search for obvious identifiers or snippets when
+  `searchMode: LEXICAL` is the right tool.
+- Do not force `IDENTITY`, `CODE`, or `SUMMARY` unless you are intentionally
+  narrowing an already-understood search problem.
+- Do not ignore `expandHint` or other response hints when DevQL already tells
+  you how to drill down.
+- Do not start with stage-specific detail queries before selecting a concrete
+  artefact.
+- Do not use DevQL for edits, builds, tests, formatting, or git operations.
 
-# Concrete artefacts for a known file or line range
-bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", lines: { start: <start>, end: <end> } }) { artefacts(first: 20) { path symbolFqn canonicalKind startLine endLine } } }'
+## Integration
 
-# Fuzzy lookup when the symbol name is approximate or may be misspelled
-bitloops devql query '{ selectArtefacts(by: { fuzzyName: "<approx-symbol-name>" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
-
-# Semantic lookup for free-form conceptual requests
-bitloops devql query '{ selectArtefacts(by: { semanticQuery: "<natural-language request>" }) { artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine } } }'
-
-# Concrete callers/usages/imports once the symbol is known
-bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { items(first: 50) { edgeKind startLine endLine fromArtefact { symbolFqn path startLine endLine } toArtefact { symbolFqn path startLine endLine } toSymbolRef } } } }'
-
-# Discover the exact row fields for the chosen stage
-bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { deps(kind: CALLS, direction: IN, includeUnresolved: true) { schema } } }'
-
-# Concrete tests that directly target the selected artefact
-bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { tests { summary items(first: 20) { artefact { name filePath startLine endLine } coveringTests { testName suiteName filePath startLine endLine } } } } }'
-
-# use sparingly to see the whole schema
-bitloops devql schema
-```
-
-## Do Not Use DevQL
-
-- when you don't have a specific artefact or file in mind
-- editing files
-- running tests, builds, or git commands
-- literal string search when you already know the exact text
+- If `overview` shows something relevant, expand only the one stage needed for
+  the current question.
+- If DevQL is unavailable or empty, switch to targeted `rg` or file reads.

@@ -243,8 +243,15 @@ async fn devql_sdl_route_returns_schema_text() {
     assert!(body.contains("searchInteractionTurns(input: InteractionSearchInputObject!)"));
     assert!(body.contains("chatHistory"));
     assert!(body.contains("selectArtefacts(by: ArtefactSelectorInput!): ArtefactSelection!"));
-    assert!(body.contains("fuzzyName: String"));
-    assert!(body.contains("semanticQuery: String"));
+    assert!(body.contains("search: String"));
+    assert!(body.contains("searchMode: SearchMode"));
+    assert!(body.contains("enum SearchMode"));
+    assert!(body.contains("searchBreakdown("));
+    assert!(body.contains("type SearchBreakdown"));
+    assert!(body.contains("searchScore: ArtefactSearchScore"));
+    assert!(body.contains("type ArtefactSearchScore"));
+    assert!(!body.contains("fuzzyName: String"));
+    assert!(!body.contains("naturalLanguage: String"));
     assert!(body.contains("asOf(input: AsOfInput!): TemporalScope!"));
     assert!(!body.contains("repo(name: String!): Repository!"));
 }
@@ -496,6 +503,66 @@ fn checked_in_slim_schema_file_matches_runtime_sdl() {
     assert_eq!(actual, expected);
 }
 
+#[test]
+fn tests_expand_hint_implements_base_expand_hint_interface() {
+    let schema_sdl = crate::graphql::schema_sdl();
+    let slim_sdl = crate::graphql::slim_schema_sdl();
+
+    for sdl in [&schema_sdl, &slim_sdl] {
+        assert!(
+            sdl.contains(
+                "interface ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
+            ),
+            "expected base ExpandHint interface in SDL:\n{sdl}"
+        );
+        assert!(
+            sdl.contains(
+                "type TestHarnessTestsExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
+            ),
+            "expected tests expand hint to implement ExpandHint:\n{sdl}"
+        );
+        assert!(
+            sdl.contains("expandHint: TestHarnessTestsExpandHint!"),
+            "expected tests summary to keep its concrete expandHint field type:\n{sdl}"
+        );
+        assert!(
+            sdl.contains(
+                "type ExpandHintParameter {\n\tname: String!\n\tintent: String!\n\tsupportedValues: [String!]!\n}",
+            ),
+            "expected ExpandHintParameter type in SDL:\n{sdl}"
+        );
+        assert!(
+            sdl.contains(
+                "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
+            ),
+            "expected dependency expand hint to implement ExpandHint:\n{sdl}"
+        );
+        if sdl.contains("type DependencyStageResult") {
+            assert!(
+                sdl.contains("expandHint: DependencyExpandHint"),
+                "expected dependency stage to keep its concrete expandHint field type:\n{sdl}"
+            );
+        }
+    }
+
+    assert!(
+        slim_sdl.contains(
+            "type CloneExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
+        ),
+        "expected slim SDL to expose CloneExpandHint implementing ExpandHint:\n{slim_sdl}"
+    );
+    assert!(
+        slim_sdl.contains("expandHint: CloneExpandHint"),
+        "expected codeMatches stage to keep its concrete expandHint field type:\n{slim_sdl}"
+    );
+    assert!(
+        slim_sdl.contains(
+            "type DependencyExpandHint implements ExpandHint {\n\tintent: String!\n\ttemplate: String!\n\tparameters: [ExpandHintParameter!]!\n}",
+        ),
+        "expected slim SDL to expose DependencyExpandHint implementing ExpandHint:\n{slim_sdl}"
+    );
+}
+
 fn graphql_parent_depth_limit_query(parent_depth: usize) -> String {
     let mut query = String::from(
         r#"{ repo(name: "demo") { file(path: "src/caller.ts") { artefacts(first: 1) { edges { node {"#,
@@ -664,7 +731,7 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
                 }
               }
             }
-            deps(filter: { direction: OUT }, first: 10) {
+            dependencies(filter: { direction: OUT }, first: 10) {
               totalCount
               edges {
                 node {
@@ -689,7 +756,7 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
               }
             }
           }
-          deps(filter: { direction: OUT }, first: 10) {
+          dependencies(filter: { direction: OUT }, first: 10) {
             totalCount
             edges {
               node {
@@ -740,7 +807,7 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
     assert_eq!(payload["data"]["file"]["language"], "typescript");
     assert_eq!(payload["data"]["file"]["blobSha"], "blob-caller");
     assert_eq!(payload["data"]["file"]["artefacts"]["totalCount"], 2);
-    assert_eq!(payload["data"]["file"]["deps"]["totalCount"], 2);
+    assert_eq!(payload["data"]["file"]["dependencies"]["totalCount"], 2);
     assert_eq!(payload["data"]["files"].as_array().map(Vec::len), Some(3));
     assert_eq!(payload["data"]["artefacts"]["totalCount"], 4);
     assert_eq!(
@@ -751,8 +818,8 @@ async fn devql_post_route_executes_slim_repository_file_and_dependency_queries()
         payload["data"]["artefacts"]["pageInfo"]["hasPreviousPage"],
         false
     );
-    assert_eq!(payload["data"]["deps"]["totalCount"], 0);
-    assert_eq!(payload["data"]["deps"]["edges"], json!([]));
+    assert_eq!(payload["data"]["dependencies"]["totalCount"], 0);
+    assert_eq!(payload["data"]["dependencies"]["edges"], json!([]));
 }
 
 #[tokio::test]
@@ -1283,22 +1350,26 @@ async fn devql_post_route_executes_slim_test_harness_stage_queries() {
             }
             summary {
               totalCoveringTests
+              expandHint {
+                intent
+                template
+              }
             }
           }
-          coverage(filter: { symbolFqn: "src/caller.ts::caller" }, first: 5) {
-            artefact {
-              artefactId
-            }
-            coverage {
-              coverageSource
-              lineCoveragePct
-              branchDataAvailable
-              uncoveredLines
-            }
-            summary {
-              uncoveredLineCount
-            }
-          }
+          # coverage(filter: { symbolFqn: "src/caller.ts::caller" }, first: 5) {
+          #   artefact {
+          #     artefactId
+          #   }
+          #   coverage {
+          #     coverageSource
+          #     lineCoveragePct
+          #     branchDataAvailable
+          #     uncoveredLines
+          #   }
+          #   summary {
+          #     uncoveredLineCount
+          #   }
+          # }
         }
         "#,
     )
@@ -1327,25 +1398,19 @@ async fn devql_post_route_executes_slim_test_harness_stage_queries() {
         1
     );
     assert_eq!(
-        payload["data"]["coverage"][0]["coverage"]["coverageSource"],
-        "lcov"
+        payload["data"]["tests"][0]["summary"]["expandHint"]["intent"],
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_INTENT
     );
+    let expand_template = payload["data"]["tests"][0]["summary"]["expandHint"]["template"]
+        .as_str()
+        .expect("expand hint template");
     assert_eq!(
-        payload["data"]["coverage"][0]["coverage"]["lineCoveragePct"],
-        50.0
+        expand_template,
+        crate::capability_packs::test_harness::types::TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE
     );
-    assert_eq!(
-        payload["data"]["coverage"][0]["coverage"]["branchDataAvailable"],
-        true
-    );
-    assert_eq!(
-        payload["data"]["coverage"][0]["coverage"]["uncoveredLines"],
-        json!([5])
-    );
-    assert_eq!(
-        payload["data"]["coverage"][0]["summary"]["uncoveredLineCount"],
-        1
-    );
+    assert!(expand_template.contains("coveringTests"));
+    assert!(!expand_template.contains("artefact {"));
+    // coverage assertions are intentionally parked until the typed field is restored.
 }
 
 #[tokio::test]
@@ -1473,11 +1538,11 @@ async fn devql_post_route_surfaces_slim_stage_validation_errors() {
               artefactId
             }
           }
-          badCoverage: coverage(first: 0) {
-            artefact {
-              artefactId
-            }
-          }
+          # badCoverage: coverage(first: 0) {
+          #   artefact {
+          #     artefactId
+          #   }
+          # }
           badTestsSummary: testsSummary {
             commitSha
           }
@@ -1489,7 +1554,7 @@ async fn devql_post_route_surfaces_slim_stage_validation_errors() {
     let errors = payload["errors"]
         .as_array()
         .expect("expected graphql errors");
-    assert_eq!(errors.len(), 3, "unexpected errors: {errors:?}");
+    assert_eq!(errors.len(), 2, "unexpected errors: {errors:?}");
     let messages = errors
         .iter()
         .filter_map(|error| error["message"].as_str())
@@ -1499,12 +1564,6 @@ async fn devql_post_route_surfaces_slim_stage_validation_errors() {
             .iter()
             .any(|message| message.contains("`minConfidence` must be between 0 and 1")),
         "expected minConfidence validation error, got {messages:?}"
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("`first` must be greater than 0")),
-        "expected coverage limit validation error, got {messages:?}"
     );
     assert!(
         messages

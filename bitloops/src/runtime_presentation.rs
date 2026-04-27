@@ -65,8 +65,8 @@ pub(crate) fn lane_activity_label(detail: &str) -> &'static str {
 
 pub(crate) fn session_status_label(status: &str) -> &'static str {
     match status.to_ascii_lowercase().as_str() {
-        "completed" => "Finished",
-        "completed_with_warnings" => "Finished with warnings",
+        "completed" => "Completed",
+        "completed_with_warnings" => "Completed with warnings",
         "failing" => "Finishing remaining work after a failure",
         "failed" => "Failed",
         "waiting" => "Waiting",
@@ -78,14 +78,15 @@ pub(crate) fn session_status_label(status: &str) -> &'static str {
 
 pub(crate) fn waiting_reason_label(reason: &str) -> &'static str {
     match reason {
-        "waiting_for_sync" => "Waiting for sync to finish",
+        "waiting_for_sync" => "Waiting for sync to complete",
         "waiting_for_embeddings_bootstrap" => "Waiting for the embeddings runtime to warm up",
         "waiting_for_summary_bootstrap" => "Waiting for summary generation to be ready",
         "waiting_for_summaries" => "Waiting for summaries to be ready",
         "waiting_for_follow_up_sync" => "Waiting for the follow-up sync",
         "waiting_for_top_level_work" => "Waiting for the codebase work to finish",
         "waiting_for_bootstrap" => "Waiting for bootstrap work to finish",
-        "waiting_for_current_state_consumer" => "Waiting for the codebase update queue",
+        "waiting_for_current_state_consumer" => "Waiting for codebase updates to apply",
+        "preparing_embedding_batches" => "Preparing embedding batches",
         "waiting_on_blocked_mailbox" => "Waiting for a blocked worker pool",
         "waiting_for_workplane" => "Waiting for queued enrichment work to finish",
         "blocked_mailbox" => "Blocked by a worker pool",

@@ -166,7 +166,7 @@ fn render_ingest_lane_while_sync_is_running() {
         &SummaryProgressState::Hidden,
     );
 
-    assert!(frame.contains("Waiting for sync to finish before starting ingest"));
+    assert!(frame.contains("Waiting for sync to complete before starting ingest"));
     assert!(frame.contains("Analysing your current branch to know what's what"));
     assert!(frame.contains("Analysing your git history because you know... history is important"));
 }
@@ -192,7 +192,7 @@ fn render_completed_sync_lane_while_ingest_continues() {
     assert!(frame.contains("Sync complete"));
     assert!(frame.contains("100% complete"));
     assert!(frame.contains("Ingesting demo"));
-    assert!(!frame.contains("Waiting for sync to finish before starting ingest"));
+    assert!(!frame.contains("Waiting for sync to complete before starting ingest"));
 }
 
 #[test]

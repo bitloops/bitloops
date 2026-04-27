@@ -52,10 +52,21 @@ mod tests {
         OPEN_CODE_SKILL_RELATIVE_PATH, install_repo_skill,
     };
 
+    fn write_repo_policy(dir: &tempfile::TempDir, body: &str) {
+        std::fs::write(dir.path().join(".bitloops.toml"), body).expect("write repo policy");
+    }
+
     #[test]
-    fn render_plugin_template_injects_presence_only_bootstrap_when_skill_exists() {
+    fn render_plugin_template_injects_capability_aware_bootstrap_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo_root = dir.path();
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
         install_repo_skill(repo_root).expect("install skill");
 
         let rendered = render_plugin_template(repo_root, false).expect("render should succeed");
@@ -66,8 +77,16 @@ mod tests {
             "bootstrap text should reference the repo-local skill path"
         );
         assert!(
-            rendered.contains("Bitloops has installed DevQL guidance for this repo"),
-            "bootstrap text should preserve the presence-only guidance"
+            rendered.contains("DevQL-capable guidance surface"),
+            "bootstrap text should preserve the capability-aware guidance"
+        );
+        assert!(
+            rendered.contains("When DevQL is available in this session"),
+            "bootstrap text should prefer DevQL conditionally"
+        );
+        assert!(
+            rendered.contains("fall back to targeted repo search or file reads"),
+            "bootstrap text should preserve the fallback guidance"
         );
         assert!(
             !rendered.contains("bitloops devql query"),
@@ -96,14 +115,24 @@ mod tests {
     }
 
     #[test]
-    fn render_plugin_template_stays_quiet_when_skill_is_absent() {
+    fn render_plugin_template_stays_quiet_when_policy_disables_guidance() {
         let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[agents]
+supported = ["opencode"]
+devql_guidance_enabled = false
+"#,
+        );
+        install_repo_skill(dir.path()).expect("install skill");
+
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
         assert!(rendered.contains(r#"const BOOTSTRAP_CONTEXT = ""#));
         assert!(!rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH));
-        assert!(!rendered.contains("Bitloops has installed DevQL guidance for this repo"));
+        assert!(!rendered.contains("DevQL-capable guidance surface"));
         assert!(!rendered.contains("<EXTREMELY_IMPORTANT>"));
     }
 

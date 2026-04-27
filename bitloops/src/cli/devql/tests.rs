@@ -220,6 +220,215 @@ fn sqlite_path_for_repo(repo_root: &Path) -> PathBuf {
         .expect("resolve sqlite path")
 }
 
+fn duckdb_path_for_repo(repo_root: &Path) -> PathBuf {
+    crate::config::resolve_store_backend_config_for_repo(repo_root)
+        .expect("resolve backend config")
+        .events
+        .resolve_duckdb_db_path_for_repo(repo_root)
+}
+
+fn seed_cli_analytics_sources(repo_root: &Path) {
+    use crate::host::interactions::interaction_repository::create_interaction_repository;
+    use crate::host::interactions::store::InteractionEventRepository;
+    use crate::host::interactions::types::{
+        InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
+    };
+
+    let sqlite_path = sqlite_path_for_repo(repo_root);
+    let duckdb_path = duckdb_path_for_repo(repo_root);
+    fs::create_dir_all(sqlite_path.parent().expect("sqlite parent")).expect("create sqlite dir");
+    fs::create_dir_all(duckdb_path.parent().expect("duckdb parent")).expect("create duckdb dir");
+
+    let sqlite = Connection::open(&sqlite_path).expect("open sqlite");
+    sqlite
+        .execute_batch(
+            "
+            CREATE TABLE repositories (
+                repo_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                organization TEXT NOT NULL,
+                name TEXT NOT NULL,
+                default_branch TEXT,
+                metadata_json TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE repo_sync_state (
+                repo_id TEXT PRIMARY KEY,
+                repo_root TEXT NOT NULL,
+                active_branch TEXT,
+                head_commit_sha TEXT,
+                head_tree_sha TEXT,
+                parser_version TEXT NOT NULL,
+                extractor_version TEXT NOT NULL,
+                scope_exclusions_fingerprint TEXT,
+                last_sync_started_at TEXT,
+                last_sync_completed_at TEXT,
+                last_sync_status TEXT,
+                last_sync_reason TEXT
+            );
+            CREATE TABLE current_file_state (
+                repo_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                analysis_mode TEXT NOT NULL,
+                file_role TEXT NOT NULL,
+                text_index_mode TEXT NOT NULL,
+                language TEXT NOT NULL,
+                resolved_language TEXT NOT NULL,
+                dialect TEXT,
+                primary_context_id TEXT,
+                secondary_context_ids_json TEXT NOT NULL,
+                frameworks_json TEXT NOT NULL,
+                runtime_profile TEXT,
+                classification_reason TEXT NOT NULL,
+                context_fingerprint TEXT,
+                extraction_fingerprint TEXT NOT NULL,
+                head_content_id TEXT,
+                index_content_id TEXT,
+                worktree_content_id TEXT,
+                effective_content_id TEXT NOT NULL,
+                effective_source TEXT NOT NULL,
+                parser_version TEXT NOT NULL,
+                extractor_version TEXT NOT NULL,
+                exists_in_head INTEGER NOT NULL,
+                exists_in_index INTEGER NOT NULL,
+                exists_in_worktree INTEGER NOT NULL,
+                last_synced_at TEXT NOT NULL,
+                PRIMARY KEY (repo_id, path)
+            );",
+        )
+        .expect("create analytics sqlite tables");
+
+    let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo identity");
+    sqlite
+        .execute(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch, metadata_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'main', '{}', '2026-04-22T09:00:00Z')",
+            rusqlite::params![repo.repo_id, repo.provider, repo.organization, repo.name],
+        )
+        .expect("insert repositories row");
+    sqlite
+        .execute(
+            "INSERT INTO repo_sync_state (repo_id, repo_root, active_branch, head_commit_sha, head_tree_sha, parser_version, extractor_version, scope_exclusions_fingerprint, last_sync_started_at, last_sync_completed_at, last_sync_status, last_sync_reason)
+             VALUES (?1, ?2, 'main', 'abc', 'def', '1', '1', '', '2026-04-22T09:00:00Z', '2026-04-22T09:05:00Z', 'completed', '')",
+            rusqlite::params![repo.repo_id, repo_root.to_string_lossy().to_string()],
+        )
+        .expect("insert repo_sync_state row");
+    sqlite
+        .execute(
+            "INSERT INTO current_file_state (
+                repo_id, path, analysis_mode, file_role, text_index_mode, language, resolved_language, dialect,
+                primary_context_id, secondary_context_ids_json, frameworks_json, runtime_profile, classification_reason,
+                context_fingerprint, extraction_fingerprint, head_content_id, index_content_id, worktree_content_id,
+                effective_content_id, effective_source, parser_version, extractor_version, exists_in_head, exists_in_index,
+                exists_in_worktree, last_synced_at
+             ) VALUES (
+                ?1, 'src/lib.rs', 'code', 'source_code', 'none', 'rust', 'rust', '', '', '[]', '[]', '',
+                'seeded', '', 'fingerprint-1', 'head-1', 'index-1', 'worktree-1', 'effective-1', 'worktree', '1', '1', 1, 1, 1,
+                '2026-04-22T09:04:00Z'
+             )",
+            rusqlite::params![repo.repo_id],
+        )
+        .expect("insert current_file_state row");
+
+    let events_cfg = crate::config::EventsBackendConfig {
+        duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
+        clickhouse_url: None,
+        clickhouse_user: None,
+        clickhouse_password: None,
+        clickhouse_database: None,
+    };
+    let repository = create_interaction_repository(&events_cfg, repo_root, repo.repo_id.clone())
+        .expect("create interaction repository");
+    repository
+        .upsert_session(&InteractionSession {
+            session_id: "session-1".to_string(),
+            repo_id: repo.repo_id.clone(),
+            branch: "main".to_string(),
+            actor_id: "actor-1".to_string(),
+            actor_name: "Alice".to_string(),
+            actor_email: "alice@example.com".to_string(),
+            actor_source: "seed".to_string(),
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            first_prompt: "Inspect analytics".to_string(),
+            transcript_path: "/tmp/transcript.jsonl".to_string(),
+            worktree_path: repo_root.to_string_lossy().to_string(),
+            worktree_id: "worktree-1".to_string(),
+            started_at: "2026-04-22T09:00:00Z".to_string(),
+            ended_at: None,
+            last_event_at: "2026-04-22T09:03:00Z".to_string(),
+            updated_at: "2026-04-22T09:03:00Z".to_string(),
+        })
+        .expect("upsert analytics session");
+    repository
+        .upsert_turn(&InteractionTurn {
+            turn_id: "turn-1".to_string(),
+            session_id: "session-1".to_string(),
+            repo_id: repo.repo_id.clone(),
+            branch: "main".to_string(),
+            actor_id: "actor-1".to_string(),
+            actor_name: "Alice".to_string(),
+            actor_email: "alice@example.com".to_string(),
+            actor_source: "seed".to_string(),
+            turn_number: 1,
+            prompt: "Inspect analytics".to_string(),
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            started_at: "2026-04-22T09:00:00Z".to_string(),
+            ended_at: Some("2026-04-22T09:03:00Z".to_string()),
+            token_usage: Some(
+                crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata {
+                    input_tokens: 120,
+                    output_tokens: 80,
+                    cache_creation_tokens: 0,
+                    cache_read_tokens: 0,
+                    api_call_count: 1,
+                    subagent_tokens: None,
+                },
+            ),
+            summary: "Analysed tool usage".to_string(),
+            prompt_count: 1,
+            transcript_offset_start: Some(0),
+            transcript_offset_end: Some(100),
+            transcript_fragment: "fragment".to_string(),
+            files_modified: vec!["src/lib.rs".to_string()],
+            checkpoint_id: None,
+            updated_at: "2026-04-22T09:03:00Z".to_string(),
+        })
+        .expect("upsert analytics turn");
+    repository
+        .append_event(&InteractionEvent {
+            event_id: "event-1".to_string(),
+            session_id: "session-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            repo_id: repo.repo_id,
+            branch: "main".to_string(),
+            actor_id: "actor-1".to_string(),
+            actor_name: "Alice".to_string(),
+            actor_email: "alice@example.com".to_string(),
+            actor_source: "seed".to_string(),
+            event_type: InteractionEventType::ToolInvocationObserved,
+            event_time: "2026-04-22T09:01:00Z".to_string(),
+            source: "transcript_derivation".to_string(),
+            sequence_number: 1,
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            tool_use_id: "toolu-1".to_string(),
+            tool_kind: "bash".to_string(),
+            task_description: "rg tool analytics".to_string(),
+            subagent_id: String::new(),
+            payload: json!({
+                "tool_name": "bash",
+                "input_summary": "rg tool analytics",
+                "command": "rg tool analytics",
+                "command_binary": "rg",
+                "command_argv": ["rg", "tool", "analytics"],
+                "transcript_path": "/tmp/transcript.jsonl"
+            }),
+        })
+        .expect("append analytics event");
+}
+
 fn with_isolated_daemon_state<T>(repo_root: &Path, f: impl FnOnce() -> T) -> T {
     let state_root = TempDir::new().expect("temp dir");
     let state_root_str = state_root.path().to_string_lossy().to_string();
@@ -822,6 +1031,62 @@ fn devql_cli_parses_query_graphql_flag() {
     assert_eq!(query.query, "{ repo(name: \"bitloops-cli\") { name } }");
     assert!(query.graphql);
     assert!(!query.compact);
+}
+
+#[test]
+fn devql_cli_parses_analytics_sql_scope_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "analytics",
+        "sql",
+        "SELECT * FROM analytics.repositories",
+        "--repo",
+        "repo-1",
+        "--repo",
+        "repo-2",
+        "--json",
+    ])
+    .expect("devql analytics sql should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Analytics(analytics)) = args.command else {
+        panic!("expected devql analytics command");
+    };
+    let DevqlAnalyticsCommand::Sql(sql) = analytics.command;
+
+    assert_eq!(sql.query, "SELECT * FROM analytics.repositories");
+    assert_eq!(sql.repos, vec!["repo-1".to_string(), "repo-2".to_string()]);
+    assert!(sql.json);
+    assert!(!sql.all_repos);
+}
+
+#[test]
+fn devql_analytics_sql_command_executes_for_current_repo() {
+    let repo = seed_devql_cli_repo();
+    seed_cli_analytics_sources(repo.path());
+    let runtime = test_runtime();
+
+    runtime.block_on(async {
+        let args = DevqlArgs {
+            command: Some(DevqlCommand::Analytics(DevqlAnalyticsArgs {
+                command: DevqlAnalyticsCommand::Sql(DevqlAnalyticsSqlArgs {
+                    query: "SELECT repo_id, path FROM analytics.current_file_state".to_string(),
+                    repos: Vec::new(),
+                    all_repos: false,
+                    json: true,
+                }),
+            })),
+        };
+        let mut sink = Vec::new();
+        run_with_scope_discovery(args, &mut sink, || {
+            discover_slim_cli_repo_scope(Some(repo.path()))
+        })
+        .await
+        .expect("analytics sql command should execute");
+    });
 }
 
 #[test]

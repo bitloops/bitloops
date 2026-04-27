@@ -70,7 +70,7 @@ async fn execute_devql_query_rejects_tests_with_deps() {
     let cfg = test_cfg();
     let events_cfg = default_events_cfg();
     let parsed = parse_devql_query(
-        r#"repo("temp2")->artefacts(kind:"function")->deps(kind:"calls")->tests()->limit(1)"#,
+        r#"repo("temp2")->artefacts(kind:"function")->dependencies(kind:"calls")->tests()->limit(1)"#,
     )
     .unwrap();
     let err = execute_devql_query(&cfg, &parsed, &events_cfg, None)
@@ -78,7 +78,7 @@ async fn execute_devql_query_rejects_tests_with_deps() {
         .unwrap_err();
     assert!(
         err.to_string()
-            .contains("tests() cannot be combined with deps()")
+            .contains("tests() cannot be combined with dependencies()")
     );
 }
 

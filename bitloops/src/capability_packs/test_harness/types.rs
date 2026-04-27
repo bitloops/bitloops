@@ -10,6 +10,16 @@ pub const TEST_HARNESS_COVERAGE_STAGE_ID: &str = "coverage";
 pub const TEST_HARNESS_LINKAGE_INGESTER_ID: &str = "test_harness.linkage";
 pub const TEST_HARNESS_COVERAGE_INGESTER_ID: &str = "test_harness.coverage";
 pub const TEST_HARNESS_CLASSIFICATION_INGESTER_ID: &str = "test_harness.classification";
+pub const TEST_HARNESS_TESTS_EXPAND_HINT_INTENT: &str =
+    "Inspect concrete covering tests for selected artefacts";
+pub const TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE: &str = "bitloops devql query '{ selectArtefacts(by: { symbolFqn: \"<symbol-fqn>\" }) { tests { overview items(first: 20) { coveringTests { testName suiteName filePath startLine endLine } } } } }'";
+
+pub fn test_harness_tests_expand_hint_json() -> Value {
+    json!({
+        "intent": TEST_HARNESS_TESTS_EXPAND_HINT_INTENT,
+        "template": TEST_HARNESS_TESTS_EXPAND_HINT_TEMPLATE,
+    })
+}
 
 pub fn resolve_test_harness_config(view: &CapabilityConfigView) -> Option<&Value> {
     view.scoped()

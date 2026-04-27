@@ -173,7 +173,7 @@ fn compile_clone_summary_stage_rejects_invalid_since_literal() {
 #[test]
 fn compile_deps_summary_stage_under_artefacts() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(deps:true,direction:"both",unresolved:true,kind:"calls")->limit(5)"#,
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(dependencies:true,direction:"both",unresolved:true,kind:"calls")->limit(5)"#,
     )
     .expect("query parses");
 
@@ -195,7 +195,7 @@ fn compile_deps_summary_stage_under_artefacts() {
             startLine
             endLine
             language
-            depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: true }) {
+            dependenciesSummary(filter: { kind: CALLS, direction: BOTH, unresolved: true }) {
               totalCount
               incomingCount
               outgoingCount
@@ -220,27 +220,28 @@ fn compile_deps_summary_stage_under_artefacts() {
 #[test]
 fn compile_deps_summary_stage_defaults_to_resolved_when_unresolved_is_omitted() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(deps:true,direction:"both",kind:"calls")->limit(5)"#,
+        r#"repo("bitloops-cli")->file("src/main.rs")->artefacts(lines:1..20,kind:"function")->summary(dependencies:true,direction:"both",kind:"calls")->limit(5)"#,
     )
     .expect("query parses");
 
     let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
     assert!(
-        graphql
-            .contains("depsSummary(filter: { kind: CALLS, direction: BOTH, unresolved: false })"),
+        graphql.contains(
+            "dependenciesSummary(filter: { kind: CALLS, direction: BOTH, unresolved: false })"
+        ),
         "unexpected graphql: {graphql}"
     );
 }
 
 #[test]
 fn compile_deps_summary_stage_requires_artefacts() {
-    let parsed =
-        parse_devql_query(r#"repo("bitloops-cli")->summary(deps:true)"#).expect("query parses");
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->summary(dependencies:true)"#)
+        .expect("query parses");
 
     let err = compile_devql_to_graphql(&parsed).expect_err("summary deps requires artefacts");
     assert!(
         err.to_string()
-            .contains("summary(deps:true, ...) requires an artefacts() stage"),
+            .contains("summary(dependencies:true, ...) requires an artefacts() stage"),
         "unexpected error: {err:#}"
     );
 }
@@ -248,7 +249,7 @@ fn compile_deps_summary_stage_requires_artefacts() {
 #[test]
 fn compile_deps_summary_stage_rejects_invalid_arguments() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->artefacts()->summary(deps:true,unsupported:"x")"#,
+        r#"repo("bitloops-cli")->artefacts()->summary(dependencies:true,unsupported:"x")"#,
     )
     .expect("query parses");
 
@@ -262,13 +263,14 @@ fn compile_deps_summary_stage_rejects_invalid_arguments() {
 
 #[test]
 fn compile_deps_summary_stage_requires_deps_true() {
-    let parsed = parse_devql_query(r#"repo("bitloops-cli")->artefacts()->summary(deps:false)"#)
-        .expect("query parses");
+    let parsed =
+        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->summary(dependencies:false)"#)
+            .expect("query parses");
 
     let err = compile_devql_to_graphql(&parsed).expect_err("deps must be true");
     assert!(
         err.to_string()
-            .contains("summary(deps:...) requires deps:true"),
+            .contains("summary(dependencies:...) requires dependencies:true"),
         "unexpected error: {err:#}"
     );
 }
@@ -276,7 +278,7 @@ fn compile_deps_summary_stage_requires_deps_true() {
 #[test]
 fn compile_deps_summary_stage_rejects_invalid_direction_value() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->artefacts()->summary(deps:true,direction:"sideways")"#,
+        r#"repo("bitloops-cli")->artefacts()->summary(dependencies:true,direction:"sideways")"#,
     )
     .expect("query parses");
 
@@ -290,9 +292,10 @@ fn compile_deps_summary_stage_rejects_invalid_direction_value() {
 
 #[test]
 fn compile_deps_summary_stage_rejects_invalid_kind_value() {
-    let parsed =
-        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->summary(deps:true,kind:"bogus")"#)
-            .expect("query parses");
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->summary(dependencies:true,kind:"bogus")"#,
+    )
+    .expect("query parses");
 
     let err = compile_devql_to_graphql(&parsed).expect_err("invalid kind value must fail");
     assert!(
@@ -305,7 +308,7 @@ fn compile_deps_summary_stage_rejects_invalid_kind_value() {
 #[test]
 fn compile_deps_summary_stage_rejects_invalid_unresolved_value() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->artefacts()->summary(deps:true,unresolved:"maybe")"#,
+        r#"repo("bitloops-cli")->artefacts()->summary(dependencies:true,unresolved:"maybe")"#,
     )
     .expect("query parses");
 
@@ -319,28 +322,31 @@ fn compile_deps_summary_stage_rejects_invalid_unresolved_value() {
 
 #[test]
 fn compile_deps_summary_stage_rejects_combination_with_deps_stage() {
-    let parsed =
-        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->deps()->summary(deps:true)"#)
-            .expect("query parses");
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->dependencies()->summary(dependencies:true)"#,
+    )
+    .expect("query parses");
 
     let err = compile_devql_to_graphql(&parsed).expect_err("deps + deps summary should fail");
     assert!(
-        err.to_string()
-            .contains("summary(deps:true, ...) cannot be combined with deps() stage"),
+        err.to_string().contains(
+            "summary(dependencies:true, ...) cannot be combined with dependencies() stage"
+        ),
         "unexpected error: {err:#}"
     );
 }
 
 #[test]
 fn compile_deps_summary_stage_rejects_combination_with_clones_stage() {
-    let parsed =
-        parse_devql_query(r#"repo("bitloops-cli")->artefacts()->clones()->summary(deps:true)"#)
-            .expect("query parses");
+    let parsed = parse_devql_query(
+        r#"repo("bitloops-cli")->artefacts()->clones()->summary(dependencies:true)"#,
+    )
+    .expect("query parses");
 
     let err = compile_devql_to_graphql(&parsed).expect_err("clones + deps summary should fail");
     assert!(
         err.to_string()
-            .contains("summary(deps:true, ...) cannot be combined with clones() stage"),
+            .contains("summary(dependencies:true, ...) cannot be combined with clones() stage"),
         "unexpected error: {err:#}"
     );
 }
@@ -473,7 +479,7 @@ fn compile_artefact_clones_pipeline_keeps_raw_mode_opt_in() {
 #[test]
 fn compile_project_deps_pipeline() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->project("packages/api")->deps(kind:"imports",direction:"out")->limit(100)"#,
+        r#"repo("bitloops-cli")->project("packages/api")->dependencies(kind:"imports",direction:"out")->limit(100)"#,
     )
     .expect("query parses");
 
@@ -484,7 +490,7 @@ fn compile_project_deps_pipeline() {
         r#"query {
   repo(name: "bitloops-cli") {
     project(path: "packages/api") {
-      deps(filter: { kind: IMPORTS, direction: OUT, includeUnresolved: true }, first: 100) {
+      dependencies(filter: { kind: IMPORTS, direction: OUT, includeUnresolved: true }, first: 100) {
         edges {
           node {
             id
@@ -506,7 +512,7 @@ fn compile_project_deps_pipeline() {
 #[test]
 fn compile_project_deps_pipeline_preserves_explicit_include_unresolved_false() {
     let parsed = parse_devql_query(
-        r#"repo("bitloops-cli")->project("packages/api")->deps(kind:"imports",direction:"out",include_unresolved:false)->limit(100)"#,
+        r#"repo("bitloops-cli")->project("packages/api")->dependencies(kind:"imports",direction:"out",include_unresolved:false)->limit(100)"#,
     )
     .expect("query parses");
 
@@ -517,7 +523,7 @@ fn compile_project_deps_pipeline_preserves_explicit_include_unresolved_false() {
         r#"query {
   repo(name: "bitloops-cli") {
     project(path: "packages/api") {
-      deps(filter: { kind: IMPORTS, direction: OUT, includeUnresolved: false }, first: 100) {
+      dependencies(filter: { kind: IMPORTS, direction: OUT, includeUnresolved: false }, first: 100) {
         edges {
           node {
             id
@@ -581,7 +587,7 @@ fn parse_devql_pipeline_supports_select_artefacts_symbol_selector() {
 }
 
 #[test]
-fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
+fn compile_slim_select_artefacts_checkpoints_defaults_to_overview() {
     let parsed =
         parse_devql_query(r#"selectArtefacts(path:"src/main.rs",lines:20..25)->checkpoints()"#)
             .expect("query parses");
@@ -594,7 +600,7 @@ fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
         r#"query {
   selectArtefacts(by: { path: "src/main.rs", lines: { start: 20, end: 25 } }) {
     checkpoints {
-      summary
+      overview
     }
   }
 }"#
@@ -602,8 +608,8 @@ fn compile_slim_select_artefacts_checkpoints_defaults_to_summary() {
 }
 
 #[test]
-fn compile_slim_select_artefacts_fuzzy_name_selector() {
-    let parsed = parse_devql_query(r#"selectArtefacts(fuzzy_name:"payLater()")->checkpoints()"#)
+fn compile_slim_select_artefacts_search_selector() {
+    let parsed = parse_devql_query(r#"selectArtefacts(search:"payLater()")->checkpoints()"#)
         .expect("query parses");
 
     let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
@@ -612,9 +618,9 @@ fn compile_slim_select_artefacts_fuzzy_name_selector() {
     assert_eq!(
         graphql,
         r#"query {
-  selectArtefacts(by: { fuzzyName: "payLater()" }) {
+  selectArtefacts(by: { search: "payLater()" }) {
     checkpoints {
-      summary
+      overview
     }
   }
 }"#
@@ -622,18 +628,63 @@ fn compile_slim_select_artefacts_fuzzy_name_selector() {
 }
 
 #[test]
-fn compile_slim_select_artefacts_rejects_fuzzy_name_mixed_with_lines() {
+fn compile_slim_select_artefacts_search_selector_with_search_mode() {
     let parsed = parse_devql_query(
-        r#"selectArtefacts(fuzzy_name:"payLater()",lines:20..25)->checkpoints()"#,
+        r#"selectArtefacts(search:"Method::HEAD",search_mode:"lexical")->checkpoints()"#,
     )
     .expect("query parses");
+
+    let selector = parsed
+        .select_artefacts
+        .as_ref()
+        .expect("selection should be present");
+    assert_eq!(selector.search.as_deref(), Some("Method::HEAD"));
+    assert_eq!(selector.search_mode.as_deref(), Some("lexical"));
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { search: "Method::HEAD", searchMode: LEXICAL }) {
+    checkpoints {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_rejects_search_mixed_with_lines() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(search:"payLater()",lines:20..25)->checkpoints()"#)
+            .expect("query parses");
 
     let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
         .expect_err("invalid selector should fail");
 
     assert!(
         err.to_string()
-            .contains("allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"),
+            .contains("allows exactly one of symbol_fqn:, search:, or path:/lines:"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_rejects_search_mode_without_search() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/main.rs",search_mode:"identity")->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("search mode without search should fail");
+
+    assert!(
+        err.to_string()
+            .contains("only allows search_mode: when search: is provided"),
         "unexpected error: {err:#}"
     );
 }
@@ -650,7 +701,7 @@ fn compile_slim_select_artefacts_rejects_symbol_fqn_mixed_with_lines() {
 
     assert!(
         err.to_string()
-            .contains("allows exactly one of symbol_fqn:, fuzzy_name:, or path:/lines:"),
+            .contains("allows exactly one of symbol_fqn:, search:, or path:/lines:"),
         "unexpected error: {err:#}"
     );
 }
@@ -658,7 +709,7 @@ fn compile_slim_select_artefacts_rejects_symbol_fqn_mixed_with_lines() {
 #[test]
 fn compile_slim_select_artefacts_deps_supports_schema_projection() {
     let parsed = parse_devql_query(
-        r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->deps()->select(summary,schema)"#,
+        r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->dependencies()->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -669,8 +720,17 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
         graphql,
         r#"query {
   selectArtefacts(by: { symbolFqn: "src/main.rs::main" }) {
-    deps(includeUnresolved: true) {
-      summary
+    dependencies(includeUnresolved: true) {
+      overview
+      expandHint {
+        intent
+        template
+        parameters {
+          name
+          intent
+          supportedValues
+        }
+      }
       schema
     }
   }
@@ -681,7 +741,7 @@ fn compile_slim_select_artefacts_deps_supports_schema_projection() {
 #[test]
 fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector() {
     let parsed = parse_devql_query(
-        r#"deps(direction:"in",include_unresolved:true)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+        r#"dependencies(direction:"in",include_unresolved:true)->selectArtefacts(path:"src/main.rs")->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -692,8 +752,17 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
         graphql,
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
-    deps(direction: IN, includeUnresolved: true) {
-      summary
+    dependencies(direction: IN, includeUnresolved: true) {
+      overview
+      expandHint {
+        intent
+        template
+        parameters {
+          name
+          intent
+          supportedValues
+        }
+      }
       schema
     }
   }
@@ -704,7 +773,7 @@ fn compile_slim_select_artefacts_preserves_explicit_deps_stage_before_selector()
 #[test]
 fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
     let parsed = parse_devql_query(
-        r#"deps(direction:"in",include_unresolved:false)->selectArtefacts(path:"src/main.rs")->select(summary,schema)"#,
+        r#"dependencies(direction:"in",include_unresolved:false)->selectArtefacts(path:"src/main.rs")->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -715,8 +784,40 @@ fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
         graphql,
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
-    deps(direction: IN, includeUnresolved: false) {
-      summary
+    dependencies(direction: IN, includeUnresolved: false) {
+      overview
+      expandHint {
+        intent
+        template
+        parameters {
+          name
+          intent
+          supportedValues
+        }
+      }
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_clones_stage_emits_code_matches_field() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/main.rs")->clones(relation_kind:"similar_implementation",min_score:0.8)->select(overview,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/main.rs" }) {
+    codeMatches(relationKind: "similar_implementation", minScore: 0.8) {
+      overview
       schema
     }
   }
@@ -727,7 +828,7 @@ fn compile_slim_select_artefacts_preserves_explicit_include_unresolved_false() {
 #[test]
 fn compile_slim_select_artefacts_tests_maps_stage_arguments() {
     let parsed = parse_devql_query(
-        r#"selectArtefacts(path:"src/main.rs")->tests(min_confidence:0.8,linkage_source:"coverage")->select(summary,schema)"#,
+        r#"selectArtefacts(path:"src/main.rs")->tests(min_confidence:0.8,linkage_source:"coverage")->select(overview,schema)"#,
     )
     .expect("query parses");
 
@@ -739,7 +840,7 @@ fn compile_slim_select_artefacts_tests_maps_stage_arguments() {
         r#"query {
   selectArtefacts(by: { path: "src/main.rs" }) {
     tests(minConfidence: 0.8, linkageSource: "coverage") {
-      summary
+      overview
       schema
     }
   }
@@ -887,6 +988,14 @@ fn compile_tests_stage_defaults_to_covering_test_line_range_fields() {
     assert!(
         graphql.contains("endLine"),
         "expected covering test endLine in compiled graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("expandHint"),
+        "expected tests summary expandHint in compiled graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("template"),
+        "expected tests summary expandHint template in compiled graphql: {graphql}"
     );
     assert!(
         !graphql.contains("confidence"),

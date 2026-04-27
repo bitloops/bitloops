@@ -12,7 +12,6 @@ Feature: Cross-capability deterministic smoke
     And I add semantic clone fixtures in bitloops
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
-    And I run EnableCLI for bitloops
     And I configure semantic clones with fake embeddings runtime in bitloops
     And I run DevQL init in bitloops
     And DevQL pack health for semantic clones is ready in bitloops
@@ -31,3 +30,8 @@ Feature: Cross-capability deterministic smoke
     And DevQL deps query for "UserService.createUser" with direction "in" and asOf latest commit returns at least 1 result in bitloops
     And TestHarness query for "UserService.createUser" at current workspace state with view "summary" returns results in bitloops
     And DevQL clones query for "renderInvoice" returns at least 1 result in bitloops
+
+  @devql @integration @develop_gate @devql_search
+  Scenario: Unified selectArtefacts search remains queryable across fuzzy and semantic lanes
+    Then DevQL selectArtefacts search for "rendrInvoice()" returns symbol "src/render/render-invoice.ts::renderInvoice" in bitloops
+    And DevQL selectArtefacts search for "invoice document renderer" returns at least 1 result in bitloops

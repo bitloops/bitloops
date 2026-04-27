@@ -28,6 +28,7 @@ impl EdgeKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum, Default)]
+#[graphql(name = "DependenciesDirection")]
 pub enum DepsDirection {
     #[default]
     Out,
@@ -36,6 +37,7 @@ pub enum DepsDirection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, InputObject)]
+#[graphql(name = "DependenciesFilterInput")]
 pub struct DepsFilterInput {
     pub kind: Option<EdgeKind>,
     #[graphql(default)]
@@ -68,6 +70,7 @@ mod tests {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, InputObject, Default)]
+#[graphql(name = "DependenciesSummaryFilterInput")]
 pub struct DepsSummaryFilterInput {
     pub kind: Option<EdgeKind>,
     pub direction: Option<DepsDirection>,
@@ -76,6 +79,7 @@ pub struct DepsSummaryFilterInput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, SimpleObject)]
+#[graphql(name = "DependenciesSummaryKindCounts")]
 pub struct DepsSummaryKindCounts {
     pub imports: i32,
     pub calls: i32,
@@ -108,6 +112,7 @@ impl DepsSummaryKindCounts {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, SimpleObject)]
+#[graphql(name = "DependenciesSummary")]
 pub struct DepsSummary {
     pub total_count: i32,
     pub incoming_count: i32,

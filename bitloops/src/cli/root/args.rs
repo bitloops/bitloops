@@ -12,6 +12,14 @@ pub struct DisableArgs {
     /// Deprecated: the nearest discovered project policy is edited automatically.
     #[arg(long, default_value_t = false)]
     pub project: bool,
+
+    /// Disable capture for this Bitloops project.
+    #[arg(long, default_value_t = false)]
+    pub capture: bool,
+
+    /// Disable the repo-local DevQL guidance surface for configured agents.
+    #[arg(long = "devql-guidance", default_value_t = false)]
+    pub devql_guidance: bool,
 }
 
 #[derive(Args, Debug, Clone, Default)]

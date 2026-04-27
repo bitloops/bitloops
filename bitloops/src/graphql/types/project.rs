@@ -12,8 +12,7 @@ use super::{
     CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
     ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
     DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
-    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    TemporalScope, TestHarnessCommitSummary, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -130,6 +129,7 @@ impl Project {
         ))
     }
 
+    #[graphql(name = "dependencies")]
     async fn deps(
         &self,
         ctx: &Context<'_>,
@@ -336,6 +336,8 @@ impl Project {
         )
     }
 
+    // Temporarily hidden from the typed GraphQL surface until coverage is refreshed.
+    /*
     async fn coverage(
         &self,
         ctx: &Context<'_>,
@@ -370,6 +372,7 @@ impl Project {
             .map_err(|err| map_stage_adapter_error("project coverage", err))?,
         )
     }
+    */
 
     #[graphql(name = "testsSummary")]
     async fn tests_summary(&self, ctx: &Context<'_>) -> Result<TestHarnessCommitSummary> {
