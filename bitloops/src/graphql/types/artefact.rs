@@ -527,8 +527,8 @@ impl Artefact {
                 None,
                 stage_limit(first)?,
             )
-                .await
-                .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
+            .await
+            .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
     }
 

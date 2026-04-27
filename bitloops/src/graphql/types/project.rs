@@ -12,8 +12,8 @@ use super::{
     CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
     ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
     DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
-    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult,
-    TestHarnessTestsResult, paginate_items,
+    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -367,8 +367,8 @@ impl Project {
                 None,
                 stage_limit(first)?,
             )
-                .await
-                .map_err(|err| map_stage_adapter_error("project coverage", err))?,
+            .await
+            .map_err(|err| map_stage_adapter_error("project coverage", err))?,
         )
     }
 

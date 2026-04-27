@@ -1295,9 +1295,18 @@ async fn devql_graphql_test_harness_pack_fields_resolve_typed_results() {
         json!("static_analysis")
     );
     assert_eq!(node["tests"][0]["summary"]["totalCoveringTests"], json!(1));
-    assert_eq!(node["coverage"][0]["artefact"]["artefactId"], json!("artefact::caller"));
-    assert_eq!(node["coverage"][0]["coverage"]["coverageSource"], json!("lcov"));
-    assert_eq!(node["coverage"][0]["coverage"]["lineCoveragePct"], json!(50.0));
+    assert_eq!(
+        node["coverage"][0]["artefact"]["artefactId"],
+        json!("artefact::caller")
+    );
+    assert_eq!(
+        node["coverage"][0]["coverage"]["coverageSource"],
+        json!("lcov")
+    );
+    assert_eq!(
+        node["coverage"][0]["coverage"]["lineCoveragePct"],
+        json!(50.0)
+    );
     assert_eq!(
         node["coverage"][0]["summary"]["uncoveredLineCount"],
         json!(1)
