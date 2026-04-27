@@ -13,6 +13,7 @@ use super::sql::{
     build_active_embedding_setup_lookup_sql, build_current_repo_embedding_states_sql,
     build_current_repo_semantic_clone_coverage_sql, build_current_semantic_summary_lookup_sql,
     build_semantic_summary_lookup_sql, build_symbol_embedding_index_state_sql,
+    build_symbol_embedding_index_states_sql,
 };
 
 pub(crate) async fn load_active_embedding_setup(
@@ -100,6 +101,26 @@ pub(crate) async fn load_symbol_embedding_index_state(
     Ok(parse_symbol_embedding_index_state_rows(&rows))
 }
 
+pub(crate) async fn load_symbol_embedding_index_states(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
+) -> Result<HashMap<String, embeddings::SymbolEmbeddingIndexState>> {
+    if artefact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = relational
+        .query_rows(&build_symbol_embedding_index_states_sql(
+            artefact_ids,
+            "symbol_embeddings",
+            representation_kind,
+            setup_fingerprint,
+        ))
+        .await?;
+    Ok(parse_symbol_embedding_index_state_map_rows(&rows))
+}
+
 pub(crate) async fn load_current_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
@@ -176,6 +197,27 @@ pub(crate) fn parse_symbol_embedding_index_state_rows(
             .and_then(Value::as_str)
             .map(str::to_string),
     }
+}
+
+fn parse_symbol_embedding_index_state_map_rows(
+    rows: &[Value],
+) -> HashMap<String, embeddings::SymbolEmbeddingIndexState> {
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
+            continue;
+        };
+        out.insert(
+            artefact_id.to_string(),
+            embeddings::SymbolEmbeddingIndexState {
+                embedding_hash: row
+                    .get("embedding_hash")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
+        );
+    }
+    out
 }
 
 async fn current_repo_semantic_clone_rows_are_complete(

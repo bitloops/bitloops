@@ -22,6 +22,30 @@ WHERE artefact_id = '{artefact_id}' AND representation_kind = '{representation_k
     )
 }
 
+pub(super) fn build_symbol_embedding_index_states_sql(
+    artefact_ids: &[String],
+    table: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
+) -> String {
+    let artefact_filter = if artefact_ids.is_empty() {
+        "1 = 0".to_string()
+    } else {
+        format!("artefact_id IN ({})", sql_string_list_pg(artefact_ids))
+    };
+    format!(
+        "SELECT artefact_id, embedding_input_hash AS embedding_hash \
+FROM {table} \
+WHERE {artefact_filter} AND {representation_predicate} \
+  AND setup_fingerprint = '{setup_fingerprint}'",
+        table = table,
+        artefact_filter = artefact_filter,
+        representation_predicate =
+            representation_kind_sql_predicate("representation_kind", representation_kind),
+        setup_fingerprint = esc_pg(setup_fingerprint),
+    )
+}
+
 pub(super) fn build_active_embedding_setup_lookup_sql(
     repo_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,

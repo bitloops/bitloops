@@ -1,4 +1,4 @@
-use super::storage::parse_symbol_embedding_index_state_rows;
+use super::storage::{load_symbol_embedding_index_states, parse_symbol_embedding_index_state_rows};
 use super::*;
 use crate::host::devql::esc_pg;
 use crate::host::devql::{sqlite_exec_path_allow_create, sqlite_query_rows_path};
@@ -524,6 +524,52 @@ async fn semantic_embedding_loads_index_state_from_relational_storage() {
     .expect("load embedding state");
 
     assert_eq!(state.embedding_hash.as_deref(), Some("hash-1"));
+}
+
+#[tokio::test]
+async fn semantic_embedding_bulk_loads_index_states_from_relational_storage() {
+    let setup_fingerprint = test_setup_fingerprint("voyage", "voyage-code-3", 1024);
+    let relational = sqlite_relational_with_schema(&format!(
+        "{schema}
+        INSERT INTO symbol_embeddings (
+            artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+        ) VALUES
+            ('artefact-1', 'repo-1', 'blob-1', 'code', '{setup_fingerprint}', 'voyage', 'voyage-code-3', 1024, 'hash-1', '[0.1,0.2,0.3]'),
+            ('artefact-2', 'repo-1', 'blob-2', 'code', '{setup_fingerprint}', 'voyage', 'voyage-code-3', 1024, 'hash-2', '[0.2,0.3,0.4]'),
+            ('summary-1', 'repo-1', 'blob-1', 'summary', '{setup_fingerprint}', 'voyage', 'voyage-code-3', 1024, 'summary-hash', '[0.3,0.4,0.5]');
+        ",
+        schema = schema::semantic_embeddings_sqlite_schema_sql(),
+        setup_fingerprint = setup_fingerprint,
+    ))
+    .await;
+
+    let states = load_symbol_embedding_index_states(
+        &relational,
+        &[
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "missing".to_string(),
+        ],
+        embeddings::EmbeddingRepresentationKind::Code,
+        &setup_fingerprint,
+    )
+    .await
+    .expect("bulk load embedding states");
+
+    assert_eq!(
+        states
+            .get("artefact-1")
+            .and_then(|state| state.embedding_hash.as_deref()),
+        Some("hash-1")
+    );
+    assert_eq!(
+        states
+            .get("artefact-2")
+            .and_then(|state| state.embedding_hash.as_deref()),
+        Some("hash-2")
+    );
+    assert!(!states.contains_key("missing"));
+    assert!(!states.contains_key("summary-1"));
 }
 
 #[tokio::test]

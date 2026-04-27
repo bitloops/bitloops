@@ -196,6 +196,7 @@ impl EnrichmentCoordinator {
             }
         };
         let prepare_ms = prepare_started.elapsed().as_millis() as u64;
+        let prepare_timings = prepared.timings;
         let flush_started = Instant::now();
         let relational_store =
             DefaultRelationalStore::open_local_for_roots(&batch.config_root, &batch.repo_root)?;
@@ -223,13 +224,21 @@ impl EnrichmentCoordinator {
         if let Err(err) = flush_result {
             requeue_embedding_mailbox_batch(&self.workplane_store, &batch, 5, &format!("{err:#}"))?;
             log::warn!(
-                "semantic mailbox batch completed: pipeline=embedding repo_id={} representation_kind={} leased_count={} expanded_count={} queue_wait_ms={} prepare_ms={} flush_ms={} total_ms={} attempts={} outcome=retry_scheduled retry_in_ms=5000",
+                "semantic mailbox batch completed: pipeline=embedding repo_id={} representation_kind={} leased_count={} expanded_count={} queue_wait_ms={} prepare_ms={} prepare_config_ms={} prepare_input_ms={} prepare_summary_ms={} prepare_freshness_ms={} prepare_embedding_ms={} prepare_sql_ms={} prepare_setup_ms={} prepare_total_ms={} flush_ms={} total_ms={} attempts={} outcome=retry_scheduled retry_in_ms=5000",
                 batch.repo_id,
                 batch.representation_kind,
                 batch.items.len(),
                 expanded_count,
                 queue_wait_ms,
                 prepare_ms,
+                prepare_timings.config_ms,
+                prepare_timings.input_ms,
+                prepare_timings.summary_ms,
+                prepare_timings.freshness_ms,
+                prepare_timings.embedding_ms,
+                prepare_timings.sql_ms,
+                prepare_timings.setup_ms,
+                prepare_timings.total_ms,
                 flush_ms,
                 prepare_ms.saturating_add(flush_ms),
                 attempts,
@@ -238,13 +247,21 @@ impl EnrichmentCoordinator {
         }
 
         log::info!(
-            "semantic mailbox batch completed: pipeline=embedding repo_id={} representation_kind={} leased_count={} expanded_count={} queue_wait_ms={} prepare_ms={} flush_ms={} total_ms={} attempts={} outcome=completed",
+            "semantic mailbox batch completed: pipeline=embedding repo_id={} representation_kind={} leased_count={} expanded_count={} queue_wait_ms={} prepare_ms={} prepare_config_ms={} prepare_input_ms={} prepare_summary_ms={} prepare_freshness_ms={} prepare_embedding_ms={} prepare_sql_ms={} prepare_setup_ms={} prepare_total_ms={} flush_ms={} total_ms={} attempts={} outcome=completed",
             batch.repo_id,
             batch.representation_kind,
             batch.items.len(),
             expanded_count,
             queue_wait_ms,
             prepare_ms,
+            prepare_timings.config_ms,
+            prepare_timings.input_ms,
+            prepare_timings.summary_ms,
+            prepare_timings.freshness_ms,
+            prepare_timings.embedding_ms,
+            prepare_timings.sql_ms,
+            prepare_timings.setup_ms,
+            prepare_timings.total_ms,
             flush_ms,
             prepare_ms.saturating_add(flush_ms),
             attempts,

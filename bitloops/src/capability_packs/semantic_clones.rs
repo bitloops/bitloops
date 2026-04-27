@@ -33,9 +33,10 @@ pub(crate) use stage_embeddings::{
     init_sqlite_semantic_embeddings_schema, load_active_embedding_setup,
     load_current_repo_embedding_states, load_current_semantic_summary_map,
     load_current_symbol_embedding_index_state, load_semantic_summary_map,
-    load_symbol_embedding_index_state, persist_active_embedding_setup,
-    refresh_current_repo_symbol_embeddings_and_clone_edges, semantic_embeddings_sqlite_schema_sql,
-    upsert_current_symbol_embedding_rows, upsert_symbol_embedding_rows,
+    load_symbol_embedding_index_state, load_symbol_embedding_index_states,
+    persist_active_embedding_setup, refresh_current_repo_symbol_embeddings_and_clone_edges,
+    semantic_embeddings_sqlite_schema_sql, upsert_current_symbol_embedding_rows,
+    upsert_symbol_embedding_rows,
 };
 #[allow(unused_imports)]
 pub(crate) use stage_search_documents::{

@@ -343,6 +343,7 @@ mod tests {
     };
     use crate::runtime_presentation::{
         INIT_CODE_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_SECTION_TITLE,
+        INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE,
     };
 
     fn lane_with_progress(
@@ -633,6 +634,58 @@ mod tests {
         assert_eq!(
             compact_lane_detail(INIT_CODE_EMBEDDINGS_SECTION_TITLE, &lane),
             Some("Preparing embedding batches".to_string())
+        );
+    }
+
+    #[test]
+    fn compact_summary_embeddings_waiting_for_summaries_hides_progress_percent() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "waiting".to_string(),
+            waiting_reason: Some("waiting_for_summaries".to_string()),
+            detail: None,
+            activity_label: Some("Waiting for summaries to be ready".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 1410,
+                in_memory_completed: 0,
+                total: 3335,
+                remaining: 1925,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 1410,
+        };
+        let render_context = LaneRenderContext {
+            spinner: "spin",
+            tick: "tick",
+            spinner_index: 0,
+            terminal_width: Some(80),
+        };
+
+        let lines = render_compact_lane(
+            INIT_SUMMARY_EMBEDDINGS_SECTION_TITLE,
+            &lane,
+            "Creating summary embeddings",
+            None,
+            None,
+            30,
+            &render_context,
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert!(
+            !lines[0].contains('%'),
+            "waiting dependency heading should not show a progress percent: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("Waiting for summaries to be ready"),
+            "unexpected status line: {}",
+            lines[1]
         );
     }
 
