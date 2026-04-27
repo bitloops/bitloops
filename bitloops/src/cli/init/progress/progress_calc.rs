@@ -123,17 +123,14 @@ fn progress_summary(
 ) -> Option<(f64, String)> {
     let counts = lane_progress_counts(lane.progress.as_ref()?)?;
     let ratio = (counts.visible_completed as f64 / counts.total as f64).clamp(0.0, 1.0);
+    let percent = lane_progress_percent(counts.visible_completed, counts.total);
 
     if title == INIT_SUMMARIES_LANE_LABEL && counts.in_memory_completed > 0 {
         return Some((
             ratio,
             format!(
                 " {:>3}% {} of {} summaries generated · {} persisted · {} left",
-                (ratio * 100.0).round() as usize,
-                counts.visible_completed,
-                counts.total,
-                counts.completed,
-                counts.remaining
+                percent, counts.visible_completed, counts.total, counts.completed, counts.remaining
             ),
         ));
     }
@@ -143,10 +140,7 @@ fn progress_summary(
         if title == INIT_CODE_EMBEDDINGS_LANE_LABEL {
             format!(
                 " {:>3}% {} of {} source artefacts indexed · {} left",
-                (ratio * 100.0).round() as usize,
-                counts.completed,
-                counts.total,
-                counts.remaining
+                percent, counts.completed, counts.total, counts.remaining
             )
         } else {
             let noun = if title == INIT_SUMMARIES_LANE_LABEL {
@@ -158,14 +152,20 @@ fn progress_summary(
             };
             format!(
                 " {:>3}% {} of {} {} ready · {} left",
-                (ratio * 100.0).round() as usize,
-                counts.completed,
-                counts.total,
-                noun,
-                counts.remaining
+                percent, counts.completed, counts.total, noun, counts.remaining
             )
         },
     ))
+}
+
+fn lane_progress_percent(completed: u64, total: u64) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    if completed >= total {
+        return 100;
+    }
+    (((completed as f64 / total as f64) * 100.0).floor() as usize).min(99)
 }
 
 pub(crate) fn lane_progress(
@@ -254,7 +254,7 @@ fn is_dependency_waiting_reason(reason: &str) -> bool {
 
 pub(crate) fn lane_status_icon<'a>(status: &str, spinner: &'a str, tick: &'a str) -> &'a str {
     match status.to_ascii_lowercase().as_str() {
-        "completed" | "completed_with_warnings" | "skipped" => tick,
+        "completed" | "completed_with_warnings" | "skipped" | "warning" => tick,
         _ => spinner,
     }
 }
@@ -316,8 +316,39 @@ mod tests {
     }
 
     #[test]
-    fn warning_lane_status_icon_uses_spinner() {
-        assert_eq!(lane_status_icon("warning", "spin", "tick"), "spin");
+    fn warning_lane_status_icon_uses_terminal_icon() {
+        assert_eq!(lane_status_icon("warning", "spin", "tick"), "tick");
+    }
+
+    #[test]
+    fn lane_progress_does_not_round_incomplete_progress_to_100_percent() {
+        let lane = RuntimeInitLaneGraphqlRecord {
+            status: "running".to_string(),
+            waiting_reason: None,
+            detail: Some("Generating summaries".to_string()),
+            activity_label: Some("Generating summaries".to_string()),
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed: 3333,
+                in_memory_completed: 0,
+                total: 3335,
+                remaining: 2,
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 3333,
+        };
+
+        let (_ratio, summary) = lane_progress(INIT_SUMMARIES_LANE_LABEL, &lane);
+
+        assert!(
+            summary.starts_with("  99%"),
+            "unexpected progress summary: {summary}"
+        );
     }
 
     #[test]

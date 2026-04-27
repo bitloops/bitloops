@@ -20,6 +20,7 @@ use crate::daemon::{
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 use super::coordinator::InitRuntimeCoordinator;
+use super::coordinator::selected_lanes_have_warning_status;
 use super::embedding_freshness::EmbeddingFreshnessState;
 use super::lanes::{
     derive_code_embeddings_lane, derive_ingest_lane, derive_session_status, derive_summaries_lane,
@@ -1476,6 +1477,96 @@ fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
         Some(
             "Summary generation finished without producing current summaries for every eligible artefact"
         )
+    );
+}
+
+#[test]
+fn selected_lane_warning_statuses_count_as_session_warnings() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: false,
+            run_summaries: true,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: None,
+            summaries_bootstrap: Some(SummaryBootstrapRequest {
+                action: SummaryBootstrapAction::ConfigureCloud,
+                message: None,
+                model_name: None,
+                gateway_url_override: None,
+            }),
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: None,
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: None,
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: None,
+        summary_bootstrap_completion_seq: Some(2),
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let summary_run = SummaryBootstrapRunRecord {
+        run_id: "summary-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: "init-session-1".to_string(),
+        request: SummaryBootstrapRequest {
+            action: SummaryBootstrapAction::ConfigureCloud,
+            message: None,
+            model_name: None,
+            gateway_url_override: None,
+        },
+        status: SummaryBootstrapStatus::Completed,
+        progress: SummaryBootstrapProgress::default(),
+        result: None,
+        error: None,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 10,
+        completed_at_unix: Some(10),
+    };
+    let summaries_lane = derive_summaries_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        Some(&summary_run),
+        StatusCounts::default(),
+        &SessionWorkplaneStats::default(),
+        Some(InitRuntimeLaneProgressView {
+            completed: 3333,
+            in_memory_completed: 0,
+            total: 3335,
+            remaining: 2,
+        }),
+    );
+
+    assert_eq!(summaries_lane.status, "warning");
+    assert!(selected_lanes_have_warning_status(&[(
+        session.selections.run_summaries,
+        &summaries_lane,
+    )]));
+    assert_eq!(
+        derive_session_status(false, false, true, None, true),
+        "completed_with_warnings"
     );
 }
 

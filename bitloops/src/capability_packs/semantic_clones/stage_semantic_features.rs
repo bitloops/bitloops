@@ -23,6 +23,7 @@ pub(crate) use self::schema::{
     init_sqlite_semantic_features_schema,
 };
 pub(crate) use self::storage::{
+    build_conditional_current_semantic_persist_existing_rows_sql,
     build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
     build_semantic_persist_rows_sql, parse_semantic_index_state_rows,
     semantic_features_sqlite_schema_sql,

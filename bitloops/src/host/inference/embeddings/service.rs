@@ -76,33 +76,60 @@ impl EmbeddingService for BitloopsEmbeddingsIpcService {
         self.cache_key.clone()
     }
 
-    fn embed(&self, input: &str, _input_type: EmbeddingInputType) -> Result<Vec<f32>> {
-        let input = input.trim();
-        if input.is_empty() {
-            bail!("embedding input cannot be empty");
+    fn embed(&self, input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>> {
+        let mut vectors = self.embed_batch(&[input.to_string()], input_type)?;
+        vectors
+            .drain(..)
+            .next()
+            .ok_or_else(|| anyhow!("standalone embeddings runtime returned no vectors"))
+    }
+
+    fn embed_batch(
+        &self,
+        inputs: &[String],
+        _input_type: EmbeddingInputType,
+    ) -> Result<Vec<Vec<f32>>> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
         }
 
-        let texts = vec![input.to_string()];
-        let mut vectors = self.shared_session.embed(&texts).with_context(|| {
+        let texts = inputs
+            .iter()
+            .map(|input| input.trim())
+            .map(|input| {
+                if input.is_empty() {
+                    bail!("embedding input cannot be empty");
+                }
+                Ok(input.to_string())
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let vectors = self.shared_session.embed(&texts).with_context(|| {
             format!(
                 "requesting standalone `bitloops-local-embeddings` runtime for profile `{}`",
                 self.profile_name
             )
         })?;
-        let vector = vectors
-            .drain(..)
-            .next()
-            .ok_or_else(|| anyhow!("standalone embeddings runtime returned no vectors"))?;
-        if vector.is_empty() {
-            bail!("standalone embeddings runtime returned an empty vector");
-        }
-        if vector.len() != self.output_dimension {
+
+        if vectors.len() != texts.len() {
             bail!(
-                "standalone embeddings runtime returned dimension {} but expected {}",
-                vector.len(),
-                self.output_dimension
+                "standalone embeddings runtime returned {} vectors for {} inputs",
+                vectors.len(),
+                texts.len()
             );
         }
-        Ok(vector)
+        for vector in &vectors {
+            if vector.is_empty() {
+                bail!("standalone embeddings runtime returned an empty vector");
+            }
+            if vector.len() != self.output_dimension {
+                bail!(
+                    "standalone embeddings runtime returned dimension {} but expected {}",
+                    vector.len(),
+                    self.output_dimension
+                );
+            }
+        }
+        Ok(vectors)
     }
 }

@@ -66,6 +66,9 @@ while IFS= read -r line; do
         *'bitloops python embedding dimension probe'*)
           printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
           ;;
+        *'second document'*)
+          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0],[3.0,4.0]]}}\n' "$request_id"
+          ;;
         *)
 {timeout_branch}          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
           ;;
@@ -199,6 +202,30 @@ fn platform_ipc_service_injects_logged_in_token_into_requested_env_var() {
         env.contains("BITLOOPS_CUSTOM_PLATFORM_TOKEN=token-from-login"),
         "expected injected custom platform token env var, got: {env}"
     );
+}
+
+#[test]
+fn bitloops_embeddings_ipc_service_supports_batch_embed() {
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_embeddings_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    write_fake_runtime_script(&script_path, None, None);
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let service =
+        BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+            .expect("build ipc service");
+
+    let vectors = service
+        .embed_batch(
+            &["first document".to_string(), "second document".to_string()],
+            EmbeddingInputType::Document,
+        )
+        .expect("batch embed");
+
+    assert_eq!(vectors.len(), 2);
+    assert_eq!(vectors[0].len(), service.output_dimension().unwrap());
+    assert_eq!(vectors[1].len(), service.output_dimension().unwrap());
 }
 
 #[test]

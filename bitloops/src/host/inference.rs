@@ -50,6 +50,16 @@ pub trait EmbeddingService: Send + Sync {
     fn output_dimension(&self) -> Option<usize>;
     fn cache_key(&self) -> String;
     fn embed(&self, input: &str, input_type: EmbeddingInputType) -> Result<Vec<f32>>;
+    fn embed_batch(
+        &self,
+        inputs: &[String],
+        input_type: EmbeddingInputType,
+    ) -> Result<Vec<Vec<f32>>> {
+        inputs
+            .iter()
+            .map(|input| self.embed(input, input_type))
+            .collect()
+    }
 }
 
 pub trait TextGenerationService: Send + Sync {

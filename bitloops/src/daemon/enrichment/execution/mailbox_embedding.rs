@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::{
     ActiveEmbeddingRepresentationState, EmbeddingRepresentationKind,
-    build_symbol_embedding_input_hash, build_symbol_embedding_inputs, build_symbol_embedding_row,
+    build_symbol_embedding_input_hash, build_symbol_embedding_inputs, build_symbol_embedding_rows,
     resolve_embedding_setup, symbol_embeddings_require_reindex,
 };
 use crate::capability_packs::semantic_clones::runtime_config::{
@@ -145,6 +145,7 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     if !embedding_inputs.is_empty() {
         embedding_statements.push(build_embedding_setup_persist_sql(&setup));
     }
+    let mut reindex_inputs = Vec::new();
     for embedding_input in embedding_inputs {
         let state = load_symbol_embedding_index_state(
             &relational,
@@ -158,21 +159,25 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         if !symbol_embeddings_require_reindex(&state, &next_input_hash) {
             continue;
         }
-        let embedding_input_for_row = embedding_input.clone();
-        let provider_for_row = Arc::clone(&provider);
-        let row = tokio::task::spawn_blocking(move || {
-            build_symbol_embedding_row(&embedding_input_for_row, provider_for_row.as_ref())
+        reindex_inputs.push(embedding_input);
+    }
+    if !reindex_inputs.is_empty() {
+        let provider_for_rows = Arc::clone(&provider);
+        let rows = tokio::task::spawn_blocking(move || {
+            build_symbol_embedding_rows(&reindex_inputs, provider_for_rows.as_ref())
         })
         .await
-        .context("building embedding row on blocking worker")??;
-        embedding_statements.push(build_sqlite_symbol_embedding_persist_sql(&row)?);
-        if let Some(current_input) = current_by_artefact.get(&row.artefact_id) {
-            embedding_statements.push(build_current_symbol_embedding_persist_sql(
-                current_input,
-                &current_input.path,
-                &current_input.blob_sha,
-                &row,
-            )?);
+        .context("building embedding rows on blocking worker")??;
+        for row in rows {
+            embedding_statements.push(build_sqlite_symbol_embedding_persist_sql(&row)?);
+            if let Some(current_input) = current_by_artefact.get(&row.artefact_id) {
+                embedding_statements.push(build_current_symbol_embedding_persist_sql(
+                    current_input,
+                    &current_input.path,
+                    &current_input.blob_sha,
+                    &row,
+                )?);
+            }
         }
         upserted_any = true;
     }

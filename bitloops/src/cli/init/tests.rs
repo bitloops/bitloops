@@ -885,6 +885,69 @@ fn run_init_status_outputs_selected_lanes_in_json() {
 }
 
 #[test]
+fn run_init_status_json_promotes_completed_session_with_selected_warning_lane() {
+    let repo = tempfile::tempdir().expect("temp repo");
+    let session_id = "init-session-status-warning";
+    setup_git_repo(&repo);
+    let repo_id = test_repo_id(repo.path());
+
+    with_graphql_executor_hook(
+        {
+            let repo_id = repo_id.clone();
+            move |_repo_root, query, variables| {
+                assert!(query.contains("runtimeSnapshot("));
+                assert_eq!(variables["repoId"], json!(repo_id));
+                Ok(runtime_snapshot_json(
+                    repo_id.as_str(),
+                    session_id,
+                    RuntimeSessionSnapshotFixture {
+                        status: "COMPLETED",
+                        summaries_selected: true,
+                        summaries_lane_status: "WARNING",
+                        ..RuntimeSessionSnapshotFixture::default()
+                    },
+                ))
+            }
+        },
+        || {
+            let mut out = Vec::new();
+            let mut input = Cursor::new("");
+            let runtime = test_runtime();
+            runtime
+                .block_on(run_with_io_async_for_project_root(
+                    init_status_command_args(InitStatusArgs {
+                        json: true,
+                        wait: false,
+                        watch: false,
+                        session_id: None,
+                    }),
+                    repo.path(),
+                    &mut out,
+                    &mut input,
+                    None,
+                ))
+                .expect("run init status");
+
+            let payload: serde_json::Value =
+                serde_json::from_slice(&out).expect("parse init status json");
+
+            assert_eq!(
+                payload["session"]["status"],
+                json!("completed_with_warnings")
+            );
+            assert_eq!(
+                payload["session"]["statusLabel"],
+                json!("Completed with warnings")
+            );
+            assert_eq!(
+                payload["session"]["summaryText"],
+                json!("Setup tasks completed with warnings")
+            );
+        },
+    );
+}
+
+#[test]
 fn run_init_status_wait_outputs_final_terminal_json() {
     let snapshot_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
     let repo = tempfile::tempdir().expect("temp repo");

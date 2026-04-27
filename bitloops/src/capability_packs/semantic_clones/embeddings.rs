@@ -280,31 +280,59 @@ pub fn resolve_embedding_setup(provider: &dyn EmbeddingService) -> Result<Embedd
     ))
 }
 
+pub fn build_symbol_embedding_rows(
+    inputs: &[SymbolEmbeddingInput],
+    provider: &dyn EmbeddingService,
+) -> Result<Vec<SymbolEmbeddingRow>> {
+    if inputs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let setup = resolve_embedding_setup(provider)?;
+    let texts = inputs
+        .iter()
+        .map(build_symbol_embedding_text)
+        .collect::<Vec<_>>();
+    let vectors = provider.embed_batch(&texts, HostEmbeddingInputType::Document)?;
+    if vectors.len() != inputs.len() {
+        bail!(
+            "embedding provider returned {} vectors for {} inputs",
+            vectors.len(),
+            inputs.len()
+        );
+    }
+
+    inputs
+        .iter()
+        .zip(vectors)
+        .map(|(input, embedding)| {
+            if embedding.is_empty() {
+                bail!("embedding provider returned an empty vector");
+            }
+            Ok(SymbolEmbeddingRow {
+                artefact_id: input.artefact_id.clone(),
+                repo_id: input.repo_id.clone(),
+                blob_sha: input.blob_sha.clone(),
+                representation_kind: input.representation_kind,
+                setup_fingerprint: setup.setup_fingerprint.clone(),
+                provider: setup.provider.clone(),
+                model: setup.model.clone(),
+                dimension: setup.dimension,
+                embedding_input_hash: build_symbol_embedding_input_hash(input, provider),
+                embedding,
+            })
+        })
+        .collect()
+}
+
 pub fn build_symbol_embedding_row(
     input: &SymbolEmbeddingInput,
     provider: &dyn EmbeddingService,
 ) -> Result<SymbolEmbeddingRow> {
-    let setup = resolve_embedding_setup(provider)?;
-    let embedding = provider.embed(
-        &build_symbol_embedding_text(input),
-        HostEmbeddingInputType::Document,
-    )?;
-    if embedding.is_empty() {
-        bail!("embedding provider returned an empty vector");
-    }
-
-    Ok(SymbolEmbeddingRow {
-        artefact_id: input.artefact_id.clone(),
-        repo_id: input.repo_id.clone(),
-        blob_sha: input.blob_sha.clone(),
-        representation_kind: input.representation_kind,
-        setup_fingerprint: setup.setup_fingerprint.clone(),
-        provider: setup.provider,
-        model: setup.model,
-        dimension: setup.dimension,
-        embedding_input_hash: build_symbol_embedding_input_hash(input, provider),
-        embedding,
-    })
+    build_symbol_embedding_rows(std::slice::from_ref(input), provider)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("embedding provider returned no row"))
 }
 
 fn build_code_embedding_text(input: &SymbolEmbeddingInput) -> String {
@@ -512,6 +540,7 @@ fn build_embedding_setup_fingerprint(provider: &str, model: &str, dimension: usi
 mod tests {
     use super::*;
     use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct MockEmbeddingProvider;
 
@@ -564,6 +593,66 @@ mod tests {
         }
     }
 
+    struct CountingEmbeddingProvider {
+        dimension: usize,
+        embed_calls: AtomicUsize,
+        embed_batch_calls: AtomicUsize,
+    }
+
+    impl CountingEmbeddingProvider {
+        fn new(dimension: usize) -> Self {
+            Self {
+                dimension,
+                embed_calls: AtomicUsize::new(0),
+                embed_batch_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn embed_calls(&self) -> usize {
+            self.embed_calls.load(Ordering::SeqCst)
+        }
+
+        fn embed_batch_calls(&self) -> usize {
+            self.embed_batch_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl EmbeddingService for CountingEmbeddingProvider {
+        fn provider_name(&self) -> &str {
+            "counting"
+        }
+
+        fn model_name(&self) -> &str {
+            "counting-model"
+        }
+
+        fn output_dimension(&self) -> Option<usize> {
+            Some(self.dimension)
+        }
+
+        fn cache_key(&self) -> String {
+            format!(
+                "provider=counting::model=counting-model::dimension={}",
+                self.dimension
+            )
+        }
+
+        fn embed(&self, _input: &str, _input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
+            self.embed_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![0.0; self.dimension])
+        }
+
+        fn embed_batch(
+            &self,
+            inputs: &[String],
+            input_type: HostEmbeddingInputType,
+        ) -> Result<Vec<Vec<f32>>> {
+            assert_eq!(input_type, HostEmbeddingInputType::Document);
+            self.embed_batch_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(inputs.iter().map(|_| vec![0.0; self.dimension]).collect())
+        }
+    }
+
     fn sample_input() -> SymbolEmbeddingInput {
         SymbolEmbeddingInput {
             artefact_id: "artefact-1".to_string(),
@@ -587,6 +676,14 @@ mod tests {
             parent_kind: Some("file".to_string()),
             content_hash: Some("hash-1".to_string()),
         }
+    }
+
+    fn sample_symbol_embedding_input(artefact_id: &str) -> SymbolEmbeddingInput {
+        let mut input = sample_input();
+        input.artefact_id = artefact_id.to_string();
+        input.name = artefact_id.replace('-', "_");
+        input.symbol_fqn = format!("src/services/user.ts::{}", input.name);
+        input
     }
 
     #[test]
@@ -753,6 +850,21 @@ mod tests {
         assert_eq!(row.model, "voyage-code-3");
         assert_eq!(row.dimension, 3);
         assert_eq!(row.embedding, vec![0.1_f32, 0.2_f32, 0.3_f32]);
+    }
+
+    #[test]
+    fn build_symbol_embedding_rows_uses_provider_batch_once() {
+        let provider = CountingEmbeddingProvider::new(4);
+        let inputs = vec![
+            sample_symbol_embedding_input("artefact-1"),
+            sample_symbol_embedding_input("artefact-2"),
+        ];
+
+        let rows = build_symbol_embedding_rows(&inputs, &provider).expect("build embedding rows");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(provider.embed_batch_calls(), 1);
+        assert_eq!(provider.embed_calls(), 0);
     }
 
     #[test]

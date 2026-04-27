@@ -48,6 +48,7 @@ pub(crate) use stage_search_documents::{
 };
 #[allow(unused_imports)]
 pub(crate) use stage_semantic_features::{
+    build_conditional_current_semantic_persist_existing_rows_sql,
     build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
     build_semantic_persist_rows_sql, clear_current_semantic_feature_rows_for_path,
     ensure_required_llm_summary_output, ensure_semantic_features_schema,

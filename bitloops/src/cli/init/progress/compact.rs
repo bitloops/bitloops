@@ -129,8 +129,30 @@ fn compact_lane_percent(
     task: Option<&crate::cli::devql::graphql::TaskGraphqlRecord>,
     summary_run: Option<&crate::cli::devql::graphql::RuntimeSummaryBootstrapRunGraphqlRecord>,
 ) -> Option<usize> {
-    compact_lane_ratio(title, lane, task, summary_run)
-        .map(|ratio| ((ratio * 100.0).round() as usize).min(100))
+    if let Some(task) = task.filter(|task| is_active_runtime_status(task.status.as_str())) {
+        return task_progress(task).0.map(compact_ratio_percent);
+    }
+    if let Some(run) = summary_run.filter(|run| is_active_runtime_status(run.status.as_str())) {
+        return summary_progress(run).0.map(compact_ratio_percent);
+    }
+    if let Some(counts) = lane.progress.as_ref().and_then(lane_progress_counts) {
+        return Some(compact_percent(counts.visible_completed, counts.total));
+    }
+    compact_lane_ratio(title, lane, task, summary_run).map(compact_ratio_percent)
+}
+
+fn compact_ratio_percent(ratio: f64) -> usize {
+    ((ratio * 100.0).round() as usize).min(100)
+}
+
+fn compact_percent(completed: u64, total: u64) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    if completed >= total {
+        return 100;
+    }
+    (((completed as f64 / total as f64) * 100.0).floor() as usize).min(99)
 }
 
 pub(crate) fn compact_lane_in_memory_ratio(
@@ -241,12 +263,12 @@ fn compact_ready_summary(
 ) -> Option<String> {
     let counts = lane_progress_counts(lane.progress.as_ref()?)?;
     if include_percent {
-        let ratio = (counts.visible_completed as f64 / counts.total as f64).clamp(0.0, 1.0);
+        let percent = compact_percent(counts.visible_completed, counts.total);
         let total_width = counts.total.to_string().len();
         if counts.in_memory_completed > 0 {
             return Some(format!(
                 "{:>3}% · {} / {} generated · {} persisted",
-                (ratio * 100.0).round() as usize,
+                percent,
                 compact_count_column(counts.visible_completed, total_width),
                 counts.total,
                 compact_count_column(counts.completed, total_width),
@@ -254,7 +276,7 @@ fn compact_ready_summary(
         }
         return Some(format!(
             "{:>3}% · {} / {} ready",
-            (ratio * 100.0).round() as usize,
+            percent,
             compact_count_column(counts.completed, total_width),
             counts.total
         ));
@@ -312,15 +334,130 @@ fn compact_count_column(value: u64, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LaneRenderContext, compact_lane_detail, compact_queue_status_text, render_compact_lane,
+        LaneRenderContext, compact_lane_detail, compact_queue_status_text, compact_ready_summary,
+        render_compact_lane,
     };
     use crate::cli::devql::graphql::{
         RuntimeInitLaneGraphqlRecord, RuntimeInitLaneProgressGraphqlRecord,
-        RuntimeInitLaneQueueGraphqlRecord,
+        RuntimeInitLaneQueueGraphqlRecord, TaskGraphqlRecord,
     };
     use crate::runtime_presentation::{
         INIT_CODE_EMBEDDINGS_SECTION_TITLE, INIT_SUMMARIES_SECTION_TITLE,
     };
+
+    fn lane_with_progress(
+        status: &str,
+        completed: i32,
+        in_memory_completed: i32,
+        total: i32,
+    ) -> RuntimeInitLaneGraphqlRecord {
+        RuntimeInitLaneGraphqlRecord {
+            status: status.to_string(),
+            waiting_reason: None,
+            detail: None,
+            activity_label: None,
+            task_id: None,
+            run_id: None,
+            progress: Some(RuntimeInitLaneProgressGraphqlRecord {
+                completed,
+                in_memory_completed,
+                total,
+                remaining: total.saturating_sub(completed + in_memory_completed),
+            }),
+            queue: RuntimeInitLaneQueueGraphqlRecord::default(),
+            warnings: Vec::new(),
+            pending_count: 0,
+            running_count: 0,
+            failed_count: 0,
+            completed_count: 0,
+        }
+    }
+
+    fn active_sync_task(paths_completed: i32, paths_total: i32) -> TaskGraphqlRecord {
+        serde_json::from_value(serde_json::json!({
+            "taskId": "sync-task-1",
+            "repoId": "repo-1",
+            "repoName": "bitloops",
+            "repoIdentity": "local/bitloops",
+            "kind": "SYNC",
+            "source": "init",
+            "status": "RUNNING",
+            "submittedAtUnix": 1,
+            "startedAtUnix": 2,
+            "updatedAtUnix": 3,
+            "completedAtUnix": serde_json::Value::Null,
+            "queuePosition": 1,
+            "tasksAhead": 0,
+            "error": serde_json::Value::Null,
+            "syncSpec": serde_json::Value::Null,
+            "ingestSpec": serde_json::Value::Null,
+            "embeddingsBootstrapSpec": serde_json::Value::Null,
+            "summaryBootstrapSpec": serde_json::Value::Null,
+            "syncProgress": {
+                "phase": "extracting_paths",
+                "currentPath": "src/lib.rs",
+                "pathsTotal": paths_total,
+                "pathsCompleted": paths_completed,
+                "pathsRemaining": paths_total.saturating_sub(paths_completed),
+                "pathsUnchanged": 0,
+                "pathsAdded": 0,
+                "pathsChanged": 0,
+                "pathsRemoved": 0,
+                "cacheHits": 0,
+                "cacheMisses": 0,
+                "parseErrors": 0
+            },
+            "ingestProgress": serde_json::Value::Null,
+            "embeddingsBootstrapProgress": serde_json::Value::Null,
+            "summaryBootstrapProgress": serde_json::Value::Null,
+            "syncResult": serde_json::Value::Null,
+            "ingestResult": serde_json::Value::Null,
+            "embeddingsBootstrapResult": serde_json::Value::Null,
+            "summaryBootstrapResult": serde_json::Value::Null
+        }))
+        .expect("task record")
+    }
+
+    #[test]
+    fn compact_ready_summary_does_not_round_incomplete_progress_to_100_percent() {
+        let lane = lane_with_progress("running", 3333, 0, 3335);
+
+        let summary =
+            compact_ready_summary(INIT_SUMMARIES_SECTION_TITLE, &lane, true).expect("summary text");
+
+        assert!(
+            summary.starts_with(" 99% · 3333 / 3335 ready"),
+            "unexpected summary: {summary}"
+        );
+    }
+
+    #[test]
+    fn compact_lane_percent_matches_active_task_progress_when_lane_counts_exist() {
+        let lane = lane_with_progress("running", 3333, 0, 3335);
+        let task = active_sync_task(10, 100);
+        let render_context = LaneRenderContext {
+            spinner: "spin",
+            tick: "tick",
+            spinner_index: 0,
+            terminal_width: Some(80),
+        };
+
+        let lines = render_compact_lane(
+            INIT_SUMMARIES_SECTION_TITLE,
+            &lane,
+            "Generating summaries",
+            Some(&task),
+            None,
+            22,
+            &render_context,
+        );
+
+        assert!(
+            lines[0].ends_with("  10%"),
+            "unexpected heading: {}",
+            lines[0]
+        );
+    }
 
     #[test]
     fn compact_queue_status_text_keeps_all_queue_columns_visible() {

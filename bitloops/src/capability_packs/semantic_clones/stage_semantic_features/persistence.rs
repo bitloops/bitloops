@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 use super::schema::ensure_semantic_features_schema;
 use super::storage::{
+    build_conditional_current_semantic_persist_existing_rows_sql,
     build_conditional_current_semantic_persist_rows_sql, build_current_semantic_persist_rows_sql,
     build_delete_current_symbol_features_sql, build_delete_current_symbol_semantics_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
@@ -35,6 +36,12 @@ pub(crate) async fn upsert_semantic_feature_rows(
             &next_input_hash,
             summary_provider.requires_model_output(),
         ) {
+            persist_existing_semantic_feature_rows_to_current_for_matching_input(
+                relational,
+                input,
+                &next_input_hash,
+            )
+            .await?;
             stats.skipped += 1;
             continue;
         }
@@ -136,6 +143,35 @@ async fn persist_semantic_feature_rows(
             relational.dialect(),
         )?)
         .await
+}
+
+pub(super) async fn persist_existing_semantic_feature_rows_to_current_for_matching_input(
+    relational: &RelationalStorage,
+    input: &semantic::SemanticFeatureInput,
+    semantic_features_input_hash: &str,
+) -> Result<()> {
+    match relational
+        .exec_serialized(
+            &build_conditional_current_semantic_persist_existing_rows_sql(
+                input,
+                semantic_features_input_hash,
+                relational.dialect(),
+            )?,
+        )
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = err.to_string();
+            if message.contains("no such table: artefacts_current")
+                || message.contains("no such table: current_file_state")
+            {
+                return Ok(());
+            }
+            Err(err)
+                .context("repairing current semantic feature rows from existing historical rows")
+        }
+    }
 }
 
 pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(

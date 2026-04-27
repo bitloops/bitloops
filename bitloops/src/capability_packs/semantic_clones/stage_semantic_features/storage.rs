@@ -611,6 +611,44 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
     ))
 }
 
+pub(crate) fn build_conditional_current_semantic_persist_existing_rows_sql(
+    input: &semantic::SemanticFeatureInput,
+    semantic_features_input_hash: &str,
+    dialect: RelationalDialect,
+) -> Result<String> {
+    let generated_at_sql = semantic_generated_at_now_sql(dialect);
+    let target_select_for_semantics = build_current_semantic_target_select_sql(input);
+    let target_select_for_features = build_current_semantic_target_select_sql(input);
+
+    Ok(format!(
+        "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
+SELECT target.artefact_id, target.repo_id, target.path, target.content_id, target.symbol_id, s.semantic_features_input_hash, s.docstring_summary, s.llm_summary, s.template_summary, s.summary, s.confidence, s.source_model \
+FROM ({target_select_for_semantics}) target \
+JOIN symbol_semantics s \
+  ON s.repo_id = target.repo_id \
+ AND s.artefact_id = '{artefact_id}' \
+ AND s.blob_sha = target.content_id \
+ AND s.semantic_features_input_hash = '{input_hash}' \
+WHERE 1 = 1 \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}; \
+INSERT INTO symbol_features_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, normalized_name, normalized_signature, modifiers, identifier_tokens, normalized_body_tokens, parent_kind, context_tokens) \
+SELECT target.artefact_id, target.repo_id, target.path, target.content_id, target.symbol_id, f.semantic_features_input_hash, f.normalized_name, f.normalized_signature, f.modifiers, f.identifier_tokens, f.normalized_body_tokens, f.parent_kind, f.context_tokens \
+FROM ({target_select_for_features}) target \
+JOIN symbol_features f \
+  ON f.repo_id = target.repo_id \
+ AND f.artefact_id = '{artefact_id}' \
+ AND f.blob_sha = target.content_id \
+ AND f.semantic_features_input_hash = '{input_hash}' \
+WHERE 1 = 1 \
+ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, modifiers = EXCLUDED.modifiers, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = {generated_at}",
+        target_select_for_semantics = target_select_for_semantics,
+        target_select_for_features = target_select_for_features,
+        artefact_id = esc_pg(&input.artefact_id),
+        input_hash = esc_pg(semantic_features_input_hash),
+        generated_at = generated_at_sql,
+    ))
+}
+
 pub(super) fn build_semantic_persist_summary_sql(
     semantics: &semantic::SymbolSemanticsRow,
     semantic_features_input_hash: &str,

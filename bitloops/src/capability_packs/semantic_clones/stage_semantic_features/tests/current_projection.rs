@@ -107,6 +107,84 @@ async fn historical_semantic_upsert_does_not_overwrite_diverged_current_projecti
 }
 
 #[tokio::test]
+async fn skipped_fresh_historical_semantics_repair_missing_current_projection() {
+    let relational = sqlite_relational_with_current_projection_schema().await;
+    let input = sample_semantic_input("artefact-1", "content-1");
+    let provider = Arc::new(TestSummaryProvider);
+    let input_hash = semantic::build_semantic_feature_input_hash(&input, provider.as_ref());
+
+    relational
+        .exec(&format!(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                start_byte, end_byte, modifiers, updated_at
+            ) VALUES (
+                'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'artefact-1', 'rust',
+                'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
+            );
+            INSERT INTO current_file_state (repo_id, path, analysis_mode)
+            VALUES ('repo-1', 'src/lib.rs', 'code');
+            INSERT INTO symbol_features (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (
+                'artefact-1', 'repo-1', 'content-1', '{input_hash}',
+                'artefact_1', 'fn artefact_1()', '[]', '[]', '[]', NULL, '[]'
+            );
+            INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES (
+                'artefact-1', 'repo-1', 'content-1', '{input_hash}',
+                NULL, 'Summarises the symbol.', 'Template summary.', 'Summarises the symbol.', 0.95, 'test:model'
+            );"
+        ))
+        .await
+        .expect("seed fresh historical rows");
+
+    let stats = upsert_semantic_feature_rows(&relational, &[input], provider)
+        .await
+        .expect("repair current projection");
+
+    assert_eq!(stats.skipped, 1);
+    let current = relational
+        .query_rows(
+            "SELECT f.semantic_features_input_hash AS feature_hash,
+                    s.semantic_features_input_hash AS semantic_hash,
+                    s.llm_summary,
+                    s.source_model
+             FROM symbol_features_current f
+             JOIN symbol_semantics_current s
+               ON s.repo_id = f.repo_id
+              AND s.artefact_id = f.artefact_id
+              AND s.content_id = f.content_id
+             WHERE f.artefact_id = 'artefact-1'",
+        )
+        .await
+        .expect("load current projection");
+
+    assert_eq!(current.len(), 1);
+    assert_eq!(
+        current[0].get("feature_hash").and_then(Value::as_str),
+        Some(input_hash.as_str())
+    );
+    assert_eq!(
+        current[0].get("semantic_hash").and_then(Value::as_str),
+        Some(input_hash.as_str())
+    );
+    assert_eq!(
+        current[0].get("llm_summary").and_then(Value::as_str),
+        Some("Summarises the symbol.")
+    );
+    assert_eq!(
+        current[0].get("source_model").and_then(Value::as_str),
+        Some("test:model")
+    );
+}
+
+#[tokio::test]
 async fn historical_semantic_upsert_scopes_current_projection_matching_by_repo() {
     let relational = sqlite_relational_with_current_projection_schema().await;
     relational
