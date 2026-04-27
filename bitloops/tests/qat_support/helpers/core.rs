@@ -1262,6 +1262,16 @@ fn managed_agent_hook_marker(agent_name: &str) -> Result<&'static str> {
     })
 }
 
+fn repo_has_bitloops_git_post_commit_hook(repo_root: &Path) -> Result<bool> {
+    let post_commit_path = repo_root.join(".git").join("hooks").join("post-commit");
+    if !post_commit_path.exists() {
+        return Ok(false);
+    }
+    let post_commit_content = fs::read_to_string(&post_commit_path)
+        .with_context(|| format!("reading {}", post_commit_path.display()))?;
+    Ok(post_commit_content.contains("bitloops hooks git post-commit"))
+}
+
 fn assert_git_post_commit_hook_installed_at(repo_root: &Path) -> Result<()> {
     let post_commit_path = repo_root.join(".git").join("hooks").join("post-commit");
     ensure!(
@@ -1269,10 +1279,8 @@ fn assert_git_post_commit_hook_installed_at(repo_root: &Path) -> Result<()> {
         "expected git post-commit hook at {}",
         post_commit_path.display()
     );
-    let post_commit_content = fs::read_to_string(&post_commit_path)
-        .with_context(|| format!("reading {}", post_commit_path.display()))?;
     ensure!(
-        post_commit_content.contains("bitloops hooks git post-commit"),
+        repo_has_bitloops_git_post_commit_hook(repo_root)?,
         "missing post-commit bitloops hook in {}",
         post_commit_path.display()
     );
@@ -2762,11 +2770,13 @@ pub fn commit_for_relative_day_for_repo(
         args.insert(1, "--allow-empty");
     }
     run_git_success(world, &args, &env, "git commit relative day")?;
-    run_bitloops_success(
-        world,
-        &["hooks", "git", "post-commit"],
-        "bitloops hooks git post-commit",
-    )?;
+    if !repo_has_bitloops_git_post_commit_hook(world.repo_dir())? {
+        run_bitloops_success(
+            world,
+            &["hooks", "git", "post-commit"],
+            "bitloops hooks git post-commit",
+        )?;
+    }
     capture_head_sha(world)?;
     Ok(())
 }

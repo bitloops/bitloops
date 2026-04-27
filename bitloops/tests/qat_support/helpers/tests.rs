@@ -110,6 +110,48 @@ fn git_date_for_relative_day_uses_stable_noon_timestamp() {
 }
 
 #[test]
+fn repo_has_bitloops_git_post_commit_hook_detects_managed_hook() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let hooks_dir = dir.path().join(".git").join("hooks");
+    fs::create_dir_all(&hooks_dir).expect("create hooks dir");
+    fs::write(
+        hooks_dir.join("post-commit"),
+        "#!/bin/sh\nbitloops hooks git post-commit\n",
+    )
+    .expect("write post-commit hook");
+
+    assert!(
+        repo_has_bitloops_git_post_commit_hook(dir.path()).expect("inspect post-commit hook"),
+        "managed Bitloops post-commit hook should be detected"
+    );
+}
+
+#[test]
+fn repo_has_bitloops_git_post_commit_hook_ignores_missing_or_unmanaged_hooks() {
+    let missing_dir = tempfile::tempdir().expect("tempdir");
+    assert!(
+        !repo_has_bitloops_git_post_commit_hook(missing_dir.path())
+            .expect("inspect missing post-commit hook"),
+        "missing post-commit hook should not be treated as managed"
+    );
+
+    let unmanaged_dir = tempfile::tempdir().expect("tempdir");
+    let hooks_dir = unmanaged_dir.path().join(".git").join("hooks");
+    fs::create_dir_all(&hooks_dir).expect("create hooks dir");
+    fs::write(
+        hooks_dir.join("post-commit"),
+        "#!/bin/sh\necho custom-post-commit\n",
+    )
+    .expect("write unmanaged post-commit hook");
+
+    assert!(
+        !repo_has_bitloops_git_post_commit_hook(unmanaged_dir.path())
+            .expect("inspect unmanaged post-commit hook"),
+        "non-Bitloops post-commit hooks should not be treated as managed"
+    );
+}
+
+#[test]
 fn offline_vite_scaffold_writes_expected_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     create_offline_vite_react_ts_scaffold(dir.path()).expect("create scaffold");
