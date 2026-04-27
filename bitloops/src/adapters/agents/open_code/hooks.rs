@@ -5,7 +5,7 @@ use serde_json::to_string;
 
 use super::plugin::{
     BITLOOPS_CMD_PLACEHOLDER, BOOTSTRAP_CONTEXT_PLACEHOLDER, PLUGIN_TEMPLATE,
-    session_bootstrap_text,
+    TURN_GUIDANCE_CONTEXT_PLACEHOLDER, session_bootstrap_text, turn_guidance_text,
 };
 
 pub const PLUGIN_FILE_NAME: &str = "bitloops.ts";
@@ -30,6 +30,11 @@ pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<Strin
             "plugin template missing bootstrap context placeholder"
         ));
     }
+    if !PLUGIN_TEMPLATE.contains(TURN_GUIDANCE_CONTEXT_PLACEHOLDER) {
+        return Err(anyhow!(
+            "plugin template missing turn guidance context placeholder"
+        ));
+    }
 
     let bitloops_cmd = if local_dev {
         "cargo run --"
@@ -39,10 +44,13 @@ pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<Strin
 
     let bootstrap_context = to_string(&session_bootstrap_text(repo_root))
         .map_err(|err| anyhow!("failed to serialize bootstrap context: {err}"))?;
+    let turn_guidance_context = to_string(&turn_guidance_text(repo_root))
+        .map_err(|err| anyhow!("failed to serialize turn guidance context: {err}"))?;
 
     Ok(PLUGIN_TEMPLATE
         .replace(BITLOOPS_CMD_PLACEHOLDER, bitloops_cmd)
-        .replace(BOOTSTRAP_CONTEXT_PLACEHOLDER, &bootstrap_context))
+        .replace(BOOTSTRAP_CONTEXT_PLACEHOLDER, &bootstrap_context)
+        .replace(TURN_GUIDANCE_CONTEXT_PLACEHOLDER, &turn_guidance_context))
 }
 
 #[cfg(test)]
@@ -51,9 +59,103 @@ mod tests {
     use crate::adapters::agents::open_code::skills::{
         OPEN_CODE_SKILL_RELATIVE_PATH, install_repo_skill,
     };
+    use crate::host::hooks::augmentation::devql_guidance::prompt_warrants_devql;
+
+    struct RenderedMessage {
+        id: String,
+        role: String,
+        parts: Vec<String>,
+    }
 
     fn write_repo_policy(dir: &tempfile::TempDir, body: &str) {
         std::fs::write(dir.path().join(".bitloops.toml"), body).expect("write repo policy");
+    }
+
+    fn rendered_message(id: &str, role: &str, parts: &[&str]) -> RenderedMessage {
+        RenderedMessage {
+            id: id.to_string(),
+            role: role.to_string(),
+            parts: parts.iter().map(|part| part.to_string()).collect(),
+        }
+    }
+
+    fn rendered_const(rendered: &str, name: &str) -> String {
+        let prefix = format!("const {name} = ");
+        let line = rendered
+            .lines()
+            .find_map(|line| line.trim_start().strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("rendered plugin should contain {name}"));
+
+        serde_json::from_str(line).unwrap_or_else(|err| panic!("failed to parse {name}: {err}"))
+    }
+
+    fn text_from_parts(parts: &[String]) -> String {
+        parts.join("\n")
+    }
+
+    fn count_parts_containing(message: &RenderedMessage, marker: &str) -> usize {
+        message
+            .parts
+            .iter()
+            .filter(|part| part.contains(marker))
+            .count()
+    }
+
+    fn has_text_part_containing(message: &RenderedMessage, marker: &str) -> bool {
+        count_parts_containing(message, marker) > 0
+    }
+
+    fn apply_rendered_transform(
+        rendered: &str,
+        latest_user_message_id: Option<&str>,
+        latest_user_prompt: Option<&str>,
+        messages: &mut [RenderedMessage],
+    ) {
+        let bootstrap_context = rendered_const(rendered, "BOOTSTRAP_CONTEXT");
+        let turn_guidance_context = rendered_const(rendered, "TURN_GUIDANCE_CONTEXT");
+        if bootstrap_context.is_empty() && turn_guidance_context.is_empty() {
+            return;
+        }
+
+        if !bootstrap_context.is_empty() {
+            if let Some(first_user) = messages
+                .iter_mut()
+                .find(|message| message.role == "user" && !message.parts.is_empty())
+            {
+                if !has_text_part_containing(first_user, "EXTREMELY_IMPORTANT") {
+                    first_user.parts.insert(0, bootstrap_context);
+                }
+            }
+        }
+
+        let Some(latest_user_message_id) = latest_user_message_id else {
+            return;
+        };
+        if turn_guidance_context.is_empty() {
+            return;
+        }
+
+        let Some(latest_user) = messages.iter_mut().find(|message| {
+            message.id == latest_user_message_id
+                && message.role == "user"
+                && !message.parts.is_empty()
+        }) else {
+            return;
+        };
+        let prompt = latest_user_prompt
+            .map(ToString::to_string)
+            .unwrap_or_else(|| text_from_parts(&latest_user.parts));
+        if !prompt_warrants_devql(&prompt) {
+            return;
+        }
+
+        let marker = turn_guidance_context
+            .split(" when ")
+            .next()
+            .unwrap_or(&turn_guidance_context);
+        if !has_text_part_containing(latest_user, marker) {
+            latest_user.parts.insert(0, turn_guidance_context);
+        }
     }
 
     #[test]
@@ -112,6 +214,16 @@ enabled = true
             rendered.contains("await Bun.file(repoSkillPath).exists()"),
             "plugin should re-check skill presence before injecting bootstrap text"
         );
+        assert!(rendered.contains(
+            r#"const TURN_GUIDANCE_CONTEXT = "Use DevQL first for this repo-aware request"#
+        ));
+        assert!(rendered.contains("const latestUserPromptByMessageID = new Map<string, string>()"));
+        assert!(rendered.contains("\"chat.message\": async"));
+        assert!(rendered.contains("promptWarrantsDevql(prompt)"));
+        assert!(rendered.contains(
+            "latestUser.parts.unshift({ ...ref, type: \"text\", text: TURN_GUIDANCE_CONTEXT })"
+        ));
+        assert!(!rendered.contains("\"experimental.chat.system.transform\""));
     }
 
     #[test]
@@ -131,8 +243,10 @@ devql_guidance_enabled = false
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
         assert!(rendered.contains(r#"const BOOTSTRAP_CONTEXT = ""#));
+        assert!(rendered.contains(r#"const TURN_GUIDANCE_CONTEXT = ""#));
         assert!(!rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH));
         assert!(!rendered.contains("DevQL-capable guidance surface"));
+        assert!(!rendered.contains("Use DevQL first for this repo-aware request"));
         assert!(!rendered.contains("<EXTREMELY_IMPORTANT>"));
     }
 
@@ -142,5 +256,126 @@ devql_guidance_enabled = false
         let rendered = render_plugin_template(dir.path(), true).expect("render should succeed");
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = "cargo run --""#));
+    }
+
+    #[test]
+    fn render_plugin_template_transform_injects_bootstrap_and_turn_guidance_by_message_role() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
+        install_repo_skill(dir.path()).expect("install skill");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        let mut messages = vec![
+            rendered_message("first-user", "user", &["Initial request"]),
+            rendered_message("assistant", "assistant", &["Assistant response"]),
+            rendered_message(
+                "latest-user",
+                "user",
+                &["Explain src/adapters/agents/open_code/plugin.rs"],
+            ),
+        ];
+
+        apply_rendered_transform(
+            &rendered,
+            Some("latest-user"),
+            Some("Explain src/adapters/agents/open_code/plugin.rs"),
+            &mut messages,
+        );
+        apply_rendered_transform(
+            &rendered,
+            Some("latest-user"),
+            Some("Explain src/adapters/agents/open_code/plugin.rs"),
+            &mut messages,
+        );
+
+        assert_eq!(
+            count_parts_containing(&messages[0], "EXTREMELY_IMPORTANT"),
+            1
+        );
+        assert_eq!(
+            count_parts_containing(&messages[2], "Use DevQL first for this repo-aware request"),
+            1
+        );
+        assert_eq!(
+            count_parts_containing(&messages[0], "Use DevQL first for this repo-aware request"),
+            0
+        );
+        assert_eq!(
+            count_parts_containing(&messages[2], "EXTREMELY_IMPORTANT"),
+            0
+        );
+    }
+
+    #[test]
+    fn render_plugin_template_transform_skips_turn_guidance_for_execution_prompts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[capture]
+enabled = true
+"#,
+        );
+        install_repo_skill(dir.path()).expect("install skill");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        let mut messages = vec![
+            rendered_message("first-user", "user", &["Initial request"]),
+            rendered_message("latest-user", "user", &["Run cargo fmt"]),
+        ];
+
+        apply_rendered_transform(
+            &rendered,
+            Some("latest-user"),
+            Some("Run cargo fmt"),
+            &mut messages,
+        );
+
+        assert_eq!(
+            count_parts_containing(&messages[0], "EXTREMELY_IMPORTANT"),
+            1
+        );
+        assert_eq!(
+            count_parts_containing(&messages[1], "Use DevQL first for this repo-aware request"),
+            0
+        );
+    }
+
+    #[test]
+    fn render_plugin_template_transform_disabled_guidance_injects_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_repo_policy(
+            &dir,
+            r#"
+[agents]
+supported = ["opencode"]
+devql_guidance_enabled = false
+"#,
+        );
+        install_repo_skill(dir.path()).expect("install skill");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+        assert_eq!(rendered_const(&rendered, "BOOTSTRAP_CONTEXT"), "");
+        assert_eq!(rendered_const(&rendered, "TURN_GUIDANCE_CONTEXT"), "");
+
+        let mut messages = vec![
+            rendered_message("first-user", "user", &["Initial request"]),
+            rendered_message("latest-user", "user", &["Explain src/lib.rs"]),
+        ];
+
+        apply_rendered_transform(
+            &rendered,
+            Some("latest-user"),
+            Some("Explain src/lib.rs"),
+            &mut messages,
+        );
+
+        assert_eq!(messages[0].parts, vec!["Initial request"]);
+        assert_eq!(messages[1].parts, vec!["Explain src/lib.rs"]);
     }
 }
