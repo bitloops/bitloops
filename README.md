@@ -14,7 +14,7 @@
     ·
     <a href="#getting-started">Getting Started</a>
     ·
-    <a href="https://github.com/bitloops/bitloops/blob/Repo_Documentation_Improvement/DevQL-Getting_Started.md">DevQL</a>
+    <a href="https://bitloops.com/docs/concepts/devql">DevQL</a>
     ·
     <a href="#faqs">FAQs</a>
      ·
@@ -104,7 +104,7 @@ curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del
 
 ## Getting Started
 
-1. The fastest way to get started is to run this from inside the git repository or subproject you want to capture:
+1. From the repository you want Bitloops to capture, run:
 
    ```bash
    bitloops init --install-default-daemon
@@ -112,7 +112,7 @@ curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del
 
    This bootstraps the default daemon service if needed, creates or updates `.bitloops.local.toml`, and installs Bitloops hooks for the current project.
 
-2. Toggle capture later if needed:
+2. To pause or resume capture later:
 
    ```bash
    bitloops enable
@@ -127,8 +127,7 @@ curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del
 
 ## Dashboard
 
-To view your checkpoints, with the daemon running visit:
-[localhost:5667](http://127.0.0.1:5667)
+After setup, open [localhost:5667](http://127.0.0.1:5667) to view checkpoints and DevQL data.
 
 ## Uninstall
 
@@ -155,7 +154,7 @@ bitloops uninstall --full
 
 ## What is DevQL?
 
-DevQL is a typed GraphQL interface for querying artefacts, checkpoints, dependencies, and knowledge — available as a CLI DSL, raw GraphQL, or dashboard endpoint.
+DevQL is Bitloops’ query layer for asking structured questions about your repository, checkpoints, dependencies, tests, and captured development context.
 
 [Read more here](https://bitloops.com/docs/concepts/devql)
 
@@ -173,15 +172,9 @@ You bet!
 
 ### What kind of databases do I need?
 
-DevQL now uses a provider model:
+None for normal use. Bitloops ships with local storage defaults, so setup is plug-and-play.
 
-- Relational backend: `sqlite` or `postgres`
-- Events backend: `duckdb` or `clickhouse`
-
-Current runtime adapters are `sqlite`/`postgres` for relational and
-`duckdb`/`clickhouse` for events (default relational backend: `sqlite`,
-default events backend: `duckdb`). Legacy `postgres_dsn` / `clickhouse_*` and
-`BITLOOPS_DEVQL_*` settings remain supported for backward compatibility.
+Advanced users can configure external storage backends, but that is optional and not required to get started.
 
 ### Why do you use telemetry and why should I opt-in?
 
