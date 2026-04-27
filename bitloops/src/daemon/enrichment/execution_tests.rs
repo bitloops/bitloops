@@ -1602,9 +1602,7 @@ async fn prepare_embedding_mailbox_batch_splits_repo_wide_backfill_before_hydrat
         "fixture should exceed one embedding mailbox batch"
     );
     let unrelated = inputs
-        .iter()
-        .skip(super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE)
-        .next()
+        .get(super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE)
         .expect("fixture should include a later path outside the first batch");
 
     relational
