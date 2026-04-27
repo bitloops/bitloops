@@ -135,10 +135,14 @@ fn compact_lane_percent(
     if let Some(run) = summary_run.filter(|run| is_active_runtime_status(run.status.as_str())) {
         return summary_progress(run).0.map(compact_ratio_percent);
     }
-    if let Some(counts) = lane.progress.as_ref().and_then(lane_progress_counts) {
+
+    let ratio = compact_lane_ratio(title, lane, task, summary_run);
+    if ratio.is_some()
+        && let Some(counts) = lane.progress.as_ref().and_then(lane_progress_counts)
+    {
         return Some(compact_percent(counts.visible_completed, counts.total));
     }
-    compact_lane_ratio(title, lane, task, summary_run).map(compact_ratio_percent)
+    ratio.map(compact_ratio_percent)
 }
 
 fn compact_ratio_percent(ratio: f64) -> usize {
