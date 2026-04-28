@@ -89,7 +89,7 @@ Feature: Activation and Onboarding
         And   I run bitloops init --agent claude-code --sync=false in bitloops
         And   I run bitloops disable --capture --devql-guidance in bitloops
         Then  bitloops status shows disabled in bitloops
-        And   agent hooks are removed for the claude-code agent in bitloops
+        And   the repo-local .claude/skills/bitloops/using-devql/SKILL.md does not exist in bitloops
         And   git post-commit hook exists in bitloops
 
     # ── Uninstall Bitloops from a repository ─────────────────

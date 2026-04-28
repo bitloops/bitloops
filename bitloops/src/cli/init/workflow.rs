@@ -411,9 +411,14 @@ pub(crate) async fn run_for_project_root(
         }
         InitEmbeddingsSetupSelection::Skip => {}
     }
-    let summary_selection =
-        choose_summary_setup_during_init(project_root, args.install_default_daemon, out, input)
-            .await?;
+    let summary_selection = choose_summary_setup_during_init(
+        project_root,
+        args.install_default_daemon,
+        args.no_summaries,
+        out,
+        input,
+    )
+    .await?;
     if matches!(summary_selection, SummarySetupSelection::Cloud) {
         login_required = true;
     }

@@ -17,7 +17,8 @@ pub(crate) fn capture_temporary_checkpoint_batch(
         .enable_all()
         .build()
         .context("creating watcher capture runtime")?;
-    runtime.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))
+    runtime.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))?;
+    persist_workspace_revision(cfg, &changes.tree_hash)
 }
 
 pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
@@ -29,13 +30,13 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
         return Ok(());
     };
     handle.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))?;
-
-    Ok(())
+    persist_workspace_revision(cfg, &changes.tree_hash)
 }
 
 struct PreparedCaptureBatch {
     modified: Vec<String>,
     deleted: Vec<String>,
+    tree_hash: String,
 }
 
 fn prepare_capture_temporary_checkpoint_batch(
@@ -97,14 +98,10 @@ fn prepare_capture_temporary_checkpoint_batch(
     relational.initialise_local_devql_schema()?;
     let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
 
-    let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
-        .context("resolving repo identity for watch capture")?
-        .repo_id;
-
     let latest_tree_hash = sqlite.with_connection(|conn| {
         conn.query_row(
             "SELECT tree_hash FROM workspace_revisions WHERE repo_id = ?1 ORDER BY id DESC LIMIT 1",
-            rusqlite::params![&repo_id],
+            rusqlite::params![cfg.repo.repo_id.as_str()],
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -114,19 +111,11 @@ fn prepare_capture_temporary_checkpoint_batch(
         return Ok(None);
     }
 
-    let _row_id = sqlite.with_connection(|conn| {
-        conn.execute(
-            "INSERT OR IGNORE INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
-            rusqlite::params![repo_id, tree_hash],
-        )?;
-        conn.query_row(
-            "SELECT id FROM workspace_revisions WHERE repo_id = ?1 AND tree_hash = ?2",
-            rusqlite::params![repo_id, tree_hash],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(anyhow::Error::from)
-    })?;
-    Ok(Some(PreparedCaptureBatch { modified, deleted }))
+    Ok(Some(PreparedCaptureBatch {
+        modified,
+        deleted,
+        tree_hash,
+    }))
 }
 
 async fn sync_changed_paths(
@@ -191,6 +180,24 @@ fn enqueue_spooled_sync_task_with_retry(
         }
     }
     Ok(())
+}
+
+fn persist_workspace_revision(
+    cfg: &crate::host::devql::DevqlConfig,
+    tree_hash: &str,
+) -> Result<()> {
+    let relational = DefaultRelationalStore::open_local_for_repo_root(&cfg.repo_root)
+        .context("opening local relational store for watcher workspace revision persist")?;
+    relational.initialise_local_devql_schema()?;
+    let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
+    sqlite.with_connection(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
+            rusqlite::params![cfg.repo.repo_id.as_str(), tree_hash],
+        )
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+    })
 }
 
 fn filter_paths_for_sync(
@@ -658,6 +665,50 @@ mod tests {
         assert_eq!(
             workspace_rows, 1,
             "duplicate tree hash should be deduplicated"
+        );
+    }
+
+    #[test]
+    fn prepare_capture_batch_does_not_consume_tree_hash_before_sync_handoff_succeeds() {
+        let dir = seed_repo();
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub fn second() -> i32 {\n    2\n}\n",
+        )
+        .expect("update file");
+
+        let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        let target = dir.path().join("src/lib.rs");
+
+        let first = prepare_capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("prepare first capture batch");
+        assert!(
+            first.is_some(),
+            "updated file should produce a capture batch before handoff"
+        );
+
+        let db_path = devql_sqlite_path(dir.path());
+        let conn = Connection::open(db_path).expect("open sqlite");
+        let workspace_rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+                [&cfg.repo.repo_id],
+                |row| row.get(0),
+            )
+            .expect("count workspace_revisions after prepare-only step");
+        assert_eq!(
+            workspace_rows, 0,
+            "prepare-only capture must not persist workspace_revisions before sync handoff succeeds"
+        );
+
+        let second =
+            prepare_capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+                .expect("prepare retry capture batch");
+        assert!(
+            second.is_some(),
+            "retry should still produce a capture batch when the prior handoff never succeeded"
         );
     }
 

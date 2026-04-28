@@ -111,6 +111,10 @@ pub struct InitArgs {
     )]
     pub no_embeddings: bool,
 
+    /// Skip semantic summaries setup during init.
+    #[arg(long, default_value_t = false)]
+    pub no_summaries: bool,
+
     /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
     #[arg(long)]
     pub embeddings_gateway_url: Option<String>,

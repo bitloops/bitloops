@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **SQLite sync materialisation now waits cleanly for transient writer contention**: the batched sync writer now starts `IMMEDIATE` SQLite transactions for current-state materialisation, cache-touch completion, and removed-path cleanup instead of beginning deferred transactions and upgrading later during row deletes. This fixes transient `database is locked` failures during sync materialisation when another writer briefly holds the database lock.
+- **OpenCode now receives prompt-time DevQL guidance through its plugin message transform**: the generated OpenCode plugin now tracks the latest user prompt via `chat.message` and injects the shared turn-level DevQL guidance into that latest user message through `experimental.chat.messages.transform`, while keeping hook stdout augmentation disabled for OpenCode. This aligns OpenCode with the Codex and Claude DevQL reinforcement path without using system-prompt transforms.
+
 ## [0.0.19] - 2026-04-24
 
 ### Added
