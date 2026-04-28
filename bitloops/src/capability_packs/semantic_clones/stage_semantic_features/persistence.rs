@@ -4,8 +4,11 @@ use anyhow::{Context, Result};
 
 use super::schema::ensure_semantic_features_schema;
 use super::storage::{
+    build_conditional_current_semantic_persist_existing_rows_sql,
     build_conditional_current_semantic_persist_rows_sql, build_current_semantic_persist_rows_sql,
-    build_delete_current_symbol_features_sql, build_delete_current_symbol_semantics_sql,
+    build_delete_current_symbol_features_for_paths_sql, build_delete_current_symbol_features_sql,
+    build_delete_current_symbol_semantics_for_paths_sql, build_delete_current_symbol_semantics_sql,
+    build_repair_current_semantic_projection_from_historical_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
     parse_semantic_index_state_rows,
 };
@@ -35,6 +38,18 @@ pub(crate) async fn upsert_semantic_feature_rows(
             &next_input_hash,
             summary_provider.requires_model_output(),
         ) {
+            repair_current_semantic_feature_rows_from_historical(
+                relational,
+                &input.repo_id,
+                std::slice::from_ref(&input.artefact_id),
+            )
+            .await?;
+            persist_existing_semantic_feature_rows_to_current_for_matching_input(
+                relational,
+                input,
+                &next_input_hash,
+            )
+            .await?;
             stats.skipped += 1;
             continue;
         }
@@ -116,6 +131,27 @@ pub(crate) async fn clear_current_semantic_feature_rows_for_path(
         .await
 }
 
+pub(crate) async fn clear_current_semantic_feature_rows_for_paths(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    paths: &[String],
+) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    ensure_semantic_features_schema(relational).await?;
+    let mut statements = Vec::new();
+    if let Some(sql) = build_delete_current_symbol_features_for_paths_sql(repo_id, paths) {
+        statements.push(sql);
+    }
+    if let Some(sql) = build_delete_current_symbol_semantics_for_paths_sql(repo_id, paths) {
+        statements.push(sql);
+    }
+    relational
+        .exec_serialized_batch_transactional(&statements)
+        .await
+}
+
 async fn load_semantic_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
@@ -138,6 +174,59 @@ async fn persist_semantic_feature_rows(
         .await
 }
 
+pub(crate) async fn repair_current_semantic_feature_rows_from_historical(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    artefact_ids: &[String],
+) -> Result<()> {
+    ensure_semantic_features_schema(relational).await?;
+    match relational
+        .exec_serialized(
+            &build_repair_current_semantic_projection_from_historical_sql(
+                repo_id,
+                artefact_ids,
+                relational.dialect(),
+            ),
+        )
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!("{err:#}");
+            if missing_current_projection_schema_error(&message) {
+                return Ok(());
+            }
+            Err(err).context("repairing current semantic projection from historical rows")
+        }
+    }
+}
+
+pub(super) async fn persist_existing_semantic_feature_rows_to_current_for_matching_input(
+    relational: &RelationalStorage,
+    input: &semantic::SemanticFeatureInput,
+    semantic_features_input_hash: &str,
+) -> Result<()> {
+    match relational
+        .exec_serialized(
+            &build_conditional_current_semantic_persist_existing_rows_sql(
+                input,
+                semantic_features_input_hash,
+                relational.dialect(),
+            )?,
+        )
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!("{err:#}");
+            if missing_current_projection_schema_error(&message) {
+                return Ok(());
+            }
+            Err(err).context("repairing remapped current semantic projection from historical rows")
+        }
+    }
+}
+
 pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
     relational: &RelationalStorage,
     input: &semantic::SemanticFeatureInput,
@@ -153,10 +242,8 @@ pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
     {
         Ok(()) => Ok(()),
         Err(err) => {
-            let message = err.to_string();
-            if message.contains("no such table: artefacts_current")
-                || message.contains("no such table: current_file_state")
-            {
+            let message = format!("{err:#}");
+            if missing_current_projection_schema_error(&message) {
                 return Ok(());
             }
             Err(err).context("persisting current semantic feature rows for matching input")
@@ -181,4 +268,52 @@ async fn persist_current_semantic_feature_rows(
             relational.dialect(),
         )?)
         .await
+}
+
+fn missing_current_projection_schema_error(message: &str) -> bool {
+    missing_relation_error(message, "artefacts_current")
+        || missing_relation_error(message, "current_file_state")
+        || missing_column_error(message, "cfs.effective_content_id")
+        || missing_column_error(message, "state.effective_content_id")
+        || missing_column_error(message, "effective_content_id")
+}
+
+fn missing_relation_error(message: &str, relation: &str) -> bool {
+    message.contains(&format!("no such table: {relation}"))
+        || message.contains(&format!("relation \"{relation}\" does not exist"))
+        || message.contains(&format!("relation '{relation}' does not exist"))
+        || message.contains(&format!("relation {relation} does not exist"))
+}
+
+fn missing_column_error(message: &str, column: &str) -> bool {
+    message.contains(&format!("no such column: {column}"))
+        || message.contains(&format!("column \"{column}\" does not exist"))
+        || message.contains(&format!("column '{column}' does not exist"))
+        || message.contains(&format!("column {column} does not exist"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::missing_current_projection_schema_error;
+
+    #[test]
+    fn missing_current_projection_schema_error_recognizes_postgres_missing_relation() {
+        assert!(missing_current_projection_schema_error(
+            "error returned from database: relation \"current_file_state\" does not exist",
+        ));
+    }
+
+    #[test]
+    fn missing_current_projection_schema_error_recognizes_postgres_missing_aliased_column() {
+        assert!(missing_current_projection_schema_error(
+            "error returned from database: column state.effective_content_id does not exist",
+        ));
+    }
+
+    #[test]
+    fn missing_current_projection_schema_error_ignores_unrelated_errors() {
+        assert!(!missing_current_projection_schema_error(
+            "error returned from database: syntax error near FROM",
+        ));
+    }
 }

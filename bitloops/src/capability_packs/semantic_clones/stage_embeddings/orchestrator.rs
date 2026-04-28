@@ -48,6 +48,7 @@ pub(crate) async fn upsert_symbol_embedding_rows(
     );
     stats.eligible = embedding_inputs.len();
 
+    let mut reindex_inputs = Vec::new();
     for input in embedding_inputs {
         let next_input_hash =
             embeddings::build_symbol_embedding_input_hash(&input, embedding_provider.as_ref());
@@ -62,16 +63,23 @@ pub(crate) async fn upsert_symbol_embedding_rows(
             stats.skipped += 1;
             continue;
         }
+        reindex_inputs.push(input);
+    }
 
-        let input = input.clone();
-        let embedding_provider = Arc::clone(&embedding_provider);
-        let row = tokio::task::spawn_blocking(move || {
-            embeddings::build_symbol_embedding_row(&input, embedding_provider.as_ref())
+    if !reindex_inputs.is_empty() {
+        let embedding_provider_for_rows = Arc::clone(&embedding_provider);
+        let rows = tokio::task::spawn_blocking(move || {
+            embeddings::build_symbol_embedding_rows(
+                &reindex_inputs,
+                embedding_provider_for_rows.as_ref(),
+            )
         })
         .await
-        .context("building semantic embedding row on blocking worker")??;
-        persist_symbol_embedding_row(relational, &row).await?;
-        stats.upserted += 1;
+        .context("building semantic embedding rows on blocking worker")??;
+        for row in rows {
+            persist_symbol_embedding_row(relational, &row).await?;
+            stats.upserted += 1;
+        }
     }
 
     Ok(stats)
@@ -123,13 +131,8 @@ pub(crate) async fn upsert_current_symbol_embedding_rows(
     )
     .await?;
 
+    let mut reindex_inputs = Vec::new();
     for input in embedding_inputs {
-        let input_metadata = input_by_artefact_id
-            .get(&input.artefact_id)
-            .copied()
-            .ok_or_else(|| {
-                anyhow::anyhow!("missing current semantic input for `{}`", input.artefact_id)
-            })?;
         let next_input_hash =
             embeddings::build_symbol_embedding_input_hash(&input, embedding_provider.as_ref());
         let state = load_current_symbol_embedding_index_state(
@@ -143,17 +146,36 @@ pub(crate) async fn upsert_current_symbol_embedding_rows(
             stats.skipped += 1;
             continue;
         }
+        reindex_inputs.push(input);
+    }
 
-        let input = input.clone();
-        let embedding_provider = Arc::clone(&embedding_provider);
-        let row = tokio::task::spawn_blocking(move || {
-            embeddings::build_symbol_embedding_row(&input, embedding_provider.as_ref())
+    if !reindex_inputs.is_empty() {
+        let embedding_provider_for_rows = Arc::clone(&embedding_provider);
+        let rows = tokio::task::spawn_blocking(move || {
+            embeddings::build_symbol_embedding_rows(
+                &reindex_inputs,
+                embedding_provider_for_rows.as_ref(),
+            )
         })
         .await
-        .context("building current semantic embedding row on blocking worker")??;
-        persist_current_symbol_embedding_row(relational, input_metadata, path, content_id, &row)
+        .context("building current semantic embedding rows on blocking worker")??;
+        for row in rows {
+            let input_metadata = input_by_artefact_id
+                .get(&row.artefact_id)
+                .copied()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("missing current semantic input for `{}`", row.artefact_id)
+                })?;
+            persist_current_symbol_embedding_row(
+                relational,
+                input_metadata,
+                path,
+                content_id,
+                &row,
+            )
             .await?;
-        stats.upserted += 1;
+            stats.upserted += 1;
+        }
     }
 
     Ok(stats)

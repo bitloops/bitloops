@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::config::{
-    InferenceTask, resolve_inference_capability_config_for_repo,
-    resolve_preferred_daemon_config_path_for_repo,
+    BITLOOPS_CONFIG_RELATIVE_PATH, InferenceTask, SemanticSummaryMode,
+    resolve_inference_capability_config_for_repo, resolve_preferred_daemon_config_path_for_repo,
 };
 use crate::host::inference::{BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER};
 
@@ -35,6 +35,9 @@ pub(crate) fn summary_generation_configured(repo_root: &Path) -> bool {
     }
 
     let capability = resolve_inference_capability_config_for_repo(repo_root);
+    if capability.semantic_clones.summary_mode == SemanticSummaryMode::Off {
+        return false;
+    }
     let Some(profile_name) = capability
         .semantic_clones
         .inference
@@ -127,7 +130,8 @@ pub(super) fn write_summary_profile(repo_root: &Path, model_name: &str) -> Resul
     }
 
     update_summary_generation_binding(&mut doc, &profile_name);
-    write_daemon_config_document(&config_path, &doc)
+    write_daemon_config_document(&config_path, &doc)?;
+    maybe_sync_repo_local_summary_mode(repo_root, "auto")
 }
 
 pub(super) fn write_platform_summary_profile(
@@ -167,7 +171,8 @@ pub(super) fn write_platform_summary_profile(
     }
 
     update_summary_generation_binding(&mut doc, &profile_name);
-    write_daemon_config_document(&config_path, &doc)
+    write_daemon_config_document(&config_path, &doc)?;
+    maybe_sync_repo_local_summary_mode(repo_root, "auto")
 }
 
 fn read_daemon_config_document(config_path: &Path) -> Result<DocumentMut> {
@@ -191,12 +196,32 @@ fn read_daemon_config_document(config_path: &Path) -> Result<DocumentMut> {
 }
 
 fn write_daemon_config_document(config_path: &Path, doc: &DocumentMut) -> Result<()> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating Bitloops config directory {}", parent.display()))?;
+    }
     std::fs::write(config_path, doc.to_string())
         .with_context(|| format!("writing Bitloops daemon config {}", config_path.display()))
 }
 
+fn maybe_sync_repo_local_summary_mode(repo_root: &Path, mode: &str) -> Result<()> {
+    let repo_config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    if !repo_config_path.exists() {
+        return Ok(());
+    }
+    write_summary_mode(&repo_config_path, mode)
+}
+
+fn write_summary_mode(config_path: &Path, mode: &str) -> Result<()> {
+    let mut doc = read_daemon_config_document(config_path)?;
+    let semantic_clones = ensure_table(&mut doc, "semantic_clones");
+    semantic_clones["summary_mode"] = Item::Value(mode.into());
+    write_daemon_config_document(config_path, &doc)
+}
+
 fn update_summary_generation_binding(doc: &mut DocumentMut, profile_name: &str) {
     let semantic_clones = ensure_table(doc, "semantic_clones");
+    semantic_clones["summary_mode"] = Item::Value("auto".into());
     let semantic_inference = ensure_child_table(semantic_clones, "inference");
     semantic_inference["summary_generation"] = Item::Value(profile_name.into());
 }

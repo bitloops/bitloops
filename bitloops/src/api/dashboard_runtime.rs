@@ -249,19 +249,20 @@ pub(super) async fn run(
 
     match (transport, tls_acceptor) {
         (DashboardTransport::Https, Some(acceptor)) => {
-            serve_until_shutdown_tls(listener, acceptor, state, options.shutdown_message).await
+            serve_until_shutdown_tls(listener, acceptor, state).await
         }
-        (DashboardTransport::Http, _) => {
-            serve_until_shutdown_http(listener, state, options.shutdown_message).await
-        }
+        (DashboardTransport::Http, _) => serve_until_shutdown_http(listener, state).await,
         (DashboardTransport::Https, None) => {
             Err(anyhow!("dashboard HTTPS selected without a TLS acceptor"))
         }
     }?;
 
-    if let Some(on_shutdown) = options.on_shutdown.as_ref() {
-        on_shutdown();
-    }
+    run_shutdown_actions(
+        options.on_shutdown,
+        options.shutdown_message,
+        Duration::from_secs(5),
+    )
+    .await;
 
     Ok(())
 }
@@ -302,14 +303,13 @@ async fn serve_until_shutdown_tls(
     listener: TcpListener,
     tls_acceptor: TlsAcceptor,
     state: DashboardState,
-    shutdown_message: Option<String>,
 ) -> Result<()> {
     use hyper::server::conn::http1::Builder as Http1Builder;
     use hyper_util::rt::TokioIo;
     use hyper_util::service::TowerToHyperService;
 
     let app = router::build_dashboard_router(state);
-    serve_until_shutdown_with_handler(listener, shutdown_message, move |stream| {
+    serve_until_shutdown_with_handler(listener, move |stream| {
         let tls_acceptor = tls_acceptor.clone();
         let app = app.clone();
         async move {
@@ -342,17 +342,13 @@ async fn serve_until_shutdown_tls(
     .await
 }
 
-async fn serve_until_shutdown_http(
-    listener: TcpListener,
-    state: DashboardState,
-    shutdown_message: Option<String>,
-) -> Result<()> {
+async fn serve_until_shutdown_http(listener: TcpListener, state: DashboardState) -> Result<()> {
     use hyper::server::conn::http1::Builder as Http1Builder;
     use hyper_util::rt::TokioIo;
     use hyper_util::service::TowerToHyperService;
 
     let app = router::build_dashboard_router(state);
-    serve_until_shutdown_with_handler(listener, shutdown_message, move |stream| {
+    serve_until_shutdown_with_handler(listener, move |stream| {
         let app = app.clone();
         async move {
             let io = TokioIo::new(stream);
@@ -401,7 +397,6 @@ async fn wait_for_shutdown_signal() {
 
 async fn serve_until_shutdown_with_handler<F, Fut>(
     listener: TcpListener,
-    shutdown_message: Option<String>,
     mut on_stream: F,
 ) -> Result<()>
 where
@@ -424,11 +419,22 @@ where
     }
 
     drop(listener);
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    Ok(())
+}
+
+async fn run_shutdown_actions(
+    on_shutdown: Option<super::DashboardShutdownHook>,
+    shutdown_message: Option<String>,
+    shutdown_delay: Duration,
+) {
+    if let Some(on_shutdown) = on_shutdown.as_ref() {
+        on_shutdown();
+    }
+
+    tokio::time::sleep(shutdown_delay).await;
     if let Some(message) = shutdown_message {
         println!("{message}");
     }
-    Ok(())
 }
 
 fn clickable_url(url: &str) -> String {
@@ -524,7 +530,13 @@ pub(super) fn open_in_default_browser(url: &str) -> Result<()> {
 
 #[cfg(test)]
 mod dashboard_runtime_unit_tests {
-    use super::{clickable_url, warning_block_lines};
+    use super::{clickable_url, run_shutdown_actions, warning_block_lines};
+    use crate::api::DashboardShutdownHook;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Duration;
 
     #[test]
     fn clickable_url_inserts_osc8_hyperlink_sequence() {
@@ -545,5 +557,28 @@ mod dashboard_runtime_unit_tests {
         assert!(lines.iter().any(|l| l.contains('⚠')));
         assert!(lines.iter().any(|l| l.contains("line one")));
         assert!(lines.iter().any(|l| l.contains("line two")));
+    }
+
+    #[tokio::test(start_paused = true, flavor = "current_thread")]
+    async fn run_shutdown_actions_calls_hook_before_waiting() {
+        let called = Arc::new(AtomicBool::new(false));
+        let on_shutdown: DashboardShutdownHook = Arc::new({
+            let called = called.clone();
+            move || {
+                called.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let task = tokio::spawn(run_shutdown_actions(
+            Some(on_shutdown),
+            None,
+            Duration::from_millis(50),
+        ));
+        tokio::task::yield_now().await;
+
+        assert!(called.load(Ordering::SeqCst));
+        assert!(!task.is_finished());
+        tokio::time::advance(Duration::from_millis(50)).await;
+        task.await.expect("join shutdown actions task");
     }
 }

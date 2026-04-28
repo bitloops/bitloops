@@ -22,6 +22,55 @@ use tempfile::TempDir;
 
 const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
 
+#[test]
+fn semantic_embedding_work_batches_match_platform_embedding_request_limit() {
+    assert_eq!(
+        crate::daemon::enrichment::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
+        32
+    );
+}
+
+#[test]
+fn repo_backfill_selection_distinguishes_empty_explicit_ids_from_full_repo() {
+    let full_repo_items = vec![selection_test_embedding_item(None)];
+    let full_repo = super::helpers::select_current_semantic_input_scope(&full_repo_items);
+    assert!(full_repo.requested_artefact_ids().is_none());
+
+    let empty_explicit_items = vec![selection_test_embedding_item(Some(serde_json::json!([])))];
+    let empty_explicit = super::helpers::select_current_semantic_input_scope(&empty_explicit_items);
+    assert!(
+        empty_explicit
+            .requested_artefact_ids()
+            .is_some_and(|ids| ids.is_empty())
+    );
+}
+
+fn selection_test_embedding_item(
+    payload_json: Option<serde_json::Value>,
+) -> SemanticEmbeddingMailboxItemRecord {
+    SemanticEmbeddingMailboxItemRecord {
+        item_id: "selection-test-item".to_string(),
+        repo_id: "repo-selection-test".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-selection-test"),
+        config_root: PathBuf::from("/tmp/repo-selection-test"),
+        init_session_id: None,
+        representation_kind: "code".to_string(),
+        item_kind: SemanticMailboxItemKind::RepoBackfill,
+        artefact_id: None,
+        payload_json,
+        dedupe_key: Some("selection-test-dedupe".to_string()),
+        status: SemanticMailboxItemStatus::Leased,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        leased_at_unix: Some(1),
+        lease_expires_at_unix: Some(301),
+        lease_token: Some("selection-test-lease".to_string()),
+        updated_at_unix: 1,
+        last_error: None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CurrentEmbeddingRow {
     symbol_fqn: String,
@@ -74,19 +123,37 @@ fn fake_runtime_command_and_args(
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let vector = if dimension == 4 {
-        "[[0.1,0.2,0.3,0.4]]"
+        "[0.1,0.2,0.3,0.4]"
     } else {
-        "[[0.1,0.2,0.3]]"
+        "[0.1,0.2,0.3]"
     };
+    let request_log_path = fake_embedding_request_log_path(repo_root);
     let script_template = r#"#!/bin/sh
 model_name='__MODEL__'
 vector='__VECTOR__'
+request_log='__REQUEST_LOG__'
 printf '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}\n'
 while IFS= read -r line; do
   req_id=$(printf '%s\n' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
   case "$line" in
     *'"cmd":"embed"'*)
-      printf '{"id":"%s","ok":true,"vectors":%s,"model":"%s"}\n' "$req_id" "$vector" "$model_name"
+      printf '%s\n' "$line" >> "$request_log"
+      texts_payload=$(printf '%s\n' "$line" | sed -n 's/.*"texts":\[\(.*\)\].*/\1/p')
+      text_count=0
+      if [ -n "$texts_payload" ]; then
+        text_count=1
+        remaining="$texts_payload"
+        while [ "$remaining" != "${remaining#*\",\"}" ]; do
+          text_count=$((text_count + 1))
+          remaining="${remaining#*\",\"}"
+        done
+      fi
+      vectors="$vector"
+      while [ "$text_count" -gt 1 ]; do
+        vectors="$vectors,$vector"
+        text_count=$((text_count - 1))
+      done
+      printf '{"id":"%s","ok":true,"vectors":[%s],"model":"%s"}\n' "$req_id" "$vectors" "$model_name"
       ;;
     *'"cmd":"shutdown"'*)
       printf '{"id":"%s","ok":true,"model":"%s"}\n' "$req_id" "$model_name"
@@ -101,7 +168,8 @@ exit 0
 "#;
     let script = script_template
         .replace("__MODEL__", model)
-        .replace("__VECTOR__", vector);
+        .replace("__VECTOR__", vector)
+        .replace("__REQUEST_LOG__", &request_log_path.to_string_lossy());
     fs::write(&script_path, script).expect("write fake runtime script");
     let mut permissions = fs::metadata(&script_path)
         .expect("stat fake runtime script")
@@ -123,13 +191,15 @@ fn fake_runtime_command_and_args(
         fs::create_dir_all(parent).expect("create fake runtime dir");
     }
     let vector = if dimension == 4 {
-        "@(@(0.1, 0.2, 0.3, 0.4))"
+        "@(0.1, 0.2, 0.3, 0.4)"
     } else {
-        "@(@(0.1, 0.2, 0.3))"
+        "@(0.1, 0.2, 0.3)"
     };
+    let request_log_path = fake_embedding_request_log_path(repo_root);
     let script_template = r#"
 $model = "__MODEL__"
 $vector = __VECTOR__
+$requestLog = "__REQUEST_LOG__"
 $ready = @{
   event = "ready"
   protocol = 1
@@ -142,10 +212,15 @@ while (($line = $stdin.ReadLine()) -ne $null) {
   $request = $line | ConvertFrom-Json
   switch ($request.cmd) {
     "embed" {
+      Add-Content -Path $requestLog -Value $line
+      $vectors = @()
+      foreach ($text in $request.texts) {
+        $vectors += ,$vector
+      }
       $response = @{
         id = $request.id
         ok = $true
-        vectors = $vector
+        vectors = $vectors
         model = $model
       }
     }
@@ -174,7 +249,8 @@ exit 0
 "#;
     let script = script_template
         .replace("__MODEL__", model)
-        .replace("__VECTOR__", vector);
+        .replace("__VECTOR__", vector)
+        .replace("__REQUEST_LOG__", &request_log_path.to_string_lossy());
     fs::write(&script_path, script).expect("write fake runtime script");
     (
         "powershell".to_string(),
@@ -186,6 +262,18 @@ exit 0
             script_path.display().to_string(),
         ],
     )
+}
+
+fn fake_embedding_request_log_path(repo_root: &Path) -> PathBuf {
+    repo_root.join(".bitloops/test-bin/fake-embeddings-requests.log")
+}
+
+fn fake_embedding_request_lines(repo_root: &Path) -> Vec<String> {
+    fs::read_to_string(fake_embedding_request_log_path(repo_root))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
 }
 
 fn write_daemon_embedding_config(
@@ -237,6 +325,14 @@ model = {model:?}
         ),
     )
     .expect("write daemon embedding config");
+}
+
+fn remove_summary_embedding_slot(repo_root: &Path, profile_name: &str) {
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let config = fs::read_to_string(&config_path).expect("read daemon embedding config");
+    let summary_slot = format!("summary_embeddings = \"{profile_name}\"\n");
+    fs::write(config_path, config.replace(&summary_slot, ""))
+        .expect("write daemon code-only embedding config");
 }
 
 #[test]
@@ -1485,6 +1581,174 @@ WHERE repo_id = '{}' AND path = '{}'",
 }
 
 #[tokio::test]
+async fn prepare_embedding_mailbox_batch_splits_repo_wide_backfill_before_hydrating_later_paths() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let generated_dir = repo.path().join("src/generated");
+    fs::create_dir_all(&generated_dir).expect("create generated source dir");
+    for index in 0..60 {
+        fs::write(
+            generated_dir.join(format!("worker_{index:02}.ts")),
+            format!(
+                "export function generatedWorker{index:02}(input: string): string {{\n  return `${{input}}:{index}`;\n}}\n"
+            ),
+        )
+        .expect("write generated source");
+    }
+    git_ok(repo.path(), &["add", "src/generated"]);
+    git_ok(repo.path(), &["commit", "-m", "add generated sources"]);
+
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    assert!(
+        inputs.len() > super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
+        "fixture should exceed one embedding mailbox batch"
+    );
+    let unrelated = inputs
+        .get(super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE)
+        .expect("fixture should include a later path outside the first batch");
+
+    relational
+        .exec(&format!(
+            "UPDATE current_file_state \
+SET head_content_id = 'missing-repo-wide-backfill-blob' \
+WHERE repo_id = '{}' AND path = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::esc_pg(&unrelated.path),
+        ))
+        .await
+        .expect("break later current projection path");
+
+    super::helpers::load_current_semantic_inputs(&relational, repo.path(), &cfg.repo.repo_id, None)
+        .await
+        .expect_err("full current hydration should still fail on the broken later path");
+
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "repo-wide-backfill-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "repo-wide-backfill-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: None,
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("repo-wide-backfill-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("repo-wide backfill should hydrate only the first chunk");
+
+    assert_eq!(
+        prepared.expanded_count,
+        super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE
+    );
+    assert!(prepared.commit.replacement_backfill_item.is_some());
+}
+
+#[tokio::test]
+async fn prepare_embedding_mailbox_batch_persists_multiple_rows_from_one_batch() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let requested_ids = inputs
+        .iter()
+        .take(2)
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(requested_ids.len(), 2, "fixture should include two inputs");
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "batch-embedding-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "batch-embedding-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::json!(requested_ids)),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("batch-embedding-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare embedding batch");
+
+    let embedding_inserts = prepared
+        .commit
+        .embedding_statements
+        .iter()
+        .filter(|sql| sql.contains("symbol_embeddings"))
+        .count();
+    let non_probe_embedding_requests = fake_embedding_request_lines(repo.path())
+        .into_iter()
+        .filter(|line| !line.contains("bitloops python embedding dimension probe"))
+        .count();
+
+    assert!(embedding_inserts >= 2);
+    assert_eq!(prepared.expanded_count, 2);
+    assert_eq!(non_probe_embedding_requests, 1);
+}
+
+#[tokio::test]
 async fn prepare_summary_mailbox_batch_with_explicit_repo_backfill_ids_skips_unrelated_current_paths()
  {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
@@ -1558,6 +1822,167 @@ WHERE repo_id = '{}' AND path = '{}'",
         prepared.commit.acked_item_ids,
         vec!["explicit-repo-backfill-summary-item".to_string()]
     );
+}
+
+#[tokio::test]
+async fn prepare_summary_mailbox_batch_skipped_fresh_input_repairs_current_and_enqueues_summary_embedding()
+ {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let selected = inputs
+        .iter()
+        .find(|input| input.path == "src/invoice.ts")
+        .expect("invoice artefact input");
+
+    relational
+        .exec(&format!(
+            "DELETE FROM symbol_semantics_current \
+WHERE repo_id = '{}' AND artefact_id = '{}'; \
+DELETE FROM symbol_features_current \
+WHERE repo_id = '{}' AND artefact_id = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::esc_pg(&selected.artefact_id),
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::esc_pg(&selected.artefact_id),
+        ))
+        .await
+        .expect("remove current semantic projection for selected artefact");
+
+    let batch = super::super::workplane::ClaimedSummaryMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        lease_token: "skipped-fresh-summary-lease".to_string(),
+        items: vec![SemanticSummaryMailboxItemRecord {
+            item_id: "skipped-fresh-summary-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(selected.artefact_id.clone()),
+            payload_json: None,
+            dedupe_key: Some(format!(
+                "{}:{}",
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                selected.artefact_id
+            )),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("skipped-fresh-summary-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_summary_mailbox_batch(&batch, |_, _| {})
+        .await
+        .expect("prepare summary batch");
+
+    assert!(
+        prepared
+            .commit
+            .semantic_statements
+            .iter()
+            .any(|sql| sql.contains("symbol_features_current")),
+        "expected current feature projection repair SQL"
+    );
+    assert!(
+        prepared
+            .commit
+            .semantic_statements
+            .iter()
+            .any(|sql| sql.contains("symbol_semantics_current")),
+        "expected current semantic projection repair SQL"
+    );
+    assert_eq!(prepared.commit.embedding_follow_ups.len(), 1);
+    assert_eq!(
+        prepared.commit.embedding_follow_ups[0].representation_kind,
+        "summary"
+    );
+    assert_eq!(
+        prepared.commit.embedding_follow_ups[0]
+            .artefact_id
+            .as_deref(),
+        Some(selected.artefact_id.as_str())
+    );
+    let expected_dedupe_key = format!(
+        "{}:{}",
+        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+        selected.artefact_id
+    );
+    assert_eq!(
+        prepared.commit.embedding_follow_ups[0]
+            .dedupe_key
+            .as_deref(),
+        Some(expected_dedupe_key.as_str())
+    );
+}
+
+#[tokio::test]
+async fn prepare_summary_mailbox_batch_skipped_fresh_input_with_code_only_embeddings_has_no_summary_follow_up()
+ {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    remove_summary_embedding_slot(repo.path(), "alpha");
+    let selected = inputs
+        .iter()
+        .find(|input| input.path == "src/invoice.ts")
+        .expect("invoice artefact input");
+    let batch = super::super::workplane::ClaimedSummaryMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        lease_token: "code-only-summary-lease".to_string(),
+        items: vec![SemanticSummaryMailboxItemRecord {
+            item_id: "code-only-summary-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(selected.artefact_id.clone()),
+            payload_json: None,
+            dedupe_key: Some(format!(
+                "{}:{}",
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                selected.artefact_id
+            )),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("code-only-summary-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_summary_mailbox_batch(&batch, |_, _| {})
+        .await
+        .expect("prepare summary batch");
+
+    assert!(prepared.commit.embedding_follow_ups.is_empty());
 }
 
 #[tokio::test]

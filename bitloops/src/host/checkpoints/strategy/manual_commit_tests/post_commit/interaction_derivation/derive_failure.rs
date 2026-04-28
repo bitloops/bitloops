@@ -68,7 +68,7 @@ pub(crate) fn derive_post_commit_errors_when_overlapping_turn_is_missing_transcr
 }
 
 #[test]
-pub(crate) fn derive_post_commit_returns_error_when_spool_flush_fails_with_pending_work() {
+pub(crate) fn derive_post_commit_returns_none_when_spool_flush_fails_without_local_turn_data() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
@@ -77,15 +77,12 @@ pub(crate) fn derive_post_commit_returns_error_when_spool_flush_fails_with_pendi
         .expect("resolve repo identity")
         .repo_id;
     let repository = FakeInteractionRepository::new(&repo_id, Arc::new(Mutex::new(Vec::new())));
-    let spool = FakeInteractionSpool {
-        repo_id,
-        pending_mutations: true,
-        flush_error: Some("forced flush failure".to_string()),
-        ..FakeInteractionSpool::default()
-    };
+    let spool = FakeInteractionSpool::new(&repo_id)
+        .with_pending_mutations(true)
+        .with_flush_error("forced flush failure");
 
     let strategy = ManualCommitStrategy::new(dir.path());
-    let err = strategy
+    let checkpoint_id = strategy
         .derive_post_commit_from_interaction_sources(
             "deadbeef",
             &HashSet::new(),
@@ -93,17 +90,10 @@ pub(crate) fn derive_post_commit_returns_error_when_spool_flush_fails_with_pendi
             &repository,
             Some(&spool),
         )
-        .expect_err("flush failure with pending work should error");
+        .expect("empty local spool fallback should not error");
     assert!(
-        format!("{err:#}").contains("flushing interaction spool before post_commit derivation")
-    );
-    assert!(
-        format!("{err:#}").contains("commit=deadbeef"),
-        "error should include the commit context: {err:#}"
-    );
-    assert!(
-        format!("{err:#}").contains("spool_pending_work=true"),
-        "error should include pending-work context: {err:#}"
+        checkpoint_id.is_none(),
+        "flush fallback should return no checkpoint when the local spool has no usable turns"
     );
 }
 

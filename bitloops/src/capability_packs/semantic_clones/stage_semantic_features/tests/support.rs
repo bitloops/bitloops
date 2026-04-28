@@ -79,6 +79,7 @@ CREATE TABLE current_file_state (
     repo_id TEXT NOT NULL,
     path TEXT NOT NULL,
     analysis_mode TEXT NOT NULL,
+    effective_content_id TEXT NOT NULL,
     PRIMARY KEY (repo_id, path)
 );",
             super::super::storage::semantic_features_sqlite_schema_sql(),

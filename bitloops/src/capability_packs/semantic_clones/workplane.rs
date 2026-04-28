@@ -34,7 +34,7 @@ pub const SEMANTIC_CLONES_DEFERRED_PIPELINE_MAILBOXES: [&str; 5] = [
 ];
 
 const REPO_BACKFILL_DEDUPE_SUFFIX: &str = "repo_backfill";
-pub const REPO_BACKFILL_MAILBOX_CHUNK_SIZE: usize = 50;
+pub const REPO_BACKFILL_MAILBOX_CHUNK_SIZE: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

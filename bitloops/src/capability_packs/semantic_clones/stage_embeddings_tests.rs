@@ -1,10 +1,11 @@
-use super::storage::parse_symbol_embedding_index_state_rows;
+use super::storage::{load_symbol_embedding_index_states, parse_symbol_embedding_index_state_rows};
 use super::*;
 use crate::host::devql::esc_pg;
 use crate::host::devql::{sqlite_exec_path_allow_create, sqlite_query_rows_path};
 use crate::host::inference::{EmbeddingInputType as HostEmbeddingInputType, EmbeddingService};
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::tempdir;
 
 const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
@@ -32,6 +33,65 @@ impl EmbeddingService for TestEmbeddingProvider {
 
     fn embed(&self, input: &str, _input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
         Ok(vec![input.len() as f32, 0.5, 0.25])
+    }
+}
+
+struct CountingEmbeddingProvider {
+    dimension: usize,
+    embed_calls: AtomicUsize,
+    embed_batch_calls: AtomicUsize,
+}
+
+impl CountingEmbeddingProvider {
+    fn new(dimension: usize) -> Self {
+        Self {
+            dimension,
+            embed_calls: AtomicUsize::new(0),
+            embed_batch_calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn embed_calls(&self) -> usize {
+        self.embed_calls.load(Ordering::SeqCst)
+    }
+
+    fn embed_batch_calls(&self) -> usize {
+        self.embed_batch_calls.load(Ordering::SeqCst)
+    }
+}
+
+impl EmbeddingService for CountingEmbeddingProvider {
+    fn provider_name(&self) -> &str {
+        TEST_EMBEDDINGS_DRIVER
+    }
+
+    fn model_name(&self) -> &str {
+        "counting-model"
+    }
+
+    fn output_dimension(&self) -> Option<usize> {
+        Some(self.dimension)
+    }
+
+    fn cache_key(&self) -> String {
+        format!("provider={TEST_EMBEDDINGS_DRIVER}:model=counting-model")
+    }
+
+    fn embed(&self, input: &str, _input_type: HostEmbeddingInputType) -> Result<Vec<f32>> {
+        self.embed_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![input.len() as f32, 0.5, 0.25])
+    }
+
+    fn embed_batch(
+        &self,
+        inputs: &[String],
+        _input_type: HostEmbeddingInputType,
+    ) -> Result<Vec<Vec<f32>>> {
+        self.embed_batch_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(inputs
+            .iter()
+            .map(|input| vec![input.len() as f32, 0.5, 0.25])
+            .collect())
     }
 }
 
@@ -349,6 +409,97 @@ fn semantic_embedding_summary_lookup_sql_uses_all_ids() {
 }
 
 #[tokio::test]
+async fn current_summary_lookup_falls_back_to_fresh_historical_rows() {
+    let relational = sqlite_relational_with_schema(&format!(
+        "{}\nCREATE TABLE artefacts_current (
+            repo_id TEXT NOT NULL,
+            artefact_id TEXT PRIMARY KEY,
+            path TEXT NOT NULL,
+            content_id TEXT NOT NULL,
+            symbol_id TEXT
+        );
+        CREATE TABLE current_file_state (
+            repo_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            analysis_mode TEXT NOT NULL
+        );
+        CREATE TABLE symbol_semantics_current (
+            artefact_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            content_id TEXT NOT NULL,
+            symbol_id TEXT,
+            semantic_features_input_hash TEXT NOT NULL,
+            docstring_summary TEXT,
+            llm_summary TEXT,
+            template_summary TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            source_model TEXT
+        );
+        CREATE TABLE symbol_semantics (
+            artefact_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            blob_sha TEXT NOT NULL,
+            semantic_features_input_hash TEXT NOT NULL,
+            docstring_summary TEXT,
+            llm_summary TEXT,
+            template_summary TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            source_model TEXT
+        );",
+        schema::semantic_embeddings_sqlite_schema_sql()
+    ))
+    .await;
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (repo_id, artefact_id, path, content_id, symbol_id)
+             VALUES
+                ('repo-1', 'current-artefact', 'src/lib.rs', 'blob-1', 'sym-current'),
+                ('repo-1', 'historical-artefact', 'src/lib.rs', 'blob-1', 'sym-historical');
+             INSERT INTO current_file_state (repo_id, path, analysis_mode)
+             VALUES ('repo-1', 'src/lib.rs', 'code');
+             INSERT INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+             ) VALUES (
+                'current-artefact', 'repo-1', 'src/lib.rs', 'blob-1', 'sym-current', 'hash-current',
+                NULL, 'Current summary.', 'Current template.', 'Current summary.', 0.9, 'test:model'
+             );
+             INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+             ) VALUES (
+                'historical-artefact', 'repo-1', 'blob-1', 'hash-historical',
+                NULL, 'Historical summary.', 'Historical template.', 'Historical summary.', 0.9, 'test:model'
+             );",
+        )
+        .await
+        .expect("seed summary rows");
+
+    let summaries = load_current_semantic_summary_map(
+        &relational,
+        &[
+            "current-artefact".to_string(),
+            "historical-artefact".to_string(),
+        ],
+        embeddings::EmbeddingRepresentationKind::Summary,
+    )
+    .await
+    .expect("load current summary map");
+
+    assert_eq!(
+        summaries.get("current-artefact").map(String::as_str),
+        Some("Current summary.")
+    );
+    assert_eq!(
+        summaries.get("historical-artefact").map(String::as_str),
+        Some("Historical summary.")
+    );
+}
+
+#[tokio::test]
 async fn semantic_embedding_loads_index_state_from_relational_storage() {
     let setup_fingerprint = test_setup_fingerprint("voyage", "voyage-code-3", 1024);
     let relational = sqlite_relational_with_schema(&format!(
@@ -373,6 +524,52 @@ async fn semantic_embedding_loads_index_state_from_relational_storage() {
     .expect("load embedding state");
 
     assert_eq!(state.embedding_hash.as_deref(), Some("hash-1"));
+}
+
+#[tokio::test]
+async fn semantic_embedding_bulk_loads_index_states_from_relational_storage() {
+    let setup_fingerprint = test_setup_fingerprint("voyage", "voyage-code-3", 1024);
+    let relational = sqlite_relational_with_schema(&format!(
+        "{schema}
+        INSERT INTO symbol_embeddings (
+            artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+        ) VALUES
+            ('artefact-1', 'repo-1', 'blob-1', 'code', '{setup_fingerprint}', 'voyage', 'voyage-code-3', 1024, 'hash-1', '[0.1,0.2,0.3]'),
+            ('artefact-2', 'repo-1', 'blob-2', 'code', '{setup_fingerprint}', 'voyage', 'voyage-code-3', 1024, 'hash-2', '[0.2,0.3,0.4]'),
+            ('summary-1', 'repo-1', 'blob-1', 'summary', '{setup_fingerprint}', 'voyage', 'voyage-code-3', 1024, 'summary-hash', '[0.3,0.4,0.5]');
+        ",
+        schema = schema::semantic_embeddings_sqlite_schema_sql(),
+        setup_fingerprint = setup_fingerprint,
+    ))
+    .await;
+
+    let states = load_symbol_embedding_index_states(
+        &relational,
+        &[
+            "artefact-1".to_string(),
+            "artefact-2".to_string(),
+            "missing".to_string(),
+        ],
+        embeddings::EmbeddingRepresentationKind::Code,
+        &setup_fingerprint,
+    )
+    .await
+    .expect("bulk load embedding states");
+
+    assert_eq!(
+        states
+            .get("artefact-1")
+            .and_then(|state| state.embedding_hash.as_deref()),
+        Some("hash-1")
+    );
+    assert_eq!(
+        states
+            .get("artefact-2")
+            .and_then(|state| state.embedding_hash.as_deref()),
+        Some("hash-2")
+    );
+    assert!(!states.contains_key("missing"));
+    assert!(!states.contains_key("summary-1"));
 }
 
 #[tokio::test]
@@ -640,6 +837,94 @@ async fn historical_embedding_upsert_persists_code_and_summary_variants() {
             ("artefact-2".to_string(), "summary".to_string()),
         ]
     );
+}
+
+#[tokio::test]
+async fn historical_embedding_upsert_batches_reindex_inputs_once() {
+    let relational = sqlite_relational_with_schema(&format!(
+        "{}\nCREATE TABLE symbol_semantics (
+                artefact_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                symbol_id TEXT,
+                semantic_features_input_hash TEXT NOT NULL,
+                docstring_summary TEXT,
+                llm_summary TEXT,
+                template_summary TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                source_model TEXT
+            );",
+        schema::semantic_embeddings_sqlite_schema_sql()
+    ))
+    .await;
+    relational
+        .exec(
+            "INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, symbol_id, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES
+                ('artefact-1', 'repo-1', 'blob-1', 'sym-1', 'semantic-hash-1', NULL, 'Loads invoice data.', 'Function load invoice.', 'Loads invoice data.', 0.9, 'test-model'),
+                ('artefact-2', 'repo-1', 'blob-1', 'sym-2', 'semantic-hash-2', NULL, NULL, 'Function save invoice.', 'Function save invoice.', 0.9, NULL)",
+        )
+        .await
+        .expect("insert historical semantics");
+
+    let inputs = vec![
+        semantic::SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("sym-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/a.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "src/a.ts::loadInvoice".to_string(),
+            name: "loadInvoice".to_string(),
+            signature: Some("function loadInvoice(id: string)".to_string()),
+            modifiers: Vec::new(),
+            body: "return loadInvoiceData(id);".to_string(),
+            docstring: None,
+            parent_kind: None,
+            dependency_signals: vec!["loadInvoiceData".to_string()],
+            content_hash: Some("blob-1".to_string()),
+        },
+        semantic::SemanticFeatureInput {
+            artefact_id: "artefact-2".to_string(),
+            symbol_id: Some("sym-2".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/a.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_declaration".to_string(),
+            symbol_fqn: "src/a.ts::saveInvoice".to_string(),
+            name: "saveInvoice".to_string(),
+            signature: Some("function saveInvoice(id: string)".to_string()),
+            modifiers: Vec::new(),
+            body: "return persistInvoice(id);".to_string(),
+            docstring: None,
+            parent_kind: None,
+            dependency_signals: vec!["persistInvoice".to_string()],
+            content_hash: Some("blob-1".to_string()),
+        },
+    ];
+    let provider = Arc::new(CountingEmbeddingProvider::new(3));
+    let service: Arc<dyn EmbeddingService> = provider.clone();
+
+    let stats = upsert_symbol_embedding_rows(
+        &relational,
+        &inputs,
+        embeddings::EmbeddingRepresentationKind::Code,
+        service,
+    )
+    .await
+    .expect("upsert historical code embeddings");
+
+    assert_eq!(stats.upserted, 2);
+    assert_eq!(provider.embed_batch_calls(), 1);
+    assert_eq!(provider.embed_calls(), 0);
 }
 
 #[tokio::test]

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
@@ -169,7 +170,10 @@ fn render_status_text(
     let mut lines = vec![
         format!("Repository: {repo_id}"),
         format!("Init session: {}", session.init_session_id),
-        format!("Status: {}", runtime_status_label(session.status.as_str())),
+        format!(
+            "Status: {}",
+            runtime_status_label(effective_session_status(session).as_ref())
+        ),
         format!("Summary: {}", session_summary_text(snapshot, session)),
     ];
 
@@ -226,10 +230,11 @@ fn render_status_json(
             .as_ref()
             .map(|session| session.init_session_id.clone()),
         "session": selected_session.map(|session| {
+            let status = effective_session_status(session);
             json!({
                 "initSessionId": session.init_session_id.as_str(),
-                "status": session.status.as_str(),
-                "statusLabel": runtime_status_label(session.status.as_str()),
+                "status": status.as_ref(),
+                "statusLabel": runtime_status_label(status.as_ref()),
                 "waitingReason": session.waiting_reason.clone(),
                 "waitingLabel": session
                     .waiting_reason
@@ -375,6 +380,20 @@ fn selected_lanes(session: &RuntimeInitSessionGraphqlRecord) -> Vec<SelectedLane
     selected
 }
 
+fn effective_session_status(session: &RuntimeInitSessionGraphqlRecord) -> Cow<'_, str> {
+    if session.status.eq_ignore_ascii_case("completed") && selected_lane_warning(session) {
+        Cow::Borrowed("completed_with_warnings")
+    } else {
+        Cow::Borrowed(session.status.as_str())
+    }
+}
+
+fn selected_lane_warning(session: &RuntimeInitSessionGraphqlRecord) -> bool {
+    selected_lanes(session)
+        .iter()
+        .any(|selected| selected.lane.status.eq_ignore_ascii_case("warning"))
+}
+
 fn session_summary_text(
     snapshot: &RuntimeSnapshotGraphqlRecord,
     session: &RuntimeInitSessionGraphqlRecord,
@@ -415,7 +434,8 @@ fn session_summary_status_text(session: &RuntimeInitSessionGraphqlRecord) -> Str
         };
     }
 
-    match session.status.to_ascii_lowercase().as_str() {
+    let status = effective_session_status(session);
+    match status.to_ascii_lowercase().as_str() {
         "completed" => "Setup tasks completed".to_string(),
         "completed_with_warnings" => "Setup tasks completed with warnings".to_string(),
         "failed" => "Setup failed".to_string(),

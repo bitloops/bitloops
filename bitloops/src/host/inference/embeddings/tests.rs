@@ -66,6 +66,9 @@ while IFS= read -r line; do
         *'bitloops python embedding dimension probe'*)
           printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
           ;;
+        *'second document'*)
+          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0],[3.0,4.0]]}}\n' "$request_id"
+          ;;
         *)
 {timeout_branch}          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
           ;;
@@ -81,6 +84,93 @@ done
     .expect("write fake runtime script");
 }
 
+fn write_batch_rejecting_fake_runtime_script(script_path: &Path) {
+    fs::write(
+        script_path,
+        r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+printf '%s\n' '{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}'
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"shutdown"'*)
+      printf '{"id":"%s","ok":true}\n' "$request_id"
+      exit 0
+      ;;
+    *'"cmd":"embed"'*)
+      case "$line" in
+        *'bitloops python embedding dimension probe'*)
+          printf '{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}\n' "$request_id"
+          ;;
+        *'first document'*'second document'*)
+          printf '{"id":"%s","ok":false,"error":{"message":"batch rejected"}}\n' "$request_id"
+          ;;
+        *'second document'*)
+          printf '{"id":"%s","ok":true,"vectors":[[3.0,4.0]]}\n' "$request_id"
+          ;;
+        *)
+          printf '{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}\n' "$request_id"
+          ;;
+      esac
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write batch rejecting fake runtime script");
+}
+
+fn write_request_recording_fake_runtime_script(script_path: &Path, request_log: &Path) {
+    fs::write(
+        script_path,
+        format!(
+            r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+printf '%s\n' '{{"event":"ready","protocol":1,"capabilities":["embed","shutdown"]}}'
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"cmd":"shutdown"'*)
+      printf '{{"id":"%s","ok":true}}\n' "$request_id"
+      exit 0
+      ;;
+    *'"cmd":"embed"'*)
+      case "$line" in
+        *'bitloops python embedding dimension probe'*)
+          printf '{{"id":"%s","ok":true,"vectors":[[1.0,2.0]]}}\n' "$request_id"
+          ;;
+        *)
+          document_ids=$(printf '%s' "$line" | grep -o 'platform document [0-9][0-9]' | sed 's/.* //')
+          count=$(printf '%s\n' "$document_ids" | sed '/^$/d' | wc -l | tr -d ' ')
+          printf '%s\n' "$count" >> "{request_log}"
+          vectors=""
+          for id in $document_ids; do
+            number=$(printf '%s' "$id" | sed 's/^0*//')
+            if [ -z "$number" ]; then
+              number=0
+            fi
+            if [ -n "$vectors" ]; then
+              vectors="$vectors,"
+            fi
+            vectors="$vectors[$number.0,2.0]"
+          done
+          printf '{{"id":"%s","ok":true,"vectors":[%s]}}\n' "$request_id" "$vectors"
+          ;;
+      esac
+      ;;
+  esac
+done
+"#,
+            request_log = request_log.display()
+        ),
+    )
+    .expect("write request recording fake runtime script");
+}
+
 fn fake_runtime_config(script_path: &Path, launch_log: &Path) -> InferenceRuntimeConfig {
     InferenceRuntimeConfig {
         command: "/bin/sh".to_string(),
@@ -91,6 +181,44 @@ fn fake_runtime_config(script_path: &Path, launch_log: &Path) -> InferenceRuntim
         startup_timeout_secs: 1,
         request_timeout_secs: 1,
     }
+}
+
+#[test]
+fn platform_ipc_service_splits_large_embedding_batches_into_supported_requests() {
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_embeddings_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    let request_log = temp.path().join("requests.log");
+    write_request_recording_fake_runtime_script(&script_path, &request_log);
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let service = with_platform_runtime_auth_environment_hook(
+        |api_key_env| {
+            Ok(vec![(
+                api_key_env.to_string(),
+                "token-from-login".to_string(),
+            )])
+        },
+        || BitloopsEmbeddingsIpcService::new("platform_code", &runtime, "test-model", None, true),
+    )
+    .expect("build platform ipc service");
+
+    let inputs = (0..50)
+        .map(|index| format!("platform document {index:02}"))
+        .collect::<Vec<_>>();
+    let vectors = service
+        .embed_batch(&inputs, EmbeddingInputType::Document)
+        .expect("platform batch embed");
+
+    assert_eq!(vectors.len(), 50);
+    assert_eq!(vectors[0], vec![0.0, 2.0]);
+    assert_eq!(vectors[31], vec![31.0, 2.0]);
+    assert_eq!(vectors[32], vec![32.0, 2.0]);
+    assert_eq!(vectors[49], vec![49.0, 2.0]);
+    assert_eq!(
+        fs::read_to_string(&request_log).expect("read request log"),
+        "32\n18\n"
+    );
 }
 
 #[test]
@@ -199,6 +327,52 @@ fn platform_ipc_service_injects_logged_in_token_into_requested_env_var() {
         env.contains("BITLOOPS_CUSTOM_PLATFORM_TOKEN=token-from-login"),
         "expected injected custom platform token env var, got: {env}"
     );
+}
+
+#[test]
+fn bitloops_embeddings_ipc_service_supports_batch_embed() {
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_embeddings_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    write_fake_runtime_script(&script_path, None, None);
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let service =
+        BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+            .expect("build ipc service");
+
+    let vectors = service
+        .embed_batch(
+            &["first document".to_string(), "second document".to_string()],
+            EmbeddingInputType::Document,
+        )
+        .expect("batch embed");
+
+    assert_eq!(vectors.len(), 2);
+    assert_eq!(vectors[0].len(), service.output_dimension().unwrap());
+    assert_eq!(vectors[1].len(), service.output_dimension().unwrap());
+}
+
+#[test]
+fn bitloops_embeddings_ipc_service_falls_back_to_single_requests_when_batch_is_rejected() {
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_embeddings_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    write_batch_rejecting_fake_runtime_script(&script_path);
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let service =
+        BitloopsEmbeddingsIpcService::new("local_code", &runtime, "test-model", None, false)
+            .expect("build ipc service");
+
+    let vectors = service
+        .embed_batch(
+            &["first document".to_string(), "second document".to_string()],
+            EmbeddingInputType::Document,
+        )
+        .expect("batch embed with single-input fallback");
+
+    assert_eq!(vectors, vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
 }
 
 #[test]

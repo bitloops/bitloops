@@ -11,8 +11,9 @@ use crate::host::devql::RelationalStorage;
 use super::ensure_semantic_embeddings_schema;
 use super::sql::{
     build_active_embedding_setup_lookup_sql, build_current_repo_embedding_states_sql,
-    build_current_repo_semantic_clone_coverage_sql, build_semantic_summary_lookup_sql,
-    build_symbol_embedding_index_state_sql,
+    build_current_repo_semantic_clone_coverage_sql, build_current_semantic_summary_lookup_sql,
+    build_semantic_summary_lookup_sql, build_symbol_embedding_index_state_sql,
+    build_symbol_embedding_index_states_sql,
 };
 
 pub(crate) async fn load_active_embedding_setup(
@@ -100,6 +101,26 @@ pub(crate) async fn load_symbol_embedding_index_state(
     Ok(parse_symbol_embedding_index_state_rows(&rows))
 }
 
+pub(crate) async fn load_symbol_embedding_index_states(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
+) -> Result<HashMap<String, embeddings::SymbolEmbeddingIndexState>> {
+    if artefact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = relational
+        .query_rows(&build_symbol_embedding_index_states_sql(
+            artefact_ids,
+            "symbol_embeddings",
+            representation_kind,
+            setup_fingerprint,
+        ))
+        .await?;
+    Ok(parse_symbol_embedding_index_state_map_rows(&rows))
+}
+
 pub(crate) async fn load_current_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
@@ -137,13 +158,30 @@ pub(crate) async fn load_current_semantic_summary_map(
     artefact_ids: &[String],
     representation_kind: embeddings::EmbeddingRepresentationKind,
 ) -> Result<HashMap<String, String>> {
-    load_semantic_summary_map_from_table(
+    if representation_kind != embeddings::EmbeddingRepresentationKind::Summary {
+        return Ok(HashMap::new());
+    }
+
+    let current = load_semantic_summary_map_from_sql(
         relational,
         artefact_ids,
-        "symbol_semantics_current",
+        build_current_semantic_summary_lookup_sql(artefact_ids),
         representation_kind,
     )
-    .await
+    .await;
+    match current {
+        Ok(summary_map) => Ok(summary_map),
+        Err(err) if missing_current_summary_projection_table(&err) => {
+            load_semantic_summary_map_from_table(
+                relational,
+                artefact_ids,
+                "symbol_semantics_current",
+                representation_kind,
+            )
+            .await
+        }
+        Err(err) => Err(err),
+    }
 }
 
 pub(crate) fn parse_symbol_embedding_index_state_rows(
@@ -159,6 +197,27 @@ pub(crate) fn parse_symbol_embedding_index_state_rows(
             .and_then(Value::as_str)
             .map(str::to_string),
     }
+}
+
+fn parse_symbol_embedding_index_state_map_rows(
+    rows: &[Value],
+) -> HashMap<String, embeddings::SymbolEmbeddingIndexState> {
+    let mut out = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
+            continue;
+        };
+        out.insert(
+            artefact_id.to_string(),
+            embeddings::SymbolEmbeddingIndexState {
+                embedding_hash: row
+                    .get("embedding_hash")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
+        );
+    }
+    out
 }
 
 async fn current_repo_semantic_clone_rows_are_complete(
@@ -198,9 +257,26 @@ async fn load_semantic_summary_map_from_table(
         return Ok(HashMap::new());
     }
 
-    let rows = relational
-        .query_rows(&build_semantic_summary_lookup_sql(artefact_ids, table))
-        .await?;
+    load_semantic_summary_map_from_sql(
+        relational,
+        artefact_ids,
+        build_semantic_summary_lookup_sql(artefact_ids, table),
+        _representation_kind,
+    )
+    .await
+}
+
+async fn load_semantic_summary_map_from_sql(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+    sql: String,
+    _representation_kind: embeddings::EmbeddingRepresentationKind,
+) -> Result<HashMap<String, String>> {
+    if artefact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = relational.query_rows(&sql).await?;
     let mut out = HashMap::with_capacity(rows.len());
     for row in rows {
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
@@ -274,6 +350,21 @@ fn parse_active_embedding_state_rows(
         .collect()
 }
 
+fn missing_current_summary_projection_table(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    missing_relation_error(&message, "artefacts_current")
+        || missing_relation_error(&message, "current_file_state")
+        || (missing_relation_error(&message, "symbol_semantics")
+            && !missing_relation_error(&message, "symbol_semantics_current"))
+}
+
+fn missing_relation_error(message: &str, relation: &str) -> bool {
+    message.contains(&format!("no such table: {relation}"))
+        || message.contains(&format!("relation \"{relation}\" does not exist"))
+        || message.contains(&format!("relation '{relation}' does not exist"))
+        || message.contains(&format!("relation {relation} does not exist"))
+}
+
 fn value_as_positive_usize(value: &Value) -> Option<usize> {
     if let Some(value) = value.as_u64() {
         return usize::try_from(value).ok();
@@ -332,5 +423,29 @@ fn resolve_embedding_summary(row: &Value) -> Option<String> {
             template_summary,
             docstring_summary,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+
+    use super::missing_current_summary_projection_table;
+
+    #[test]
+    fn summary_projection_missing_postgres_relation_falls_back() {
+        let err =
+            anyhow!("error returned from database: relation \"artefacts_current\" does not exist");
+
+        assert!(missing_current_summary_projection_table(&err));
+    }
+
+    #[test]
+    fn summary_projection_missing_current_table_does_not_fallback() {
+        let err = anyhow!(
+            "error returned from database: relation \"symbol_semantics_current\" does not exist"
+        );
+
+        assert!(!missing_current_summary_projection_table(&err));
     }
 }

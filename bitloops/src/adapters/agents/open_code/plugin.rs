@@ -1,11 +1,17 @@
 use std::path::Path;
 
 use crate::adapters::agents::AGENT_NAME_OPEN_CODE;
-use crate::host::hooks::augmentation::devql_guidance::build_session_bootstrap;
+use crate::host::hooks::augmentation::devql_guidance::{
+    build_session_bootstrap, build_turn_guidance,
+};
 use crate::host::hooks::augmentation::prompt_surface_presence::installed_prompt_surface_relative_path;
 
 pub const BITLOOPS_CMD_PLACEHOLDER: &str = "__BITLOOPS_CMD__";
 pub const BOOTSTRAP_CONTEXT_PLACEHOLDER: &str = "__BOOTSTRAP_CONTEXT__";
+pub const TURN_GUIDANCE_CONTEXT_PLACEHOLDER: &str = "__TURN_GUIDANCE_CONTEXT__";
+pub const DEVQL_REPO_UNDERSTANDING_TERMS_PLACEHOLDER: &str = "__DEVQL_REPO_UNDERSTANDING_TERMS__";
+pub const DEVQL_EXECUTION_TERMS_PLACEHOLDER: &str = "__DEVQL_EXECUTION_TERMS__";
+pub const DEVQL_CODE_REFERENCE_MARKERS_PLACEHOLDER: &str = "__DEVQL_CODE_REFERENCE_MARKERS__";
 
 pub(crate) fn session_bootstrap_text(repo_root: &Path) -> String {
     let Some(surface_path) =
@@ -15,6 +21,16 @@ pub(crate) fn session_bootstrap_text(repo_root: &Path) -> String {
     };
 
     build_session_bootstrap(surface_path)
+}
+
+pub(crate) fn turn_guidance_text(repo_root: &Path) -> String {
+    let Some(surface_path) =
+        installed_prompt_surface_relative_path(repo_root, AGENT_NAME_OPEN_CODE)
+    else {
+        return String::new();
+    };
+
+    build_turn_guidance(surface_path)
 }
 
 pub const PLUGIN_TEMPLATE: &str = r##"// Bitloops CLI plugin for OpenCode
@@ -28,12 +44,18 @@ import path from "node:path"
 export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
   const BITLOOPS_CMD = "__BITLOOPS_CMD__"
   const BOOTSTRAP_CONTEXT = __BOOTSTRAP_CONTEXT__
+  const TURN_GUIDANCE_CONTEXT = __TURN_GUIDANCE_CONTEXT__
+  const DEVQL_REPO_UNDERSTANDING_TERMS = __DEVQL_REPO_UNDERSTANDING_TERMS__
+  const DEVQL_EXECUTION_TERMS = __DEVQL_EXECUTION_TERMS__
+  const DEVQL_CODE_REFERENCE_MARKERS = __DEVQL_CODE_REFERENCE_MARKERS__
   // Store transcripts in a temp directory - these are ephemeral handoff files
   // between the plugin and the hook handler. Once checkpointed, the data
   // lives on git refs and the file is disposable.
   const sanitized = directory.replace(/[^a-zA-Z0-9]/g, "-")
   const transcriptDir = `${tmpdir()}/bitloops-opencode/${sanitized}`
   const seenUserMessages = new Set<string>()
+  const latestUserPromptByMessageID = new Map<string, string>()
+  let latestUserMessageID: string | null = null
 
   // In-memory stores - used to write transcripts without relying on the SDK API,
   // which may be unavailable during shutdown.
@@ -67,6 +89,23 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
       .filter((p: any) => p.type === "text")
       .map((p: any) => p.text ?? "")
       .join("\n")
+  }
+
+  /** Decide whether a user prompt is repo-aware understanding work. */
+  function promptWarrantsDevql(prompt: string): boolean {
+    const lower = prompt.toLowerCase()
+    const looksLikeCodeReference = DEVQL_CODE_REFERENCE_MARKERS.some((needle) => prompt.includes(needle))
+    const looksLikeEditOrExecution = DEVQL_EXECUTION_TERMS.some((needle) => lower.includes(needle))
+    const looksLikeRepoUnderstanding = DEVQL_REPO_UNDERSTANDING_TERMS.some((needle) => lower.includes(needle))
+
+    return (looksLikeCodeReference || looksLikeRepoUnderstanding) && !looksLikeEditOrExecution
+  }
+
+  /** Check whether a message already contains a text marker. */
+  function hasTextPartContaining(message: any, marker: string): boolean {
+    return (message.parts ?? []).some(
+      (p: any) => p.type === "text" && typeof p.text === "string" && p.text.includes(marker)
+    )
   }
 
   /** Format a message object from its accumulated parts. */
@@ -184,17 +223,37 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
     },
 
     "experimental.chat.messages.transform": async (_input, output) => {
-      if (!BOOTSTRAP_CONTEXT) return
+      if (!BOOTSTRAP_CONTEXT && !TURN_GUIDANCE_CONTEXT) return
       const repoSkillPath = path.join(directory, ".opencode", "skills", "bitloops", "using-devql", "SKILL.md")
       if (!(await Bun.file(repoSkillPath).exists())) return
       if (!output.messages.length) return
-      const firstUser = output.messages.find((m: any) => m.info?.role === "user")
-      if (!firstUser || !firstUser.parts?.length) return
-      if (firstUser.parts.some((p: any) => p.type === "text" && typeof p.text === "string" && p.text.includes("EXTREMELY_IMPORTANT"))) {
-        return
+
+      if (BOOTSTRAP_CONTEXT) {
+        const firstUser = output.messages.find((m: any) => m.info?.role === "user")
+        if (firstUser?.parts?.length && !hasTextPartContaining(firstUser, "EXTREMELY_IMPORTANT")) {
+          const ref = firstUser.parts[0]
+          firstUser.parts.unshift({ ...ref, type: "text", text: BOOTSTRAP_CONTEXT })
+        }
       }
-      const ref = firstUser.parts[0]
-      firstUser.parts.unshift({ ...ref, type: "text", text: BOOTSTRAP_CONTEXT })
+
+      if (!TURN_GUIDANCE_CONTEXT || !latestUserMessageID) return
+      const latestUser = output.messages.find(
+        (m: any) => m.info?.id === latestUserMessageID && m.info?.role === "user"
+      )
+      if (!latestUser?.parts?.length) return
+      const prompt = latestUserPromptByMessageID.get(latestUserMessageID) ?? textFromParts(latestUser.parts)
+      if (!promptWarrantsDevql(prompt)) return
+      const turnGuidanceMarker = TURN_GUIDANCE_CONTEXT.split(" when ")[0]
+      if (hasTextPartContaining(latestUser, turnGuidanceMarker)) return
+      const ref = latestUser.parts[0]
+      latestUser.parts.unshift({ ...ref, type: "text", text: TURN_GUIDANCE_CONTEXT })
+    },
+
+    "chat.message": async (input, output) => {
+      const messageID = input.messageID ?? output.message?.id
+      if (!messageID) return
+      latestUserMessageID = messageID
+      latestUserPromptByMessageID.set(messageID, textFromParts(output.parts ?? []))
     },
 
     event: async ({ event }) => {
@@ -282,6 +341,8 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
             await writeExportJSON(session.id)
           }
           seenUserMessages.clear()
+          latestUserMessageID = null
+          latestUserPromptByMessageID.clear()
           messageStore.clear()
           partStore.clear()
           currentSessionID = null

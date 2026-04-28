@@ -14,6 +14,7 @@ use crate::host::interactions::types::{
     InteractionEvent, InteractionSubagentRun, InteractionToolInvocation, InteractionTurn,
 };
 use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
+use crate::storage::SqliteConnectionPool;
 
 const MAX_INTERACTION_ROWS: usize = 1_000_000;
 
@@ -243,12 +244,34 @@ fn load_checkpoint_links(
         Ok(store) => store,
         Err(_) => return Ok(HashMap::new()),
     };
-    let _ = relational.initialise_local_relational_checkpoint_schema();
-    let _ = relational.initialise_local_devql_schema();
-    let sqlite = match relational.local_sqlite_pool() {
-        Ok(sqlite) => sqlite,
-        Err(_) => return Ok(HashMap::new()),
-    };
+    match query_checkpoint_links(&relational, repo_id) {
+        Ok(rows) => Ok(rows),
+        Err(err) if checkpoint_link_bootstrap_needed(&err) => {
+            bootstrap_checkpoint_link_schema(&relational)?;
+            match query_checkpoint_links(&relational, repo_id) {
+                Ok(rows) => Ok(rows),
+                Err(retry_err) if checkpoint_link_bootstrap_needed(&retry_err) => {
+                    Ok(HashMap::new())
+                }
+                Err(retry_err) => Err(retry_err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn query_checkpoint_links(
+    relational: &DefaultRelationalStore,
+    repo_id: &str,
+) -> Result<HashMap<String, Vec<InteractionLinkedCheckpoint>>> {
+    let sqlite = relational.local_sqlite_pool()?;
+    query_checkpoint_links_sqlite(&sqlite, repo_id)
+}
+
+fn query_checkpoint_links_sqlite(
+    sqlite: &SqliteConnectionPool,
+    repo_id: &str,
+) -> Result<HashMap<String, Vec<InteractionLinkedCheckpoint>>> {
     sqlite.with_connection(|conn| {
         let mut stmt = conn.prepare(
             "SELECT cc.checkpoint_id, cc.commit_sha,
@@ -281,6 +304,22 @@ fn load_checkpoint_links(
         }
         Ok(out)
     })
+}
+
+fn bootstrap_checkpoint_link_schema(relational: &DefaultRelationalStore) -> Result<()> {
+    relational
+        .initialise_local_devql_schema()
+        .context("initialising local DevQL schema for interaction checkpoint links")?;
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .context("initialising local relational checkpoint schema for interaction checkpoint links")
+}
+
+fn checkpoint_link_bootstrap_needed(err: &anyhow::Error) -> bool {
+    let message = err.to_string();
+    message.contains("SQLite database file not found at")
+        || message.contains("no such table: commit_checkpoints")
+        || message.contains("no such table: commits")
 }
 
 fn group_tool_uses<I, F>(tool_uses: I, key_fn: F) -> HashMap<String, Vec<InteractionToolInvocation>>
