@@ -4,6 +4,9 @@ use crate::config::{
     ENV_DAEMON_CONFIG_PATH_OVERRIDE, bootstrap_default_daemon_environment, load_daemon_settings,
     persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
+use crate::devql_transport::{RepoPathRegistry, RepoPathRegistryEntry, persist_repo_path_registry};
+use crate::host::runtime_store::RepoSqliteRuntimeStore;
+use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::log_capture::capture_logs_async;
 use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
@@ -34,6 +37,60 @@ fn write_daemon_config(config_root: &Path, content: &str) -> PathBuf {
     fs::create_dir_all(parent).expect("create config parent");
     fs::write(&config_path, content).expect("write daemon config");
     config_path
+}
+
+#[cfg(unix)]
+fn spawn_detached_long_lived_process() -> u32 {
+    let output = std::process::Command::new("sh")
+        .args(["-c", "sleep 60 >/dev/null 2>&1 & echo $!"])
+        .output()
+        .expect("spawn detached long-lived process");
+    assert!(
+        output.status.success(),
+        "failed to spawn detached long-lived process: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("detached pid stdout should be utf8")
+        .trim()
+        .parse()
+        .expect("detached pid should parse")
+}
+
+#[cfg(windows)]
+fn spawn_detached_long_lived_process() -> u32 {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "$p = Start-Process -FilePath ping -ArgumentList '-n 60 127.0.0.1' -WindowStyle Hidden -PassThru; $p.Id",
+        ])
+        .output()
+        .expect("spawn detached long-lived process");
+    assert!(
+        output.status.success(),
+        "failed to spawn detached long-lived process: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("detached pid stdout should be utf8")
+        .trim()
+        .parse()
+        .expect("detached pid should parse")
+}
+
+fn wait_for_pid_exit(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if !process_is_running(pid).expect("inspect detached watcher process state") {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected detached watcher process {pid} to exit during daemon shutdown cleanup"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[tokio::test]
@@ -84,6 +141,76 @@ async fn daemon_lifecycle_logs_terminal_restart_failure() {
 #[test]
 fn supervisor_service_name_is_global_and_stable() {
     assert_eq!(GLOBAL_SUPERVISOR_SERVICE_NAME, "com.bitloops.daemon");
+}
+
+#[test]
+fn daemon_shutdown_tears_down_watchers_bound_to_the_same_daemon_config() {
+    let temp = TempDir::new().expect("temp dir");
+    let daemon_root = temp.path().join("daemon-root");
+    let repo_root = temp.path().join("repo");
+    fs::create_dir_all(&daemon_root).expect("create daemon root");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    fs::write(
+        repo_root.join(".bitloops.local.toml"),
+        "[capture]\nenabled = true\nstrategy = \"manual-commit\"\n",
+    )
+    .expect("write repo-local watcher policy");
+
+    let daemon_config_path = write_daemon_test_config(&daemon_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(".bitloops.local.toml"),
+        &daemon_config_path,
+    )
+    .expect("write repo daemon binding");
+
+    let mut daemon_config =
+        resolve_daemon_config(Some(daemon_config_path.as_path())).expect("resolve daemon config");
+    daemon_config.repo_registry_path = temp.path().join("repo-path-registry.json");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    persist_repo_path_registry(
+        &daemon_config.repo_registry_path,
+        &RepoPathRegistry {
+            version: 1,
+            entries: vec![RepoPathRegistryEntry {
+                repo_id: repo.repo_id,
+                provider: repo.provider,
+                organisation: repo.organization,
+                name: repo.name,
+                identity: repo.identity,
+                repo_root: repo_root.clone(),
+                last_branch: Some("main".to_string()),
+                git_dir_relative_path: Some(".git".to_string()),
+                updated_at_unix: 0,
+            }],
+        },
+    )
+    .expect("persist repo path registry");
+
+    let watcher_pid = spawn_detached_long_lived_process();
+    let runtime_store =
+        RepoSqliteRuntimeStore::open_for_roots(&daemon_config.config_root, &repo_root)
+            .expect("open repo runtime store");
+    runtime_store
+        .save_watcher_registration(
+            watcher_pid,
+            "shutdown-cleanup-token",
+            &repo_root,
+            crate::host::runtime_store::RepoWatcherRegistrationState::Ready,
+        )
+        .expect("seed watcher registration");
+
+    stop_bound_repo_watchers_for_daemon_shutdown(&daemon_config);
+
+    assert!(
+        runtime_store
+            .load_watcher_registration()
+            .expect("load watcher registration after shutdown cleanup")
+            .is_none(),
+        "daemon shutdown cleanup should clear watcher registration for bound repo"
+    );
+    wait_for_pid_exit(watcher_pid);
 }
 
 #[test]

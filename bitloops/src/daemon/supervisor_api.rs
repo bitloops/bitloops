@@ -28,10 +28,14 @@ pub(super) async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs)
             .with_state(SupervisorAppState {
                 operation_lock: Arc::new(Mutex::new(())),
             });
+        let child_reaper = spawn_supervisor_child_reaper();
 
         let result = axum::serve(control_listener, app)
             .with_graceful_shutdown(wait_for_shutdown_signal())
             .await;
+        if let Some(reaper) = child_reaper {
+            reaper.abort();
+        }
 
         if let Err(err) = delete_supervisor_runtime_state() {
             log::warn!("failed to clear daemon supervisor runtime state on shutdown: {err:#}");
@@ -43,6 +47,37 @@ pub(super) async fn run_internal_supervisor(_args: InternalDaemonSupervisorArgs)
         log::error!("daemon supervisor failed: {err:#}");
     }
     result
+}
+
+#[cfg(unix)]
+fn spawn_supervisor_child_reaper() -> Option<tokio::task::JoinHandle<()>> {
+    Some(tokio::spawn(async {
+        use tokio::signal::unix::{SignalKind, signal};
+
+        let mut sigchld = match signal(SignalKind::child()) {
+            Ok(signal) => signal,
+            Err(err) => {
+                log::warn!("failed to install SIGCHLD handler for daemon supervisor: {err:#}");
+                return;
+            }
+        };
+        while sigchld.recv().await.is_some() {
+            match reap_terminated_child_processes() {
+                Ok(count) if count > 0 => {
+                    log::debug!("daemon supervisor reaped {count} child process(es)");
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    log::warn!("failed to reap daemon supervisor child processes: {err:#}");
+                }
+            }
+        }
+    }))
+}
+
+#[cfg(not(unix))]
+fn spawn_supervisor_child_reaper() -> Option<tokio::task::JoinHandle<()>> {
+    None
 }
 
 async fn supervisor_health() -> Json<SupervisorHealthResponse> {
