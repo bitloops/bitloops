@@ -12,12 +12,15 @@ use super::runtime::{
 use super::session::PythonEmbeddingsSessionConfig;
 use super::shared::{SharedBitloopsEmbeddingsSession, shared_bitloops_embeddings_session_registry};
 
+const PLATFORM_EMBEDDINGS_MAX_CLIENT_BATCH_SIZE: usize = 32;
+
 pub(crate) struct BitloopsEmbeddingsIpcService {
     profile_name: String,
     model_name: String,
     output_dimension: usize,
     cache_key: String,
     shared_session: Arc<SharedBitloopsEmbeddingsSession>,
+    max_request_batch_size: Option<usize>,
 }
 
 impl BitloopsEmbeddingsIpcService {
@@ -55,6 +58,8 @@ impl BitloopsEmbeddingsIpcService {
             output_dimension,
             cache_key,
             shared_session,
+            max_request_batch_size: platform_backed
+                .then_some(PLATFORM_EMBEDDINGS_MAX_CLIENT_BATCH_SIZE),
         })
     }
 
@@ -84,6 +89,32 @@ impl BitloopsEmbeddingsIpcService {
                     )
                 })?;
             vectors.append(&mut single);
+        }
+        Ok(vectors)
+    }
+
+    fn embed_texts_in_supported_batches(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let Some(max_request_batch_size) = self.max_request_batch_size else {
+            return match self.embed_texts(texts) {
+                Ok(vectors) => Ok(vectors),
+                Err(err) if texts.len() > 1 => {
+                    self.embed_texts_individually_after_batch_error(texts, err)
+                }
+                Err(err) => Err(err),
+            };
+        };
+
+        let mut vectors = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(max_request_batch_size) {
+            match self.embed_texts(chunk) {
+                Ok(mut chunk_vectors) => vectors.append(&mut chunk_vectors),
+                Err(err) if chunk.len() > 1 => {
+                    let mut fallback_vectors =
+                        self.embed_texts_individually_after_batch_error(chunk, err)?;
+                    vectors.append(&mut fallback_vectors);
+                }
+                Err(err) => return Err(err),
+            }
         }
         Ok(vectors)
     }
@@ -161,12 +192,6 @@ impl EmbeddingService for BitloopsEmbeddingsIpcService {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        match self.embed_texts(&texts) {
-            Ok(vectors) => Ok(vectors),
-            Err(err) if texts.len() > 1 => {
-                self.embed_texts_individually_after_batch_error(&texts, err)
-            }
-            Err(err) => Err(err),
-        }
+        self.embed_texts_in_supported_batches(&texts)
     }
 }
