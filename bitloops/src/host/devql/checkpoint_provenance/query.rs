@@ -217,6 +217,76 @@ pub(crate) fn build_checkpoint_file_debug_sql(
     )
 }
 
+fn build_checkpoint_selection_lookup_sql(
+    repo_id: &str,
+    symbol_ids: &[String],
+    paths: &[String],
+    activity_filter: CheckpointFileActivityFilter<'_>,
+) -> Option<String> {
+    let symbol_ids = quoted_non_empty_values(symbol_ids);
+    let path_candidates = paths
+        .iter()
+        .flat_map(|path| build_path_candidates(path))
+        .filter(|path| !path.trim().is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut selects = Vec::new();
+
+    if !symbol_ids.is_empty() {
+        let mut clauses = vec![format!("ca.repo_id = '{}'", esc_pg(repo_id))];
+        clauses.push(format!(
+            "(ca.before_symbol_id IN ({symbols}) OR ca.after_symbol_id IN ({symbols}))",
+            symbols = symbol_ids.join(", "),
+        ));
+        clauses.extend(activity_filter.sql_clauses("ca"));
+        selects.push(format!(
+            "SELECT ca.checkpoint_id, ca.event_time \
+               FROM checkpoint_artefacts ca \
+              WHERE {}",
+            clauses.join(" AND "),
+        ));
+    }
+
+    if !path_candidates.is_empty() {
+        let path_clause = format!(
+            "({} OR {} OR {})",
+            sql_path_candidates_clause("cf.path_before", &path_candidates),
+            sql_path_candidates_clause("cf.path_after", &path_candidates),
+            sql_path_candidates_clause("cf.copy_source_path", &path_candidates),
+        );
+        let mut clauses = vec![format!("cf.repo_id = '{}'", esc_pg(repo_id)), path_clause];
+        clauses.extend(activity_filter.sql_clauses("cf"));
+        selects.push(format!(
+            "SELECT cf.checkpoint_id, cf.event_time \
+               FROM checkpoint_files cf \
+              WHERE {}",
+            clauses.join(" AND "),
+        ));
+    }
+
+    if selects.is_empty() {
+        return None;
+    }
+
+    Some(format!(
+        "SELECT checkpoint_id, MAX(event_time) AS event_time \
+           FROM ({}) selection_matches \
+       GROUP BY checkpoint_id \
+       ORDER BY event_time DESC, checkpoint_id DESC",
+        selects.join(" UNION ALL "),
+    ))
+}
+
+fn quoted_non_empty_values(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("'{}'", esc_pg(value)))
+        .collect()
+}
+
 fn checkpoint_file_scope_clause(column: &str, scope: CheckpointFileScope<'_>) -> Option<String> {
     match scope {
         CheckpointFileScope::Repository => None,
@@ -369,35 +439,22 @@ impl<'a> CheckpointFileGateway<'a> {
         symbol_ids: &[String],
         activity_filter: CheckpointFileActivityFilter<'_>,
     ) -> Result<Vec<CheckpointArtefactMatch>> {
-        if symbol_ids.is_empty() {
+        self.list_checkpoint_ids_for_selection(repo_id, symbol_ids, &[], activity_filter)
+            .await
+    }
+
+    pub(crate) async fn list_checkpoint_ids_for_selection(
+        &self,
+        repo_id: &str,
+        symbol_ids: &[String],
+        paths: &[String],
+        activity_filter: CheckpointFileActivityFilter<'_>,
+    ) -> Result<Vec<CheckpointArtefactMatch>> {
+        let Some(sql) =
+            build_checkpoint_selection_lookup_sql(repo_id, symbol_ids, paths, activity_filter)
+        else {
             return Ok(Vec::new());
-        }
-
-        let symbol_ids = symbol_ids
-            .iter()
-            .map(|symbol_id| symbol_id.trim())
-            .filter(|symbol_id| !symbol_id.is_empty())
-            .map(|symbol_id| format!("'{}'", esc_pg(symbol_id)))
-            .collect::<Vec<_>>();
-        if symbol_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut clauses = vec![format!("ca.repo_id = '{}'", esc_pg(repo_id))];
-        clauses.push(format!(
-            "(ca.before_symbol_id IN ({symbols}) OR ca.after_symbol_id IN ({symbols}))",
-            symbols = symbol_ids.join(", "),
-        ));
-        clauses.extend(activity_filter.sql_clauses("ca"));
-
-        let sql = format!(
-            "SELECT ca.checkpoint_id, MAX(ca.event_time) AS event_time \
-               FROM checkpoint_artefacts ca \
-              WHERE {} \
-           GROUP BY ca.checkpoint_id \
-           ORDER BY event_time DESC, ca.checkpoint_id DESC",
-            clauses.join(" AND "),
-        );
+        };
         let rows = self.relational.query_rows(&sql).await?;
         rows.into_iter()
             .map(checkpoint_artefact_match_from_row)

@@ -259,6 +259,23 @@ mod tests {
             dest_symbol_id TEXT NOT NULL,
             dest_artefact_id TEXT NOT NULL
         );
+
+        CREATE TABLE checkpoint_artefacts (
+            relation_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            checkpoint_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_time TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            change_kind TEXT NOT NULL,
+            before_symbol_id TEXT,
+            after_symbol_id TEXT,
+            before_artefact_id TEXT,
+            after_artefact_id TEXT
+        );
     ";
 
     async fn sqlite_relational_with_provenance(seed_sql: &str) -> RelationalStorage {
@@ -317,6 +334,31 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].checkpoint_id, "checkpoint-2");
         assert_eq!(rows[1].checkpoint_id, "checkpoint-1");
+    }
+
+    #[tokio::test]
+    async fn list_selection_checkpoint_ids_includes_file_relation_matches() {
+        let relational = sqlite_relational_with_provenance(
+            "
+            INSERT INTO checkpoint_files VALUES
+                ('file-row-1', 'repo-1', 'checkpoint-file', 'session-1', '2026-03-20T10:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-old', 'blob-new', NULL, NULL);
+            ",
+        )
+        .await;
+        let gateway = CheckpointFileGateway::new(&relational);
+
+        let rows = gateway
+            .list_checkpoint_ids_for_selection(
+                "repo-1",
+                &["missing-symbol".to_string()],
+                &["./src/lib.rs".to_string()],
+                CheckpointFileActivityFilter::default(),
+            )
+            .await
+            .expect("lookup selection checkpoints");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].checkpoint_id, "checkpoint-file");
     }
 
     #[test]

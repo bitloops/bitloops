@@ -164,7 +164,7 @@ impl ArtefactSelection {
     ) -> Result<CheckpointStageData> {
         let checkpoints = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_selected_symbol_checkpoints(&self.scope, &self.symbol_ids(), agent, since)
+            .list_selected_checkpoints(&self.scope, &self.symbol_ids(), &self.paths(), agent, since)
             .await
             .map_err(|err| {
                 backend_error(format!("failed to resolve selected checkpoints: {err:#}"))

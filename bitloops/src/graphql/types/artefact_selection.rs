@@ -218,6 +218,10 @@ impl ArtefactSelection {
                 .map(|artefact| artefact.symbol_id.as_str()),
         )
     }
+
+    fn paths(&self) -> Vec<String> {
+        dedup_strings(self.artefacts.iter().map(|artefact| artefact.path.as_str()))
+    }
 }
 
 #[cfg(test)]
