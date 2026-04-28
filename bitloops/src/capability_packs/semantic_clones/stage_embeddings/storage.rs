@@ -352,10 +352,17 @@ fn parse_active_embedding_state_rows(
 
 fn missing_current_summary_projection_table(err: &anyhow::Error) -> bool {
     let message = format!("{err:#}");
-    message.contains("no such table: artefacts_current")
-        || message.contains("no such table: current_file_state")
-        || (message.contains("no such table: symbol_semantics")
-            && !message.contains("no such table: symbol_semantics_current"))
+    missing_relation_error(&message, "artefacts_current")
+        || missing_relation_error(&message, "current_file_state")
+        || (missing_relation_error(&message, "symbol_semantics")
+            && !missing_relation_error(&message, "symbol_semantics_current"))
+}
+
+fn missing_relation_error(message: &str, relation: &str) -> bool {
+    message.contains(&format!("no such table: {relation}"))
+        || message.contains(&format!("relation \"{relation}\" does not exist"))
+        || message.contains(&format!("relation '{relation}' does not exist"))
+        || message.contains(&format!("relation {relation} does not exist"))
 }
 
 fn value_as_positive_usize(value: &Value) -> Option<usize> {
@@ -416,5 +423,29 @@ fn resolve_embedding_summary(row: &Value) -> Option<String> {
             template_summary,
             docstring_summary,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+
+    use super::missing_current_summary_projection_table;
+
+    #[test]
+    fn summary_projection_missing_postgres_relation_falls_back() {
+        let err =
+            anyhow!("error returned from database: relation \"artefacts_current\" does not exist");
+
+        assert!(missing_current_summary_projection_table(&err));
+    }
+
+    #[test]
+    fn summary_projection_missing_current_table_does_not_fallback() {
+        let err = anyhow!(
+            "error returned from database: relation \"symbol_semantics_current\" does not exist"
+        );
+
+        assert!(!missing_current_summary_projection_table(&err));
     }
 }

@@ -193,10 +193,7 @@ pub(crate) async fn repair_current_semantic_feature_rows_from_historical(
         Ok(()) => Ok(()),
         Err(err) => {
             let message = format!("{err:#}");
-            if message.contains("no such table: artefacts_current")
-                || message.contains("no such table: current_file_state")
-                || message.contains("no such column: cfs.effective_content_id")
-            {
+            if missing_current_projection_schema_error(&message) {
                 return Ok(());
             }
             Err(err).context("repairing current semantic projection from historical rows")
@@ -222,10 +219,7 @@ pub(super) async fn persist_existing_semantic_feature_rows_to_current_for_matchi
         Ok(()) => Ok(()),
         Err(err) => {
             let message = format!("{err:#}");
-            if message.contains("no such table: artefacts_current")
-                || message.contains("no such table: current_file_state")
-                || message.contains("no such column: state.effective_content_id")
-            {
+            if missing_current_projection_schema_error(&message) {
                 return Ok(());
             }
             Err(err).context("repairing remapped current semantic projection from historical rows")
@@ -248,11 +242,8 @@ pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
     {
         Ok(()) => Ok(()),
         Err(err) => {
-            let message = err.to_string();
-            if message.contains("no such table: artefacts_current")
-                || message.contains("no such table: current_file_state")
-                || message.contains("no such column: state.effective_content_id")
-            {
+            let message = format!("{err:#}");
+            if missing_current_projection_schema_error(&message) {
                 return Ok(());
             }
             Err(err).context("persisting current semantic feature rows for matching input")
@@ -277,4 +268,52 @@ async fn persist_current_semantic_feature_rows(
             relational.dialect(),
         )?)
         .await
+}
+
+fn missing_current_projection_schema_error(message: &str) -> bool {
+    missing_relation_error(message, "artefacts_current")
+        || missing_relation_error(message, "current_file_state")
+        || missing_column_error(message, "cfs.effective_content_id")
+        || missing_column_error(message, "state.effective_content_id")
+        || missing_column_error(message, "effective_content_id")
+}
+
+fn missing_relation_error(message: &str, relation: &str) -> bool {
+    message.contains(&format!("no such table: {relation}"))
+        || message.contains(&format!("relation \"{relation}\" does not exist"))
+        || message.contains(&format!("relation '{relation}' does not exist"))
+        || message.contains(&format!("relation {relation} does not exist"))
+}
+
+fn missing_column_error(message: &str, column: &str) -> bool {
+    message.contains(&format!("no such column: {column}"))
+        || message.contains(&format!("column \"{column}\" does not exist"))
+        || message.contains(&format!("column '{column}' does not exist"))
+        || message.contains(&format!("column {column} does not exist"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::missing_current_projection_schema_error;
+
+    #[test]
+    fn missing_current_projection_schema_error_recognizes_postgres_missing_relation() {
+        assert!(missing_current_projection_schema_error(
+            "error returned from database: relation \"current_file_state\" does not exist",
+        ));
+    }
+
+    #[test]
+    fn missing_current_projection_schema_error_recognizes_postgres_missing_aliased_column() {
+        assert!(missing_current_projection_schema_error(
+            "error returned from database: column state.effective_content_id does not exist",
+        ));
+    }
+
+    #[test]
+    fn missing_current_projection_schema_error_ignores_unrelated_errors() {
+        assert!(!missing_current_projection_schema_error(
+            "error returned from database: syntax error near FROM",
+        ));
+    }
 }
