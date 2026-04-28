@@ -440,6 +440,26 @@ pub(super) fn load_file_changes(
     Ok(rows)
 }
 
+pub(super) fn count_file_changes(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    from_generation_seq: u64,
+    to_generation_seq: u64,
+) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT path)
+         FROM capability_workplane_cursor_file_changes
+         WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3",
+        params![
+            repo_id,
+            sql_i64(from_generation_seq)?,
+            sql_i64(to_generation_seq)?,
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
 pub(super) fn load_artefact_changes(
     conn: &rusqlite::Connection,
     repo_id: &str,
@@ -470,6 +490,56 @@ pub(super) fn load_artefact_changes(
         )?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+pub(super) fn count_artefact_changes(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    from_generation_seq: u64,
+    to_generation_seq: u64,
+) -> Result<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT symbol_id)
+         FROM capability_workplane_cursor_artefact_changes
+         WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3",
+        params![
+            repo_id,
+            sql_i64(from_generation_seq)?,
+            sql_i64(to_generation_seq)?,
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(usize::try_from(count).unwrap_or(usize::MAX))
+}
+
+pub(super) fn load_distinct_changed_paths(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    from_generation_seq: u64,
+    to_generation_seq: u64,
+) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT path
+         FROM (
+             SELECT DISTINCT path
+             FROM capability_workplane_cursor_file_changes
+             WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3
+             UNION
+             SELECT DISTINCT path
+             FROM capability_workplane_cursor_artefact_changes
+             WHERE repo_id = ?1 AND generation_seq >= ?2 AND generation_seq <= ?3
+         )
+         ORDER BY path ASC",
+    )?;
+    let rows = stmt.query_map(
+        params![
+            repo_id,
+            sql_i64(from_generation_seq)?,
+            sql_i64(to_generation_seq)?,
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
 #[allow(dead_code)]

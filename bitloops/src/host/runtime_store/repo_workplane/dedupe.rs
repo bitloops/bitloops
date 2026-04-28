@@ -1,8 +1,9 @@
 //! Dedupe lookups and row mappers for workplane jobs and semantic mailbox items.
 
 use anyhow::Result;
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::types::{
@@ -118,44 +119,74 @@ pub(crate) fn load_deduped_summary_mailbox_item(
     .map_err(anyhow::Error::from)
 }
 
-pub(crate) fn load_deduped_embedding_mailbox_item(
+pub(crate) fn load_deduped_embedding_mailbox_items(
     conn: &rusqlite::Connection,
     repo_id: &str,
     representation_kind: &str,
-    dedupe_key: Option<&str>,
-) -> Result<Option<SemanticEmbeddingMailboxItemRecord>> {
-    let Some(dedupe_key) = dedupe_key else {
-        return Ok(None);
-    };
-    conn.query_row(
-        "SELECT item_id, repo_id, repo_root, config_root, init_session_id, representation_kind,
-                item_kind, artefact_id, payload_json, dedupe_key, status, attempts,
-                available_at_unix, submitted_at_unix, leased_at_unix, lease_expires_at_unix,
-                lease_token, updated_at_unix, last_error
-         FROM semantic_embedding_mailbox_items
-         WHERE repo_id = ?1
-           AND representation_kind = ?2
-           AND dedupe_key = ?3
-           AND status IN (?4, ?5, ?6)
-         ORDER BY CASE status
-                      WHEN 'leased' THEN 0
-                      WHEN 'pending' THEN 1
-                      ELSE 2
-                  END,
-                  submitted_at_unix ASC
-         LIMIT 1",
-        params![
-            repo_id,
-            representation_kind,
-            dedupe_key,
-            SemanticMailboxItemStatus::Leased.as_str(),
-            SemanticMailboxItemStatus::Pending.as_str(),
-            SemanticMailboxItemStatus::Failed.as_str(),
-        ],
-        map_embedding_mailbox_item_record_row,
-    )
-    .optional()
-    .map_err(anyhow::Error::from)
+    dedupe_keys: &[String],
+) -> Result<HashMap<String, SemanticEmbeddingMailboxItemRecord>> {
+    const DEDUPE_LOOKUP_CHUNK_SIZE: usize = 500;
+
+    let mut unique_dedupe_keys = Vec::new();
+    let mut seen_dedupe_keys = HashSet::new();
+    for dedupe_key in dedupe_keys {
+        if seen_dedupe_keys.insert(dedupe_key.as_str()) {
+            unique_dedupe_keys.push(dedupe_key.as_str());
+        }
+    }
+    if unique_dedupe_keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut records = HashMap::new();
+    for chunk in unique_dedupe_keys.chunks(DEDUPE_LOOKUP_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT item_id, repo_id, repo_root, config_root, init_session_id, representation_kind,
+                    item_kind, artefact_id, payload_json, dedupe_key, status, attempts,
+                    available_at_unix, submitted_at_unix, leased_at_unix, lease_expires_at_unix,
+                    lease_token, updated_at_unix, last_error
+             FROM semantic_embedding_mailbox_items
+             WHERE repo_id = ?1
+               AND representation_kind = ?2
+               AND dedupe_key IN ({placeholders})
+               AND status IN (?, ?, ?)
+             ORDER BY dedupe_key ASC,
+                      CASE status
+                          WHEN 'leased' THEN 0
+                          WHEN 'pending' THEN 1
+                          ELSE 2
+                      END,
+                      submitted_at_unix ASC"
+        );
+        let mut query_params = Vec::with_capacity(chunk.len() + 5);
+        query_params.push(SqlValue::Text(repo_id.to_string()));
+        query_params.push(SqlValue::Text(representation_kind.to_string()));
+        for dedupe_key in chunk {
+            query_params.push(SqlValue::Text((*dedupe_key).to_string()));
+        }
+        query_params.push(SqlValue::Text(
+            SemanticMailboxItemStatus::Leased.as_str().to_string(),
+        ));
+        query_params.push(SqlValue::Text(
+            SemanticMailboxItemStatus::Pending.as_str().to_string(),
+        ));
+        query_params.push(SqlValue::Text(
+            SemanticMailboxItemStatus::Failed.as_str().to_string(),
+        ));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(query_params.iter()))?;
+        while let Some(row) = rows.next()? {
+            let record = map_embedding_mailbox_item_record_row(row)?;
+            if let Some(dedupe_key) = record.dedupe_key.clone() {
+                records.entry(dedupe_key).or_insert(record);
+            }
+        }
+    }
+    Ok(records)
 }
 
 fn map_workplane_job_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkplaneJobRecord> {

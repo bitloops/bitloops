@@ -42,7 +42,8 @@ fn compact_session_status_text(
         };
     }
 
-    match session.status.to_ascii_lowercase().as_str() {
+    let status = effective_compact_session_status(session);
+    match status.as_str() {
         "completed" => "Setup tasks completed".to_string(),
         "completed_with_warnings" => "Setup tasks completed with warnings".to_string(),
         "failed" => "Setup failed".to_string(),
@@ -50,4 +51,36 @@ fn compact_session_status_text(
         "running" => "Building your project's Intelligence Layer".to_string(),
         _ => "Background processing is running".to_string(),
     }
+}
+
+fn effective_compact_session_status(
+    session: &crate::cli::devql::graphql::RuntimeInitSessionGraphqlRecord,
+) -> String {
+    if session.status.eq_ignore_ascii_case("completed") && selected_warning_lane(session) {
+        "completed_with_warnings".to_string()
+    } else {
+        session.status.to_ascii_lowercase()
+    }
+}
+
+fn selected_warning_lane(
+    session: &crate::cli::devql::graphql::RuntimeInitSessionGraphqlRecord,
+) -> bool {
+    (session.run_sync && session.sync_lane.status.eq_ignore_ascii_case("warning"))
+        || (session.run_ingest && session.ingest_lane.status.eq_ignore_ascii_case("warning"))
+        || (session.embeddings_selected
+            && session
+                .code_embeddings_lane
+                .status
+                .eq_ignore_ascii_case("warning"))
+        || (session.summaries_selected
+            && session
+                .summaries_lane
+                .status
+                .eq_ignore_ascii_case("warning"))
+        || (session.summary_embeddings_selected
+            && session
+                .summary_embeddings_lane
+                .status
+                .eq_ignore_ascii_case("warning"))
 }

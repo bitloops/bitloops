@@ -22,6 +22,30 @@ WHERE artefact_id = '{artefact_id}' AND representation_kind = '{representation_k
     )
 }
 
+pub(super) fn build_symbol_embedding_index_states_sql(
+    artefact_ids: &[String],
+    table: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
+) -> String {
+    let artefact_filter = if artefact_ids.is_empty() {
+        "1 = 0".to_string()
+    } else {
+        format!("artefact_id IN ({})", sql_string_list_pg(artefact_ids))
+    };
+    format!(
+        "SELECT artefact_id, embedding_input_hash AS embedding_hash \
+FROM {table} \
+WHERE {artefact_filter} AND {representation_predicate} \
+  AND setup_fingerprint = '{setup_fingerprint}'",
+        table = table,
+        artefact_filter = artefact_filter,
+        representation_predicate =
+            representation_kind_sql_predicate("representation_kind", representation_kind),
+        setup_fingerprint = esc_pg(setup_fingerprint),
+    )
+}
+
 pub(super) fn build_active_embedding_setup_lookup_sql(
     repo_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,
@@ -107,6 +131,31 @@ FROM {table} \
 WHERE artefact_id IN ({})",
         sql_string_list_pg(artefact_ids),
         table = table,
+    )
+}
+
+pub(super) fn build_current_semantic_summary_lookup_sql(artefact_ids: &[String]) -> String {
+    format!(
+        "SELECT a.artefact_id AS artefact_id, \
+                COALESCE(sc.docstring_summary, sh.docstring_summary) AS docstring_summary, \
+                COALESCE(sc.llm_summary, sh.llm_summary) AS llm_summary, \
+                COALESCE(sc.template_summary, sh.template_summary) AS template_summary, \
+                COALESCE(sc.summary, sh.summary) AS summary, \
+                COALESCE(sc.source_model, sh.source_model) AS source_model \
+         FROM artefacts_current a \
+         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         LEFT JOIN symbol_semantics_current sc \
+           ON sc.repo_id = a.repo_id \
+          AND sc.artefact_id = a.artefact_id \
+          AND sc.content_id = a.content_id \
+         LEFT JOIN symbol_semantics sh \
+           ON sh.repo_id = a.repo_id \
+          AND sh.artefact_id = a.artefact_id \
+          AND sh.blob_sha = a.content_id \
+         WHERE a.artefact_id IN ({}) \
+           AND cfs.analysis_mode = 'code' \
+           AND (sc.artefact_id IS NOT NULL OR sh.artefact_id IS NOT NULL)",
+        sql_string_list_pg(artefact_ids),
     )
 }
 

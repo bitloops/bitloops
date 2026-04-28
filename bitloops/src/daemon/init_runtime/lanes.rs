@@ -315,7 +315,7 @@ pub(crate) fn derive_code_embeddings_lane(
             warnings,
         )
         .with_waiting_reason("preparing_embedding_batches")
-        .with_activity_label("Preparing embedding batches");
+        .with_activity_label("Indexing first embedding batch");
     }
     if stats.code_embedding_jobs.counts.pending > 0 || stats.code_embedding_jobs.counts.running > 0
     {

@@ -15,7 +15,8 @@ pub(crate) use self::hydration::{
     load_semantic_feature_inputs_for_current_repo,
 };
 pub(crate) use self::persistence::{
-    clear_current_semantic_feature_rows_for_path, upsert_current_semantic_feature_rows,
+    clear_current_semantic_feature_rows_for_path, clear_current_semantic_feature_rows_for_paths,
+    repair_current_semantic_feature_rows_from_historical, upsert_current_semantic_feature_rows,
     upsert_semantic_feature_rows,
 };
 pub(crate) use self::schema::{
@@ -23,9 +24,10 @@ pub(crate) use self::schema::{
     init_sqlite_semantic_features_schema,
 };
 pub(crate) use self::storage::{
-    build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
-    build_semantic_persist_rows_sql, parse_semantic_index_state_rows,
-    semantic_features_sqlite_schema_sql,
+    build_conditional_current_semantic_persist_rows_sql,
+    build_repair_current_semantic_projection_from_historical_sql,
+    build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
+    parse_semantic_index_state_rows, semantic_features_sqlite_schema_sql,
 };
 pub(crate) use self::summary::{
     ensure_required_llm_summary_output, load_semantic_summary_snapshot,

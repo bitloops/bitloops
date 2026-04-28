@@ -10,6 +10,9 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
+use crate::capability_packs::semantic_clones::{
+    repair_current_semantic_feature_rows_from_historical, semantic_features_sqlite_schema_sql,
+};
 use crate::daemon::types::InitSessionTaskTerminalSnapshot;
 use crate::daemon::{
     DevqlTaskKind, DevqlTaskRecord, DevqlTaskSource, DevqlTaskStatus, EmbeddingsBootstrapTaskSpec,
@@ -17,9 +20,12 @@ use crate::daemon::{
     SummaryBootstrapAction, SummaryBootstrapProgress, SummaryBootstrapRequest,
     SummaryBootstrapRunRecord, SummaryBootstrapStatus, SyncTaskMode, SyncTaskSpec,
 };
+use crate::host::devql::RelationalStorage;
+use crate::host::relational_store::DefaultRelationalStore;
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 use super::coordinator::InitRuntimeCoordinator;
+use super::coordinator::selected_lanes_have_warning_status;
 use super::embedding_freshness::EmbeddingFreshnessState;
 use super::lanes::{
     derive_code_embeddings_lane, derive_ingest_lane, derive_session_status, derive_summaries_lane,
@@ -29,6 +35,7 @@ use super::orchestration::{
     selected_session_workplane_stats, selected_sync_terminal, selected_top_level_terminal,
     semantic_bootstrap_waiting_reason, semantic_follow_up_ready_for_sync,
 };
+use super::progress::load_summary_freshness_state;
 use super::session_stats::{
     load_semantic_embedding_session_mailbox_counts, load_semantic_summary_session_mailbox_counts,
     summary_effective_work_item_count,
@@ -38,6 +45,7 @@ use super::stats::{
     is_summary_mailbox,
 };
 use super::types::InitRuntimeLaneProgressView;
+use tempfile::tempdir;
 
 fn completed_sync_task(task_id: &str, completed_at_unix: u64) -> DevqlTaskRecord {
     DevqlTaskRecord {
@@ -105,6 +113,186 @@ fn running_ingest_task(task_id: &str, updated_at_unix: u64) -> DevqlTaskRecord {
         ),
         result: None,
     }
+}
+
+#[test]
+fn summary_freshness_counts_fresh_historical_rows_when_current_projection_is_missing() {
+    let temp = tempdir().expect("temp dir");
+    let db_path = temp.path().join("relational.sqlite");
+    let store = DefaultRelationalStore::local_only(db_path);
+    store
+        .execute_local_sqlite_batch_allow_create(
+            "CREATE TABLE artefacts_current (
+                repo_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                canonical_kind TEXT,
+                language_kind TEXT
+            );
+            CREATE TABLE current_file_state (
+                repo_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                analysis_mode TEXT NOT NULL
+            );
+            CREATE TABLE symbol_features_current (
+                repo_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                content_id TEXT NOT NULL,
+                semantic_features_input_hash TEXT NOT NULL
+            );
+            CREATE TABLE symbol_semantics_current (
+                repo_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                content_id TEXT NOT NULL,
+                semantic_features_input_hash TEXT NOT NULL,
+                llm_summary TEXT,
+                source_model TEXT
+            );
+            CREATE TABLE symbol_features (
+                repo_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                semantic_features_input_hash TEXT NOT NULL
+            );
+            CREATE TABLE symbol_semantics (
+                repo_id TEXT NOT NULL,
+                artefact_id TEXT NOT NULL,
+                blob_sha TEXT NOT NULL,
+                semantic_features_input_hash TEXT NOT NULL,
+                llm_summary TEXT,
+                source_model TEXT
+            );
+            INSERT INTO artefacts_current (repo_id, path, content_id, artefact_id, canonical_kind, language_kind)
+            VALUES
+                ('repo-1', 'src/lib.rs', 'blob-1', 'current-artefact', 'function', 'function_item'),
+                ('repo-1', 'src/lib.rs', 'blob-1', 'historical-artefact', 'method', 'function_item');
+            INSERT INTO current_file_state (repo_id, path, analysis_mode)
+            VALUES ('repo-1', 'src/lib.rs', 'code');
+            INSERT INTO symbol_features_current (repo_id, artefact_id, content_id, semantic_features_input_hash)
+            VALUES ('repo-1', 'current-artefact', 'blob-1', 'hash-current');
+            INSERT INTO symbol_semantics_current (repo_id, artefact_id, content_id, semantic_features_input_hash, llm_summary, source_model)
+            VALUES ('repo-1', 'current-artefact', 'blob-1', 'hash-current', 'Current summary.', 'test:model');
+            INSERT INTO symbol_features (repo_id, artefact_id, blob_sha, semantic_features_input_hash)
+            VALUES ('repo-1', 'historical-artefact', 'blob-1', 'hash-historical');
+            INSERT INTO symbol_semantics (repo_id, artefact_id, blob_sha, semantic_features_input_hash, llm_summary, source_model)
+            VALUES ('repo-1', 'historical-artefact', 'blob-1', 'hash-historical', 'Historical summary.', 'test:model');",
+        )
+        .expect("seed relational store");
+
+    let freshness = load_summary_freshness_state(&store, "repo-1").expect("load summary freshness");
+
+    assert_eq!(freshness.eligible_artefact_ids.len(), 2);
+    assert!(
+        freshness
+            .fresh_model_backed_artefact_ids
+            .contains("current-artefact")
+    );
+    assert!(
+        freshness
+            .fresh_model_backed_artefact_ids
+            .contains("historical-artefact")
+    );
+    assert_eq!(freshness.outstanding_work_item_count(), 0);
+}
+
+#[tokio::test]
+async fn summary_freshness_counts_repaired_current_projection_before_historical_fallback() {
+    let temp = tempdir().expect("temp dir");
+    let db_path = temp.path().join("relational.sqlite");
+    crate::host::devql::sqlite_exec_path_allow_create(
+        &db_path,
+        &format!(
+            "{}\nCREATE TABLE artefacts_current (
+                repo_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_id TEXT NOT NULL,
+                symbol_id TEXT,
+                artefact_id TEXT NOT NULL,
+                canonical_kind TEXT,
+                language_kind TEXT
+            );
+            CREATE TABLE current_file_state (
+                repo_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                analysis_mode TEXT NOT NULL,
+                effective_content_id TEXT NOT NULL
+            );",
+            semantic_features_sqlite_schema_sql(),
+        ),
+    )
+    .await
+    .expect("create relational schema");
+
+    let relational = RelationalStorage::local_only(db_path.clone());
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, canonical_kind, language_kind
+            ) VALUES
+                ('repo-1', 'src/lib.rs', 'blob-1', 'current-symbol', 'current-artefact', 'function', 'function_item'),
+                ('repo-1', 'src/lib.rs', 'blob-1', 'historical-symbol', 'historical-artefact', 'method', 'function_item');
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'blob-1');
+            INSERT INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (
+                'current-artefact', 'repo-1', 'src/lib.rs', 'blob-1', 'current-symbol', 'hash-current',
+                'current_name', 'fn current_name()', '[]', '[]', '[]', NULL, '[]'
+            );
+            INSERT INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES (
+                'current-artefact', 'repo-1', 'src/lib.rs', 'blob-1', 'current-symbol', 'hash-current',
+                NULL, 'Current summary.', 'Current template.', 'Current summary.', 0.95, 'test:model'
+            );
+            INSERT INTO symbol_features (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+            ) VALUES (
+                'historical-artefact', 'repo-1', 'blob-1', 'hash-historical',
+                'historical_name', 'fn historical_name()', '[]', '[]', '[]', NULL, '[]'
+            );
+            INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES (
+                'historical-artefact', 'repo-1', 'blob-1', 'hash-historical',
+                NULL, 'Historical summary.', 'Historical template.', 'Historical summary.', 0.95, 'test:model'
+            );",
+        )
+        .await
+        .expect("seed stranded summary rows");
+
+    repair_current_semantic_feature_rows_from_historical(
+        &relational,
+        "repo-1",
+        &["historical-artefact".to_string()],
+    )
+    .await
+    .expect("repair current semantic projection");
+
+    let current_rows = relational
+        .query_rows(
+            "SELECT artefact_id
+             FROM symbol_semantics_current
+             WHERE repo_id = 'repo-1'
+             ORDER BY artefact_id",
+        )
+        .await
+        .expect("load current semantic rows");
+    assert_eq!(current_rows.len(), 2);
+
+    let store = DefaultRelationalStore::local_only(db_path);
+    let freshness = load_summary_freshness_state(&store, "repo-1").expect("load summary freshness");
+
+    assert_eq!(freshness.eligible_artefact_ids.len(), 2);
+    assert_eq!(freshness.fresh_model_backed_artefact_ids.len(), 2);
+    assert_eq!(freshness.outstanding_work_item_count(), 0);
 }
 
 fn embeddings_only_session() -> InitSessionRecord {
@@ -969,7 +1157,7 @@ fn code_embeddings_lane_reports_preparing_batches_before_first_completed_work_it
     );
     assert_eq!(
         lane.activity_label.as_deref(),
-        Some("Preparing embedding batches")
+        Some("Indexing first embedding batch")
     );
 }
 
@@ -1476,6 +1664,96 @@ fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
         Some(
             "Summary generation finished without producing current summaries for every eligible artefact"
         )
+    );
+}
+
+#[test]
+fn selected_lane_warning_statuses_count_as_session_warnings() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: false,
+            run_summaries: true,
+            run_summary_embeddings: false,
+            ingest_backfill: None,
+            embeddings_bootstrap: None,
+            summaries_bootstrap: Some(SummaryBootstrapRequest {
+                action: SummaryBootstrapAction::ConfigureCloud,
+                message: None,
+                model_name: None,
+                gateway_url_override: None,
+            }),
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: None,
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: None,
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 2,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: None,
+        summary_bootstrap_completion_seq: Some(2),
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let summary_run = SummaryBootstrapRunRecord {
+        run_id: "summary-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: "init-session-1".to_string(),
+        request: SummaryBootstrapRequest {
+            action: SummaryBootstrapAction::ConfigureCloud,
+            message: None,
+            model_name: None,
+            gateway_url_override: None,
+        },
+        status: SummaryBootstrapStatus::Completed,
+        progress: SummaryBootstrapProgress::default(),
+        result: None,
+        error: None,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 10,
+        completed_at_unix: Some(10),
+    };
+    let summaries_lane = derive_summaries_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        Some(&summary_run),
+        StatusCounts::default(),
+        &SessionWorkplaneStats::default(),
+        Some(InitRuntimeLaneProgressView {
+            completed: 3333,
+            in_memory_completed: 0,
+            total: 3335,
+            remaining: 2,
+        }),
+    );
+
+    assert_eq!(summaries_lane.status, "warning");
+    assert!(selected_lanes_have_warning_status(&[(
+        session.selections.run_summaries,
+        &summaries_lane,
+    )]));
+    assert_eq!(
+        derive_session_status(false, false, true, None, true),
+        "completed_with_warnings"
     );
 }
 

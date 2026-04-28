@@ -73,6 +73,23 @@ pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
     relational.exec_serialized(&sql).await
 }
 
+pub(crate) async fn clear_current_symbol_embedding_rows_for_paths(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    paths: &[String],
+) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    ensure_semantic_embeddings_schema(relational).await?;
+    let sql = format!(
+        "DELETE FROM symbol_embeddings_current WHERE repo_id = '{}' AND path IN ({})",
+        esc_pg(repo_id),
+        sql_string_list_pg(paths),
+    );
+    relational.exec_serialized(&sql).await
+}
+
 pub(crate) async fn clear_repo_active_embedding_setup(
     relational: &RelationalStorage,
     repo_id: &str,

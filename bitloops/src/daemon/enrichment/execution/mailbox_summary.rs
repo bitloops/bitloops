@@ -4,17 +4,20 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
+use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::features::{
-    build_semantic_feature_input_hash, semantic_features_require_reindex,
+    SemanticFeatureInput, build_semantic_feature_input_hash, semantic_features_require_reindex,
 };
 use crate::capability_packs::semantic_clones::runtime_config::{
-    SummaryProviderMode, resolve_semantic_clones_config, resolve_summary_provider,
+    SummaryProviderMode, embedding_slot_for_representation, resolve_semantic_clones_config,
+    resolve_summary_provider,
 };
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX;
 use crate::capability_packs::semantic_clones::{
-    build_conditional_current_semantic_persist_rows_sql, build_semantic_get_index_state_sql,
-    build_semantic_persist_rows_sql, ensure_required_llm_summary_output,
-    parse_semantic_index_state_rows,
+    build_conditional_current_semantic_persist_rows_sql,
+    build_repair_current_semantic_projection_from_historical_sql,
+    build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
+    ensure_required_llm_summary_output, parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -60,6 +63,8 @@ where
         &capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID),
         SummaryProviderMode::ConfiguredStrict,
     )?;
+    let summary_embeddings_enabled =
+        embedding_slot_for_representation(&config, EmbeddingRepresentationKind::Summary).is_some();
 
     let current_input_selection = select_current_semantic_input_scope(&batch.items);
     let current_inputs = load_current_semantic_inputs(
@@ -97,15 +102,13 @@ where
                 let requested_ids = item
                     .payload_json
                     .as_ref()
-                    .map(payload_artefact_ids_from_value)
-                    .unwrap_or_default();
-                let mut selected = if requested_ids.is_empty() {
-                    current_inputs.clone()
-                } else {
-                    requested_ids
+                    .map(payload_artefact_ids_from_value);
+                let mut selected = match requested_ids {
+                    Some(requested_ids) => requested_ids
                         .iter()
                         .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>(),
+                    None => current_inputs.clone(),
                 };
                 if selected.len() > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE {
                     let remaining_ids = selected
@@ -150,6 +153,16 @@ where
             &next_input_hash,
             summary_provider.provider.requires_model_output(),
         ) {
+            semantic_statements.push(
+                build_repair_current_semantic_projection_from_historical_sql(
+                    &input.repo_id,
+                    std::slice::from_ref(&input.artefact_id),
+                    relational.dialect(),
+                ),
+            );
+            if summary_embeddings_enabled {
+                embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+            }
             continue;
         }
 
@@ -173,19 +186,8 @@ where
             input,
             relational.dialect(),
         )?);
-        if config.embedding_mode != crate::config::SemanticCloneEmbeddingMode::Off {
-            embedding_follow_ups.push(SemanticEmbeddingMailboxItemInsert::new(
-                None,
-                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
-                    .to_string(),
-                SemanticMailboxItemKind::Artefact,
-                Some(input.artefact_id.clone()),
-                None,
-                Some(format!(
-                    "{}:{}",
-                    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, input.artefact_id
-                )),
-            ));
+        if summary_embeddings_enabled {
+            embedding_follow_ups.push(summary_embedding_follow_up_for(input));
         }
         if let Some(init_session_ids) = artefact_session_ids.get(&input.artefact_id) {
             on_item_prepared(&input.artefact_id, init_session_ids);
@@ -217,4 +219,20 @@ where
             .max()
             .unwrap_or(0),
     })
+}
+
+fn summary_embedding_follow_up_for(
+    input: &SemanticFeatureInput,
+) -> SemanticEmbeddingMailboxItemInsert {
+    SemanticEmbeddingMailboxItemInsert::new(
+        None,
+        EmbeddingRepresentationKind::Summary.to_string(),
+        SemanticMailboxItemKind::Artefact,
+        Some(input.artefact_id.clone()),
+        None,
+        Some(format!(
+            "{}:{}",
+            SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, input.artefact_id
+        )),
+    )
 }

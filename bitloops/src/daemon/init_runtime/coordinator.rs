@@ -42,7 +42,8 @@ use super::tasks::{
     summary_run_from_task_ref, summary_status_is_failed, task_status_is_failed,
 };
 use super::types::{
-    InitRuntimeSessionView, InitRuntimeSnapshot, InitSessionHandle, RuntimeEventRecord,
+    InitRuntimeLaneView, InitRuntimeSessionView, InitRuntimeSnapshot, InitSessionHandle,
+    RuntimeEventRecord,
 };
 use super::workplane::{repo_blocked_mailboxes, workplane_snapshot_from_mailboxes};
 
@@ -422,7 +423,18 @@ impl InitRuntimeCoordinator {
             &selected_workplane,
         );
         let warning_failures = selected_workplane.warning_failed_jobs_total;
-        let has_warnings = warning_failures > 0;
+        let selected_lane_warning = selected_lanes_have_warning_status(&[
+            (
+                session.selections.run_code_embeddings,
+                &code_embeddings_lane,
+            ),
+            (session.selections.run_summaries, &summaries_lane),
+            (
+                session.selections.run_summary_embeddings,
+                &summary_embeddings_lane,
+            ),
+        ]);
+        let has_warnings = warning_failures > 0 || selected_lane_warning;
         let semantic_bootstraps_terminal =
             semantic_bootstraps_terminal(&session, embeddings_task.as_ref(), summary_run.as_ref());
         let bootstrap_waiting = semantic_bootstrap_still_outstanding_after_initial_sync(
@@ -530,7 +542,7 @@ impl InitRuntimeCoordinator {
             init_session_id: session.init_session_id,
             status: status.clone(),
             waiting_reason,
-            warning_summary: has_warnings.then(|| warning_summary(warning_failures)),
+            warning_summary: warning_summary(warning_failures),
             follow_up_sync_required: follow_up_pending,
             run_sync: session.selections.run_sync,
             run_ingest: session.selections.run_ingest,
@@ -779,6 +791,14 @@ fn record_task_terminal_snapshot(session: &mut InitSessionRecord, task: &DevqlTa
     if session.follow_up_sync_task_id.as_deref() == Some(task.task_id.as_str()) {
         session.follow_up_sync_terminal = Some(snapshot);
     }
+}
+
+pub(super) fn selected_lanes_have_warning_status(
+    selected_lanes: &[(bool, &InitRuntimeLaneView)],
+) -> bool {
+    selected_lanes
+        .iter()
+        .any(|(selected, lane)| *selected && lane.status.eq_ignore_ascii_case("warning"))
 }
 
 fn task_terminal_snapshot(task: &DevqlTaskRecord) -> Option<InitSessionTaskTerminalSnapshot> {

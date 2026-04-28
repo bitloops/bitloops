@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- **Code embeddings calculations now prepare first batches more efficiently**: repo-wide embedding backfills are split into explicit first chunks before semantic input hydration, embedding freshness state is loaded in bulk per batch instead of once per artefact, and embedding batch completion logs now include prepare-stage timings for config, input hydration, summary lookup, freshness checks, embedding, SQL generation, and setup work.
+
 ### Fixed
 
 - **SQLite sync materialisation now waits cleanly for transient writer contention**: the batched sync writer now starts `IMMEDIATE` SQLite transactions for current-state materialisation, cache-touch completion, and removed-path cleanup instead of beginning deferred transactions and upgrading later during row deletes. This fixes transient `database is locked` failures during sync materialisation when another writer briefly holds the database lock.

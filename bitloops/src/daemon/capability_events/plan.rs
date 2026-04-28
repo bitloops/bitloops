@@ -12,9 +12,14 @@ use crate::host::capability_host::{
 
 use super::super::types::{CapabilityEventRunRecord, unix_timestamp_now};
 use super::queue::{
-    ArtefactChangeRow, FileChangeRow, GenerationRow, latest_generation_seq, load_artefact_changes,
-    load_consumer_cursor, load_file_changes, load_generations, sql_i64,
+    ArtefactChangeRow, FileChangeRow, GenerationRow, count_artefact_changes, count_file_changes,
+    latest_generation_seq, load_artefact_changes, load_consumer_cursor,
+    load_distinct_changed_paths, load_file_changes, load_generations, sql_i64,
 };
+
+const FULL_RECONCILE_GENERATION_SPAN_THRESHOLD: u64 = 64;
+const FULL_RECONCILE_FILE_CHANGE_THRESHOLD: usize = 2_000;
+const FULL_RECONCILE_ARTEFACT_CHANGE_THRESHOLD: usize = 5_000;
 
 #[derive(Debug, Clone)]
 pub(super) struct ExecutionPlan {
@@ -63,31 +68,100 @@ pub(super) fn build_execution_plan(
         return Ok(None);
     }
 
-    let file_changes = load_file_changes(
-        conn,
-        &run.repo_id,
-        from_generation_seq_exclusive + 1,
-        latest_generation_seq,
-    )?;
-    let artefact_changes = load_artefact_changes(
-        conn,
-        &run.repo_id,
-        from_generation_seq_exclusive + 1,
-        latest_generation_seq,
-    )?;
-    let merged_files = merge_file_changes(&file_changes);
-    let merged_artefacts = merge_artefact_changes(&artefact_changes);
-    let reconcile_mode = determine_reconcile_mode(
-        cursor.last_applied_generation_seq,
-        &generations,
-        merged_files.len(),
-        merged_artefacts.len(),
-    );
-    let (file_upserts, file_removals) = partition_file_changes(merged_files);
-    let (artefact_upserts, artefact_removals) = partition_artefact_changes(merged_artefacts);
     let latest_generation = generations
         .last()
         .expect("checked non-empty generations before building execution plan");
+    let from_generation_seq = from_generation_seq_exclusive + 1;
+    let forced_full_reconcile = cursor.last_applied_generation_seq.is_none()
+        || generations
+            .iter()
+            .any(|generation| generation.requires_full_reconcile)
+        || latest_generation_seq.saturating_sub(cursor.last_applied_generation_seq.unwrap_or(0))
+            > FULL_RECONCILE_GENERATION_SPAN_THRESHOLD;
+    let (
+        reconcile_mode,
+        affected_paths,
+        file_upserts,
+        file_removals,
+        artefact_upserts,
+        artefact_removals,
+    ) = if forced_full_reconcile {
+        (
+            ReconcileMode::FullReconcile,
+            load_distinct_changed_paths(
+                conn,
+                &run.repo_id,
+                from_generation_seq,
+                latest_generation_seq,
+            )?,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+    } else {
+        let file_count = count_file_changes(
+            conn,
+            &run.repo_id,
+            from_generation_seq,
+            latest_generation_seq,
+        )?;
+        let artefact_count = count_artefact_changes(
+            conn,
+            &run.repo_id,
+            from_generation_seq,
+            latest_generation_seq,
+        )?;
+        if file_count > FULL_RECONCILE_FILE_CHANGE_THRESHOLD
+            || artefact_count > FULL_RECONCILE_ARTEFACT_CHANGE_THRESHOLD
+        {
+            (
+                ReconcileMode::FullReconcile,
+                load_distinct_changed_paths(
+                    conn,
+                    &run.repo_id,
+                    from_generation_seq,
+                    latest_generation_seq,
+                )?,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )
+        } else {
+            let file_changes = load_file_changes(
+                conn,
+                &run.repo_id,
+                from_generation_seq,
+                latest_generation_seq,
+            )?;
+            let artefact_changes = load_artefact_changes(
+                conn,
+                &run.repo_id,
+                from_generation_seq,
+                latest_generation_seq,
+            )?;
+            let merged_files = merge_file_changes(&file_changes);
+            let merged_artefacts = merge_artefact_changes(&artefact_changes);
+            let reconcile_mode = determine_reconcile_mode(
+                cursor.last_applied_generation_seq,
+                &generations,
+                merged_files.len(),
+                merged_artefacts.len(),
+            );
+            let (file_upserts, file_removals) = partition_file_changes(merged_files);
+            let (artefact_upserts, artefact_removals) =
+                partition_artefact_changes(merged_artefacts);
+            (
+                reconcile_mode,
+                Vec::new(),
+                file_upserts,
+                file_removals,
+                artefact_upserts,
+                artefact_removals,
+            )
+        }
+    };
 
     let mut record = run.clone();
     record.from_generation_seq = from_generation_seq_exclusive;
@@ -126,6 +200,7 @@ pub(super) fn build_execution_plan(
             reconcile_mode,
             file_upserts,
             file_removals,
+            affected_paths,
             artefact_upserts,
             artefact_removals,
         },
@@ -238,9 +313,9 @@ pub(super) fn determine_reconcile_mode(
         || generations
             .iter()
             .any(|generation| generation.requires_full_reconcile)
-        || pending_generation_span > 64
-        || merged_file_count > 2_000
-        || merged_artefact_count > 5_000
+        || pending_generation_span > FULL_RECONCILE_GENERATION_SPAN_THRESHOLD
+        || merged_file_count > FULL_RECONCILE_FILE_CHANGE_THRESHOLD
+        || merged_artefact_count > FULL_RECONCILE_ARTEFACT_CHANGE_THRESHOLD
     {
         ReconcileMode::FullReconcile
     } else {

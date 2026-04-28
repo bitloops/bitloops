@@ -69,6 +69,7 @@ pub(crate) fn session_status_label(status: &str) -> &'static str {
         "completed_with_warnings" => "Completed with warnings",
         "failing" => "Finishing remaining work after a failure",
         "failed" => "Failed",
+        "warning" => "Warning",
         "waiting" => "Waiting",
         "running" => "Running",
         "queued" => "Queued",
@@ -170,9 +171,27 @@ pub(crate) fn workplane_warning_message(failed_jobs: u64, latest_error: Option<&
     }
 }
 
-pub(crate) fn warning_summary(failed_jobs: u64) -> String {
+pub(crate) fn warning_summary(failed_jobs: u64) -> Option<String> {
+    if failed_jobs == 0 {
+        return None;
+    }
     let task_label = if failed_jobs == 1 { "task" } else { "tasks" };
-    format!(
+    Some(format!(
         "{failed_jobs} enrichment {task_label} failed. Retry with: {RETRY_FAILED_ENRICHMENTS_COMMAND}"
-    )
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{session_status_label, warning_summary};
+
+    #[test]
+    fn warning_status_label_is_not_running() {
+        assert_eq!(session_status_label("warning"), "Warning");
+    }
+
+    #[test]
+    fn warning_summary_omits_zero_failed_jobs() {
+        assert_eq!(warning_summary(0), None);
+    }
 }

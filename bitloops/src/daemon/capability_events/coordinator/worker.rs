@@ -15,7 +15,7 @@ use crate::daemon::capability_events::queue::{StoredRunRecord, load_runs, sql_i6
 use crate::daemon::types::{
     CapabilityEventRunRecord, CapabilityEventRunStatus, unix_timestamp_now,
 };
-use crate::host::capability_host::DevqlCapabilityHost;
+use crate::host::capability_host::{DevqlCapabilityHost, ReconcileMode};
 use crate::host::devql::resolve_repo_identity;
 
 use super::types::{
@@ -195,15 +195,38 @@ impl CapabilityEventCoordinator {
             .await;
         match outcome {
             Ok(Ok(result)) => match validate_consumer_result(&plan.request, &result) {
-                Ok(()) => RunCompletion::Completed {
-                    run: plan.record,
-                    applied_to_generation_seq: result.applied_to_generation_seq,
-                },
+                Ok(()) => {
+                    log::info!(
+                        "current-state consumer completed: repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} metrics={}",
+                        plan.record.repo_id,
+                        plan.record.capability_id,
+                        plan.record.consumer_id,
+                        reconcile_mode_for_log(plan.request.reconcile_mode),
+                        plan.request.from_generation_seq_exclusive,
+                        result.applied_to_generation_seq,
+                        result
+                            .metrics
+                            .as_ref()
+                            .map(serde_json::Value::to_string)
+                            .unwrap_or_else(|| "{}".to_string()),
+                    );
+                    RunCompletion::Completed {
+                        run: plan.record,
+                        applied_to_generation_seq: result.applied_to_generation_seq,
+                    }
+                }
                 Err(err) => terminal_or_retry(plan.record, err),
             },
             Ok(Err(err)) => terminal_or_retry(plan.record, err),
             Err(_) => terminal_or_retry(plan.record, anyhow!("current-state consumer panicked")),
         }
+    }
+}
+
+fn reconcile_mode_for_log(mode: ReconcileMode) -> &'static str {
+    match mode {
+        ReconcileMode::MergedDelta => "merged_delta",
+        ReconcileMode::FullReconcile => "full_reconcile",
     }
 }
 

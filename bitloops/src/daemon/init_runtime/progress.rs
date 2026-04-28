@@ -90,20 +90,8 @@ fn count_current_model_backed_summary_artefacts(
     query_progress_count(
         relational,
         &format!(
-            "SELECT COUNT(DISTINCT a.artefact_id) AS total \
-             FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             JOIN symbol_features_current f ON f.repo_id = a.repo_id AND f.artefact_id = a.artefact_id AND f.content_id = a.content_id \
-             JOIN {CURRENT_SUMMARY_SEMANTICS_TABLE} s ON s.repo_id = a.repo_id AND s.artefact_id = a.artefact_id AND s.content_id = a.content_id \
-             WHERE a.repo_id = '{}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
-               AND s.semantic_features_input_hash = f.semantic_features_input_hash \
-               AND ( \
-                    (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
-                    OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
-               )",
-            escape_sql_string(repo_id),
+            "SELECT COUNT(*) AS total FROM ({}) fresh",
+            fresh_model_backed_summary_artefacts_sql(repo_id),
         ),
     )
 }
@@ -112,42 +100,75 @@ pub(crate) fn load_summary_freshness_state(
     relational: &DefaultRelationalStore,
     repo_id: &str,
 ) -> Result<SummaryFreshnessState> {
-    let eligible_artefact_ids = query_progress_ids(
-        relational,
-        &format!(
-            "SELECT DISTINCT a.artefact_id \
-             FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             WHERE a.repo_id = '{}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import'",
-            escape_sql_string(repo_id),
-        ),
-    )?;
+    let eligible_artefact_ids =
+        query_progress_ids(relational, &eligible_current_summary_artefacts_sql(repo_id))?;
     let fresh_model_backed_artefact_ids = query_progress_ids(
         relational,
-        &format!(
-            "SELECT DISTINCT a.artefact_id \
-             FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             JOIN symbol_features_current f ON f.repo_id = a.repo_id AND f.artefact_id = a.artefact_id AND f.content_id = a.content_id \
-             JOIN {CURRENT_SUMMARY_SEMANTICS_TABLE} s ON s.repo_id = a.repo_id AND s.artefact_id = a.artefact_id AND s.content_id = a.content_id \
-             WHERE a.repo_id = '{}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
-               AND s.semantic_features_input_hash = f.semantic_features_input_hash \
-               AND ( \
-                    (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
-                    OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
-               )",
-            escape_sql_string(repo_id),
-        ),
+        &fresh_model_backed_summary_artefacts_sql(repo_id),
     )?;
 
     Ok(SummaryFreshnessState {
         eligible_artefact_ids,
         fresh_model_backed_artefact_ids,
     })
+}
+
+fn eligible_current_summary_artefacts_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT DISTINCT a.artefact_id \
+         FROM artefacts_current a \
+         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         WHERE a.repo_id = '{}' \
+           AND cfs.analysis_mode = 'code' \
+           AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import'",
+        escape_sql_string(repo_id),
+    )
+}
+
+fn fresh_model_backed_summary_artefacts_sql(repo_id: &str) -> String {
+    let repo_id = escape_sql_string(repo_id);
+    format!(
+        "SELECT DISTINCT a.artefact_id \
+         FROM artefacts_current a \
+         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         WHERE a.repo_id = '{repo_id}' \
+           AND cfs.analysis_mode = 'code' \
+           AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+           AND ( \
+                EXISTS ( \
+                    SELECT 1 \
+                    FROM symbol_features_current f \
+                    JOIN {CURRENT_SUMMARY_SEMANTICS_TABLE} s \
+                      ON s.repo_id = f.repo_id \
+                     AND s.artefact_id = f.artefact_id \
+                     AND s.content_id = f.content_id \
+                    WHERE f.repo_id = a.repo_id \
+                      AND f.artefact_id = a.artefact_id \
+                      AND f.content_id = a.content_id \
+                      AND s.semantic_features_input_hash = f.semantic_features_input_hash \
+                      AND ( \
+                           (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
+                           OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
+                      ) \
+                ) \
+                OR EXISTS ( \
+                    SELECT 1 \
+                    FROM symbol_features f \
+                    JOIN symbol_semantics s \
+                      ON s.repo_id = f.repo_id \
+                     AND s.artefact_id = f.artefact_id \
+                     AND s.blob_sha = f.blob_sha \
+                    WHERE f.repo_id = a.repo_id \
+                      AND f.artefact_id = a.artefact_id \
+                      AND f.blob_sha = a.content_id \
+                      AND s.semantic_features_input_hash = f.semantic_features_input_hash \
+                      AND ( \
+                           (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
+                           OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
+                      ) \
+                ) \
+           )",
+    )
 }
 
 fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {

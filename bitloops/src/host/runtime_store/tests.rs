@@ -831,6 +831,63 @@ fn repo_runtime_store_persists_capability_workplane_mailbox_intents() {
     );
 }
 
+#[test]
+fn semantic_embedding_enqueue_batches_dedupe_pending_items() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+
+    let first = store
+        .enqueue_semantic_embedding_mailbox_items(vec![SemanticEmbeddingMailboxItemInsert::new(
+            Some("session-1".to_string()),
+            "code",
+            SemanticMailboxItemKind::RepoBackfill,
+            None,
+            Some(serde_json::json!(["a1", "a2"])),
+            Some("semantic_clones.embedding.code:repo_backfill:chunk-1".to_string()),
+        )])
+        .expect("enqueue initial embedding item");
+    assert_eq!(first.inserted_jobs, 1);
+    assert_eq!(first.updated_jobs, 0);
+
+    let second = store
+        .enqueue_semantic_embedding_mailbox_items(vec![SemanticEmbeddingMailboxItemInsert::new(
+            Some("session-2".to_string()),
+            "code",
+            SemanticMailboxItemKind::RepoBackfill,
+            None,
+            Some(serde_json::json!(["a1", "a2", "a3"])),
+            Some("semantic_clones.embedding.code:repo_backfill:chunk-1".to_string()),
+        )])
+        .expect("enqueue duplicate embedding item");
+    assert_eq!(second.inserted_jobs, 0);
+    assert_eq!(second.updated_jobs, 1);
+
+    let sqlite = store.connect_repo_sqlite().expect("connect repo sqlite");
+    sqlite
+        .with_connection(|conn| {
+            let (count, payload_json): (i64, String) = conn.query_row(
+                "SELECT COUNT(*), MAX(payload_json)
+                 FROM semantic_embedding_mailbox_items
+                 WHERE repo_id = ?1
+                   AND representation_kind = 'code'
+                   AND dedupe_key = 'semantic_clones.embedding.code:repo_backfill:chunk-1'",
+                rusqlite::params![store.repo_id()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(count, 1);
+            let payload: serde_json::Value =
+                serde_json::from_str(&payload_json).expect("payload json should parse");
+            assert_eq!(payload, serde_json::json!(["a1", "a2", "a3"]));
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("load embedding mailbox rows");
+}
+
 fn collect_rust_files(root: &Path, out: &mut Vec<PathBuf>) {
     let mut entries = fs::read_dir(root)
         .expect("read source directory")
