@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-04-28
+
 ### Changed
 
 - **Code embeddings calculations now prepare first batches more efficiently**: repo-wide embedding backfills are split into explicit first chunks before semantic input hydration, embedding freshness state is loaded in bulk per batch instead of once per artefact, and embedding batch completion logs now include prepare-stage timings for config, input hydration, summary lookup, freshness checks, embedding, SQL generation, and setup work.
