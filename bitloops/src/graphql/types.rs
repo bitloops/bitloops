@@ -3,6 +3,7 @@ pub mod artefact_selection;
 pub mod chat;
 pub mod checkpoint;
 pub mod clone;
+pub mod codecity;
 pub mod commit;
 pub mod connection;
 pub mod dependency_edge;
@@ -32,6 +33,7 @@ pub use artefact_selection::{
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
+pub use codecity::CodeCityWorldResult;
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,

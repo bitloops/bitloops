@@ -1,0 +1,208 @@
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
+
+use anyhow::Result;
+
+use super::config::CodeCityConfig;
+use super::graph_metrics::{build_file_graph, compute_importance};
+use super::height::{build_floors_for_file, building_loc, total_height};
+use super::layout::apply_phase1_layout;
+use super::source_graph::CodeCitySourceGraph;
+use crate::capability_packs::codecity::types::{
+    CODECITY_CAPABILITY_ID, CODECITY_WORLD_STAGE_ID, CodeCityBuilding, CodeCityDiagnostic,
+    CodeCityGeometry, CodeCityImportance, CodeCityLayoutSummary, CodeCitySize, CodeCitySummary,
+    CodeCityWorldPayload,
+};
+
+pub fn build_codecity_world(
+    source: CodeCitySourceGraph,
+    repo_id: &str,
+    commit_sha: Option<String>,
+    config: CodeCityConfig,
+) -> Result<CodeCityWorldPayload> {
+    let config_fingerprint = config.fingerprint()?;
+    let mut diagnostics = source.diagnostics;
+    let included_files = source
+        .files
+        .iter()
+        .filter(|file| file.included)
+        .cloned()
+        .collect::<Vec<_>>();
+    let artefact_count = source
+        .artefacts
+        .iter()
+        .filter(|artefact| !is_file_artefact(artefact))
+        .count();
+
+    diagnostics.push(CodeCityDiagnostic {
+        code: "codecity.health.deferred".to_string(),
+        severity: "info".to_string(),
+        message: "Phase 1 uses neutral floor colours because health inputs are not computed yet."
+            .to_string(),
+        path: None,
+    });
+    diagnostics.push(CodeCityDiagnostic {
+        code: "codecity.loc.line_span_phase1".to_string(),
+        severity: "info".to_string(),
+        message:
+            "Phase 1 approximates floor size with artefact line spans rather than semantic LoC."
+                .to_string(),
+        path: None,
+    });
+
+    if source.files.is_empty() {
+        diagnostics.push(CodeCityDiagnostic {
+            code: "codecity.source.no_current_files".to_string(),
+            severity: "info".to_string(),
+            message: "No current DevQL file rows were available for this repository.".to_string(),
+            path: None,
+        });
+    }
+
+    if included_files.is_empty() {
+        return Ok(CodeCityWorldPayload {
+            capability: CODECITY_CAPABILITY_ID.to_string(),
+            stage: CODECITY_WORLD_STAGE_ID.to_string(),
+            status: "empty".to_string(),
+            repo_id: repo_id.to_string(),
+            commit_sha,
+            config_fingerprint,
+            summary: CodeCitySummary {
+                file_count: source.files.len(),
+                artefact_count,
+                dependency_count: source.edges.len(),
+                included_file_count: 0,
+                excluded_file_count: source.files.len(),
+                max_importance: 0.0,
+                max_height: 0.0,
+            },
+            layout: CodeCityLayoutSummary::default(),
+            buildings: Vec::new(),
+            dependency_arcs: Vec::new(),
+            diagnostics,
+        });
+    }
+
+    let file_graph = build_file_graph(&included_files, &source.edges);
+    let importance_by_path = compute_importance(&file_graph, &config.importance);
+    let mut artefacts_by_path = BTreeMap::<String, Vec<_>>::new();
+    for artefact in source.artefacts {
+        artefacts_by_path
+            .entry(artefact.path.clone())
+            .or_default()
+            .push(artefact);
+    }
+
+    if source.edges.is_empty() {
+        diagnostics.push(CodeCityDiagnostic {
+            code: "codecity.dependencies.empty".to_string(),
+            severity: "info".to_string(),
+            message: "No resolved cross-file dependencies were available for CodeCity scoring."
+                .to_string(),
+            path: None,
+        });
+    }
+
+    let mut buildings = included_files
+        .into_iter()
+        .map(|file| {
+            let artefacts = artefacts_by_path.remove(&file.path).unwrap_or_default();
+            let floors = build_floors_for_file(&file, &artefacts, &config.height, &config.colours);
+            let importance = importance_by_path
+                .get(&file.path)
+                .cloned()
+                .unwrap_or_else(CodeCityImportance::default);
+            let total_height = total_height(&floors, &config.height);
+            let side_length = config.importance.min_footprint
+                + (config.importance.max_footprint - config.importance.min_footprint)
+                    * importance.score.clamp(0.0, 1.0).sqrt();
+
+            CodeCityBuilding {
+                path: file.path,
+                language: file.language,
+                boundary_id: "root".to_string(),
+                zone: "unclassified".to_string(),
+                importance,
+                size: CodeCitySize {
+                    loc: building_loc(&floors),
+                    artefact_count: floors.len(),
+                    total_height,
+                },
+                geometry: CodeCityGeometry {
+                    side_length,
+                    footprint_area: side_length * side_length,
+                    height: total_height,
+                    width: side_length,
+                    depth: side_length,
+                    ..CodeCityGeometry::default()
+                },
+                floors,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    buildings.sort_by(|left, right| {
+        right
+            .importance
+            .score
+            .partial_cmp(&left.importance.score)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| {
+                right
+                    .size
+                    .total_height
+                    .partial_cmp(&left.size.total_height)
+                    .unwrap_or(Ordering::Equal)
+            })
+            .then_with(|| left.path.cmp(&right.path))
+    });
+
+    let layout = apply_phase1_layout(&mut buildings, &config.layout);
+    let max_importance = buildings
+        .iter()
+        .map(|building| building.importance.score)
+        .fold(0.0_f64, f64::max);
+    let max_height = buildings
+        .iter()
+        .map(|building| building.geometry.height)
+        .fold(0.0_f64, f64::max);
+
+    let dependency_arcs = if config.include_dependency_arcs {
+        super::source_graph::build_dependency_arcs(&source.edges)
+    } else {
+        Vec::new()
+    };
+
+    Ok(CodeCityWorldPayload {
+        capability: CODECITY_CAPABILITY_ID.to_string(),
+        stage: CODECITY_WORLD_STAGE_ID.to_string(),
+        status: "ok".to_string(),
+        repo_id: repo_id.to_string(),
+        commit_sha,
+        config_fingerprint,
+        summary: CodeCitySummary {
+            file_count: source.files.len(),
+            artefact_count,
+            dependency_count: source.edges.len(),
+            included_file_count: buildings.len(),
+            excluded_file_count: source.files.len().saturating_sub(buildings.len()),
+            max_importance,
+            max_height,
+        },
+        layout,
+        buildings,
+        dependency_arcs,
+        diagnostics,
+    })
+}
+
+fn is_file_artefact(
+    artefact: &crate::capability_packs::codecity::services::source_graph::CodeCitySourceArtefact,
+) -> bool {
+    artefact
+        .canonical_kind
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .eq_ignore_ascii_case("file")
+}

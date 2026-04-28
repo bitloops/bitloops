@@ -10,10 +10,10 @@ use crate::graphql::{
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
-    ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
-    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    CodeCityWorldResult, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, KnowledgeItemConnection,
+    KnowledgeItemEdge, KnowledgeProvider, TemporalScope, TestHarnessCommitSummary,
+    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -396,6 +396,34 @@ impl Project {
         .map_err(|err| map_stage_adapter_error("project tests summary", err))?;
         decode_stage_single("test_harness_tests_summary", rows)
     }
+
+    #[graphql(name = "codeCityWorld")]
+    async fn code_city_world(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 500)] first: i32,
+        #[graphql(name = "includeDependencyArcs")] include_dependency_arcs: Option<bool>,
+    ) -> Result<CodeCityWorldResult> {
+        if self.scope.temporal_scope().is_some() {
+            return Err(bad_user_input_error(
+                "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in phase 1",
+            ));
+        }
+
+        let rows = StageResolverAdapter::new(
+            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+            "codecity_world",
+        )
+        .resolve(
+            &self.scope,
+            Vec::new(),
+            Some(build_codecity_stage_args(include_dependency_arcs)),
+            stage_limit(first)?,
+        )
+        .await
+        .map_err(|err| map_stage_adapter_error("project codeCityWorld", err))?;
+        decode_stage_single("codecity_world", rows)
+    }
 }
 
 fn stage_limit(first: i32) -> Result<usize> {
@@ -430,6 +458,17 @@ fn build_tests_stage_args(
         );
     }
     Ok(Value::Object(args))
+}
+
+fn build_codecity_stage_args(include_dependency_arcs: Option<bool>) -> Value {
+    let mut args = serde_json::Map::new();
+    if let Some(include_dependency_arcs) = include_dependency_arcs {
+        args.insert(
+            "include_dependency_arcs".to_string(),
+            Value::Bool(include_dependency_arcs),
+        );
+    }
+    Value::Object(args)
 }
 
 fn project_stage_row_from_artefact(artefact: &super::Artefact) -> Value {

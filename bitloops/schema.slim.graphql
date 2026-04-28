@@ -301,6 +301,106 @@ input ClonesFilterInput {
 	neighbors: Int
 }
 
+type CodeCityBuildingResult {
+	path: String!
+	language: String!
+	boundaryId: String!
+	zone: String!
+	importance: CodeCityImportanceResult!
+	size: CodeCitySizeResult!
+	geometry: CodeCityGeometryResult!
+	floors: [CodeCityFloorResult!]!
+}
+
+type CodeCityDependencyArcResult {
+	fromPath: String!
+	toPath: String!
+	edgeCount: Int!
+	arcKind: String!
+	severity: String
+}
+
+type CodeCityDiagnosticResult {
+	code: String!
+	severity: String!
+	message: String!
+	path: String
+}
+
+type CodeCityFloorResult {
+	artefactId: String
+	symbolId: String
+	name: String!
+	canonicalKind: String
+	languageKind: String
+	startLine: Int!
+	endLine: Int!
+	loc: Int!
+	floorIndex: Int!
+	floorHeight: Float!
+	healthRisk: Float
+	colour: String!
+	healthStatus: String!
+}
+
+type CodeCityGeometryResult {
+	x: Float!
+	y: Float!
+	z: Float!
+	width: Float!
+	depth: Float!
+	sideLength: Float!
+	footprintArea: Float!
+	height: Float!
+}
+
+type CodeCityImportanceResult {
+	score: Float!
+	blastRadius: Int!
+	weightedFanIn: Float!
+	articulationScore: Float!
+	normalizedBlastRadius: Float!
+	normalizedWeightedFanIn: Float!
+	normalizedArticulationScore: Float!
+}
+
+type CodeCityLayoutResult {
+	layoutKind: String!
+	width: Float!
+	depth: Float!
+	gap: Float!
+}
+
+type CodeCitySizeResult {
+	loc: Int!
+	artefactCount: Int!
+	totalHeight: Float!
+}
+
+type CodeCitySummaryResult {
+	fileCount: Int!
+	artefactCount: Int!
+	dependencyCount: Int!
+	includedFileCount: Int!
+	excludedFileCount: Int!
+	maxImportance: Float!
+	maxHeight: Float!
+}
+
+type CodeCityWorldResult {
+	capability: String!
+	stage: String!
+	status: String!
+	repoId: String!
+	commitSha: String
+	configFingerprint: String!
+	summary: CodeCitySummaryResult!
+	layout: CodeCityLayoutResult!
+	buildings: [CodeCityBuildingResult!]!
+	dependencyArcs: [CodeCityDependencyArcResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
 type Commit {
 	sha: String!
 	parents: [String!]!
@@ -890,6 +990,7 @@ type Project {
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
+	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean): CodeCityWorldResult!
 }
 
 input RefreshKnowledgeInput {

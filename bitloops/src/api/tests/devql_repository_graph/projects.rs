@@ -134,6 +134,252 @@ async fn devql_project_queries_scope_paths_and_isolate_cross_project_resolution(
 }
 
 #[tokio::test]
+async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_scopes() {
+    fn assert_close(actual: &serde_json::Value, expected: f64) {
+        let actual = actual.as_f64().expect("numeric JSON value");
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    let repo = seed_graphql_monorepo_repo();
+    let repo_id = crate::host::devql::resolve_repo_id(repo.path()).expect("resolve repo id");
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api") {
+                  codeCityWorld(includeDependencyArcs: true, first: 10) {
+                    capability
+                    stage
+                    status
+                    repoId
+                    commitSha
+                    summary {
+                      fileCount
+                      artefactCount
+                      dependencyCount
+                      includedFileCount
+                      excludedFileCount
+                      maxImportance
+                      maxHeight
+                    }
+                    layout {
+                      layoutKind
+                      width
+                      depth
+                      gap
+                    }
+                    buildings {
+                      path
+                      importance {
+                        score
+                        blastRadius
+                        weightedFanIn
+                        articulationScore
+                        normalizedBlastRadius
+                        normalizedWeightedFanIn
+                        normalizedArticulationScore
+                      }
+                      size {
+                        loc
+                        artefactCount
+                        totalHeight
+                      }
+                      geometry {
+                        x
+                        z
+                        width
+                        depth
+                        sideLength
+                        footprintArea
+                        height
+                      }
+                      floors {
+                        name
+                        canonicalKind
+                        startLine
+                        endLine
+                        loc
+                        floorIndex
+                        floorHeight
+                        colour
+                        healthStatus
+                      }
+                    }
+                    dependencyArcs {
+                      fromPath
+                      toPath
+                      edgeCount
+                      arcKind
+                    }
+                    diagnostics {
+                      code
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let world = &json["repo"]["project"]["codeCityWorld"];
+    assert_eq!(world["capability"], "codecity");
+    assert_eq!(world["stage"], "codecity_world");
+    assert_eq!(world["status"], "ok");
+    assert_eq!(world["repoId"], repo_id);
+    assert_eq!(world["commitSha"], serde_json::Value::Null);
+    assert_eq!(world["summary"]["fileCount"], 3);
+    assert_eq!(world["summary"]["artefactCount"], 2);
+    assert_eq!(world["summary"]["dependencyCount"], 1);
+    assert_eq!(world["summary"]["includedFileCount"], 2);
+    assert_eq!(world["summary"]["excludedFileCount"], 1);
+    assert_close(&world["summary"]["maxImportance"], 0.85);
+    assert_close(&world["summary"]["maxHeight"], 0.36);
+    assert_eq!(world["layout"]["layoutKind"], "phase1_grid_treemap");
+    assert_close(&world["layout"]["gap"], 0.5);
+    assert_close(&world["layout"]["width"], 13.141498903022176);
+    assert_close(&world["layout"]["depth"], 11.641498903022176);
+
+    let buildings = world["buildings"].as_array().expect("buildings array");
+    assert_eq!(buildings.len(), 2);
+    assert_eq!(buildings[0]["path"], "packages/api/src/target.ts");
+    assert_eq!(buildings[1]["path"], "packages/api/src/caller.ts");
+
+    assert_close(&buildings[0]["importance"]["score"], 0.85);
+    assert_eq!(buildings[0]["importance"]["blastRadius"], 1);
+    assert_close(
+        &buildings[0]["importance"]["weightedFanIn"],
+        0.6491228070166745,
+    );
+    assert_close(&buildings[0]["size"]["totalHeight"], 0.36);
+    assert_eq!(buildings[0]["size"]["loc"], 3);
+    assert_close(&buildings[0]["geometry"]["x"], 0.25);
+    assert_close(&buildings[0]["geometry"]["z"], 0.25);
+    assert_close(&buildings[0]["geometry"]["width"], 11.141498903022176);
+    assert_close(&buildings[0]["geometry"]["height"], 0.36);
+    assert_eq!(
+        buildings[0]["floors"],
+        json!([{
+            "name": "target",
+            "canonicalKind": "function",
+            "startLine": 1,
+            "endLine": 3,
+            "loc": 3,
+            "floorIndex": 0,
+            "floorHeight": 0.36,
+            "colour": "#888888",
+            "healthStatus": "insufficient_data"
+        }])
+    );
+
+    assert_close(&buildings[1]["importance"]["score"], 0.0);
+    assert_eq!(buildings[1]["importance"]["blastRadius"], 0);
+    assert_close(
+        &buildings[1]["importance"]["weightedFanIn"],
+        0.3508771929833254,
+    );
+    assert_eq!(buildings[1]["size"]["loc"], 3);
+    assert_close(&buildings[1]["geometry"]["x"], 11.891498903022176);
+    assert_close(&buildings[1]["geometry"]["z"], 0.25);
+    assert_close(&buildings[1]["geometry"]["width"], 1.0);
+    assert_close(&buildings[1]["geometry"]["height"], 0.36);
+    assert_eq!(
+        buildings[1]["floors"],
+        json!([{
+            "name": "caller",
+            "canonicalKind": "function",
+            "startLine": 4,
+            "endLine": 6,
+            "loc": 3,
+            "floorIndex": 0,
+            "floorHeight": 0.36,
+            "colour": "#888888",
+            "healthStatus": "insufficient_data"
+        }])
+    );
+
+    assert_eq!(
+        world["dependencyArcs"],
+        json!([{
+            "fromPath": "packages/api/src/caller.ts",
+            "toPath": "packages/api/src/target.ts",
+            "edgeCount": 1,
+            "arcKind": "dependency"
+        }])
+    );
+
+    let diagnostic_codes = world["diagnostics"]
+        .as_array()
+        .expect("diagnostics array")
+        .iter()
+        .map(|diagnostic| {
+            diagnostic["code"]
+                .as_str()
+                .expect("diagnostic code")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert!(diagnostic_codes.contains(&"codecity.source.cross_scope_edges_ignored".to_string()));
+    assert!(diagnostic_codes.contains(&"codecity.health.deferred".to_string()));
+    assert!(diagnostic_codes.contains(&"codecity.loc.line_span_phase1".to_string()));
+
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    let temporal = schema
+        .execute(async_graphql::Request::new(format!(
+            r#"
+            {{
+              repo(name: "demo") {{
+                asOf(input: {{ commit: "{commit_sha}" }}) {{
+                  project(path: "packages/api") {{
+                    codeCityWorld {{
+                      status
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            "#,
+        )))
+        .await;
+
+    assert_eq!(
+        temporal.errors.len(),
+        1,
+        "expected one temporal-scope validation error"
+    );
+    assert_eq!(
+        temporal.errors[0]
+            .extensions
+            .as_ref()
+            .and_then(|extensions| extensions.get("code")),
+        Some(&async_graphql::Value::from("BAD_USER_INPUT"))
+    );
+    assert!(
+        temporal.errors[0].message.contains(
+            "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in phase 1"
+        ),
+        "unexpected error message: {}",
+        temporal.errors[0].message
+    );
+}
+
+#[tokio::test]
 async fn devql_temporal_queries_resolve_historical_scope_once_and_propagate_to_children() {
     let seeded = seed_graphql_temporal_repo();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
