@@ -1509,7 +1509,7 @@ fn summary_mailbox_batch_claim_leases_up_to_ten_items_without_touching_embedding
 }
 
 #[test]
-fn embedding_mailbox_batch_claim_leases_up_to_fifty_items_from_embedding_inbox_only() {
+fn embedding_mailbox_batch_claim_leases_up_to_embedding_batch_size_from_embedding_inbox_only() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
     configure_summary_refresh_for_repo(&target);
@@ -1563,7 +1563,10 @@ fn embedding_mailbox_batch_claim_leases_up_to_fifty_items_from_embedding_inbox_o
     .expect("claim embedding mailbox batch")
     .expect("embedding mailbox batch should be claimable");
 
-    assert_eq!(claimed.items.len(), 50);
+    assert_eq!(
+        claimed.items.len(),
+        crate::daemon::enrichment::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE
+    );
     assert_eq!(claimed.representation_kind.to_string(), "code");
     assert!(
         claimed
@@ -1573,11 +1576,11 @@ fn embedding_mailbox_batch_claim_leases_up_to_fifty_items_from_embedding_inbox_o
     );
     assert_eq!(
         load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Leased).len(),
-        50,
+        crate::daemon::enrichment::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
     );
     assert_eq!(
         load_embedding_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending).len(),
-        5,
+        55 - crate::daemon::enrichment::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
     );
     assert_eq!(
         load_summary_mailbox_items(&coordinator, SemanticMailboxItemStatus::Pending).len(),
@@ -2861,7 +2864,10 @@ async fn enqueue_repo_backfill_embedding_jobs_chunks_large_payloads_for_parallel
                 .payload_json
                 .as_ref()
                 .and_then(serde_json::Value::as_array)
-                .is_some_and(|artefact_ids| artefact_ids.len() <= 50)
+                .is_some_and(|artefact_ids| {
+                    artefact_ids.len()
+                        <= crate::capability_packs::semantic_clones::workplane::REPO_BACKFILL_MAILBOX_CHUNK_SIZE
+                })
     }));
     assert_eq!(
         pending_items
