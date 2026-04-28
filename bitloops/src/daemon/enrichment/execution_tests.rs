@@ -23,6 +23,14 @@ use tempfile::TempDir;
 const TEST_EMBEDDINGS_DRIVER: &str = crate::host::inference::BITLOOPS_EMBEDDINGS_IPC_DRIVER;
 
 #[test]
+fn semantic_embedding_work_batches_match_platform_embedding_request_limit() {
+    assert_eq!(
+        crate::daemon::enrichment::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
+        32
+    );
+}
+
+#[test]
 fn repo_backfill_selection_distinguishes_empty_explicit_ids_from_full_repo() {
     let full_repo_items = vec![selection_test_embedding_item(None)];
     let full_repo = super::helpers::select_current_semantic_input_scope(&full_repo_items);

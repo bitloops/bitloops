@@ -25,7 +25,7 @@ use super::readiness::{mailbox_claim_readiness, mailbox_readiness_job};
 use super::sql::{sql_i64, sql_string_list};
 
 pub(crate) const SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE: usize = 10;
-pub(crate) const SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE: usize = 50;
+pub(crate) const SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE: usize = 32;
 const SEMANTIC_MAILBOX_LEASE_SECS: u64 = 300;
 pub(crate) const WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT: usize = 32;
 

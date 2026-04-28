@@ -241,7 +241,9 @@ async fn reconcile_clears_current_projection_rows_for_affected_paths_in_bulk() -
 async fn reconcile_large_delta_chunks_code_and_identity_embedding_jobs() -> Result<()> {
     let repo = tempdir().expect("temp repo");
     let repo_id = "repo-large-delta";
-    let artefact_upserts = (0..125)
+    let artefact_count = 125usize;
+    let expected_embedding_job_count = artefact_count.div_ceil(REPO_BACKFILL_MAILBOX_CHUNK_SIZE);
+    let artefact_upserts = (0..artefact_count)
         .map(|idx| ChangedArtefact {
             artefact_id: format!("artefact-{idx:03}"),
             symbol_id: format!("symbol-{idx:03}"),
@@ -276,8 +278,8 @@ async fn reconcile_large_delta_chunks_code_and_identity_embedding_jobs() -> Resu
         .filter(|job| job.mailbox_name == SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX)
         .collect::<Vec<_>>();
 
-    assert_eq!(code_jobs.len(), 3);
-    assert_eq!(identity_jobs.len(), 3);
+    assert_eq!(code_jobs.len(), expected_embedding_job_count);
+    assert_eq!(identity_jobs.len(), expected_embedding_job_count);
     assert!(code_jobs.iter().all(|job| {
         crate::capability_packs::semantic_clones::workplane::payload_is_repo_backfill(&job.payload)
     }));
@@ -294,10 +296,16 @@ async fn reconcile_large_delta_chunks_code_and_identity_embedding_jobs() -> Resu
                 )
             })
             .sum::<u64>(),
-        125
+        artefact_count as u64
     );
-    assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(3));
-    assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(3));
+    assert_eq!(
+        metrics["enqueued_code_embedding_jobs"],
+        json!(expected_embedding_job_count)
+    );
+    assert_eq!(
+        metrics["enqueued_identity_embedding_jobs"],
+        json!(expected_embedding_job_count)
+    );
     Ok(())
 }
 
