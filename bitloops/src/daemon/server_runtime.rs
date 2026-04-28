@@ -73,6 +73,7 @@ pub(super) async fn run_server(
     let service_metadata_path = service_metadata_path(&config_root);
     let current_fingerprint = current_binary_fingerprint()?;
     let on_ready_config = daemon_config.clone();
+    let on_shutdown_config = daemon_config.clone();
     let on_ready_service_metadata_path = service_metadata_path.clone();
     let on_ready_service_name = options.service_name.clone();
     let ready_hook: DashboardReadyHook = std::sync::Arc::new(move |ready| {
@@ -110,6 +111,7 @@ pub(super) async fn run_server(
         Ok(())
     });
     let on_shutdown = std::sync::Arc::new(move || {
+        stop_bound_repo_watchers_for_daemon_shutdown(&on_shutdown_config);
         if let Err(err) = delete_runtime_state() {
             log::warn!("failed to clear daemon runtime state on shutdown: {err:#}");
         }
@@ -196,6 +198,7 @@ pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {
         {
             terminate_process(state.pid)?;
             wait_for_runtime_cleanup(&runtime_state_path(Path::new(".")), STOP_TIMEOUT)?;
+            let _ = reap_terminated_child_process(state.pid, STOP_TIMEOUT);
             Ok(())
         }
         Some(state) => bail!(
@@ -290,4 +293,86 @@ pub(super) fn ensure_can_start(repo_root: &Path, allow_stopped_service: bool) ->
     }
 
     Ok(())
+}
+
+pub(super) fn stop_bound_repo_watchers_for_daemon_shutdown(daemon_config: &ResolvedDaemonConfig) {
+    let repo_roots = match bound_repo_roots_for_daemon_config(daemon_config) {
+        Ok(repo_roots) => repo_roots,
+        Err(err) => {
+            log::warn!(
+                "failed to resolve bound repo watchers for daemon shutdown (config={}): {err:#}",
+                daemon_config.config_path.display()
+            );
+            return;
+        }
+    };
+
+    for repo_root in repo_roots {
+        if let Err(err) =
+            crate::host::devql::watch::stop_watcher(&repo_root, &daemon_config.config_root)
+        {
+            log::warn!(
+                "failed to stop DevQL watcher during daemon shutdown for repo {}: {err:#}",
+                repo_root.display()
+            );
+        }
+    }
+}
+
+fn bound_repo_roots_for_daemon_config(
+    daemon_config: &ResolvedDaemonConfig,
+) -> Result<Vec<PathBuf>> {
+    let current_binding = crate::devql_transport::daemon_binding_identifier_for_config_path(
+        &daemon_config.config_path,
+    );
+    let mut repo_roots = std::collections::BTreeSet::new();
+
+    if let Some(repo_root) = repo_root_for_current_working_tree(&daemon_config.config_root)? {
+        if crate::devql_transport::repo_daemon_binding_identifier(&repo_root) == current_binding {
+            repo_roots.insert(repo_root);
+        }
+    }
+
+    let registry =
+        crate::devql_transport::load_repo_path_registry(&daemon_config.repo_registry_path)
+            .with_context(|| {
+                format!(
+                    "loading repo path registry {} during daemon shutdown",
+                    daemon_config.repo_registry_path.display()
+                )
+            })?;
+
+    for entry in registry.entries {
+        let repo_root = entry
+            .repo_root
+            .canonicalize()
+            .unwrap_or_else(|_| entry.repo_root.clone());
+        if crate::devql_transport::repo_daemon_binding_identifier(&repo_root) == current_binding {
+            repo_roots.insert(repo_root);
+        }
+    }
+
+    Ok(repo_roots.into_iter().collect())
+}
+
+fn repo_root_for_current_working_tree(cwd: &Path) -> Result<Option<PathBuf>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .with_context(|| format!("resolving git repo root from {}", cwd.display()))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let repo_root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if repo_root.is_empty() {
+        return Ok(None);
+    }
+
+    let repo_root = PathBuf::from(repo_root);
+    Ok(Some(repo_root.canonicalize().unwrap_or(repo_root)))
 }
