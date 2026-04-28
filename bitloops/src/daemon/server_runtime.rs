@@ -327,10 +327,10 @@ fn bound_repo_roots_for_daemon_config(
     );
     let mut repo_roots = std::collections::BTreeSet::new();
 
-    if let Some(repo_root) = repo_root_for_current_working_tree(&daemon_config.config_root)? {
-        if crate::devql_transport::repo_daemon_binding_identifier(&repo_root) == current_binding {
-            repo_roots.insert(repo_root);
-        }
+    if let Some(repo_root) = repo_root_for_current_working_tree(&daemon_config.config_root)?
+        && crate::devql_transport::repo_daemon_binding_identifier(&repo_root) == current_binding
+    {
+        repo_roots.insert(repo_root);
     }
 
     let registry =
