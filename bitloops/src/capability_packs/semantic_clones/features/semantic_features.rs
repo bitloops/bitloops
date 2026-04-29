@@ -17,8 +17,8 @@ use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature}
 pub use self::semantic::SymbolSemanticsRow;
 pub(crate) use self::semantic::synthesize_deterministic_summary;
 pub use self::semantic::{
-    NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
-    summary_provider_from_service,
+    DeterministicFallbackSummaryProvider, NoopSemanticSummaryProvider, SemanticSummaryCandidate,
+    SemanticSummaryProvider, summary_provider_from_service,
 };
 use self::semantic::{build_semantics_row, normalize_summary_text};
 
@@ -318,8 +318,9 @@ pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
     next_input_hash: &str,
     requires_model_output: bool,
+    persists_summaries: bool,
 ) -> bool {
-    state.semantics_hash.as_deref() != Some(next_input_hash)
+    (persists_summaries && state.semantics_hash.as_deref() != Some(next_input_hash))
         || state.features_hash.as_deref() != Some(next_input_hash)
         || (requires_model_output && !state.semantics_llm_enriched)
 }
@@ -518,7 +519,7 @@ mod tests {
         };
 
         assert!(
-            semantic_features_require_reindex(&state, &next_hash, false),
+            semantic_features_require_reindex(&state, &next_hash, false, true),
             "changing the summary provider should force semantic rows to be rebuilt"
         );
     }
@@ -538,16 +539,31 @@ mod tests {
         };
 
         assert!(
-            semantic_features_require_reindex(&missing_model_output, &next_hash, true),
+            semantic_features_require_reindex(&missing_model_output, &next_hash, true, true),
             "strict summary mode should retry template-only semantic rows"
         );
         assert!(
-            !semantic_features_require_reindex(&missing_model_output, &next_hash, false),
+            !semantic_features_require_reindex(&missing_model_output, &next_hash, false, true),
             "deterministic summary mode should not force a rebuild when hashes still match"
         );
         assert!(
-            !semantic_features_require_reindex(&model_backed, &next_hash, true),
+            !semantic_features_require_reindex(&model_backed, &next_hash, true, true),
             "strict summary mode should keep model-backed rows when hashes still match"
+        );
+    }
+
+    #[test]
+    fn semantic_features_require_reindex_allows_missing_semantics_when_summaries_are_skipped() {
+        let next_hash = "hash-1".to_string();
+        let state = SemanticFeatureIndexState {
+            semantics_hash: None,
+            features_hash: Some(next_hash.clone()),
+            semantics_llm_enriched: false,
+        };
+
+        assert!(
+            !semantic_features_require_reindex(&state, &next_hash, false, false),
+            "feature rows alone should be considered current when providerless summaries are skipped"
         );
     }
 

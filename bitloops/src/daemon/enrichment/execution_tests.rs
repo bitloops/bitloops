@@ -1140,7 +1140,7 @@ async fn daemon_embedding_job_keeps_incremental_behavior_when_setup_is_unchanged
 }
 
 #[tokio::test]
-async fn daemon_summary_embedding_job_recommends_clone_rebuild_when_setup_is_unchanged() {
+async fn daemon_summary_embedding_job_skips_clone_rebuild_without_summary_provider() {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, _relational, inputs, input_hashes) = seed_current_state_and_semantics(
         repo.path(),
@@ -1206,11 +1206,10 @@ async fn daemon_summary_embedding_job_recommends_clone_rebuild_when_setup_is_unc
     .await;
 
     assert!(second_summary.error.is_none());
-    assert_eq!(second_summary.follow_ups.len(), 1);
-    assert!(matches!(
-        second_summary.follow_ups.first(),
-        Some(FollowUpJob::CloneEdgesRebuild { .. })
-    ));
+    assert!(
+        second_summary.follow_ups.is_empty(),
+        "providerless summary embeddings should not keep scheduling clone rebuild follow-ups"
+    );
 }
 
 #[tokio::test]

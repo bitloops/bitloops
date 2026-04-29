@@ -5,12 +5,14 @@ use anyhow::{Context, Result};
 use super::schema::ensure_semantic_features_schema;
 use super::storage::{
     build_conditional_current_semantic_persist_existing_rows_sql,
-    build_conditional_current_semantic_persist_rows_sql, build_current_semantic_persist_rows_sql,
+    build_conditional_current_semantic_persist_rows_sql,
+    build_conditional_current_symbol_feature_persist_rows_sql,
+    build_current_semantic_persist_rows_sql, build_current_symbol_feature_persist_rows_sql,
     build_delete_current_symbol_features_for_paths_sql, build_delete_current_symbol_features_sql,
     build_delete_current_symbol_semantics_for_paths_sql, build_delete_current_symbol_semantics_sql,
     build_repair_current_semantic_projection_from_historical_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
-    parse_semantic_index_state_rows,
+    build_symbol_feature_persist_rows_sql, parse_semantic_index_state_rows,
 };
 use super::summary::ensure_required_llm_summary_output;
 use crate::capability_packs::semantic_clones::features as semantic;
@@ -30,6 +32,7 @@ pub(crate) async fn upsert_semantic_feature_rows(
     ensure_search_documents_schema(relational).await?;
 
     for input in inputs {
+        let persist_summaries = summary_provider.persists_summaries();
         let next_input_hash =
             semantic::build_semantic_feature_input_hash(input, summary_provider.as_ref());
         let state = load_semantic_index_state(relational, &input.artefact_id).await?;
@@ -37,6 +40,7 @@ pub(crate) async fn upsert_semantic_feature_rows(
             &state,
             &next_input_hash,
             summary_provider.requires_model_output(),
+            persist_summaries,
         ) {
             repair_current_semantic_feature_rows_from_historical(
                 relational,
@@ -63,9 +67,16 @@ pub(crate) async fn upsert_semantic_feature_rows(
         .await
         .context("building semantic feature rows on blocking worker")?;
         ensure_required_llm_summary_output(&rows, summary_provider.as_ref())?;
-        persist_semantic_feature_rows(relational, &rows).await?;
-        persist_current_semantic_feature_rows_for_matching_input(relational, &input, &rows).await?;
-        persist_search_document_row(relational, &input, &rows).await?;
+        if persist_summaries {
+            persist_semantic_feature_rows(relational, &rows).await?;
+            persist_current_semantic_feature_rows_for_matching_input(relational, &input, &rows)
+                .await?;
+            persist_search_document_row(relational, &input, &rows).await?;
+        } else {
+            persist_symbol_feature_rows(relational, &rows).await?;
+            persist_current_symbol_feature_rows_for_matching_input(relational, &input, &rows)
+                .await?;
+        }
         stats.upserted += 1;
     }
 
@@ -91,6 +102,7 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
 
     let mut stats = semantic::SemanticFeatureIngestionStats::default();
     for input in inputs {
+        let persist_summaries = summary_provider.persists_summaries();
         let symbol_id = input.symbol_id.clone();
         let input = input.clone();
         let summary_provider_for_row = Arc::clone(&summary_provider);
@@ -101,15 +113,26 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
         .await
         .context("building current semantic feature rows on blocking worker")?;
         ensure_required_llm_summary_output(&rows, summary_provider.as_ref())?;
-        persist_current_semantic_feature_rows(
-            relational,
-            symbol_id.as_deref(),
-            path,
-            content_id,
-            &rows,
-        )
-        .await?;
-        persist_current_search_document_row(relational, &input, &rows).await?;
+        if persist_summaries {
+            persist_current_semantic_feature_rows(
+                relational,
+                symbol_id.as_deref(),
+                path,
+                content_id,
+                &rows,
+            )
+            .await?;
+            persist_current_search_document_row(relational, &input, &rows).await?;
+        } else {
+            persist_current_symbol_feature_rows(
+                relational,
+                symbol_id.as_deref(),
+                path,
+                content_id,
+                &rows,
+            )
+            .await?;
+        }
         stats.upserted += 1;
     }
 
@@ -168,6 +191,18 @@ async fn persist_semantic_feature_rows(
 ) -> Result<()> {
     relational
         .exec_serialized(&build_semantic_persist_rows_sql(
+            rows,
+            relational.dialect(),
+        )?)
+        .await
+}
+
+async fn persist_symbol_feature_rows(
+    relational: &RelationalStorage,
+    rows: &semantic::SemanticFeatureRows,
+) -> Result<()> {
+    relational
+        .exec_serialized(&build_symbol_feature_persist_rows_sql(
             rows,
             relational.dialect(),
         )?)
@@ -251,6 +286,30 @@ pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
     }
 }
 
+pub(super) async fn persist_current_symbol_feature_rows_for_matching_input(
+    relational: &RelationalStorage,
+    input: &semantic::SemanticFeatureInput,
+    rows: &semantic::SemanticFeatureRows,
+) -> Result<()> {
+    match relational
+        .exec_serialized(&build_conditional_current_symbol_feature_persist_rows_sql(
+            rows,
+            input,
+            relational.dialect(),
+        )?)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = format!("{err:#}");
+            if missing_current_projection_schema_error(&message) {
+                return Ok(());
+            }
+            Err(err).context("persisting current symbol feature rows for matching input")
+        }
+    }
+}
+
 #[allow(dead_code)]
 async fn persist_current_semantic_feature_rows(
     relational: &RelationalStorage,
@@ -261,6 +320,24 @@ async fn persist_current_semantic_feature_rows(
 ) -> Result<()> {
     relational
         .exec_serialized(&build_current_semantic_persist_rows_sql(
+            rows,
+            symbol_id,
+            path,
+            content_id,
+            relational.dialect(),
+        )?)
+        .await
+}
+
+async fn persist_current_symbol_feature_rows(
+    relational: &RelationalStorage,
+    symbol_id: Option<&str>,
+    path: &str,
+    content_id: &str,
+    rows: &semantic::SemanticFeatureRows,
+) -> Result<()> {
+    relational
+        .exec_serialized(&build_current_symbol_feature_persist_rows_sql(
             rows,
             symbol_id,
             path,

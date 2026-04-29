@@ -48,9 +48,16 @@ pub fn resolve_semantic_clones_config(view: &CapabilityConfigView) -> SemanticCl
 }
 
 pub fn embeddings_enabled(config: &SemanticClonesConfig) -> bool {
-    config.embedding_mode != SemanticCloneEmbeddingMode::Off
-        && (configured_slot_name(config.inference.code_embeddings.as_deref()).is_some()
-            || configured_slot_name(config.inference.summary_embeddings.as_deref()).is_some())
+    if config.embedding_mode == SemanticCloneEmbeddingMode::Off {
+        return false;
+    }
+
+    let code_embeddings_enabled =
+        configured_slot_name(config.inference.code_embeddings.as_deref()).is_some();
+    let summary_embeddings_enabled = resolve_selected_summary_slot(config).is_some()
+        && configured_slot_name(config.inference.summary_embeddings.as_deref()).is_some();
+
+    code_embeddings_enabled || summary_embeddings_enabled
 }
 
 fn configured_slot_name(value: Option<&str>) -> Option<String> {
@@ -98,9 +105,16 @@ pub fn resolve_summary_provider(
     inference: &dyn InferenceGateway,
     mode: SummaryProviderMode,
 ) -> Result<SummaryProviderSelection> {
-    if matches!(mode, SummaryProviderMode::DeterministicOnly)
-        || config.summary_mode == SemanticSummaryMode::Off
-    {
+    if matches!(mode, SummaryProviderMode::DeterministicOnly) {
+        return Ok(SummaryProviderSelection {
+            provider: Arc::new(features::DeterministicFallbackSummaryProvider),
+            degraded_reason: None,
+            slot_name: None,
+            profile_name: None,
+        });
+    }
+
+    if config.summary_mode == SemanticSummaryMode::Off {
         return Ok(SummaryProviderSelection {
             provider: Arc::new(features::NoopSemanticSummaryProvider),
             degraded_reason: None,
@@ -135,7 +149,7 @@ pub fn resolve_summary_provider(
                 "semantic_clones semantic summaries degraded; using deterministic summaries only: {message}"
             );
             Ok(SummaryProviderSelection {
-                provider: Arc::new(features::NoopSemanticSummaryProvider),
+                provider: Arc::new(features::DeterministicFallbackSummaryProvider),
                 degraded_reason: Some(message),
                 slot_name: Some(slot_name),
                 profile_name,
@@ -282,6 +296,10 @@ mod tests {
             !selection.provider.requires_model_output(),
             "configured degrade should allow deterministic fallback when infer calls fail"
         );
+        assert!(
+            selection.provider.persists_summaries(),
+            "configured degrade should continue to persist deterministic fallback summaries"
+        );
     }
 
     #[test]
@@ -301,5 +319,37 @@ mod tests {
             selection.provider.requires_model_output(),
             "configured strict should continue to fail when model-backed output is missing"
         );
+    }
+
+    #[test]
+    fn providerless_summary_provider_does_not_persist_summaries() {
+        let gateway = DummyInferenceGateway {
+            text_generation: Arc::new(DummyTextGenerationService),
+        };
+        let mut config = semantic_config();
+        config.inference.summary_generation = None;
+
+        let selection =
+            resolve_summary_provider(&config, &gateway, SummaryProviderMode::ConfiguredDegrade)
+                .expect("providerless summary provider should resolve");
+
+        assert!(
+            !selection.provider.persists_summaries(),
+            "providerless auto summary mode should not persist deterministic summaries"
+        );
+    }
+
+    #[test]
+    fn providerless_summary_embeddings_do_not_count_as_enabled() {
+        let config = SemanticClonesConfig {
+            embedding_mode: SemanticCloneEmbeddingMode::Deterministic,
+            inference: crate::config::SemanticClonesInferenceBindings {
+                summary_embeddings: Some("summary_embeddings".to_string()),
+                ..crate::config::SemanticClonesInferenceBindings::default()
+            },
+            ..SemanticClonesConfig::default()
+        };
+
+        assert!(!embeddings_enabled(&config));
     }
 }

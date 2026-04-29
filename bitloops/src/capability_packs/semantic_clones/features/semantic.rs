@@ -20,6 +20,9 @@ pub trait SemanticSummaryProvider: Send + Sync {
     fn requires_model_output(&self) -> bool {
         false
     }
+    fn persists_summaries(&self) -> bool {
+        true
+    }
 }
 
 pub fn summary_provider_from_service(
@@ -37,6 +40,22 @@ pub struct NoopSemanticSummaryProvider;
 impl SemanticSummaryProvider for NoopSemanticSummaryProvider {
     fn cache_key(&self) -> String {
         "provider=noop".to_string()
+    }
+
+    fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
+        None
+    }
+
+    fn persists_summaries(&self) -> bool {
+        false
+    }
+}
+
+pub struct DeterministicFallbackSummaryProvider;
+
+impl SemanticSummaryProvider for DeterministicFallbackSummaryProvider {
+    fn cache_key(&self) -> String {
+        "provider=deterministic_fallback".to_string()
     }
 
     fn generate(&self, _input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {

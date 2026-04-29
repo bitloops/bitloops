@@ -152,6 +152,7 @@ where
             &state,
             &next_input_hash,
             summary_provider.provider.requires_model_output(),
+            summary_provider.provider.persists_summaries(),
         ) {
             semantic_statements.push(
                 build_repair_current_semantic_projection_from_historical_sql(
