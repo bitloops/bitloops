@@ -2,7 +2,7 @@ mod architecture;
 mod arcs;
 mod boundaries;
 mod file_detail;
-mod phase4_support;
+mod snapshot_support;
 mod violations;
 mod world;
 

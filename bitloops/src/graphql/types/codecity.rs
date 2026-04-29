@@ -1,6 +1,8 @@
 use async_graphql::{Enum, InputObject, SimpleObject};
 use serde::Deserialize;
 
+use crate::capability_packs::codecity::types::{CodeCitySnapshotState, CodeCitySnapshotStatus};
+
 use super::connection::PageInfo;
 
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
@@ -51,6 +53,42 @@ pub struct CodeCitySnapshotStatusResult {
     pub generated_at: Option<String>,
     pub updated_at: Option<String>,
     pub last_error: Option<String>,
+}
+
+impl From<CodeCitySnapshotState> for CodeCitySnapshotStateResult {
+    fn from(value: CodeCitySnapshotState) -> Self {
+        match value {
+            CodeCitySnapshotState::Missing => Self::Missing,
+            CodeCitySnapshotState::Queued => Self::Queued,
+            CodeCitySnapshotState::Running => Self::Running,
+            CodeCitySnapshotState::Ready => Self::Ready,
+            CodeCitySnapshotState::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<CodeCitySnapshotStatus> for CodeCitySnapshotStatusResult {
+    fn from(value: CodeCitySnapshotStatus) -> Self {
+        Self {
+            state: value.state.into(),
+            stale: value.stale,
+            repo_id: value.repo_id,
+            project_path: value.project_path,
+            snapshot_key: value.snapshot_key,
+            config_fingerprint: value.config_fingerprint,
+            source_generation_seq: value
+                .source_generation_seq
+                .and_then(|value| i64::try_from(value).ok()),
+            last_success_generation_seq: value
+                .last_success_generation_seq
+                .and_then(|value| i64::try_from(value).ok()),
+            run_id: value.run_id,
+            commit_sha: value.commit_sha,
+            generated_at: value.generated_at,
+            updated_at: value.updated_at,
+            last_error: value.last_error,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
@@ -808,7 +846,7 @@ pub struct CodeCityArchitectureEvidenceResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Enum)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeCityLayoutStrategyResult {
-    Phase1GridTreemap,
+    GridTreemap,
     HexagonalRings,
     LayeredBands,
     ModularIslands,

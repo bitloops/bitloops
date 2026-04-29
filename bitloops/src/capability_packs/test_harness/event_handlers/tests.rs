@@ -184,6 +184,7 @@ async fn merged_delta_materializes_enumerated_scenarios_only_for_changed_paths()
     });
     let context = fixture.context(support, vec![production_artefact()])?;
     let request = CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: "repo-1".to_string(),
         repo_root: fixture.repo_root(),
         active_branch: Some("main".to_string()),
@@ -245,6 +246,7 @@ async fn merged_delta_materializes_synthetic_enumerated_scenarios() -> Result<()
     });
     let context = fixture.context(support, vec![production_artefact()])?;
     let request = CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: "repo-1".to_string(),
         repo_root: fixture.repo_root(),
         active_branch: Some("main".to_string()),
@@ -313,6 +315,7 @@ async fn merged_delta_promotes_to_full_reconcile_when_production_artefacts_chang
     });
     let context = fixture.context(support, vec![production_artefact()])?;
     let request = CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: "repo-1".to_string(),
         repo_root: fixture.repo_root(),
         active_branch: Some("main".to_string()),

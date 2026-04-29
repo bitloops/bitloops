@@ -93,7 +93,7 @@ pub(super) fn discover_manifest_roots(
     }
 
     for indexed_file in indexed_files {
-        let Some((root_path, manifest_name, ecosystem)) = indexed_manifest_root(indexed_file)
+        let Some((root_path, _manifest_name, ecosystem)) = indexed_manifest_root(indexed_file)
         else {
             continue;
         };
@@ -260,7 +260,7 @@ fn infer_manifest_source(
                 code: "codecity.boundary.workspace_parse_skipped".to_string(),
                 severity: "info".to_string(),
                 message: format!(
-                    "Skipped workspace parsing for `{}` because YAML parsing is not enabled in phase 2.",
+                    "Skipped workspace parsing for `{}` because YAML parsing is not enabled in architecture analysis.",
                     manifest_path.display()
                 ),
                 path: None,

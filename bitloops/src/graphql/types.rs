@@ -35,8 +35,8 @@ pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
 pub use codecity::{
     CodeCityArcConnectionResult, CodeCityArcFilterInput, CodeCityArchitectureResult,
-    CodeCityFileDetailResult, CodeCityViolationConnectionResult, CodeCityViolationFilterInput,
-    CodeCityWorldResult,
+    CodeCityFileDetailResult, CodeCitySnapshotStatusResult, CodeCityViolationConnectionResult,
+    CodeCityViolationFilterInput, CodeCityWorldResult,
 };
 pub use commit::Commit;
 pub use connection::{

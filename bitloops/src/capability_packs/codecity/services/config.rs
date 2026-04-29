@@ -718,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_include_valid_phase_two_thresholds() -> Result<()> {
+    fn defaults_include_valid_architecture_thresholds() -> Result<()> {
         let config = CodeCityConfig::default();
         assert_eq!(config.boundaries.overlap_split_threshold, 0.3);
         assert_eq!(config.boundaries.overlap_merge_threshold, 0.7);

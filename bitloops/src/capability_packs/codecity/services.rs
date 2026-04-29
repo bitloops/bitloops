@@ -1,5 +1,6 @@
 pub mod architecture;
 pub mod architecture_classifiers;
+pub mod architecture_diagnostics;
 pub mod boundary_detection;
 pub mod colour;
 pub mod community_detection;
@@ -13,7 +14,6 @@ pub mod history;
 pub mod layout;
 pub mod macro_graph;
 pub mod normalise;
-pub mod phase4;
 pub mod scoring;
 pub mod snapshot;
 pub mod source_graph;

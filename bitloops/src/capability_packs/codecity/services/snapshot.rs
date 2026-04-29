@@ -4,14 +4,15 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 
 use super::architecture::analyse_codecity_architecture;
+use super::architecture_diagnostics::enrich_world_with_architecture_diagnostics;
 use super::config::CodeCityConfig;
 use super::health::apply_health_overlay;
-use super::phase4::enrich_world_with_phase4;
 use super::source_graph::load_current_source_graph;
 use super::world::build_codecity_world_from_analysis;
 use crate::capability_packs::codecity::storage::{normalise_project_path, snapshot_key_for};
 use crate::capability_packs::codecity::types::{
-    CodeCityPhase4Snapshot, CodeCitySnapshotState, CodeCitySnapshotStatus, CodeCityWorldPayload,
+    CodeCityArchitectureDiagnosticsSnapshot, CodeCitySnapshotState, CodeCitySnapshotStatus,
+    CodeCityWorldPayload,
 };
 use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::capability_host::gateways::{GitHistoryGateway, RelationalGateway};
@@ -20,7 +21,7 @@ pub struct BuiltCodeCitySnapshot {
     pub snapshot_key: String,
     pub project_path: Option<String>,
     pub world: CodeCityWorldPayload,
-    pub phase4: CodeCityPhase4Snapshot,
+    pub architecture_diagnostics: CodeCityArchitectureDiagnosticsSnapshot,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -50,7 +51,8 @@ pub fn build_codecity_snapshot_from_current_rows(
         git_history,
         test_harness_store,
     )?;
-    let phase4 = enrich_world_with_phase4(&source, &analysis, &mut world, config);
+    let architecture_diagnostics =
+        enrich_world_with_architecture_diagnostics(&source, &analysis, &mut world, config);
     let now = chrono::Utc::now().to_rfc3339();
     world.snapshot_status = CodeCitySnapshotStatus {
         state: CodeCitySnapshotState::Ready,
@@ -61,7 +63,7 @@ pub fn build_codecity_snapshot_from_current_rows(
         config_fingerprint: world.config_fingerprint.clone(),
         source_generation_seq: Some(source_generation_seq),
         last_success_generation_seq: Some(source_generation_seq),
-        run_id: Some(phase4.run_id.clone()),
+        run_id: Some(architecture_diagnostics.run_id.clone()),
         commit_sha: world.commit_sha.clone(),
         generated_at: world
             .health
@@ -76,6 +78,6 @@ pub fn build_codecity_snapshot_from_current_rows(
         snapshot_key,
         project_path,
         world,
-        phase4,
+        architecture_diagnostics,
     })
 }

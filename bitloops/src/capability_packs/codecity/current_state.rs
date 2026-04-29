@@ -1,4 +1,3 @@
-use anyhow::Result;
 use serde_json::json;
 
 use crate::host::capability_host::{
@@ -46,12 +45,16 @@ impl CurrentStateConsumer for CodeCitySnapshotConsumer {
             let mut warnings = Vec::new();
             let mut refreshed = 0_u64;
             let mut failed = 0_u64;
+            let run_id = request
+                .run_id
+                .as_deref()
+                .unwrap_or(CODECITY_SNAPSHOT_CONSUMER_ID);
 
             for snapshot_request in requests {
                 repo.mark_snapshot_running(
                     &request.repo_id,
                     &snapshot_request.snapshot_key,
-                    &request.to_generation_seq_inclusive.to_string(),
+                    run_id,
                     request.to_generation_seq_inclusive,
                 )?;
                 match build_codecity_snapshot_from_current_rows(
@@ -69,8 +72,9 @@ impl CurrentStateConsumer for CodeCitySnapshotConsumer {
                             &snapshot.snapshot_key,
                             snapshot.project_path.as_deref(),
                             request.to_generation_seq_inclusive,
+                            Some(run_id),
                             &snapshot.world,
-                            &snapshot.phase4,
+                            &snapshot.architecture_diagnostics,
                         )?;
                         refreshed += 1;
                     }

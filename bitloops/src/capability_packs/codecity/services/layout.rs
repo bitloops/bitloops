@@ -9,7 +9,7 @@ use crate::capability_packs::codecity::types::{
 
 use super::config::LayoutConfig;
 
-pub fn apply_phase1_layout(
+pub fn apply_grid_treemap_layout(
     buildings: &mut [CodeCityBuilding],
     layout: &LayoutConfig,
 ) -> CodeCityLayoutSummary {
@@ -56,7 +56,7 @@ pub fn apply_phase1_layout(
     }
 
     CodeCityLayoutSummary {
-        layout_kind: "phase1_grid_treemap".to_string(),
+        layout_kind: "grid_treemap".to_string(),
         width: max_width,
         depth: max_depth,
         gap: layout.building_gap,
@@ -376,7 +376,7 @@ fn position_boundaries(
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{apply_architecture_layout, apply_phase1_layout};
+    use super::{apply_architecture_layout, apply_grid_treemap_layout};
     use crate::capability_packs::codecity::services::config::CodeCityConfig;
     use crate::capability_packs::codecity::types::{
         CodeCityArchitecturePattern, CodeCityBoundary, CodeCityBoundaryArchitectureReport,
@@ -468,8 +468,8 @@ mod tests {
         ];
         let mut second = first.clone();
 
-        let first_layout = apply_phase1_layout(&mut first, &config.layout);
-        let second_layout = apply_phase1_layout(&mut second, &config.layout);
+        let first_layout = apply_grid_treemap_layout(&mut first, &config.layout);
+        let second_layout = apply_grid_treemap_layout(&mut second, &config.layout);
 
         assert_eq!(first_layout, second_layout);
         assert_eq!(first, second);

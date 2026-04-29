@@ -163,6 +163,7 @@ pub(super) fn request(
     artefact_removals: Vec<RemovedArtefact>,
 ) -> CurrentStateConsumerRequest {
     CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: repo_id.to_string(),
         repo_root: repo_root.to_path_buf(),
         active_branch: Some("main".to_string()),

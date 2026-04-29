@@ -4,26 +4,33 @@ use rusqlite::params;
 use super::SqliteCodeCityRepository;
 use crate::capability_packs::codecity::types::{
     CODECITY_DEFAULT_SNAPSHOT_KEY, CodeCityArcGeometry, CodeCityArcKind, CodeCityArcVisibility,
-    CodeCityArchitectureViolation, CodeCityDependencyEvidence, CodeCityFileDependencyArc,
-    CodeCityPhase4Snapshot, CodeCityRenderArc, CodeCityViolationEvidence, CodeCityViolationPattern,
-    CodeCityViolationRule, CodeCityViolationSeverity,
+    CodeCityArchitectureDiagnosticsSnapshot, CodeCityArchitectureViolation,
+    CodeCityDependencyEvidence, CodeCityFileDependencyArc, CodeCityRenderArc,
+    CodeCityViolationEvidence, CodeCityViolationPattern, CodeCityViolationRule,
+    CodeCityViolationSeverity,
 };
 
 impl SqliteCodeCityRepository {
-    pub fn replace_phase4_snapshot(&self, snapshot: &CodeCityPhase4Snapshot) -> Result<()> {
-        self.replace_phase4_snapshot_for_key(CODECITY_DEFAULT_SNAPSHOT_KEY, snapshot)
+    pub fn replace_architecture_diagnostics_snapshot(
+        &self,
+        snapshot: &CodeCityArchitectureDiagnosticsSnapshot,
+    ) -> Result<()> {
+        self.replace_architecture_diagnostics_snapshot_for_key(
+            CODECITY_DEFAULT_SNAPSHOT_KEY,
+            snapshot,
+        )
     }
 
-    pub(crate) fn replace_phase4_snapshot_for_key(
+    pub(crate) fn replace_architecture_diagnostics_snapshot_for_key(
         &self,
         snapshot_key: &str,
-        snapshot: &CodeCityPhase4Snapshot,
+        snapshot: &CodeCityArchitectureDiagnosticsSnapshot,
     ) -> Result<()> {
         let created_at = chrono::Utc::now().to_rfc3339();
         self.sqlite.with_connection(|conn| {
             let tx = conn
                 .unchecked_transaction()
-                .context("starting CodeCity Phase 4 snapshot transaction")?;
+                .context("starting CodeCity architecture diagnostics snapshot transaction")?;
 
             tx.execute(
                 "DELETE FROM codecity_render_arcs_current WHERE repo_id = ?1 AND snapshot_key = ?2",
@@ -199,20 +206,23 @@ impl SqliteCodeCityRepository {
             }
 
             tx.commit()
-                .context("committing CodeCity Phase 4 snapshot transaction")?;
+                .context("committing CodeCity architecture diagnostics snapshot transaction")?;
             Ok(())
         })
     }
 
-    pub fn load_phase4_snapshot(&self, repo_id: &str) -> Result<CodeCityPhase4Snapshot> {
-        self.load_phase4_snapshot_for_key(repo_id, CODECITY_DEFAULT_SNAPSHOT_KEY)
+    pub fn load_architecture_diagnostics_snapshot(
+        &self,
+        repo_id: &str,
+    ) -> Result<CodeCityArchitectureDiagnosticsSnapshot> {
+        self.load_architecture_diagnostics_snapshot_for_key(repo_id, CODECITY_DEFAULT_SNAPSHOT_KEY)
     }
 
-    pub(crate) fn load_phase4_snapshot_for_key(
+    pub(crate) fn load_architecture_diagnostics_snapshot_for_key(
         &self,
         repo_id: &str,
         snapshot_key: &str,
-    ) -> Result<CodeCityPhase4Snapshot> {
+    ) -> Result<CodeCityArchitectureDiagnosticsSnapshot> {
         let evidence = self.load_dependency_evidence(repo_id, snapshot_key)?;
         let file_arcs = self.load_file_dependency_arcs(repo_id, snapshot_key)?;
         let violations = self.load_architecture_violations(repo_id, snapshot_key)?;
@@ -228,7 +238,7 @@ impl SqliteCodeCityRepository {
             .and_then(|row| row.commit_sha.clone())
             .or_else(|| file_arcs.first().and_then(|row| row.commit_sha.clone()))
             .or_else(|| violations.first().and_then(|row| row.commit_sha.clone()));
-        Ok(CodeCityPhase4Snapshot {
+        Ok(CodeCityArchitectureDiagnosticsSnapshot {
             repo_id: repo_id.to_string(),
             run_id,
             commit_sha,

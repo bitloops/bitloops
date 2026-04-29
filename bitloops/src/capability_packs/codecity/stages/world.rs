@@ -1,17 +1,9 @@
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::capability_packs::codecity::services::architecture::analyse_codecity_architecture;
+use super::snapshot_support::{build_snapshot_stage_data, missing_world_payload};
 use crate::capability_packs::codecity::services::config::CodeCityConfig;
-use crate::capability_packs::codecity::services::health::apply_health_overlay;
-use crate::capability_packs::codecity::services::phase4::enrich_world_with_phase4;
-use crate::capability_packs::codecity::services::source_graph::load_current_source_graph;
-use crate::capability_packs::codecity::services::world::build_codecity_world_from_analysis;
-use crate::capability_packs::codecity::storage::SqliteCodeCityRepository;
-use crate::capability_packs::codecity::types::{
-    CODECITY_WORLD_STAGE_ID, CodeCityDiagnostic, codecity_current_scope_required_stage_response,
-    codecity_source_data_unavailable_stage_response,
-};
+use crate::capability_packs::codecity::types::CODECITY_WORLD_STAGE_ID;
 use crate::host::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
 };
@@ -25,38 +17,6 @@ impl StageHandler for CodeCityWorldStageHandler {
         ctx: &'a mut dyn CapabilityExecutionContext,
     ) -> BoxFuture<'a, Result<StageResponse>> {
         Box::pin(async move {
-            let repo_id = request
-                .payload
-                .get("query_context")
-                .and_then(|query_context| query_context.get("repo_id"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or(ctx.repo().repo_id.as_str())
-                .to_string();
-
-            let resolved_commit = request
-                .payload
-                .get("query_context")
-                .and_then(|query_context| query_context.get("resolved_commit_sha"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            if resolved_commit.is_some() {
-                return Ok(codecity_current_scope_required_stage_response(
-                    CODECITY_WORLD_STAGE_ID,
-                ));
-            }
-
-            let project_path = request
-                .payload
-                .get("query_context")
-                .and_then(|query_context| query_context.get("project_path"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty() && *value != ".")
-                .map(str::to_string);
-
             let args = request
                 .payload
                 .get("args")
@@ -64,123 +24,41 @@ impl StageHandler for CodeCityWorldStageHandler {
                 .unwrap_or_else(|| json!({}));
             let config = CodeCityConfig::from_stage_args(&args)?;
             let limit = request.limit().unwrap_or(500);
-
-            let source = match load_current_source_graph(
-                ctx.host_relational(),
-                &repo_id,
-                project_path.as_deref(),
-                &config,
-            ) {
-                Ok(source) => source,
-                Err(err) if is_source_data_unavailable_error(&err) => {
-                    return Ok(codecity_source_data_unavailable_stage_response(
-                        CODECITY_WORLD_STAGE_ID,
-                        format!("{err:#}"),
-                    ));
-                }
-                Err(err) => return Err(err),
-            };
-
-            let current_head = ctx
-                .git_history()
-                .resolve_head(ctx.repo_root())
-                .unwrap_or(None);
-            let analysis = analyse_codecity_architecture(&source, &config, ctx.repo_root());
-            let mut world = build_codecity_world_from_analysis(
-                &source,
-                &repo_id,
-                current_head,
-                &config,
-                &analysis,
-            )?;
-            let codecity_repo = SqliteCodeCityRepository::open_for_repo_root(ctx.repo_root())
-                .and_then(|repo| {
-                    repo.initialise_schema()?;
-                    Ok(repo)
-                });
-            let loaded_health = if config.include_health {
-                match codecity_repo.as_ref() {
-                    Ok(repo) => repo.try_apply_current_snapshot(&mut world)?,
-                    Err(_) => false,
-                }
-            } else {
-                false
-            };
-            if !loaded_health {
-                apply_health_overlay(
-                    &mut world,
-                    &source,
-                    &config,
-                    ctx.repo_root(),
-                    ctx.git_history(),
-                    ctx.test_harness_store(),
-                )?;
-                if config.include_health {
-                    match codecity_repo.as_ref() {
-                        Ok(repo) => {
-                            if let Err(err) = repo.replace_current_snapshot(&world) {
-                                world.diagnostics.push(CodeCityDiagnostic {
-                                    code: "codecity.health.persistence_unavailable".to_string(),
-                                    severity: "warning".to_string(),
-                                    message: format!(
-                                        "CodeCity health was computed but could not be persisted: {err:#}"
-                                    ),
-                                    path: None,
-                                    boundary_id: None,
-                                });
-                            }
-                        }
-                        Err(err) => {
-                            world.diagnostics.push(CodeCityDiagnostic {
-                                code: "codecity.health.persistence_unavailable".to_string(),
-                                severity: "warning".to_string(),
-                                message: format!(
-                                    "CodeCity health was computed but no snapshot store was available: {err:#}"
-                                ),
-                                path: None,
-                                boundary_id: None,
-                            });
-                        }
-                    }
-                }
-            }
-            let phase4_snapshot = enrich_world_with_phase4(&source, &analysis, &mut world, &config);
-            match codecity_repo.as_ref() {
-                Ok(repo) => {
-                    if let Err(err) = repo.replace_phase4_snapshot(&phase4_snapshot) {
-                        world.diagnostics.push(CodeCityDiagnostic {
-                            code: "codecity.phase4.persistence_unavailable".to_string(),
-                            severity: "warning".to_string(),
-                            message: format!(
-                                "CodeCity architecture diagnostics were computed but could not be persisted: {err:#}"
-                            ),
-                            path: None,
-                            boundary_id: None,
-                        });
-                    }
-                }
-                Err(err) => {
-                    world.diagnostics.push(CodeCityDiagnostic {
-                        code: "codecity.phase4.persistence_unavailable".to_string(),
-                        severity: "warning".to_string(),
-                        message: format!(
-                            "CodeCity architecture diagnostics were computed but no snapshot store was available: {err:#}"
-                        ),
-                        path: None,
-                        boundary_id: None,
-                    });
-                }
-            }
+            let data =
+                match build_snapshot_stage_data(CODECITY_WORLD_STAGE_ID, &request, ctx, config)? {
+                    Ok(data) => data,
+                    Err(response) => return Ok(response),
+                };
+            let mut world = data.world.unwrap_or_else(|| {
+                missing_world_payload(
+                    &data.repo_id,
+                    data.project_path.as_deref(),
+                    &data.snapshot_key,
+                    data.snapshot_status.clone(),
+                    &data.config,
+                )
+            });
             if world.buildings.len() > limit {
                 world.buildings.truncate(limit);
             }
 
             let human = if world.status == "empty" {
-                format!("codecity world for repo {repo_id}: no eligible files")
+                format!(
+                    "codecity world for repo {}: no eligible files",
+                    world.repo_id
+                )
+            } else if world.snapshot_status.state.as_str() == "missing" {
+                format!(
+                    "codecity world for repo {} snapshot {}: missing",
+                    world.repo_id, world.snapshot_status.snapshot_key
+                )
             } else {
                 format!(
-                    "codecity world for repo {}: files={}, artefacts={}, dependencies={}, returned_buildings={}",
+                    "codecity world for repo {} snapshot {}: state={}, stale={}, files={}, artefacts={}, dependencies={}, returned_buildings={}",
                     world.repo_id,
+                    world.snapshot_status.snapshot_key,
+                    world.snapshot_status.state.as_str(),
+                    world.snapshot_status.stale,
                     world.summary.file_count,
                     world.summary.artefact_count,
                     world.summary.dependency_count,
@@ -191,14 +69,6 @@ impl StageHandler for CodeCityWorldStageHandler {
             Ok(StageResponse::new(serde_json::to_value(world)?, human))
         })
     }
-}
-
-fn is_source_data_unavailable_error(err: &anyhow::Error) -> bool {
-    let message = format!("{err:#}");
-    message.contains("run DevQL sync first")
-        || message.contains("current_file_state")
-        || message.contains("artefacts_current")
-        || message.contains("artefact_edges_current")
 }
 
 #[cfg(test)]
@@ -434,7 +304,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stage_returns_empty_payload_when_no_files_are_available() -> Result<()> {
+    async fn stage_returns_missing_payload_when_no_snapshot_is_available() -> Result<()> {
         let handler = CodeCityWorldStageHandler;
         let mut ctx = DummyExecCtx {
             repo: repo(),
@@ -457,13 +327,18 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(response.payload["status"], "empty");
+        assert_eq!(response.payload["status"], "missing");
+        assert_eq!(response.payload["snapshot_status"]["state"], "missing");
         assert_eq!(response.payload["summary"]["file_count"], 0);
+        assert_eq!(
+            response.payload["diagnostics"][0]["code"],
+            "codecity.snapshot.missing"
+        );
         Ok(())
     }
 
     #[tokio::test]
-    async fn stage_builds_scoped_world_and_honours_limits_and_arcs() -> Result<()> {
+    async fn stage_returns_scoped_missing_snapshot_without_building_on_read() -> Result<()> {
         let handler = CodeCityWorldStageHandler;
         let mut ctx = DummyExecCtx {
             repo: repo(),
@@ -561,27 +436,26 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(response.payload["status"], "ok");
-        assert_eq!(response.payload["summary"]["file_count"], 3);
-        assert_eq!(response.payload["summary"]["included_file_count"], 2);
-        assert_eq!(response.payload["summary"]["dependency_count"], 1);
+        assert_eq!(response.payload["status"], "missing");
+        assert_eq!(response.payload["snapshot_status"]["state"], "missing");
+        assert_eq!(
+            response.payload["snapshot_status"]["project_path"],
+            "packages/api"
+        );
+        assert_eq!(response.payload["summary"]["file_count"], 0);
         assert_eq!(
             response.payload["dependency_arcs"].as_array().map(Vec::len),
-            Some(1)
+            Some(0)
         );
         assert_eq!(
             response.payload["buildings"].as_array().map(Vec::len),
-            Some(1)
-        );
-        assert_eq!(
-            response.payload["buildings"][0]["path"],
-            "packages/api/src/target.ts"
+            Some(0)
         );
         Ok(())
     }
 
     #[tokio::test]
-    async fn stage_reports_missing_sync_source_data_as_failed() -> Result<()> {
+    async fn stage_reports_missing_snapshot_without_read_time_source_loading() -> Result<()> {
         let handler = CodeCityWorldStageHandler;
         let mut ctx = DummyExecCtx {
             repo: repo(),
@@ -606,10 +480,10 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(response.payload["status"], "failed");
+        assert_eq!(response.payload["status"], "missing");
         assert_eq!(
-            response.payload["reason"],
-            "codecity_source_data_unavailable"
+            response.payload["diagnostics"][0]["code"],
+            "codecity.snapshot.missing"
         );
         Ok(())
     }

@@ -5,14 +5,14 @@ use rusqlite::{OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
 use crate::capability_packs::codecity::types::{
-    CODECITY_DEFAULT_SNAPSHOT_KEY, CodeCityBuildingHealthSummary, CodeCityHealthEvidence,
-    CodeCityHealthMetrics, CodeCityPhase4Snapshot, CodeCitySnapshotState, CodeCitySnapshotStatus,
-    CodeCityWorldPayload,
+    CODECITY_DEFAULT_SNAPSHOT_KEY, CodeCityArchitectureDiagnosticsSnapshot,
+    CodeCityBuildingHealthSummary, CodeCityHealthEvidence, CodeCityHealthMetrics,
+    CodeCitySnapshotState, CodeCitySnapshotStatus, CodeCityWorldPayload,
 };
 use crate::host::relational_store::DefaultRelationalStore;
 use crate::storage::SqliteConnectionPool;
 
-mod phase4;
+mod architecture_diagnostics;
 mod schema;
 #[cfg(test)]
 mod tests;
@@ -28,7 +28,7 @@ pub struct SqliteCodeCityRepository {
 pub struct CodeCityStoredSnapshot {
     pub status: CodeCitySnapshotStatus,
     pub world: Option<CodeCityWorldPayload>,
-    pub phase4: CodeCityPhase4Snapshot,
+    pub architecture_diagnostics: CodeCityArchitectureDiagnosticsSnapshot,
 }
 
 impl SqliteCodeCityRepository {
@@ -48,13 +48,13 @@ impl SqliteCodeCityRepository {
         self.sqlite
             .execute_batch(codecity_sqlite_schema_sql())
             .context("initialising CodeCity health schema")?;
-        self.rebuild_legacy_phase4_tables_if_needed()?;
+        self.rebuild_legacy_architecture_diagnostics_tables_if_needed()?;
         self.sqlite
             .execute_batch(codecity_sqlite_schema_sql())
             .context("initialising CodeCity snapshot schema")
     }
 
-    fn rebuild_legacy_phase4_tables_if_needed(&self) -> Result<()> {
+    fn rebuild_legacy_architecture_diagnostics_tables_if_needed(&self) -> Result<()> {
         self.sqlite.with_connection(|conn| {
             for table in [
                 "codecity_dependency_evidence_current",
@@ -177,12 +177,14 @@ impl SqliteCodeCityRepository {
         snapshot_key: &str,
         project_path: Option<&str>,
         source_generation_seq: u64,
+        status_run_id: Option<&str>,
         world: &CodeCityWorldPayload,
-        snapshot: &CodeCityPhase4Snapshot,
+        snapshot: &CodeCityArchitectureDiagnosticsSnapshot,
     ) -> Result<()> {
-        self.replace_phase4_snapshot_for_key(snapshot_key, snapshot)?;
+        self.replace_architecture_diagnostics_snapshot_for_key(snapshot_key, snapshot)?;
         let now = chrono::Utc::now().to_rfc3339();
         let world_json = serde_json::to_string(world)?;
+        let run_id = status_run_id.unwrap_or(snapshot.run_id.as_str());
         self.sqlite.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO codecity_snapshots_current (
@@ -210,7 +212,7 @@ impl SqliteCodeCityRepository {
                     world.config_fingerprint,
                     sql_i64(source_generation_seq),
                     CodeCitySnapshotState::Ready.as_str(),
-                    snapshot.run_id,
+                    run_id,
                     snapshot.commit_sha,
                     world.health.generated_at,
                     now,
@@ -233,11 +235,12 @@ impl SqliteCodeCityRepository {
         };
         let status = with_staleness(status, latest_generation_seq);
         let world = self.load_snapshot_world(repo_id, snapshot_key)?;
-        let phase4 = self.load_phase4_snapshot_for_key(repo_id, snapshot_key)?;
+        let architecture_diagnostics =
+            self.load_architecture_diagnostics_snapshot_for_key(repo_id, snapshot_key)?;
         Ok(Some(CodeCityStoredSnapshot {
             status,
             world,
-            phase4,
+            architecture_diagnostics,
         }))
     }
 
@@ -250,6 +253,22 @@ impl SqliteCodeCityRepository {
         let status = self
             .load_optional_snapshot_status(repo_id, snapshot_key)?
             .unwrap_or_else(|| missing_snapshot_status(repo_id, snapshot_key, None, ""));
+        Ok(with_staleness(status, latest_generation_seq))
+    }
+
+    pub fn load_snapshot_status_or_missing(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+        project_path: Option<&str>,
+        config_fingerprint: &str,
+        latest_generation_seq: Option<u64>,
+    ) -> Result<CodeCitySnapshotStatus> {
+        let status = self
+            .load_optional_snapshot_status(repo_id, snapshot_key)?
+            .unwrap_or_else(|| {
+                missing_snapshot_status(repo_id, snapshot_key, project_path, config_fingerprint)
+            });
         Ok(with_staleness(status, latest_generation_seq))
     }
 

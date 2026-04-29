@@ -1,10 +1,10 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::phase4_support::build_phase4_stage_data;
+use super::snapshot_support::build_snapshot_stage_data;
 use super::violations::{bool_arg, parse_severity, positive_usize_arg, string_arg};
+use crate::capability_packs::codecity::services::architecture_diagnostics::arcs_connection;
 use crate::capability_packs::codecity::services::config::CodeCityConfig;
-use crate::capability_packs::codecity::services::phase4::arcs_connection;
 use crate::capability_packs::codecity::types::{
     CODECITY_ARCS_STAGE_ID, CodeCityArcFilter, CodeCityArcKind, CodeCityArcVisibility,
     CodeCityDependencyDirection,
@@ -27,7 +27,7 @@ impl StageHandler for CodeCityArcsStageHandler {
                 .get("args")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let data = match build_phase4_stage_data(
+            let data = match build_snapshot_stage_data(
                 CODECITY_ARCS_STAGE_ID,
                 &request,
                 ctx,
@@ -44,6 +44,7 @@ impl StageHandler for CodeCityArcsStageHandler {
             let filter = arc_filter_from_args(&args);
             let payload = arcs_connection(
                 &data.snapshot.render_arcs,
+                data.snapshot_status.clone(),
                 &filter,
                 first,
                 after.as_deref(),

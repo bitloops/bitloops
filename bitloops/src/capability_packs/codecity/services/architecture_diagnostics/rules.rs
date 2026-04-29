@@ -52,9 +52,10 @@ pub(super) fn evaluate_violations(
 
     if violations.is_empty() && buildings.is_empty() {
         diagnostics.push(CodeCityDiagnostic {
-            code: "codecity.phase4.no_buildings".to_string(),
+            code: "codecity.architecture.no_buildings".to_string(),
             severity: "info".to_string(),
-            message: "CodeCity Phase 4 found no building geometry to evaluate.".to_string(),
+            message: "CodeCity architecture diagnostics found no building geometry to evaluate."
+                .to_string(),
             path: None,
             boundary_id: None,
         });

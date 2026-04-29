@@ -11,11 +11,11 @@ use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
     CodeCityArcConnectionResult, CodeCityArcFilterInput, CodeCityArchitectureResult,
-    CodeCityFileDetailResult, CodeCityViolationConnectionResult, CodeCityViolationFilterInput,
-    CodeCityWorldResult, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, FileContext, KnowledgeItemConnection,
-    KnowledgeItemEdge, KnowledgeProvider, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    CodeCityFileDetailResult, CodeCitySnapshotStatusResult, CodeCityViolationConnectionResult,
+    CodeCityViolationFilterInput, CodeCityWorldResult, ConnectionPagination, DateTimeScalar,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext,
+    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope,
+    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -416,7 +416,7 @@ impl Project {
     ) -> Result<CodeCityWorldResult> {
         if self.scope.temporal_scope().is_some() {
             return Err(bad_user_input_error(
-                "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 2",
+                "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes",
             ));
         }
         if let Some(months) = analysis_window_months
@@ -451,6 +451,74 @@ impl Project {
         decode_stage_single("codecity_world", rows)
     }
 
+    #[graphql(name = "codeCitySnapshotStatus")]
+    async fn code_city_snapshot_status(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "projectPath")] project_path: Option<String>,
+    ) -> Result<CodeCitySnapshotStatusResult> {
+        if self.scope.temporal_scope().is_some() {
+            return Err(bad_user_input_error(
+                "`codeCitySnapshotStatus` does not support historical or temporary `asOf(...)` scopes",
+            ));
+        }
+
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let repo_id = context
+            .repo_id_for_scope(&self.scope)
+            .map_err(|err| backend_error(format!("failed to resolve repository: {err:#}")))?;
+        let repo_root = context.repo_root_for_scope(&self.scope).map_err(|err| {
+            backend_error(format!("failed to resolve repository checkout: {err:#}"))
+        })?;
+        let requested_project_path = if let Some(project_path) = project_path {
+            let trimmed = project_path.trim();
+            if trimmed.is_empty() {
+                return Err(bad_user_input_error("`projectPath` must not be empty"));
+            }
+            crate::capability_packs::codecity::storage::normalise_project_path(Some(trimmed))
+        } else {
+            crate::capability_packs::codecity::storage::normalise_project_path(
+                self.scope.project_path(),
+            )
+        };
+        let snapshot_key = crate::capability_packs::codecity::storage::snapshot_key_for(
+            requested_project_path.as_deref(),
+        );
+        let config = crate::capability_packs::codecity::services::config::CodeCityConfig::default();
+        let config_fingerprint = config.fingerprint().map_err(|err| {
+            backend_error(format!(
+                "failed to fingerprint CodeCity configuration: {err:#}"
+            ))
+        })?;
+        let repo =
+            crate::capability_packs::codecity::storage::SqliteCodeCityRepository::open_for_repo_root(
+                &repo_root,
+            )
+            .and_then(|repo| {
+                repo.initialise_schema()?;
+                Ok(repo)
+            })
+            .map_err(|err| {
+                backend_error(format!("failed to open CodeCity snapshot store: {err:#}"))
+            })?;
+        let latest_generation = crate::daemon::capability_event_latest_generation(&repo_id)
+            .map_err(|err| {
+                backend_error(format!("failed to load DevQL generation status: {err:#}"))
+            })?;
+        let status = repo
+            .load_snapshot_status_or_missing(
+                &repo_id,
+                &snapshot_key,
+                requested_project_path.as_deref(),
+                &config_fingerprint,
+                latest_generation,
+            )
+            .map_err(|err| {
+                backend_error(format!("failed to load CodeCity snapshot status: {err:#}"))
+            })?;
+        Ok(status.into())
+    }
+
     #[graphql(name = "codeCityArchitecture")]
     async fn code_city_architecture(
         &self,
@@ -462,7 +530,7 @@ impl Project {
     ) -> Result<CodeCityArchitectureResult> {
         if self.scope.temporal_scope().is_some() {
             return Err(bad_user_input_error(
-                "`codeCityArchitecture` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 2",
+                "`codeCityArchitecture` does not support historical or temporary `asOf(...)` scopes",
             ));
         }
 
@@ -498,7 +566,7 @@ impl Project {
     ) -> Result<CodeCityViolationConnectionResult> {
         if self.scope.temporal_scope().is_some() {
             return Err(bad_user_input_error(
-                "`codeCityViolations` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 4",
+                "`codeCityViolations` does not support historical or temporary `asOf(...)` scopes",
             ));
         }
         let pagination = ConnectionPagination::from_graphql(
@@ -529,7 +597,7 @@ impl Project {
     ) -> Result<CodeCityFileDetailResult> {
         if self.scope.temporal_scope().is_some() {
             return Err(bad_user_input_error(
-                "`codeCityFile` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 4",
+                "`codeCityFile` does not support historical or temporary `asOf(...)` scopes",
             ));
         }
         let normalized = ctx
@@ -574,7 +642,7 @@ impl Project {
     ) -> Result<CodeCityArcConnectionResult> {
         if self.scope.temporal_scope().is_some() {
             return Err(bad_user_input_error(
-                "`codeCityArcs` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 4",
+                "`codeCityArcs` does not support historical or temporary `asOf(...)` scopes",
             ));
         }
         let pagination = ConnectionPagination::from_graphql(

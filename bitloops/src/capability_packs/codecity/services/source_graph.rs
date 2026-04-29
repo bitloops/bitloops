@@ -601,7 +601,7 @@ mod tests {
     }
 
     #[test]
-    fn dependency_edge_kind_filter_accepts_phase_one_kinds() {
+    fn dependency_edge_kind_filter_accepts_current_edge_kinds() {
         for kind in [
             "imports",
             "calls",

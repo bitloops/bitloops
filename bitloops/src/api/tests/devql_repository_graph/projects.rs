@@ -162,6 +162,10 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
                     status
                     repoId
                     commitSha
+                    snapshotStatus {
+                      state
+                      projectPath
+                    }
                     summary {
                       fileCount
                       artefactCount
@@ -359,245 +363,48 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     let world = &json["repo"]["project"]["codeCityWorld"];
     assert_eq!(world["capability"], "codecity");
     assert_eq!(world["stage"], "codecity_world");
-    assert_eq!(world["status"], "ok");
+    assert_eq!(world["status"], "missing");
     assert_eq!(world["repoId"], repo_id);
+    assert_eq!(world["commitSha"], serde_json::Value::Null);
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
-    assert_eq!(world["commitSha"], commit_sha);
-    assert_eq!(world["summary"]["fileCount"], 3);
-    assert_eq!(world["summary"]["artefactCount"], 2);
-    assert_eq!(world["summary"]["dependencyCount"], 1);
-    assert_eq!(world["summary"]["boundaryCount"], 1);
+    assert_eq!(world["snapshotStatus"]["state"], "MISSING");
+    assert_eq!(world["snapshotStatus"]["projectPath"], "packages/api");
+    assert_eq!(world["summary"]["fileCount"], 0);
+    assert_eq!(world["summary"]["artefactCount"], 0);
+    assert_eq!(world["summary"]["dependencyCount"], 0);
+    assert_eq!(world["summary"]["boundaryCount"], 0);
     assert_eq!(world["summary"]["macroEdgeCount"], 0);
-    assert_eq!(world["summary"]["includedFileCount"], 2);
-    assert_eq!(world["summary"]["excludedFileCount"], 1);
+    assert_eq!(world["summary"]["includedFileCount"], 0);
+    assert_eq!(world["summary"]["excludedFileCount"], 0);
     assert_eq!(world["summary"]["unhealthyFloorCount"], 0);
     assert_eq!(world["summary"]["insufficientHealthDataCount"], 0);
     assert_eq!(world["summary"]["coverageAvailable"], false);
-    assert_eq!(world["summary"]["gitHistoryAvailable"], true);
-    assert_close(&world["summary"]["maxImportance"], 0.85);
-    assert_close(&world["summary"]["maxHeight"], 0.36);
-    assert_eq!(world["health"]["status"], "partial");
+    assert_eq!(world["summary"]["gitHistoryAvailable"], false);
+    assert_close(&world["summary"]["maxImportance"], 0.0);
+    assert_close(&world["summary"]["maxHeight"], 0.0);
+    assert_eq!(world["health"]["status"], "not_requested");
     assert_eq!(world["health"]["analysisWindowMonths"], 6);
-    assert_close(&world["health"]["confidence"], 0.85);
-    assert_eq!(world["health"]["missingSignals"], json!(["coverage"]));
+    assert_close(&world["health"]["confidence"], 0.0);
+    assert_eq!(world["health"]["missingSignals"], json!([]));
     assert_eq!(world["health"]["coverageAvailable"], false);
-    assert_eq!(world["health"]["gitHistoryAvailable"], true);
+    assert_eq!(world["health"]["gitHistoryAvailable"], false);
     assert_close(&world["health"]["weights"]["churn"], 0.30);
     assert_close(&world["health"]["weights"]["complexity"], 0.25);
     assert_close(&world["health"]["weights"]["bugs"], 0.20);
     assert_close(&world["health"]["weights"]["coverage"], 0.15);
     assert_close(&world["health"]["weights"]["authorConcentration"], 0.10);
-    assert_eq!(world["layout"]["layoutKind"], "phase1_grid_treemap");
-    assert_close(&world["layout"]["gap"], 0.5);
-    assert_close(&world["layout"]["width"], 13.141498903022176);
-    assert_close(&world["layout"]["depth"], 11.641498903022176);
+    assert_eq!(world["layout"]["layoutKind"], "grid_treemap");
+    assert_close(&world["layout"]["gap"], 0.0);
+    assert_close(&world["layout"]["width"], 0.0);
+    assert_close(&world["layout"]["depth"], 0.0);
 
     let buildings = world["buildings"].as_array().expect("buildings array");
-    assert_eq!(buildings.len(), 2);
-    assert_eq!(buildings[0]["path"], "packages/api/src/target.ts");
-    assert_eq!(buildings[1]["path"], "packages/api/src/caller.ts");
-    assert_eq!(buildings[0]["boundaryId"], "boundary:root");
-    assert_eq!(buildings[0]["zone"], "edge");
-    assert_eq!(buildings[0]["inferredZone"], "application");
-    assert_eq!(buildings[0]["conventionZone"], "edge");
-    assert!(buildings[0]["architectureRole"].as_str().is_some());
-    assert_eq!(buildings[1]["boundaryId"], "boundary:root");
-    assert_eq!(buildings[1]["zone"], "edge");
-    assert_eq!(buildings[1]["inferredZone"], "edge");
-    assert_eq!(buildings[1]["conventionZone"], "edge");
-    assert!(buildings[1]["architectureRole"].as_str().is_some());
-
-    assert_close(&buildings[0]["importance"]["score"], 0.85);
-    assert_eq!(buildings[0]["importance"]["blastRadius"], 1);
-    assert_close(
-        &buildings[0]["importance"]["weightedFanIn"],
-        0.6491228070166745,
-    );
-    assert_close(&buildings[0]["size"]["totalHeight"], 0.36);
-    assert_eq!(buildings[0]["size"]["loc"], 3);
-    assert_close(&buildings[0]["geometry"]["x"], 0.25);
-    assert_close(&buildings[0]["geometry"]["z"], 0.25);
-    assert_close(&buildings[0]["geometry"]["width"], 11.141498903022176);
-    assert_close(&buildings[0]["geometry"]["height"], 0.36);
-    assert_eq!(buildings[0]["healthStatus"], "partial");
-    assert_close(&buildings[0]["healthConfidence"], 0.85);
-    assert_close(&buildings[0]["healthSummary"]["maxRisk"], 0.0);
-    assert_eq!(
-        buildings[0]["healthSummary"]["missingSignals"],
-        json!(["coverage"])
-    );
-    let target_floor = &buildings[0]["floors"][0];
-    assert_eq!(target_floor["name"], "target");
-    assert_eq!(target_floor["canonicalKind"], "function");
-    assert_eq!(target_floor["startLine"], 1);
-    assert_eq!(target_floor["endLine"], 3);
-    assert_eq!(target_floor["loc"], 3);
-    assert_eq!(target_floor["floorIndex"], 0);
-    assert_close(&target_floor["floorHeight"], 0.36);
-    assert_eq!(target_floor["colour"], "#6B8FA3");
-    assert_eq!(target_floor["healthStatus"], "partial");
-    assert_close(&target_floor["healthRisk"], 0.0);
-    assert_close(&target_floor["healthConfidence"], 0.85);
-    assert_eq!(target_floor["healthMetrics"]["churn"], 1);
-    assert_close(&target_floor["healthMetrics"]["complexity"], 1.0);
-    assert_eq!(target_floor["healthMetrics"]["bugCount"], 0);
-    assert_eq!(
-        target_floor["healthMetrics"]["coverage"],
-        serde_json::Value::Null
-    );
-    assert_close(&target_floor["healthMetrics"]["authorConcentration"], 1.0);
-    assert_eq!(target_floor["healthEvidence"]["commitsTouching"], 1);
-    assert_eq!(target_floor["healthEvidence"]["bugFixCommits"], 0);
-    assert_eq!(target_floor["healthEvidence"]["distinctAuthors"], 1);
-    assert_eq!(
-        target_floor["healthEvidence"]["coverageSource"],
-        "unavailable"
-    );
-    assert_eq!(
-        target_floor["healthEvidence"]["gitHistorySource"],
-        "file_level_fallback"
-    );
-    assert_eq!(
-        target_floor["healthEvidence"]["complexitySource"],
-        "structural_proxy"
-    );
-    assert_eq!(
-        target_floor["healthEvidence"]["missingSignals"],
-        json!(["coverage"])
-    );
-
-    assert_close(&buildings[1]["importance"]["score"], 0.0);
-    assert_eq!(buildings[1]["importance"]["blastRadius"], 0);
-    assert_close(
-        &buildings[1]["importance"]["weightedFanIn"],
-        0.3508771929833254,
-    );
-    assert_eq!(buildings[1]["size"]["loc"], 3);
-    assert_close(&buildings[1]["geometry"]["x"], 11.891498903022176);
-    assert_close(&buildings[1]["geometry"]["z"], 0.25);
-    assert_close(&buildings[1]["geometry"]["width"], 1.0);
-    assert_close(&buildings[1]["geometry"]["height"], 0.36);
-    assert_eq!(buildings[1]["healthStatus"], "partial");
-    assert_close(&buildings[1]["healthConfidence"], 0.85);
-    assert_close(&buildings[1]["healthSummary"]["maxRisk"], 0.25 / 0.85);
-    assert_eq!(
-        buildings[1]["healthSummary"]["missingSignals"],
-        json!(["coverage"])
-    );
-    let caller_floor = &buildings[1]["floors"][0];
-    assert_eq!(caller_floor["name"], "caller");
-    assert_eq!(caller_floor["canonicalKind"], "function");
-    assert_eq!(caller_floor["startLine"], 4);
-    assert_eq!(caller_floor["endLine"], 6);
-    assert_eq!(caller_floor["loc"], 3);
-    assert_eq!(caller_floor["floorIndex"], 0);
-    assert_close(&caller_floor["floorHeight"], 0.36);
-    assert_eq!(caller_floor["healthStatus"], "partial");
-    assert_close(&caller_floor["healthRisk"], 0.25 / 0.85);
-    assert_close(&caller_floor["healthConfidence"], 0.85);
-    assert_eq!(caller_floor["healthMetrics"]["churn"], 1);
-    assert_close(&caller_floor["healthMetrics"]["complexity"], 2.0);
-    assert_eq!(caller_floor["healthMetrics"]["bugCount"], 0);
-    assert_eq!(
-        caller_floor["healthMetrics"]["coverage"],
-        serde_json::Value::Null
-    );
-    assert_close(&caller_floor["healthMetrics"]["authorConcentration"], 1.0);
-    assert_eq!(caller_floor["healthEvidence"]["commitsTouching"], 1);
-    assert_eq!(caller_floor["healthEvidence"]["bugFixCommits"], 0);
-    assert_eq!(caller_floor["healthEvidence"]["distinctAuthors"], 1);
-    assert_eq!(
-        caller_floor["healthEvidence"]["coverageSource"],
-        "unavailable"
-    );
-    assert_eq!(
-        caller_floor["healthEvidence"]["gitHistorySource"],
-        "file_level_fallback"
-    );
-    assert_eq!(
-        caller_floor["healthEvidence"]["complexitySource"],
-        "structural_proxy"
-    );
-    assert_eq!(
-        caller_floor["healthEvidence"]["missingSignals"],
-        json!(["coverage"])
-    );
-
-    assert_eq!(
-        world["dependencyArcs"],
-        json!([{
-            "fromPath": "packages/api/src/caller.ts",
-            "toPath": "packages/api/src/target.ts",
-            "edgeCount": 1,
-            "arcKind": "dependency"
-        }])
-    );
-
-    assert_eq!(
-        world["boundaries"],
-        json!([{
-            "id": "boundary:root",
-            "rootPath": ".",
-            "kind": "ROOT_FALLBACK",
-            "source": "FALLBACK",
-            "fileCount": 2,
-            "sharedLibrary": false,
-            "atomic": true,
-            "architecture": {
-                "primaryPattern": "LAYERED",
-                "primaryScore": world["boundaries"][0]["architecture"]["primaryScore"],
-                "mudScore": world["boundaries"][0]["architecture"]["mudScore"],
-                "modularity": world["boundaries"][0]["architecture"]["modularity"]
-            },
-            "layout": {
-                "strategy": "PHASE_1_GRID_TREEMAP",
-                "zoneCount": 1
-            }
-        }])
-    );
-    assert_eq!(
-        world["macroGraph"],
-        json!({
-            "topology": "SINGLE_BOUNDARY",
-            "boundaryCount": 1,
-            "edgeCount": 0,
-            "density": 0.0,
-            "edges": []
-        })
-    );
-    assert_eq!(world["architecture"]["macroTopology"], "SINGLE_BOUNDARY");
-    assert_eq!(world["architecture"]["primaryPattern"], "LAYERED");
-    assert_eq!(world["architecture"]["mudWarning"], false);
-    assert_eq!(
-        world["architecture"]["boundaryReports"],
-        json!([{
-            "boundaryId": "boundary:root",
-            "primaryPattern": "LAYERED",
-            "primaryScore": world["architecture"]["boundaryReports"][0]["primaryScore"],
-            "secondaryPattern": world["architecture"]["boundaryReports"][0]["secondaryPattern"],
-            "secondaryScore": world["architecture"]["boundaryReports"][0]["secondaryScore"]
-        }])
-    );
-    assert_eq!(
-        world["boundaryLayouts"],
-        json!([{
-            "boundaryId": "boundary:root",
-            "strategy": "PHASE_1_GRID_TREEMAP",
-            "zoneCount": 1,
-            "width": world["boundaryLayouts"][0]["width"],
-            "depth": world["boundaryLayouts"][0]["depth"],
-            "x": 0.0,
-            "z": 0.0
-        }])
-    );
-    assert_close(
-        &world["boundaryLayouts"][0]["width"],
-        world["layout"]["width"].as_f64().expect("layout width"),
-    );
-    assert_close(
-        &world["boundaryLayouts"][0]["depth"],
-        world["layout"]["depth"].as_f64().expect("layout depth"),
-    );
+    assert_eq!(buildings.len(), 0);
+    assert_eq!(world["dependencyArcs"], json!([]));
+    assert_eq!(world["boundaries"], json!([]));
+    assert_eq!(world["macroGraph"], serde_json::Value::Null);
+    assert_eq!(world["architecture"], serde_json::Value::Null);
+    assert_eq!(world["boundaryLayouts"], json!([]));
 
     let diagnostic_codes = world["diagnostics"]
         .as_array()
@@ -610,11 +417,7 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
                 .to_string()
         })
         .collect::<Vec<_>>();
-    assert!(diagnostic_codes.contains(&"codecity.source.cross_scope_edges_ignored".to_string()));
-    assert!(diagnostic_codes.contains(&"codecity.health.coverage_not_indexed".to_string()));
-    assert!(diagnostic_codes.contains(&"codecity.health.history_file_level_fallback".to_string()));
-    assert!(diagnostic_codes.contains(&"codecity.loc.line_span_phase1".to_string()));
-    assert!(diagnostic_codes.contains(&"codecity.zone.disagreement".to_string()));
+    assert_eq!(diagnostic_codes, vec!["codecity.snapshot.missing"]);
 
     let temporal = schema
         .execute(async_graphql::Request::new(format!(
@@ -648,7 +451,7 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     );
     assert!(
         temporal.errors[0].message.contains(
-            "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 2"
+            "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes"
         ),
         "unexpected error message: {}",
         temporal.errors[0].message
@@ -656,7 +459,7 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
 }
 
 #[tokio::test]
-async fn devql_project_codecity_architecture_returns_typed_phase2_payload() {
+async fn devql_project_codecity_architecture_returns_typed_payload() {
     let repo = seed_graphql_monorepo_repo();
     let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
         repo.path().to_path_buf(),

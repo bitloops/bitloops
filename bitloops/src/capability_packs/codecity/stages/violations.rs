@@ -1,9 +1,9 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::phase4_support::build_phase4_stage_data;
+use super::snapshot_support::build_snapshot_stage_data;
+use crate::capability_packs::codecity::services::architecture_diagnostics::violations_connection;
 use crate::capability_packs::codecity::services::config::CodeCityConfig;
-use crate::capability_packs::codecity::services::phase4::violations_connection;
 use crate::capability_packs::codecity::types::{
     CODECITY_VIOLATIONS_STAGE_ID, CodeCityViolationFilter, CodeCityViolationPattern,
     CodeCityViolationRule, CodeCityViolationSeverity,
@@ -27,12 +27,15 @@ impl StageHandler for CodeCityViolationsStageHandler {
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             let config = CodeCityConfig::default();
-            let data =
-                match build_phase4_stage_data(CODECITY_VIOLATIONS_STAGE_ID, &request, ctx, config)?
-                {
-                    Ok(data) => data,
-                    Err(response) => return Ok(response),
-                };
+            let data = match build_snapshot_stage_data(
+                CODECITY_VIOLATIONS_STAGE_ID,
+                &request,
+                ctx,
+                config,
+            )? {
+                Ok(data) => data,
+                Err(response) => return Ok(response),
+            };
             let first = positive_usize_arg(&args, "first")
                 .unwrap_or_else(|| request.limit().unwrap_or(100));
             let last = positive_usize_arg(&args, "last");
@@ -41,6 +44,7 @@ impl StageHandler for CodeCityViolationsStageHandler {
             let filter = violation_filter_from_args(&args);
             let payload = violations_connection(
                 &data.snapshot.violations,
+                data.snapshot_status.clone(),
                 &filter,
                 first,
                 after.as_deref(),

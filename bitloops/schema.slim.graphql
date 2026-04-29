@@ -307,6 +307,7 @@ type CodeCityArcConnectionEdgeResult {
 }
 
 type CodeCityArcConnectionResult {
+	snapshotStatus: CodeCitySnapshotStatusResult!
 	totalCount: Int!
 	edges: [CodeCityArcConnectionEdgeResult!]!
 	pageInfo: PageInfo!
@@ -623,7 +624,8 @@ type CodeCityFileDependencyArcResult {
 type CodeCityFileDetailResult {
 	status: String!
 	path: String!
-	building: CodeCityBuildingResult!
+	snapshotStatus: CodeCitySnapshotStatusResult!
+	building: CodeCityBuildingResult
 	architectureContext: CodeCityFileArchitectureContextResult!
 	incomingDependencies: CodeCityDependencyConnectionResult!
 	outgoingDependencies: CodeCityDependencyConnectionResult!
@@ -718,7 +720,7 @@ type CodeCityLayoutResult {
 }
 
 enum CodeCityLayoutStrategyResult {
-	PHASE_1_GRID_TREEMAP
+	GRID_TREEMAP
 	HEXAGONAL_RINGS
 	LAYERED_BANDS
 	MODULAR_ISLANDS
@@ -758,6 +760,18 @@ enum CodeCityMacroTopologyResult {
 	UNKNOWN
 }
 
+input CodeCityRefreshInput {
+	projectPath: String = null
+}
+
+type CodeCityRefreshResult {
+	success: Boolean!
+	queued: Boolean!
+	runId: String
+	message: String!
+	snapshotStatus: CodeCitySnapshotStatusResult!
+}
+
 type CodeCityRenderArcResult {
 	id: String!
 	kind: CodeCityArcKindResult!
@@ -788,6 +802,30 @@ type CodeCitySizeResult {
 	totalHeight: Float!
 }
 
+enum CodeCitySnapshotStateResult {
+	MISSING
+	QUEUED
+	RUNNING
+	READY
+	FAILED
+}
+
+type CodeCitySnapshotStatusResult {
+	state: CodeCitySnapshotStateResult!
+	stale: Boolean!
+	repoId: String!
+	projectPath: String
+	snapshotKey: String!
+	configFingerprint: String!
+	sourceGenerationSeq: Int
+	lastSuccessGenerationSeq: Int
+	runId: String
+	commitSha: String
+	generatedAt: String
+	updatedAt: String
+	lastError: String
+}
+
 type CodeCitySummaryResult {
 	fileCount: Int!
 	artefactCount: Int!
@@ -814,6 +852,7 @@ type CodeCityViolationConnectionEdgeResult {
 }
 
 type CodeCityViolationConnectionResult {
+	snapshotStatus: CodeCitySnapshotStatusResult!
 	totalCount: Int!
 	edges: [CodeCityViolationConnectionEdgeResult!]!
 	pageInfo: PageInfo!
@@ -928,6 +967,7 @@ type CodeCityWorldResult {
 	repoId: String!
 	commitSha: String
 	configFingerprint: String!
+	snapshotStatus: CodeCitySnapshotStatusResult!
 	summary: CodeCitySummaryResult!
 	health: CodeCityHealthOverviewResult!
 	legends: CodeCityLegendsResult!
@@ -1501,6 +1541,7 @@ type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	enqueueTask(input: EnqueueTaskInput!): EnqueueTaskResult!
+	refreshCodeCity(input: CodeCityRefreshInput!): CodeCityRefreshResult!
 	pauseTaskQueue(reason: String): TaskQueueControlResult!
 	resumeTaskQueue(repoId: String): TaskQueueControlResult!
 	cancelTask(id: String!): Task!
@@ -1532,6 +1573,7 @@ type Project {
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
 	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean, includeBoundaries: Boolean, includeArchitecture: Boolean, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean, includeHealth: Boolean, analysisWindowMonths: Int): CodeCityWorldResult!
+	codeCitySnapshotStatus(projectPath: String): CodeCitySnapshotStatusResult!
 	codeCityArchitecture(first: Int! = 500, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean): CodeCityArchitectureResult!
 	codeCityViolations(filter: CodeCityViolationFilterInput, first: Int, after: String, last: Int, before: String): CodeCityViolationConnectionResult!
 	codeCityFile(path: String!, incomingFirst: Int, outgoingFirst: Int): CodeCityFileDetailResult!

@@ -212,7 +212,7 @@ fn layered_upward_dependency_creates_high_violation_and_arc() {
         building("src/domain.rs", "core", 0.0),
         building("src/api.rs", "edge", 10.0),
     ]);
-    let snapshot = enrich_world_with_phase4(
+    let snapshot = enrich_world_with_architecture_diagnostics(
         &source(),
         &analysis(CodeCityArchitecturePattern::Layered),
         &mut world,

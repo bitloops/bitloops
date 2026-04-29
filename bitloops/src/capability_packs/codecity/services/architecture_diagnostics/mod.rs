@@ -10,13 +10,13 @@ use super::source_graph::{CodeCitySourceEdge, CodeCitySourceGraph};
 use crate::capability_packs::codecity::types::{
     CODECITY_UNCLASSIFIED_ZONE, CodeCityArcConnectionEdgePayload, CodeCityArcConnectionPayload,
     CodeCityArcFilter, CodeCityArcGeometry, CodeCityArcKind, CodeCityArcKindLegend,
-    CodeCityArcVisibility, CodeCityArchitecturePattern, CodeCityArchitectureViolation,
-    CodeCityBoundary, CodeCityBoundaryArchitectureReport, CodeCityBuilding,
-    CodeCityDependencyConnectionEdgePayload, CodeCityDependencyConnectionPayload,
+    CodeCityArcVisibility, CodeCityArchitectureDiagnosticsSnapshot, CodeCityArchitecturePattern,
+    CodeCityArchitectureViolation, CodeCityBoundary, CodeCityBoundaryArchitectureReport,
+    CodeCityBuilding, CodeCityDependencyConnectionEdgePayload, CodeCityDependencyConnectionPayload,
     CodeCityDependencyDirection, CodeCityDependencyEvidence, CodeCityDiagnostic,
     CodeCityDiagnosticBadge, CodeCityDiagnosticBadgeKind, CodeCityFileArchitectureContext,
     CodeCityFileDependencyArc, CodeCityFileDetailPayload, CodeCityLegends, CodeCityPageInfo,
-    CodeCityPhase4Snapshot, CodeCityRenderArc, CodeCitySeverityLegend, CodeCitySnapshotStatus,
+    CodeCityRenderArc, CodeCitySeverityLegend, CodeCitySnapshotStatus,
     CodeCityViolationConnectionEdgePayload, CodeCityViolationConnectionPayload,
     CodeCityViolationEvidence, CodeCityViolationFilter, CodeCityViolationPattern,
     CodeCityViolationRule, CodeCityViolationRuleCount, CodeCityViolationRuleLegend,
@@ -68,13 +68,13 @@ struct ArcViolationSpec {
     recommendation: Option<String>,
 }
 
-pub fn enrich_world_with_phase4(
+pub fn enrich_world_with_architecture_diagnostics(
     source: &CodeCitySourceGraph,
     analysis: &CodeCityArchitectureAnalysis,
     world: &mut CodeCityWorldPayload,
     config: &CodeCityConfig,
-) -> CodeCityPhase4Snapshot {
-    let mut snapshot = build_phase4_snapshot(source, analysis, world, config);
+) -> CodeCityArchitectureDiagnosticsSnapshot {
+    let mut snapshot = build_architecture_diagnostics_snapshot(source, analysis, world, config);
 
     apply_violation_state_to_file_arcs(&mut snapshot.file_arcs, &snapshot.violations);
     let render_arcs = build_render_arcs(&snapshot.file_arcs, &snapshot.violations, world, config);
@@ -118,14 +118,14 @@ pub fn enrich_world_with_phase4(
     snapshot
 }
 
-pub fn build_phase4_snapshot(
+pub fn build_architecture_diagnostics_snapshot(
     source: &CodeCitySourceGraph,
     analysis: &CodeCityArchitectureAnalysis,
     world: &CodeCityWorldPayload,
     config: &CodeCityConfig,
-) -> CodeCityPhase4Snapshot {
+) -> CodeCityArchitectureDiagnosticsSnapshot {
     let run_id = stable_id(
-        "codecity-phase4-run",
+        "codecity-architecture-diagnostics-run",
         &[
             world.repo_id.as_str(),
             world.config_fingerprint.as_str(),
@@ -178,7 +178,7 @@ pub fn build_phase4_snapshot(
     violations = merge_duplicate_violations(violations);
     apply_violation_state_to_file_arcs(&mut file_arcs, &violations);
 
-    CodeCityPhase4Snapshot {
+    CodeCityArchitectureDiagnosticsSnapshot {
         repo_id: world.repo_id.clone(),
         run_id,
         commit_sha: world.commit_sha.clone(),

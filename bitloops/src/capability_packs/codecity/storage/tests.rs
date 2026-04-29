@@ -10,12 +10,14 @@ use crate::capability_packs::codecity::services::source_graph::{
     CodeCitySourceArtefact, CodeCitySourceFile, CodeCitySourceGraph,
 };
 use crate::capability_packs::codecity::services::world::build_codecity_world;
+use crate::capability_packs::codecity::types::CodeCitySnapshotState;
 use crate::host::capability_host::gateways::EmptyGitHistoryGateway;
 use crate::storage::SqliteConnectionPool;
 
 #[test]
 fn schema_contains_health_snapshot_tables() {
     let sql = codecity_sqlite_schema_sql();
+    assert!(sql.contains("codecity_snapshots_current"));
     assert!(sql.contains("codecity_floor_health_current"));
     assert!(sql.contains("codecity_file_health_current"));
     assert!(sql.contains("codecity_health_runs_current"));
@@ -23,6 +25,43 @@ fn schema_contains_health_snapshot_tables() {
     assert!(sql.contains("codecity_file_dependency_arcs_current"));
     assert!(sql.contains("codecity_architecture_violations_current"));
     assert!(sql.contains("codecity_render_arcs_current"));
+}
+
+#[test]
+fn repository_tracks_snapshot_request_state_and_missing_status() -> Result<()> {
+    let temp = TempDir::new()?;
+    let sqlite = SqliteConnectionPool::connect(temp.path().join("devql.sqlite"))?;
+    let repo = SqliteCodeCityRepository::from_sqlite(sqlite);
+    repo.initialise_schema()?;
+
+    let missing = repo.load_snapshot_status_or_missing(
+        "repo-1",
+        "project:missing",
+        Some("packages/api"),
+        "fingerprint-1",
+        Some(7),
+    )?;
+    assert_eq!(missing.state, CodeCitySnapshotState::Missing);
+    assert_eq!(missing.project_path.as_deref(), Some("packages/api"));
+    assert_eq!(missing.config_fingerprint, "fingerprint-1");
+
+    let requested =
+        repo.upsert_snapshot_request("repo-1", Some("packages/api"), "fingerprint-1", Some(7))?;
+    assert_eq!(requested.state, CodeCitySnapshotState::Queued);
+    assert_eq!(requested.source_generation_seq, Some(7));
+    assert!(requested.stale);
+
+    repo.mark_snapshot_running("repo-1", &requested.snapshot_key, "run-1", 7)?;
+    let running = repo.load_snapshot_status("repo-1", &requested.snapshot_key, Some(7))?;
+    assert_eq!(running.state, CodeCitySnapshotState::Running);
+    assert_eq!(running.run_id.as_deref(), Some("run-1"));
+    assert!(!running.stale);
+
+    repo.mark_snapshot_failed("repo-1", &requested.snapshot_key, 7, "boom")?;
+    let failed = repo.load_snapshot_status("repo-1", &requested.snapshot_key, Some(8))?;
+    assert_eq!(failed.state, CodeCitySnapshotState::Failed);
+    assert_eq!(failed.last_error.as_deref(), Some("boom"));
+    Ok(())
 }
 
 #[test]
@@ -92,12 +131,13 @@ fn repository_replaces_and_loads_current_snapshot() -> Result<()> {
 }
 
 #[test]
-fn repository_replaces_and_loads_phase4_snapshot() -> Result<()> {
+fn repository_replaces_and_loads_architecture_diagnostics_snapshot() -> Result<()> {
     use crate::capability_packs::codecity::types::{
-        CodeCityArcGeometry, CodeCityArcKind, CodeCityArcVisibility, CodeCityArchitectureViolation,
-        CodeCityDependencyEvidence, CodeCityFileDependencyArc, CodeCityPhase4Snapshot,
-        CodeCityRenderArc, CodeCityViolationEvidence, CodeCityViolationPattern,
-        CodeCityViolationRule, CodeCityViolationSeverity,
+        CodeCityArcGeometry, CodeCityArcKind, CodeCityArcVisibility,
+        CodeCityArchitectureDiagnosticsSnapshot, CodeCityArchitectureViolation,
+        CodeCityDependencyEvidence, CodeCityFileDependencyArc, CodeCityRenderArc,
+        CodeCityViolationEvidence, CodeCityViolationPattern, CodeCityViolationRule,
+        CodeCityViolationSeverity,
     };
 
     let temp = TempDir::new()?;
@@ -212,7 +252,7 @@ fn repository_replaces_and_loads_phase4_snapshot() -> Result<()> {
         },
         metadata_json: "{}".to_string(),
     };
-    let snapshot = CodeCityPhase4Snapshot {
+    let snapshot = CodeCityArchitectureDiagnosticsSnapshot {
         repo_id: "repo-1".to_string(),
         run_id: "run-1".to_string(),
         commit_sha: Some("commit-1".to_string()),
@@ -223,8 +263,8 @@ fn repository_replaces_and_loads_phase4_snapshot() -> Result<()> {
         diagnostics: Vec::new(),
     };
 
-    repo.replace_phase4_snapshot(&snapshot)?;
-    let loaded = repo.load_phase4_snapshot("repo-1")?;
+    repo.replace_architecture_diagnostics_snapshot(&snapshot)?;
+    let loaded = repo.load_architecture_diagnostics_snapshot("repo-1")?;
 
     assert_eq!(loaded.evidence.len(), 1);
     assert_eq!(

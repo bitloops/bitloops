@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{CodeCityArchitecturePattern, CodeCityBuilding, CodeCityDiagnostic};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeCitySnapshotState {
+    #[default]
     Missing,
     Queued,
     Running,
@@ -21,12 +22,6 @@ impl CodeCitySnapshotState {
             Self::Ready => "ready",
             Self::Failed => "failed",
         }
-    }
-}
-
-impl Default for CodeCitySnapshotState {
-    fn default() -> Self {
-        Self::Missing
     }
 }
 
@@ -408,7 +403,7 @@ pub struct CodeCityRenderArc {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct CodeCityPhase4Snapshot {
+pub struct CodeCityArchitectureDiagnosticsSnapshot {
     pub repo_id: String,
     pub run_id: String,
     pub commit_sha: Option<String>,

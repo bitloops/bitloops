@@ -57,7 +57,7 @@ pub fn file_detail(
     path: &str,
     snapshot_status: CodeCitySnapshotStatus,
     world: &CodeCityWorldPayload,
-    snapshot: &CodeCityPhase4Snapshot,
+    snapshot: &CodeCityArchitectureDiagnosticsSnapshot,
     incoming_limit: usize,
     outgoing_limit: usize,
 ) -> Option<CodeCityFileDetailPayload> {

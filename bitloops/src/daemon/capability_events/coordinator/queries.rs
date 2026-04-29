@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use rusqlite::{OptionalExtension, params};
 
 use crate::daemon::capability_events::queue::{

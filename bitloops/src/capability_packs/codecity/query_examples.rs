@@ -7,7 +7,7 @@ pub static CODECITY_QUERY_EXAMPLES: &[QueryExample] = &[
         capability_id: CODECITY_CAPABILITY_ID,
         name: "CodeCity world",
         query: "repo(\"my-repo\") -> codecity_world()",
-        description: "Build the renderer-ready CodeCity world with architecture-aware boundaries and zones.",
+        description: "Load the latest renderer-ready CodeCity snapshot with architecture-aware boundaries and zones.",
     },
     QueryExample {
         capability_id: CODECITY_CAPABILITY_ID,
@@ -25,12 +25,18 @@ pub static CODECITY_QUERY_EXAMPLES: &[QueryExample] = &[
         capability_id: CODECITY_CAPABILITY_ID,
         name: "CodeCity violations",
         query: "repo(\"my-repo\") -> codecity_violations(severity: \"high\")",
-        description: "Inspect architecture violations with explanations and dependency evidence.",
+        description: "Inspect persisted architecture violations with explanations and dependency evidence.",
     },
     QueryExample {
         capability_id: CODECITY_CAPABILITY_ID,
         name: "CodeCity file detail",
         query: "repo(\"my-repo\") -> codecity_file_detail(path: \"src/domain/order.rs\")",
         description: "Inspect one building's incoming dependencies, outgoing dependencies, violations, and related arcs.",
+    },
+    QueryExample {
+        capability_id: CODECITY_CAPABILITY_ID,
+        name: "CodeCity render arcs",
+        query: "repo(\"my-repo\") -> codecity_arcs(kind: \"violation\")",
+        description: "Inspect persisted renderer arcs for dependency and architecture overlays.",
     },
 ];

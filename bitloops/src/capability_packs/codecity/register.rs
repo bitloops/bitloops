@@ -70,7 +70,7 @@ mod tests {
             &mut self,
             _ingester: crate::host::capability_host::IngesterRegistration,
         ) -> Result<()> {
-            unreachable!("codecity does not register ingesters in phase 1")
+            unreachable!("codecity does not register ingesters")
         }
 
         fn register_schema_module(&mut self, module: SchemaModule) -> Result<()> {

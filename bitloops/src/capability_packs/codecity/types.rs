@@ -16,8 +16,8 @@ pub const CODECITY_DEFAULT_SNAPSHOT_KEY: &str = "root";
 pub const CODECITY_ROOT_BOUNDARY_ID: &str = "boundary:root";
 pub const CODECITY_UNCLASSIFIED_ZONE: &str = "unclassified";
 
-mod phase4;
-pub use phase4::*;
+mod architecture_diagnostics;
+pub use architecture_diagnostics::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CodeCityWorldPayload {
@@ -113,7 +113,7 @@ pub struct CodeCityLayoutSummary {
 impl Default for CodeCityLayoutSummary {
     fn default() -> Self {
         Self {
-            layout_kind: "phase1_grid_treemap".to_string(),
+            layout_kind: "grid_treemap".to_string(),
             width: 0.0,
             depth: 0.0,
             gap: 0.0,
@@ -453,12 +453,12 @@ pub enum CodeCityMacroTopology {
 impl CodeCityMacroTopology {
     pub fn as_layout_kind(self) -> &'static str {
         match self {
-            Self::SingleBoundary => "phase1_grid_treemap",
-            Self::Star => "phase2_star_boundaries",
-            Self::Layered => "phase2_layered_boundaries",
-            Self::Federated => "phase2_federated_boundaries",
-            Self::Tangled => "phase2_tangled_boundaries",
-            Self::Unknown => "phase2_boundary_grid",
+            Self::SingleBoundary => "grid_treemap",
+            Self::Star => "star_boundaries",
+            Self::Layered => "layered_boundaries",
+            Self::Federated => "federated_boundaries",
+            Self::Tangled => "tangled_boundaries",
+            Self::Unknown => "boundary_grid",
         }
     }
 }
@@ -633,7 +633,7 @@ pub struct CodeCityZoneAssignment {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeCityLayoutStrategy {
-    Phase1GridTreemap,
+    GridTreemap,
     HexagonalRings,
     LayeredBands,
     ModularIslands,
@@ -668,7 +668,7 @@ pub fn codecity_current_scope_required_stage_response(stage_id: &str) -> StageRe
             "reason": "codecity_current_scope_required",
         }),
         format!(
-            "{stage_id} requires the current repository scope; historical and temporary asOf(...) scopes are not supported in CodeCity phase 2."
+            "{stage_id} requires the current repository scope; historical and temporary asOf(...) scopes are not supported in CodeCity architecture analysis."
         ),
     )
 }

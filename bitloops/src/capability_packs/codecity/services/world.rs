@@ -8,7 +8,7 @@ use super::architecture::{CodeCityArchitectureAnalysis, analyse_codecity_archite
 use super::config::CodeCityConfig;
 use super::graph_metrics::{build_file_graph, compute_importance};
 use super::height::{build_floors_for_file, building_loc, total_height};
-use super::layout::{apply_architecture_layout, apply_phase1_layout};
+use super::layout::{apply_architecture_layout, apply_grid_treemap_layout};
 use super::source_graph::CodeCitySourceGraph;
 use crate::capability_packs::codecity::types::{
     CODECITY_CAPABILITY_ID, CODECITY_ROOT_BOUNDARY_ID, CODECITY_WORLD_STAGE_ID,
@@ -51,10 +51,10 @@ pub fn build_codecity_world_from_analysis(
         .count();
 
     diagnostics.push(CodeCityDiagnostic {
-        code: "codecity.loc.line_span_phase1".to_string(),
+        code: "codecity.loc.line_span_fallback".to_string(),
         severity: "info".to_string(),
         message:
-            "Phase 2 still approximates floor size with artefact line spans rather than semantic LoC."
+            "Architecture analysis still approximates floor size with artefact line spans rather than semantic LoC."
                 .to_string(),
         path: None,
         boundary_id: None,
@@ -230,16 +230,16 @@ pub fn build_codecity_world_from_analysis(
         }
     }
 
-    let is_phase1_fallback = analysis.boundaries.len() == 1
+    let is_single_boundary_fallback = analysis.boundaries.len() == 1
         && analysis.boundaries[0].id == CODECITY_ROOT_BOUNDARY_ID
         && analysis.boundaries[0].kind
             == crate::capability_packs::codecity::types::CodeCityBoundaryKind::RootFallback;
 
-    let (layout, mut boundary_layouts, mut boundaries) = if is_phase1_fallback {
-        let layout = apply_phase1_layout(&mut buildings, &config.layout);
+    let (layout, mut boundary_layouts, mut boundaries) = if is_single_boundary_fallback {
+        let layout = apply_grid_treemap_layout(&mut buildings, &config.layout);
         let boundary_layouts = vec![CodeCityBoundaryLayoutSummary {
             boundary_id: CODECITY_ROOT_BOUNDARY_ID.to_string(),
-            strategy: CodeCityLayoutStrategy::Phase1GridTreemap,
+            strategy: CodeCityLayoutStrategy::GridTreemap,
             zone_count: 1,
             width: layout.width,
             depth: layout.depth,
@@ -250,7 +250,7 @@ pub fn build_codecity_world_from_analysis(
         if let Some(boundary) = boundaries.first_mut() {
             boundary.layout = Some(
                 crate::capability_packs::codecity::types::CodeCityBoundaryLayoutPreview {
-                    strategy: CodeCityLayoutStrategy::Phase1GridTreemap,
+                    strategy: CodeCityLayoutStrategy::GridTreemap,
                     zone_count: 1,
                 },
             );

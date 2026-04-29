@@ -113,6 +113,7 @@ pub enum ReconcileMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentStateConsumerRequest {
+    pub run_id: Option<String>,
     pub repo_id: String,
     pub repo_root: PathBuf,
     pub active_branch: Option<String>,
