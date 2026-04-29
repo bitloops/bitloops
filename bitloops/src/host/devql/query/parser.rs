@@ -15,6 +15,7 @@ pub(crate) struct ParsedDevqlQuery {
     pub(super) clones: CloneFilter,
     pub(super) checkpoints: CheckpointFilter,
     pub(super) historical_context: HistoricalContextFilter,
+    pub(super) context_guidance: ContextGuidanceFilter,
     pub(super) telemetry: TelemetryFilter,
     pub(super) deps: DepsFilter,
     pub(super) has_artefacts_stage: bool,
@@ -22,6 +23,7 @@ pub(crate) struct ParsedDevqlQuery {
     pub(super) has_deps_stage: bool,
     pub(super) has_checkpoints_stage: bool,
     pub(super) has_historical_context_stage: bool,
+    pub(super) has_context_guidance_stage: bool,
     pub(super) has_telemetry_stage: bool,
     pub(super) has_chat_history_stage: bool,
     pub(super) registered_stages: Vec<RegisteredStageCall>,
@@ -81,6 +83,15 @@ pub(super) struct HistoricalContextFilter {
     pub(super) agent: Option<String>,
     pub(super) since: Option<String>,
     pub(super) evidence_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct ContextGuidanceFilter {
+    pub(super) agent: Option<String>,
+    pub(super) since: Option<String>,
+    pub(super) evidence_kind: Option<String>,
+    pub(super) category: Option<String>,
+    pub(super) kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -326,6 +337,28 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
 
         if stage == "historicalContext()" {
             parsed.has_historical_context_stage = true;
+            continue;
+        }
+
+        if let Some(inner) = stage
+            .strip_prefix("contextGuidance(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let args = parse_named_args(inner)?;
+            parsed.has_context_guidance_stage = true;
+            parsed.context_guidance.agent = args.get("agent").cloned();
+            parsed.context_guidance.since = args.get("since").cloned();
+            parsed.context_guidance.evidence_kind = args
+                .get("evidence_kind")
+                .or_else(|| args.get("evidenceKind"))
+                .cloned();
+            parsed.context_guidance.category = args.get("category").cloned();
+            parsed.context_guidance.kind = args.get("kind").cloned();
+            continue;
+        }
+
+        if stage == "contextGuidance()" {
+            parsed.has_context_guidance_stage = true;
             continue;
         }
 

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
 
+use crate::capability_packs::context_guidance::storage::ContextGuidanceRepository;
 use crate::capability_packs::knowledge::storage::{
     KnowledgeDocumentRepository, KnowledgeRelationalRepository,
 };
@@ -34,6 +35,10 @@ pub trait CapabilityExecutionContext: Send {
     fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
         None
     }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        None
+    }
 }
 
 pub trait CapabilityIngestContext: Send {
@@ -55,6 +60,10 @@ pub trait CapabilityIngestContext: Send {
     }
 
     fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
+        None
+    }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
         None
     }
 
@@ -134,5 +143,9 @@ pub trait CapabilityHealthContext: Send + Sync {
     fn inference(&self) -> &dyn InferenceGateway {
         static EMPTY: EmptyInferenceGateway = EmptyInferenceGateway;
         &EMPTY
+    }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        None
     }
 }

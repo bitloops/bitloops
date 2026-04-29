@@ -44,6 +44,13 @@ pub(super) struct HistoricalContextStageData {
     pub(super) items: Vec<HistoricalContextItem>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct ContextGuidanceStageData {
+    pub(super) summary: Value,
+    pub(super) schema: Option<String>,
+    pub(super) items: Vec<ContextGuidanceItem>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum HistoricalEvidenceKind {
     SymbolProvenance,
@@ -91,6 +98,56 @@ pub struct HistoricalContextItem {
     pub tool_events: Vec<HistoricalToolEvent>,
     #[graphql(skip)]
     pub(crate) evidence_kinds: Vec<HistoricalMatchReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ContextGuidanceCategory {
+    Decision,
+    Constraint,
+    Pattern,
+    Risk,
+    Verification,
+    Context,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ContextGuidanceConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, SimpleObject, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextGuidanceSource {
+    pub source_type: String,
+    pub source_id: String,
+    pub checkpoint_id: Option<ID>,
+    pub session_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub tool_kind: Option<String>,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub excerpt: Option<String>,
+}
+
+#[derive(Debug, Clone, SimpleObject, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextGuidanceItem {
+    pub id: ID,
+    pub category: ContextGuidanceCategory,
+    pub kind: String,
+    pub label: String,
+    pub guidance: String,
+    pub evidence_excerpt: String,
+    pub confidence: ContextGuidanceConfidence,
+    pub relevance_score: f64,
+    pub generated_at: Option<DateTimeScalar>,
+    pub source_model: Option<String>,
+    pub source_count: i32,
+    pub sources: Vec<ContextGuidanceSource>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -165,6 +222,16 @@ pub struct HistoricalContextStageResult {
     pub(crate) items: Vec<HistoricalContextItem>,
 }
 
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
+pub struct ContextGuidanceStageResult {
+    #[graphql(name = "overview")]
+    pub summary: JsonScalar,
+    pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) items: Vec<ContextGuidanceItem>,
+}
+
 impl From<CheckpointStageData> for CheckpointStageResult {
     fn from(data: CheckpointStageData) -> Self {
         Self {
@@ -209,6 +276,16 @@ impl From<TestsStageData> for TestsStageResult {
 
 impl From<HistoricalContextStageData> for HistoricalContextStageResult {
     fn from(data: HistoricalContextStageData) -> Self {
+        Self {
+            summary: Json(data.summary),
+            schema: data.schema,
+            items: data.items,
+        }
+    }
+}
+
+impl From<ContextGuidanceStageData> for ContextGuidanceStageResult {
+    fn from(data: ContextGuidanceStageData) -> Self {
         Self {
             summary: Json(data.summary),
             schema: data.schema,
@@ -271,6 +348,13 @@ impl HistoricalContextStageResult {
         &self,
         #[graphql(default = 20)] first: i32,
     ) -> Result<Vec<HistoricalContextItem>> {
+        take_stage_items(&self.items, first)
+    }
+}
+
+#[ComplexObject]
+impl ContextGuidanceStageResult {
+    async fn items(&self, #[graphql(default = 20)] first: i32) -> Result<Vec<ContextGuidanceItem>> {
         take_stage_items(&self.items, first)
     }
 }

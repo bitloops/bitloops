@@ -16,9 +16,9 @@ use super::super::{
     ExpandHintParameter, TestHarnessTestsResult,
 };
 use super::stages::{
-    CheckpointStageData, CloneExpandHint, CloneStageData, DependencyExpandHint,
-    DependencyStageData, HistoricalContextItem, HistoricalContextStageData, HistoricalMatchReason,
-    TestsStageData,
+    CheckpointStageData, CloneExpandHint, CloneStageData, ContextGuidanceStageData,
+    DependencyExpandHint, DependencyStageData, HistoricalContextItem, HistoricalContextStageData,
+    HistoricalMatchReason, TestsStageData,
 };
 
 pub(super) fn decode_stage_rows<T: DeserializeOwned>(
@@ -334,6 +334,7 @@ pub(super) fn build_selection_summary(
     deps: &DependencyStageData,
     tests: &TestsStageData,
     historical_context: &HistoricalContextStageData,
+    context_guidance: &ContextGuidanceStageData,
 ) -> Value {
     json!({
         "selectedArtefactCount": selected_artefact_count,
@@ -349,6 +350,11 @@ pub(super) fn build_selection_summary(
             &historical_context.summary,
             None,
             historical_context.schema.as_deref(),
+        ),
+        "contextGuidance": selection_stage_entry(
+            &context_guidance.summary,
+            None,
+            context_guidance.schema.as_deref(),
         ),
     })
 }
@@ -636,4 +642,56 @@ type HistoricalToolEvent {
   inputSummary: String
   outputSummary: String
   command: String
+}"#;
+
+pub(super) const CONTEXT_GUIDANCE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
+  contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
+}
+
+type ContextGuidanceStageResult {
+  overview: JSON!
+  schema: String
+  items(first: Int! = 20): [ContextGuidanceItem!]!
+}
+
+type ContextGuidanceItem {
+  id: ID!
+  category: ContextGuidanceCategory!
+  kind: String!
+  label: String!
+  guidance: String!
+  evidenceExcerpt: String!
+  confidence: ContextGuidanceConfidence!
+  relevanceScore: Float!
+  generatedAt: DateTime
+  sourceModel: String
+  sourceCount: Int!
+  sources: [ContextGuidanceSource!]!
+}
+
+type ContextGuidanceSource {
+  sourceType: String!
+  sourceId: String!
+  checkpointId: ID
+  sessionId: String
+  turnId: String
+  toolKind: String
+  title: String
+  url: String
+  excerpt: String
+}
+
+enum ContextGuidanceCategory {
+  DECISION
+  CONSTRAINT
+  PATTERN
+  RISK
+  VERIFICATION
+  CONTEXT
+}
+
+enum ContextGuidanceConfidence {
+  HIGH
+  MEDIUM
+  LOW
 }"#;

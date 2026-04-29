@@ -9,14 +9,12 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     resolve_selected_summary_slot, resolve_semantic_clones_config,
 };
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::BlockedMailboxStatus;
 use crate::host::capability_host::{
-    CapabilityMailboxBacklogPolicy, CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration,
+    CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration,
 };
 use crate::host::inference::InferenceGateway;
 use crate::host::runtime_store::{
@@ -205,8 +203,7 @@ pub(crate) fn mailbox_claim_readiness(
     if let Some(readiness) = cache.get(&key) {
         return Ok(readiness.clone());
     }
-    let Some(registration) = workplane_mailbox_registration(&job.capability_id, &job.mailbox_name)
-    else {
+    let Some(registration) = workplane_mailbox_registration_for_job(job)? else {
         let readiness = WorkplaneMailboxReadiness {
             blocked: true,
             reason: Some(format!(
@@ -297,81 +294,11 @@ fn resolve_mailbox_provider_readiness(
     }
 }
 
-fn workplane_mailbox_registration(
-    capability_id: &str,
-    mailbox_name: &str,
-) -> Option<CapabilityMailboxRegistration> {
-    if capability_id != SEMANTIC_CLONES_CAPABILITY_ID {
-        return None;
-    }
-    match mailbox_name {
-        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => Some(
-            CapabilityMailboxRegistration::new(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-                crate::host::capability_host::CapabilityMailboxPolicy::Job,
-                crate::host::capability_host::CapabilityMailboxHandler::Ingester(
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SEMANTIC_FEATURES_REFRESH_INGESTER_ID,
-                ),
-            )
-            .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
-                SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT,
-            ))
-            .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
-        ),
-        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX => Some(
-            CapabilityMailboxRegistration::new(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-                crate::host::capability_host::CapabilityMailboxPolicy::Job,
-                crate::host::capability_host::CapabilityMailboxHandler::Ingester(
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
-                ),
-            )
-            .readiness_policy(CapabilityMailboxReadinessPolicy::EmbeddingsSlot(
-                SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT,
-            ))
-            .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
-        ),
-        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX => Some(
-            CapabilityMailboxRegistration::new(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
-                crate::host::capability_host::CapabilityMailboxPolicy::Job,
-                crate::host::capability_host::CapabilityMailboxHandler::Ingester(
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
-                ),
-            )
-            .readiness_policy(CapabilityMailboxReadinessPolicy::EmbeddingsSlot(
-                SEMANTIC_CLONES_CODE_EMBEDDINGS_SLOT,
-            ))
-            .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
-        ),
-        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => Some(
-            CapabilityMailboxRegistration::new(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-                crate::host::capability_host::CapabilityMailboxPolicy::Job,
-                crate::host::capability_host::CapabilityMailboxHandler::Ingester(
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
-                ),
-            )
-            .readiness_policy(CapabilityMailboxReadinessPolicy::EmbeddingsSlot(
-                SEMANTIC_CLONES_SUMMARY_EMBEDDINGS_SLOT,
-            ))
-            .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
-        ),
-        SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => Some(
-            CapabilityMailboxRegistration::new(
-                SEMANTIC_CLONES_CAPABILITY_ID,
-                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-                crate::host::capability_host::CapabilityMailboxPolicy::Job,
-                crate::host::capability_host::CapabilityMailboxHandler::Ingester(
-                    crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
-                ),
-            )
-            .backlog_policy(CapabilityMailboxBacklogPolicy::RepoCoalesced),
-        ),
-        _ => None,
-    }
+pub(crate) fn workplane_mailbox_registration_for_job(
+    job: &WorkplaneJobRecord,
+) -> Result<Option<CapabilityMailboxRegistration>> {
+    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
+        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
+    Ok(capability_host.mailbox_registration(&job.capability_id, &job.mailbox_name))
 }

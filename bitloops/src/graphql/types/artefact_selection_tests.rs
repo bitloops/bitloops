@@ -6,17 +6,17 @@ use crate::capability_packs::semantic_clones::scoring::{
 use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineRangeInput};
 
 use super::support::{
-    build_clone_expand_hint, build_dependency_expand_hint, build_dependency_summary,
-    build_historical_context_expand_hint, build_historical_context_summary,
-    build_selection_summary, captured_preview,
+    CONTEXT_GUIDANCE_STAGE_SCHEMA, build_clone_expand_hint, build_dependency_expand_hint,
+    build_dependency_summary, build_historical_context_expand_hint,
+    build_historical_context_summary, build_selection_summary, captured_preview, take_stage_items,
 };
 use super::{
     ArtefactSelectorInput, ArtefactSelectorMode, CloneExpandHint, DependencyExpandHint, SearchMode,
 };
 use crate::graphql::types::artefact_selection::stages::{
-    CheckpointStageData, CloneStageData, DependencyStageData, HistoricalContextItem,
-    HistoricalContextStageData, HistoricalMatchReason, HistoricalMatchStrength,
-    HistoricalToolEvent, TestsStageData,
+    CheckpointStageData, CloneStageData, ContextGuidanceItem, ContextGuidanceStageData,
+    DependencyStageData, HistoricalContextItem, HistoricalContextStageData, HistoricalMatchReason,
+    HistoricalMatchStrength, HistoricalToolEvent, TestsStageData,
 };
 
 fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> DependencyEdge {
@@ -153,9 +153,21 @@ fn selection_summary_includes_historical_context_stage() {
         schema: None,
         items: Vec::new(),
     };
+    let context_guidance = ContextGuidanceStageData {
+        summary: serde_json::json!({ "totalCount": 0 }),
+        schema: None,
+        items: Vec::new(),
+    };
 
-    let summary =
-        build_selection_summary(1, &checkpoints, &clones, &deps, &tests, &historical_context);
+    let summary = build_selection_summary(
+        1,
+        &checkpoints,
+        &clones,
+        &deps,
+        &tests,
+        &historical_context,
+        &context_guidance,
+    );
 
     assert_eq!(
         summary["historicalContext"],
@@ -164,6 +176,33 @@ fn selection_summary_includes_historical_context_stage() {
             "schema": null
         })
     );
+    assert_eq!(
+        summary["contextGuidance"],
+        serde_json::json!({
+            "overview": { "totalCount": 0 },
+            "schema": null
+        })
+    );
+}
+
+#[test]
+fn context_guidance_stage_item_pagination_rejects_non_positive_first() {
+    let err = take_stage_items::<ContextGuidanceItem>(&[], 0)
+        .expect_err("context guidance item pagination should reject zero");
+
+    assert!(err.message.contains("`first` must be greater than 0"));
+}
+
+#[test]
+fn context_guidance_stage_schema_matches_contract() {
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains(
+        "contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!"
+    ));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("type ContextGuidanceItem"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("type ContextGuidanceSource"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("enum ContextGuidanceCategory"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("generatedAt"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("sourceModel"));
 }
 
 #[test]

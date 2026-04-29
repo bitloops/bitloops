@@ -100,6 +100,34 @@ pub(super) fn compile_selection_historical_context_args(
     Ok(args)
 }
 
+pub(super) fn compile_selection_context_guidance_args(
+    parsed: &ParsedDevqlQuery,
+) -> Result<Vec<GraphqlArgument>> {
+    let mut args = Vec::new();
+    if let Some(agent) = parsed.context_guidance.agent.as_deref() {
+        args.push(GraphqlArgument::new("agent", quote_graphql_string(agent)));
+    }
+    if let Some(since) = parsed.context_guidance.since.as_deref() {
+        args.push(GraphqlArgument::new(
+            "since",
+            compile_datetime_literal(since)?,
+        ));
+    }
+    if let Some(evidence_kind) = parsed.context_guidance.evidence_kind.as_deref() {
+        args.push(GraphqlArgument::new(
+            "evidenceKind",
+            enum_literal(evidence_kind),
+        ));
+    }
+    if let Some(category) = parsed.context_guidance.category.as_deref() {
+        args.push(GraphqlArgument::new("category", enum_literal(category)));
+    }
+    if let Some(kind) = parsed.context_guidance.kind.as_deref() {
+        args.push(GraphqlArgument::new("kind", quote_graphql_string(kind)));
+    }
+    Ok(args)
+}
+
 pub(super) fn compile_telemetry_args(parsed: &ParsedDevqlQuery) -> Result<Vec<GraphqlArgument>> {
     let mut args = Vec::new();
     if let Some(event_type) = parsed.telemetry.event_type.as_deref() {

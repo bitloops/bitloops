@@ -109,6 +109,7 @@ type ArtefactSelection {
 	dependencies(kind: EdgeKind, direction: DependenciesDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
 	historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
+	contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
 }
 
 input ArtefactSelectorInput {
@@ -323,6 +324,54 @@ type CommitConnection {
 type CommitEdge {
 	node: Commit!
 	cursor: String!
+}
+
+enum ContextGuidanceCategory {
+	DECISION
+	CONSTRAINT
+	PATTERN
+	RISK
+	VERIFICATION
+	CONTEXT
+}
+
+enum ContextGuidanceConfidence {
+	HIGH
+	MEDIUM
+	LOW
+}
+
+type ContextGuidanceItem {
+	id: ID!
+	category: ContextGuidanceCategory!
+	kind: String!
+	label: String!
+	guidance: String!
+	evidenceExcerpt: String!
+	confidence: ContextGuidanceConfidence!
+	relevanceScore: Float!
+	generatedAt: DateTime
+	sourceModel: String
+	sourceCount: Int!
+	sources: [ContextGuidanceSource!]!
+}
+
+type ContextGuidanceSource {
+	sourceType: String!
+	sourceId: String!
+	checkpointId: ID
+	sessionId: String
+	turnId: String
+	toolKind: String
+	title: String
+	url: String
+	excerpt: String
+}
+
+type ContextGuidanceStageResult {
+	overview: JSON!
+	schema: String
+	items(first: Int! = 20): [ContextGuidanceItem!]!
 }
 
 scalar DateTime

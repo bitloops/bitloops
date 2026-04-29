@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::capability_packs::context_guidance::storage::ContextGuidanceRepository;
 use crate::capability_packs::knowledge::storage::{
     KnowledgeDocumentRepository, KnowledgeRelationalRepository,
 };
@@ -33,6 +34,7 @@ pub struct LocalCapabilityRuntime<'a> {
     config_root: &'a Value,
     backends: &'a StoreBackendConfig,
     relational: &'a dyn RelationalGateway,
+    context_guidance: &'a dyn ContextGuidanceRepository,
     knowledge_relational: &'a dyn KnowledgeRelationalRepository,
     knowledge_documents: &'a dyn KnowledgeDocumentRepository,
     blob_payloads: &'a dyn BlobPayloadGateway,
@@ -57,6 +59,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
         config_root: &'a Value,
         backends: &'a StoreBackendConfig,
         relational: &'a dyn RelationalGateway,
+        context_guidance: &'a dyn ContextGuidanceRepository,
         knowledge_relational: &'a dyn KnowledgeRelationalRepository,
         knowledge_documents: &'a dyn KnowledgeDocumentRepository,
         blob_payloads: &'a dyn BlobPayloadGateway,
@@ -78,6 +81,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
             config_root,
             backends,
             relational,
+            context_guidance,
             knowledge_relational,
             knowledge_documents,
             blob_payloads,
@@ -123,6 +127,10 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
 
     fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
         self.test_harness
+    }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        Some(self.context_guidance)
     }
 }
 
@@ -172,6 +180,10 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
 
     fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
         self.test_harness
+    }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        Some(self.context_guidance)
     }
 
     fn clone_edges_rebuild_relational(&self) -> Result<&RelationalStorage> {
@@ -278,5 +290,9 @@ impl CapabilityHealthContext for LocalCapabilityRuntime<'_> {
 
     fn inference(&self) -> &dyn InferenceGateway {
         &self.inference
+    }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        Some(self.context_guidance)
     }
 }

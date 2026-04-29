@@ -1205,6 +1205,120 @@ async fn devql_post_route_resolves_historical_context_captured_evidence() {
 }
 
 #[tokio::test]
+async fn devql_post_route_resolves_context_guidance_from_history() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    seed_graphql_context_guidance_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          selectArtefacts(by: { path: "src/target.ts" }) {
+            contextGuidance {
+              overview
+              schema
+              items(first: 10) {
+                id
+                category
+                kind
+                label
+                guidance
+                evidenceExcerpt
+                confidence
+                relevanceScore
+                generatedAt
+                sourceModel
+                sourceCount
+                sources {
+                  sourceType
+                  sourceId
+                  checkpointId
+                  sessionId
+                  turnId
+                  toolKind
+                  excerpt
+                }
+              }
+            }
+          }
+          filtered: selectArtefacts(by: { path: "src/target.ts" }) {
+            contextGuidance(evidenceKind: FILE_RELATION, category: VERIFICATION, kind: "test_success") {
+              items(first: 10) {
+                category
+                kind
+                sources {
+                  sourceType
+                }
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+
+    let guidance = &payload["data"]["selectArtefacts"]["contextGuidance"];
+    assert!(guidance["overview"]["totalCount"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        guidance["overview"]["categoryCounts"]["DECISION"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(
+        guidance["overview"]["kindCounts"]["rejected_approach"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(guidance["schema"].as_str().is_some_and(|schema| {
+        schema.contains("ContextGuidanceItem") && schema.contains("evidenceExcerpt")
+    }));
+    let items = guidance["items"].as_array().expect("guidance items");
+    assert!(
+        items
+            .iter()
+            .all(|item| item["sourceModel"] == "gpt-guidance")
+    );
+    assert!(items.iter().all(|item| {
+        item["sources"]
+            .as_array()
+            .is_some_and(|sources| !sources.is_empty())
+    }));
+    assert!(items.iter().any(|item| {
+        item["sources"]
+            .as_array()
+            .expect("sources")
+            .iter()
+            .any(|source| source["sourceType"] == "history.turn")
+    }));
+
+    let filtered = payload["data"]["filtered"]["contextGuidance"]["items"]
+        .as_array()
+        .expect("filtered items");
+    assert!(!filtered.is_empty());
+    assert!(
+        filtered
+            .iter()
+            .all(|item| item["category"] == "VERIFICATION" && item["kind"] == "test_success")
+    );
+}
+
+#[tokio::test]
 async fn devql_post_route_returns_empty_historical_context_for_empty_history() {
     let repo = seed_graphql_devql_repo();
     seed_graphql_historical_context_data(repo.path());

@@ -1,11 +1,15 @@
 use serde_json::Value;
 
-use crate::config::{InferenceConfig, ProviderConfig, SemanticClonesConfig, StoreBackendConfig};
+use crate::config::{
+    ContextGuidanceConfig, InferenceConfig, ProviderConfig, SemanticClonesConfig,
+    StoreBackendConfig,
+};
 
 pub(super) fn build_capability_config_root(
     backends: &StoreBackendConfig,
     providers: &ProviderConfig,
     semantic_clones: &SemanticClonesConfig,
+    context_guidance: &ContextGuidanceConfig,
     inference: &InferenceConfig,
 ) -> Value {
     serde_json::json!({
@@ -33,6 +37,11 @@ pub(super) fn build_capability_config_root(
                 "summary_generation": semantic_clones.inference.summary_generation,
                 "code_embeddings": semantic_clones.inference.code_embeddings,
                 "summary_embeddings": semantic_clones.inference.summary_embeddings,
+            },
+        },
+        "context_guidance": {
+            "inference": {
+                "guidance_generation": context_guidance.inference.guidance_generation,
             },
         },
         "inference": {

@@ -8,6 +8,9 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::unix_timestamp_now;
+use crate::host::capability_host::{
+    CapabilityMailboxHandler, CapabilityMailboxPolicy, CapabilityMailboxReadinessPolicy,
+};
 use crate::host::runtime_store::{
     DaemonSqliteRuntimeStore, WorkplaneJobRecord, WorkplaneJobStatus,
 };
@@ -16,7 +19,7 @@ use super::super::EnrichmentControlState;
 use super::super::worker_count::EnrichmentWorkerPool;
 use super::jobs::map_workplane_job_row;
 use super::mailbox_claim::WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT;
-use super::readiness::mailbox_claim_readiness;
+use super::readiness::{mailbox_claim_readiness, workplane_mailbox_registration_for_job};
 use super::sql::sql_i64;
 
 pub(crate) fn claim_next_workplane_job(
@@ -30,7 +33,7 @@ pub(crate) fn claim_next_workplane_job(
             .context("starting capability workplane job claim transaction")?;
         let result = (|| {
             let now = unix_timestamp_now();
-            let jobs = load_workplane_claim_candidates(conn, pool, now)?;
+            let jobs = load_workplane_claim_candidates(conn, runtime_store, pool, now)?;
             let mut readiness_cache = BTreeMap::new();
             for mut job in jobs {
                 if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
@@ -88,6 +91,7 @@ pub(crate) fn claim_next_workplane_job(
 
 fn load_workplane_claim_candidates(
     conn: &rusqlite::Connection,
+    runtime_store: &DaemonSqliteRuntimeStore,
     pool: EnrichmentWorkerPool,
     now: u64,
 ) -> Result<Vec<WorkplaneJobRecord>> {
@@ -104,8 +108,7 @@ fn load_workplane_claim_candidates(
                         lease_expires_at_unix, last_error
                  FROM capability_workplane_jobs
                  WHERE status = ?1
-                   AND mailbox_name = ?2
-                   AND available_at_unix <= ?3
+                   AND available_at_unix <= ?2
                  ORDER BY CASE mailbox_name
                               WHEN 'semantic_clones.embedding.code' THEN 0
                               WHEN 'semantic_clones.embedding.summary' THEN 0
@@ -115,19 +118,19 @@ fn load_workplane_claim_candidates(
                           END ASC,
                           available_at_unix ASC,
                           submitted_at_unix ASC
-                 LIMIT ?4",
+                 LIMIT ?3",
             )?;
             let rows = stmt.query_map(
-                params![
-                    WorkplaneJobStatus::Pending.as_str(),
-                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-                    now,
-                    limit,
-                ],
+                params![WorkplaneJobStatus::Pending.as_str(), now, limit,],
                 map_workplane_job_row,
             )?;
             for row in rows {
-                values.push(row?);
+                let job = row?;
+                if job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+                    || is_generic_text_generation_job(runtime_store, &job)?
+                {
+                    values.push(job);
+                }
             }
         }
         EnrichmentWorkerPool::Embeddings => {
@@ -201,6 +204,34 @@ fn load_workplane_claim_candidates(
         }
     }
     Ok(values)
+}
+
+fn is_generic_text_generation_job(
+    runtime_store: &DaemonSqliteRuntimeStore,
+    job: &WorkplaneJobRecord,
+) -> Result<bool> {
+    if job.capability_id == crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID
+        && job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+    {
+        return Ok(false);
+    }
+    let Some(registration) = workplane_mailbox_registration_for_job(job)? else {
+        return Ok(false);
+    };
+    if registration.policy != CapabilityMailboxPolicy::Job {
+        return Ok(false);
+    }
+    if !matches!(registration.handler, CapabilityMailboxHandler::Ingester(_)) {
+        return Ok(false);
+    }
+    if !matches!(
+        registration.readiness_policy,
+        CapabilityMailboxReadinessPolicy::TextGenerationSlot(_)
+    ) {
+        return Ok(false);
+    }
+    let mut readiness_cache = BTreeMap::new();
+    Ok(!mailbox_claim_readiness(runtime_store, &mut readiness_cache, job)?.blocked)
 }
 
 fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str) -> bool {

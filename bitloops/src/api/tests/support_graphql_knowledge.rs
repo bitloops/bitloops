@@ -550,6 +550,93 @@ pub(super) fn seed_graphql_historical_context_data(repo_root: &Path) {
         .expect("record historical interaction tool event");
 }
 
+pub(super) fn seed_graphql_context_guidance_data(repo_root: &Path) {
+    use crate::capability_packs::context_guidance::distillation::{
+        GuidanceDistillationInput, GuidanceToolEvidence,
+    };
+    use crate::capability_packs::context_guidance::storage::{
+        ContextGuidanceRepository, SqliteContextGuidanceRepository,
+    };
+    use crate::capability_packs::context_guidance::types::{
+        GuidanceAppliesTo, GuidanceDistillationOutput, GuidanceFactCategory,
+        GuidanceFactConfidence, GuidanceFactDraft, GuidanceSessionSummary,
+    };
+    use crate::host::relational_store::DefaultRelationalStore;
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let relational_store =
+        DefaultRelationalStore::open_local_for_repo_root(repo_root).expect("open relational store");
+    let sqlite = relational_store
+        .local_sqlite_pool_allow_create()
+        .expect("sqlite pool");
+    let repository = SqliteContextGuidanceRepository::new(sqlite);
+    repository
+        .initialise_schema()
+        .expect("context guidance schema");
+    let input = GuidanceDistillationInput {
+        checkpoint_id: Some("checkpoint-historical-primary".to_string()),
+        session_id: "session-historical-primary".to_string(),
+        turn_id: Some("turn-historical-primary".to_string()),
+        event_time: Some("2026-03-26T09:10:00Z".to_string()),
+        agent_type: Some("codex".to_string()),
+        model: Some("gpt-5.4".to_string()),
+        prompt: Some("Improve attr parsing".to_string()),
+        transcript_fragment: Some("Rejected std::any::type_name parsing.".to_string()),
+        files_modified: vec!["src/target.ts".to_string()],
+        tool_events: vec![GuidanceToolEvidence {
+            tool_kind: Some("shell".to_string()),
+            input_summary: Some("cargo nextest run --lib context_guidance".to_string()),
+            output_summary: Some("nextest passed".to_string()),
+            command: Some("cargo nextest run --lib context_guidance".to_string()),
+        }],
+    };
+    let output = GuidanceDistillationOutput {
+        summary: GuidanceSessionSummary {
+            intent: "Improve target implementation.".to_string(),
+            outcome: "Stored guidance for target.".to_string(),
+            decisions: vec!["Use token rendering.".to_string()],
+            rejected_approaches: vec!["Avoid std::any::type_name parsing.".to_string()],
+            patterns: Vec::new(),
+            verification: vec!["nextest passed.".to_string()],
+            open_items: Vec::new(),
+        },
+        guidance_facts: vec![
+            GuidanceFactDraft {
+                category: GuidanceFactCategory::Decision,
+                kind: "rejected_approach".to_string(),
+                guidance: "Do not derive attribute keyword names from std::any::type_name."
+                    .to_string(),
+                evidence_excerpt: "Rejected std::any::type_name parsing.".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.ts".to_string()],
+                    symbols: Vec::new(),
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+            GuidanceFactDraft {
+                category: GuidanceFactCategory::Verification,
+                kind: "test_success".to_string(),
+                guidance: "The context guidance path was verified with nextest.".to_string(),
+                evidence_excerpt: "cargo nextest run --lib context_guidance passed.".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.ts".to_string()],
+                    symbols: Vec::new(),
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+        ],
+    };
+    repository
+        .persist_history_guidance_distillation(
+            repo_id.as_str(),
+            &input,
+            &output,
+            Some("gpt-guidance"),
+            Some("guidance-profile"),
+        )
+        .expect("persist context guidance");
+}
+
 pub(super) fn seed_graphql_mutation_repo() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();
