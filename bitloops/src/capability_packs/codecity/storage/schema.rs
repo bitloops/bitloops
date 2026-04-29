@@ -60,8 +60,30 @@ CREATE TABLE IF NOT EXISTS codecity_health_runs_current (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS codecity_snapshots_current (
+    repo_id TEXT NOT NULL,
+    snapshot_key TEXT NOT NULL,
+    project_path TEXT,
+    config_fingerprint TEXT NOT NULL,
+    source_generation_seq INTEGER,
+    last_success_generation_seq INTEGER,
+    state TEXT NOT NULL,
+    stale INTEGER NOT NULL DEFAULT 0,
+    run_id TEXT,
+    commit_sha TEXT,
+    generated_at TEXT,
+    updated_at TEXT NOT NULL,
+    last_error TEXT,
+    world_json TEXT,
+    PRIMARY KEY (repo_id, snapshot_key)
+);
+
+CREATE INDEX IF NOT EXISTS codecity_snapshots_state_idx
+ON codecity_snapshots_current (repo_id, state, updated_at);
+
 CREATE TABLE IF NOT EXISTS codecity_dependency_evidence_current (
     repo_id TEXT NOT NULL,
+    snapshot_key TEXT NOT NULL DEFAULT 'root',
     evidence_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     commit_sha TEXT,
@@ -85,23 +107,24 @@ CREATE TABLE IF NOT EXISTS codecity_dependency_evidence_current (
     resolved INTEGER NOT NULL DEFAULT 0,
     cross_boundary INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (repo_id, evidence_id)
+    PRIMARY KEY (repo_id, snapshot_key, evidence_id)
 );
 
 CREATE INDEX IF NOT EXISTS codecity_dependency_evidence_from_idx
-ON codecity_dependency_evidence_current (repo_id, from_path);
+ON codecity_dependency_evidence_current (repo_id, snapshot_key, from_path);
 
 CREATE INDEX IF NOT EXISTS codecity_dependency_evidence_to_idx
-ON codecity_dependency_evidence_current (repo_id, to_path);
+ON codecity_dependency_evidence_current (repo_id, snapshot_key, to_path);
 
 CREATE INDEX IF NOT EXISTS codecity_dependency_evidence_boundary_idx
-ON codecity_dependency_evidence_current (repo_id, from_boundary_id, to_boundary_id);
+ON codecity_dependency_evidence_current (repo_id, snapshot_key, from_boundary_id, to_boundary_id);
 
 CREATE INDEX IF NOT EXISTS codecity_dependency_evidence_edge_kind_idx
-ON codecity_dependency_evidence_current (repo_id, edge_kind);
+ON codecity_dependency_evidence_current (repo_id, snapshot_key, edge_kind);
 
 CREATE TABLE IF NOT EXISTS codecity_file_dependency_arcs_current (
     repo_id TEXT NOT NULL,
+    snapshot_key TEXT NOT NULL DEFAULT 'root',
     arc_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     commit_sha TEXT,
@@ -123,23 +146,24 @@ CREATE TABLE IF NOT EXISTS codecity_file_dependency_arcs_current (
     highest_severity TEXT,
     evidence_ids_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
-    PRIMARY KEY (repo_id, arc_id)
+    PRIMARY KEY (repo_id, snapshot_key, arc_id)
 );
 
 CREATE INDEX IF NOT EXISTS codecity_file_dependency_arcs_from_idx
-ON codecity_file_dependency_arcs_current (repo_id, from_path);
+ON codecity_file_dependency_arcs_current (repo_id, snapshot_key, from_path);
 
 CREATE INDEX IF NOT EXISTS codecity_file_dependency_arcs_to_idx
-ON codecity_file_dependency_arcs_current (repo_id, to_path);
+ON codecity_file_dependency_arcs_current (repo_id, snapshot_key, to_path);
 
 CREATE INDEX IF NOT EXISTS codecity_file_dependency_arcs_cross_boundary_idx
-ON codecity_file_dependency_arcs_current (repo_id, cross_boundary, weight DESC);
+ON codecity_file_dependency_arcs_current (repo_id, snapshot_key, cross_boundary, weight DESC);
 
 CREATE INDEX IF NOT EXISTS codecity_file_dependency_arcs_violation_idx
-ON codecity_file_dependency_arcs_current (repo_id, has_violation, highest_severity);
+ON codecity_file_dependency_arcs_current (repo_id, snapshot_key, has_violation, highest_severity);
 
 CREATE TABLE IF NOT EXISTS codecity_architecture_violations_current (
     repo_id TEXT NOT NULL,
+    snapshot_key TEXT NOT NULL DEFAULT 'root',
     violation_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     commit_sha TEXT,
@@ -164,23 +188,24 @@ CREATE TABLE IF NOT EXISTS codecity_architecture_violations_current (
     suppressed INTEGER NOT NULL DEFAULT 0,
     suppression_reason TEXT,
     created_at TEXT NOT NULL,
-    PRIMARY KEY (repo_id, violation_id)
+    PRIMARY KEY (repo_id, snapshot_key, violation_id)
 );
 
 CREATE INDEX IF NOT EXISTS codecity_architecture_violations_boundary_idx
-ON codecity_architecture_violations_current (repo_id, boundary_id, severity);
+ON codecity_architecture_violations_current (repo_id, snapshot_key, boundary_id, severity);
 
 CREATE INDEX IF NOT EXISTS codecity_architecture_violations_from_idx
-ON codecity_architecture_violations_current (repo_id, from_path);
+ON codecity_architecture_violations_current (repo_id, snapshot_key, from_path);
 
 CREATE INDEX IF NOT EXISTS codecity_architecture_violations_to_idx
-ON codecity_architecture_violations_current (repo_id, to_path);
+ON codecity_architecture_violations_current (repo_id, snapshot_key, to_path);
 
 CREATE INDEX IF NOT EXISTS codecity_architecture_violations_rule_idx
-ON codecity_architecture_violations_current (repo_id, pattern, rule, severity);
+ON codecity_architecture_violations_current (repo_id, snapshot_key, pattern, rule, severity);
 
 CREATE TABLE IF NOT EXISTS codecity_render_arcs_current (
     repo_id TEXT NOT NULL,
+    snapshot_key TEXT NOT NULL DEFAULT 'root',
     render_arc_id TEXT NOT NULL,
     run_id TEXT NOT NULL,
     commit_sha TEXT,
@@ -205,16 +230,16 @@ CREATE TABLE IF NOT EXISTS codecity_render_arcs_current (
     control_y REAL NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
-    PRIMARY KEY (repo_id, render_arc_id)
+    PRIMARY KEY (repo_id, snapshot_key, render_arc_id)
 );
 
 CREATE INDEX IF NOT EXISTS codecity_render_arcs_kind_idx
-ON codecity_render_arcs_current (repo_id, arc_kind, visibility);
+ON codecity_render_arcs_current (repo_id, snapshot_key, arc_kind, visibility);
 
 CREATE INDEX IF NOT EXISTS codecity_render_arcs_file_idx
-ON codecity_render_arcs_current (repo_id, from_path, to_path);
+ON codecity_render_arcs_current (repo_id, snapshot_key, from_path, to_path);
 
 CREATE INDEX IF NOT EXISTS codecity_render_arcs_boundary_idx
-ON codecity_render_arcs_current (repo_id, from_boundary_id, to_boundary_id);
+ON codecity_render_arcs_current (repo_id, snapshot_key, from_boundary_id, to_boundary_id);
 "#
 }

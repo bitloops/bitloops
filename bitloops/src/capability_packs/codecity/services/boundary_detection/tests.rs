@@ -62,6 +62,16 @@ fn graph(files: &[&str], edges: &[(&str, &str)]) -> CodeCitySourceGraph {
     }
 }
 
+fn indexed_manifest(path: &str) -> CodeCitySourceFile {
+    CodeCitySourceFile {
+        path: path.to_string(),
+        language: "json".to_string(),
+        effective_content_id: format!("content::{path}"),
+        included: false,
+        exclusion_reason: Some("file_role".to_string()),
+    }
+}
+
 #[test]
 fn falls_back_to_root_boundary_when_no_manifest_exists() {
     let temp = tempdir().expect("tempdir");
@@ -130,6 +140,46 @@ fn implicit_boundary_ids_are_unique_when_names_repeat() {
 
     assert!(result.boundaries.len() > 1);
     assert_eq!(result.boundaries.len(), unique_count);
+}
+
+#[test]
+fn detects_manifest_boundaries_from_indexed_files_without_checkout() {
+    let temp = tempdir().expect("tempdir");
+    let mut source = graph(
+        &["packages/api/src/main.ts", "packages/web/src/app.ts"],
+        &[],
+    );
+    source
+        .files
+        .push(indexed_manifest("packages/api/package.json"));
+    source
+        .files
+        .push(indexed_manifest("packages/web/package.json"));
+
+    let result = detect_boundaries(&source, &CodeCityConfig::default(), temp.path());
+    let boundary_roots = result
+        .boundaries
+        .iter()
+        .map(|boundary| boundary.root_path.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(result.boundaries.len(), 2);
+    assert!(boundary_roots.contains("packages/api"));
+    assert!(boundary_roots.contains("packages/web"));
+    assert_eq!(
+        result.file_to_boundary["packages/api/src/main.ts"],
+        "boundary:packages/api"
+    );
+    assert_eq!(
+        result.file_to_boundary["packages/web/src/app.ts"],
+        "boundary:packages/web"
+    );
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "codecity.boundary.fallback_root")
+    );
 }
 
 #[test]

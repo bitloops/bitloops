@@ -1,3 +1,4 @@
+pub mod current_state;
 pub mod descriptor;
 pub mod health;
 pub mod migrations;

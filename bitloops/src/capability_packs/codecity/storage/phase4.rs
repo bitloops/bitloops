@@ -3,14 +3,22 @@ use rusqlite::params;
 
 use super::SqliteCodeCityRepository;
 use crate::capability_packs::codecity::types::{
-    CodeCityArcGeometry, CodeCityArcKind, CodeCityArcVisibility, CodeCityArchitectureViolation,
-    CodeCityDependencyEvidence, CodeCityFileDependencyArc, CodeCityPhase4Snapshot,
-    CodeCityRenderArc, CodeCityViolationEvidence, CodeCityViolationPattern, CodeCityViolationRule,
-    CodeCityViolationSeverity,
+    CODECITY_DEFAULT_SNAPSHOT_KEY, CodeCityArcGeometry, CodeCityArcKind, CodeCityArcVisibility,
+    CodeCityArchitectureViolation, CodeCityDependencyEvidence, CodeCityFileDependencyArc,
+    CodeCityPhase4Snapshot, CodeCityRenderArc, CodeCityViolationEvidence, CodeCityViolationPattern,
+    CodeCityViolationRule, CodeCityViolationSeverity,
 };
 
 impl SqliteCodeCityRepository {
     pub fn replace_phase4_snapshot(&self, snapshot: &CodeCityPhase4Snapshot) -> Result<()> {
+        self.replace_phase4_snapshot_for_key(CODECITY_DEFAULT_SNAPSHOT_KEY, snapshot)
+    }
+
+    pub(crate) fn replace_phase4_snapshot_for_key(
+        &self,
+        snapshot_key: &str,
+        snapshot: &CodeCityPhase4Snapshot,
+    ) -> Result<()> {
         let created_at = chrono::Utc::now().to_rfc3339();
         self.sqlite.with_connection(|conn| {
             let tx = conn
@@ -18,33 +26,34 @@ impl SqliteCodeCityRepository {
                 .context("starting CodeCity Phase 4 snapshot transaction")?;
 
             tx.execute(
-                "DELETE FROM codecity_render_arcs_current WHERE repo_id = ?1",
-                params![snapshot.repo_id],
+                "DELETE FROM codecity_render_arcs_current WHERE repo_id = ?1 AND snapshot_key = ?2",
+                params![snapshot.repo_id, snapshot_key],
             )?;
             tx.execute(
-                "DELETE FROM codecity_architecture_violations_current WHERE repo_id = ?1",
-                params![snapshot.repo_id],
+                "DELETE FROM codecity_architecture_violations_current WHERE repo_id = ?1 AND snapshot_key = ?2",
+                params![snapshot.repo_id, snapshot_key],
             )?;
             tx.execute(
-                "DELETE FROM codecity_file_dependency_arcs_current WHERE repo_id = ?1",
-                params![snapshot.repo_id],
+                "DELETE FROM codecity_file_dependency_arcs_current WHERE repo_id = ?1 AND snapshot_key = ?2",
+                params![snapshot.repo_id, snapshot_key],
             )?;
             tx.execute(
-                "DELETE FROM codecity_dependency_evidence_current WHERE repo_id = ?1",
-                params![snapshot.repo_id],
+                "DELETE FROM codecity_dependency_evidence_current WHERE repo_id = ?1 AND snapshot_key = ?2",
+                params![snapshot.repo_id, snapshot_key],
             )?;
 
             for row in &snapshot.evidence {
                 tx.execute(
                     "INSERT INTO codecity_dependency_evidence_current (
-                        repo_id, evidence_id, run_id, commit_sha, from_path, to_path,
+                        repo_id, snapshot_key, evidence_id, run_id, commit_sha, from_path, to_path,
                         to_symbol_ref, from_boundary_id, to_boundary_id, from_zone, to_zone,
                         from_symbol_id, from_artefact_id, to_symbol_id, to_artefact_id,
                         edge_id, edge_kind, language, start_line, end_line, metadata_json,
                         resolved, cross_boundary, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
                     params![
                         snapshot.repo_id,
+                        snapshot_key,
                         row.evidence_id,
                         row.run_id,
                         row.commit_sha,
@@ -75,14 +84,15 @@ impl SqliteCodeCityRepository {
             for row in &snapshot.file_arcs {
                 tx.execute(
                     "INSERT INTO codecity_file_dependency_arcs_current (
-                        repo_id, arc_id, run_id, commit_sha, from_path, to_path,
+                        repo_id, snapshot_key, arc_id, run_id, commit_sha, from_path, to_path,
                         from_boundary_id, to_boundary_id, from_zone, to_zone, edge_count,
                         import_count, call_count, reference_count, export_count,
                         inheritance_count, weight, cross_boundary, has_violation,
                         highest_severity, evidence_ids_json, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
                     params![
                         snapshot.repo_id,
+                        snapshot_key,
                         row.arc_id,
                         row.run_id,
                         row.commit_sha,
@@ -111,14 +121,15 @@ impl SqliteCodeCityRepository {
             for row in &snapshot.violations {
                 tx.execute(
                     "INSERT INTO codecity_architecture_violations_current (
-                        repo_id, violation_id, run_id, commit_sha, boundary_id,
+                        repo_id, snapshot_key, violation_id, run_id, commit_sha, boundary_id,
                         boundary_root, pattern, rule, severity, from_path, to_path,
                         from_zone, to_zone, from_boundary_id, to_boundary_id, arc_id,
                         message, explanation, recommendation, evidence_ids_json,
                         evidence_json, confidence, suppressed, suppression_reason, created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
                     params![
                         snapshot.repo_id,
+                        snapshot_key,
                         row.id,
                         row.run_id,
                         row.commit_sha,
@@ -150,14 +161,15 @@ impl SqliteCodeCityRepository {
             for row in &snapshot.render_arcs {
                 tx.execute(
                     "INSERT INTO codecity_render_arcs_current (
-                        repo_id, render_arc_id, run_id, commit_sha, arc_kind, visibility,
+                        repo_id, snapshot_key, render_arc_id, run_id, commit_sha, arc_kind, visibility,
                         severity, from_path, to_path, from_boundary_id, to_boundary_id,
                         source_arc_id, violation_id, weight, label, tooltip, from_x,
                         from_y, from_z, to_x, to_y, to_z, control_y, metadata_json,
                         created_at
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
                     params![
                         snapshot.repo_id,
+                        snapshot_key,
                         row.id,
                         snapshot.run_id,
                         snapshot.commit_sha,
@@ -193,10 +205,18 @@ impl SqliteCodeCityRepository {
     }
 
     pub fn load_phase4_snapshot(&self, repo_id: &str) -> Result<CodeCityPhase4Snapshot> {
-        let evidence = self.load_dependency_evidence(repo_id)?;
-        let file_arcs = self.load_file_dependency_arcs(repo_id)?;
-        let violations = self.load_architecture_violations(repo_id)?;
-        let render_arcs = self.load_render_arcs(repo_id)?;
+        self.load_phase4_snapshot_for_key(repo_id, CODECITY_DEFAULT_SNAPSHOT_KEY)
+    }
+
+    pub(crate) fn load_phase4_snapshot_for_key(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+    ) -> Result<CodeCityPhase4Snapshot> {
+        let evidence = self.load_dependency_evidence(repo_id, snapshot_key)?;
+        let file_arcs = self.load_file_dependency_arcs(repo_id, snapshot_key)?;
+        let violations = self.load_architecture_violations(repo_id, snapshot_key)?;
+        let render_arcs = self.load_render_arcs(repo_id, snapshot_key)?;
         let run_id = evidence
             .first()
             .map(|row| row.run_id.clone())
@@ -220,7 +240,11 @@ impl SqliteCodeCityRepository {
         })
     }
 
-    fn load_dependency_evidence(&self, repo_id: &str) -> Result<Vec<CodeCityDependencyEvidence>> {
+    fn load_dependency_evidence(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+    ) -> Result<Vec<CodeCityDependencyEvidence>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT evidence_id, run_id, commit_sha, from_path, to_path, to_symbol_ref,
@@ -228,10 +252,10 @@ impl SqliteCodeCityRepository {
                         from_artefact_id, to_symbol_id, to_artefact_id, edge_id, edge_kind,
                         language, start_line, end_line, metadata_json, resolved, cross_boundary
                  FROM codecity_dependency_evidence_current
-                 WHERE repo_id = ?1
+                 WHERE repo_id = ?1 AND snapshot_key = ?2
                  ORDER BY evidence_id ASC",
             )?;
-            let rows = stmt.query_map(params![repo_id], |row| {
+            let rows = stmt.query_map(params![repo_id, snapshot_key], |row| {
                 Ok(CodeCityDependencyEvidence {
                     evidence_id: row.get(0)?,
                     run_id: row.get(1)?,
@@ -262,7 +286,11 @@ impl SqliteCodeCityRepository {
         })
     }
 
-    fn load_file_dependency_arcs(&self, repo_id: &str) -> Result<Vec<CodeCityFileDependencyArc>> {
+    fn load_file_dependency_arcs(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+    ) -> Result<Vec<CodeCityFileDependencyArc>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT arc_id, run_id, commit_sha, from_path, to_path, from_boundary_id,
@@ -270,10 +298,10 @@ impl SqliteCodeCityRepository {
                         call_count, reference_count, export_count, inheritance_count, weight,
                         cross_boundary, has_violation, highest_severity, evidence_ids_json
                  FROM codecity_file_dependency_arcs_current
-                 WHERE repo_id = ?1
+                 WHERE repo_id = ?1 AND snapshot_key = ?2
                  ORDER BY from_path ASC, to_path ASC",
             )?;
-            let rows = stmt.query_map(params![repo_id], |row| {
+            let rows = stmt.query_map(params![repo_id, snapshot_key], |row| {
                 let evidence_ids: String = row.get(19)?;
                 let severity: Option<String> = row.get(18)?;
                 Ok(CodeCityFileDependencyArc {
@@ -307,6 +335,7 @@ impl SqliteCodeCityRepository {
     fn load_architecture_violations(
         &self,
         repo_id: &str,
+        snapshot_key: &str,
     ) -> Result<Vec<CodeCityArchitectureViolation>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
@@ -315,10 +344,10 @@ impl SqliteCodeCityRepository {
                         from_boundary_id, to_boundary_id, arc_id, message, explanation,
                         recommendation, evidence_ids_json, evidence_json, confidence, suppressed
                  FROM codecity_architecture_violations_current
-                 WHERE repo_id = ?1
+                 WHERE repo_id = ?1 AND snapshot_key = ?2
                  ORDER BY severity ASC, rule ASC, from_path ASC, to_path ASC",
             )?;
-            let rows = stmt.query_map(params![repo_id], |row| {
+            let rows = stmt.query_map(params![repo_id, snapshot_key], |row| {
                 let evidence_ids: String = row.get(18)?;
                 let evidence_json: String = row.get(19)?;
                 let pattern: String = row.get(5)?;
@@ -358,7 +387,11 @@ impl SqliteCodeCityRepository {
         })
     }
 
-    fn load_render_arcs(&self, repo_id: &str) -> Result<Vec<CodeCityRenderArc>> {
+    fn load_render_arcs(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+    ) -> Result<Vec<CodeCityRenderArc>> {
         self.sqlite.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT render_arc_id, arc_kind, visibility, severity, from_path, to_path,
@@ -366,10 +399,10 @@ impl SqliteCodeCityRepository {
                         weight, label, tooltip, from_x, from_y, from_z, to_x, to_y, to_z,
                         control_y, metadata_json
                  FROM codecity_render_arcs_current
-                 WHERE repo_id = ?1
+                 WHERE repo_id = ?1 AND snapshot_key = ?2
                  ORDER BY arc_kind ASC, render_arc_id ASC",
             )?;
-            let rows = stmt.query_map(params![repo_id], |row| {
+            let rows = stmt.query_map(params![repo_id, snapshot_key], |row| {
                 let kind: String = row.get(1)?;
                 let visibility: String = row.get(2)?;
                 let severity: Option<String> = row.get(3)?;

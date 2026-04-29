@@ -15,7 +15,7 @@ use crate::capability_packs::codecity::types::{
     CodeCityBoundaryLayoutSummary, CodeCityBuilding, CodeCityBuildingHealthSummary,
     CodeCityDiagnostic, CodeCityGeometry, CodeCityHealthOverview, CodeCityHealthWeights,
     CodeCityImportance, CodeCityLayoutStrategy, CodeCityLayoutSummary, CodeCityLegends,
-    CodeCitySize, CodeCitySummary, CodeCityWorldPayload,
+    CodeCitySize, CodeCitySnapshotStatus, CodeCitySummary, CodeCityWorldPayload,
 };
 
 pub fn build_codecity_world(
@@ -78,6 +78,7 @@ pub fn build_codecity_world_from_analysis(
             repo_id: repo_id.to_string(),
             commit_sha,
             config_fingerprint,
+            snapshot_status: CodeCitySnapshotStatus::default(),
             summary: CodeCitySummary {
                 file_count: source.files.len(),
                 artefact_count,
@@ -307,6 +308,7 @@ pub fn build_codecity_world_from_analysis(
         repo_id: repo_id.to_string(),
         commit_sha,
         config_fingerprint,
+        snapshot_status: CodeCitySnapshotStatus::default(),
         summary: CodeCitySummary {
             file_count: source.files.len(),
             artefact_count,

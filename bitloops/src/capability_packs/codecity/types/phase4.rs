@@ -2,6 +2,71 @@ use serde::{Deserialize, Serialize};
 
 use super::{CodeCityArchitecturePattern, CodeCityBuilding, CodeCityDiagnostic};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCitySnapshotState {
+    Missing,
+    Queued,
+    Running,
+    Ready,
+    Failed,
+}
+
+impl CodeCitySnapshotState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl Default for CodeCitySnapshotState {
+    fn default() -> Self {
+        Self::Missing
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodeCitySnapshotStatus {
+    pub state: CodeCitySnapshotState,
+    pub stale: bool,
+    pub repo_id: String,
+    pub project_path: Option<String>,
+    pub snapshot_key: String,
+    pub config_fingerprint: String,
+    pub source_generation_seq: Option<u64>,
+    pub last_success_generation_seq: Option<u64>,
+    pub run_id: Option<String>,
+    pub commit_sha: Option<String>,
+    pub generated_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
+impl Default for CodeCitySnapshotStatus {
+    fn default() -> Self {
+        Self {
+            state: CodeCitySnapshotState::Missing,
+            stale: false,
+            repo_id: String::new(),
+            project_path: None,
+            snapshot_key: String::new(),
+            config_fingerprint: String::new(),
+            source_generation_seq: None,
+            last_success_generation_seq: None,
+            run_id: None,
+            commit_sha: None,
+            generated_at: None,
+            updated_at: None,
+            last_error: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum CodeCityViolationSeverity {
@@ -401,7 +466,8 @@ pub struct CodeCityFileArchitectureContext {
 pub struct CodeCityFileDetailPayload {
     pub status: String,
     pub path: String,
-    pub building: CodeCityBuilding,
+    pub snapshot_status: CodeCitySnapshotStatus,
+    pub building: Option<CodeCityBuilding>,
     pub architecture_context: CodeCityFileArchitectureContext,
     pub incoming_dependencies: CodeCityDependencyConnectionPayload,
     pub outgoing_dependencies: CodeCityDependencyConnectionPayload,
@@ -419,6 +485,7 @@ pub struct CodeCityPageInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CodeCityViolationConnectionPayload {
+    pub snapshot_status: CodeCitySnapshotStatus,
     pub total_count: usize,
     pub edges: Vec<CodeCityViolationConnectionEdgePayload>,
     pub page_info: CodeCityPageInfo,
@@ -432,6 +499,7 @@ pub struct CodeCityViolationConnectionEdgePayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CodeCityArcConnectionPayload {
+    pub snapshot_status: CodeCitySnapshotStatus,
     pub total_count: usize,
     pub edges: Vec<CodeCityArcConnectionEdgePayload>,
     pub page_info: CodeCityPageInfo,

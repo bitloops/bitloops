@@ -15,6 +15,7 @@ pub mod macro_graph;
 pub mod normalise;
 pub mod phase4;
 pub mod scoring;
+pub mod snapshot;
 pub mod source_graph;
 pub mod world;
 pub mod zone_assignment;

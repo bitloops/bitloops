@@ -2,6 +2,7 @@ use super::*;
 
 pub fn violations_connection(
     violations: &[CodeCityArchitectureViolation],
+    snapshot_status: CodeCitySnapshotStatus,
     filter: &CodeCityViolationFilter,
     first: usize,
     after: Option<&str>,
@@ -11,6 +12,7 @@ pub fn violations_connection(
     let filtered = filter_violations(violations, filter);
     let (items, page_info) = page_items(filtered, first, after, last, before, violation_cursor);
     CodeCityViolationConnectionPayload {
+        snapshot_status,
         total_count: violations
             .iter()
             .filter(|v| violation_matches(v, filter))
@@ -28,6 +30,7 @@ pub fn violations_connection(
 
 pub fn arcs_connection(
     arcs: &[CodeCityRenderArc],
+    snapshot_status: CodeCitySnapshotStatus,
     filter: &CodeCityArcFilter,
     first: usize,
     after: Option<&str>,
@@ -37,6 +40,7 @@ pub fn arcs_connection(
     let filtered = filter_arcs(arcs, filter);
     let (items, page_info) = page_items(filtered, first, after, last, before, arc_cursor);
     CodeCityArcConnectionPayload {
+        snapshot_status,
         total_count: arcs.iter().filter(|arc| arc_matches(arc, filter)).count(),
         edges: items
             .into_iter()
@@ -51,8 +55,8 @@ pub fn arcs_connection(
 
 pub fn file_detail(
     path: &str,
+    snapshot_status: CodeCitySnapshotStatus,
     world: &CodeCityWorldPayload,
-    analysis: &CodeCityArchitectureAnalysis,
     snapshot: &CodeCityPhase4Snapshot,
     incoming_limit: usize,
     outgoing_limit: usize,
@@ -62,14 +66,10 @@ pub fn file_detail(
         .iter()
         .find(|building| building.path == path)?
         .clone();
-    let boundary = analysis
+    let boundary = world
         .boundaries
         .iter()
         .find(|boundary| boundary.id == building.boundary_id);
-    let report = analysis
-        .boundary_reports
-        .iter()
-        .find(|report| report.boundary_id == building.boundary_id);
     let incoming = dependency_connection(
         snapshot
             .file_arcs
@@ -109,11 +109,14 @@ pub fn file_detail(
     Some(CodeCityFileDetailPayload {
         status: "ok".to_string(),
         path: path.to_string(),
-        building,
+        snapshot_status,
+        building: Some(building),
         architecture_context: CodeCityFileArchitectureContext {
             boundary_id: boundary.map(|boundary| boundary.id.clone()),
             boundary_name: boundary.map(|boundary| boundary.name.clone()),
-            primary_pattern: report.map(|report| report.primary_pattern),
+            primary_pattern: boundary
+                .and_then(|boundary| boundary.architecture.as_ref())
+                .map(|architecture| architecture.primary_pattern),
         },
         incoming_dependencies: incoming,
         outgoing_dependencies: outgoing,

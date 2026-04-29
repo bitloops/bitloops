@@ -246,6 +246,8 @@ impl DevqlCapabilityHost {
             Arc::new(RuntimeLanguageServicesGateway {
                 inner: self.runtime.languages,
             });
+        let git_history: Arc<dyn super::gateways::GitHistoryGateway> =
+            Arc::new(super::runtime_contexts::LocalGitHistoryGateway);
         let relational = Arc::new(SqliteRelationalGateway::new(sqlite_pool));
         let host_services: Arc<dyn HostServicesGateway> = Arc::new(
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
@@ -261,8 +263,15 @@ impl DevqlCapabilityHost {
             storage: Arc::new(relational_store.to_local_inner()),
             relational,
             language_services,
+            git_history,
             host_services,
             workplane,
+            test_harness: crate::capability_packs::test_harness::storage::open_repository_for_repo(
+                self.repo_root(),
+            )
+            .ok()
+            .map(std::sync::Mutex::new)
+            .map(Arc::new),
             init_session_id,
         })
     }

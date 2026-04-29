@@ -11,6 +11,7 @@ pub struct CodeCityWorldResult {
     pub repo_id: String,
     pub commit_sha: Option<String>,
     pub config_fingerprint: String,
+    pub snapshot_status: CodeCitySnapshotStatusResult,
     pub summary: CodeCitySummaryResult,
     pub health: CodeCityHealthOverviewResult,
     pub legends: CodeCityLegendsResult,
@@ -23,6 +24,33 @@ pub struct CodeCityWorldResult {
     pub arcs: Vec<CodeCityRenderArcResult>,
     pub dependency_arcs: Vec<CodeCityDependencyArcResult>,
     pub diagnostics: Vec<CodeCityDiagnosticResult>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Enum)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCitySnapshotStateResult {
+    Missing,
+    Queued,
+    Running,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
+pub struct CodeCitySnapshotStatusResult {
+    pub state: CodeCitySnapshotStateResult,
+    pub stale: bool,
+    pub repo_id: String,
+    pub project_path: Option<String>,
+    pub snapshot_key: String,
+    pub config_fingerprint: String,
+    pub source_generation_seq: Option<i64>,
+    pub last_success_generation_seq: Option<i64>,
+    pub run_id: Option<String>,
+    pub commit_sha: Option<String>,
+    pub generated_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
@@ -522,6 +550,7 @@ pub struct CodeCityViolationConnectionEdgeResult {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
 pub struct CodeCityViolationConnectionResult {
+    pub snapshot_status: CodeCitySnapshotStatusResult,
     pub total_count: i32,
     pub edges: Vec<CodeCityViolationConnectionEdgeResult>,
     pub page_info: PageInfo,
@@ -535,6 +564,7 @@ pub struct CodeCityArcConnectionEdgeResult {
 
 #[derive(Debug, Clone, PartialEq, Deserialize, SimpleObject)]
 pub struct CodeCityArcConnectionResult {
+    pub snapshot_status: CodeCitySnapshotStatusResult,
     pub total_count: i32,
     pub edges: Vec<CodeCityArcConnectionEdgeResult>,
     pub page_info: PageInfo,
@@ -563,7 +593,8 @@ pub struct CodeCityFileArchitectureContextResult {
 pub struct CodeCityFileDetailResult {
     pub status: String,
     pub path: String,
-    pub building: CodeCityBuildingResult,
+    pub snapshot_status: CodeCitySnapshotStatusResult,
+    pub building: Option<CodeCityBuildingResult>,
     pub architecture_context: CodeCityFileArchitectureContextResult,
     pub incoming_dependencies: CodeCityDependencyConnectionResult,
     pub outgoing_dependencies: CodeCityDependencyConnectionResult,

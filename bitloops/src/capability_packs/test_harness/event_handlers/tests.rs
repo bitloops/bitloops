@@ -445,9 +445,11 @@ impl TestFixture {
             storage: Arc::new(RelationalStorage::local_only(self.db_path.clone())),
             relational: Arc::new(FakeRelationalGateway { production }),
             language_services: Arc::new(FakeLanguageServicesGateway { support }),
+            git_history: Arc::new(crate::host::capability_host::gateways::EmptyGitHistoryGateway),
             host_services: Arc::new(DefaultHostServicesGateway::new("repo-1"))
                 as Arc<dyn HostServicesGateway>,
             workplane: Arc::new(NoopWorkplaneGateway),
+            test_harness: None,
             init_session_id: None,
         })
     }

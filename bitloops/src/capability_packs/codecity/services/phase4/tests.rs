@@ -16,6 +16,7 @@ fn world(buildings: Vec<CodeCityBuilding>) -> CodeCityWorldPayload {
         repo_id: "repo-1".to_string(),
         commit_sha: Some("commit-1".to_string()),
         config_fingerprint: "fingerprint".to_string(),
+        snapshot_status: Default::default(),
         summary: CodeCitySummary::default(),
         health: CodeCityHealthOverview::not_requested(
             6,

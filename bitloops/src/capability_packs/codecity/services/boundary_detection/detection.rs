@@ -37,13 +37,32 @@ pub fn detect_boundaries(
 
     let analysis_root = source.project_path.as_deref().unwrap_or(".");
     let mut diagnostics = Vec::new();
-    let manifest_roots =
-        discover_manifest_roots(repo_root, analysis_root, &included_files, &mut diagnostics);
+    let scoped_indexed_files = source
+        .files
+        .iter()
+        .filter(|file| {
+            !matches!(
+                file.exclusion_reason.as_deref(),
+                Some("project_scope") | Some("not_present")
+            )
+        })
+        .map(|file| file.path.clone())
+        .collect::<Vec<_>>();
+    let manifest_roots = discover_manifest_roots(
+        repo_root,
+        analysis_root,
+        &included_files,
+        &scoped_indexed_files,
+        &mut diagnostics,
+    );
 
     let explicit_assignment = assign_files_to_explicit_roots(&included_files, &manifest_roots);
     let mut resolved = Vec::<ResolvedBoundary>::new();
 
-    if manifest_roots.is_empty() {
+    let has_manifest_assignment = explicit_assignment
+        .values()
+        .any(|root_path| manifest_roots.contains_key(root_path));
+    if !has_manifest_assignment {
         diagnostics.push(CodeCityDiagnostic {
             code: "codecity.boundary.fallback_root".to_string(),
             severity: "info".to_string(),

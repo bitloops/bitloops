@@ -16,7 +16,7 @@ use crate::capability_packs::codecity::types::{
     CodeCityDependencyDirection, CodeCityDependencyEvidence, CodeCityDiagnostic,
     CodeCityDiagnosticBadge, CodeCityDiagnosticBadgeKind, CodeCityFileArchitectureContext,
     CodeCityFileDependencyArc, CodeCityFileDetailPayload, CodeCityLegends, CodeCityPageInfo,
-    CodeCityPhase4Snapshot, CodeCityRenderArc, CodeCitySeverityLegend,
+    CodeCityPhase4Snapshot, CodeCityRenderArc, CodeCitySeverityLegend, CodeCitySnapshotStatus,
     CodeCityViolationConnectionEdgePayload, CodeCityViolationConnectionPayload,
     CodeCityViolationEvidence, CodeCityViolationFilter, CodeCityViolationPattern,
     CodeCityViolationRule, CodeCityViolationRuleCount, CodeCityViolationRuleLegend,

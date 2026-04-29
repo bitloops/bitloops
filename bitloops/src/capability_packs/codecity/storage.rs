@@ -2,9 +2,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{OptionalExtension, params};
+use sha2::{Digest, Sha256};
 
 use crate::capability_packs::codecity::types::{
-    CodeCityBuildingHealthSummary, CodeCityHealthEvidence, CodeCityHealthMetrics,
+    CODECITY_DEFAULT_SNAPSHOT_KEY, CodeCityBuildingHealthSummary, CodeCityHealthEvidence,
+    CodeCityHealthMetrics, CodeCityPhase4Snapshot, CodeCitySnapshotState, CodeCitySnapshotStatus,
     CodeCityWorldPayload,
 };
 use crate::host::relational_store::DefaultRelationalStore;
@@ -20,6 +22,13 @@ pub use schema::codecity_sqlite_schema_sql;
 #[derive(Debug, Clone)]
 pub struct SqliteCodeCityRepository {
     sqlite: SqliteConnectionPool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CodeCityStoredSnapshot {
+    pub status: CodeCitySnapshotStatus,
+    pub world: Option<CodeCityWorldPayload>,
+    pub phase4: CodeCityPhase4Snapshot,
 }
 
 impl SqliteCodeCityRepository {
@@ -38,7 +47,308 @@ impl SqliteCodeCityRepository {
     pub fn initialise_schema(&self) -> Result<()> {
         self.sqlite
             .execute_batch(codecity_sqlite_schema_sql())
-            .context("initialising CodeCity health schema")
+            .context("initialising CodeCity health schema")?;
+        self.rebuild_legacy_phase4_tables_if_needed()?;
+        self.sqlite
+            .execute_batch(codecity_sqlite_schema_sql())
+            .context("initialising CodeCity snapshot schema")
+    }
+
+    fn rebuild_legacy_phase4_tables_if_needed(&self) -> Result<()> {
+        self.sqlite.with_connection(|conn| {
+            for table in [
+                "codecity_dependency_evidence_current",
+                "codecity_file_dependency_arcs_current",
+                "codecity_architecture_violations_current",
+                "codecity_render_arcs_current",
+            ] {
+                if table_exists(conn, table)? && !table_has_column(conn, table, "snapshot_key")? {
+                    conn.execute(&format!("DROP TABLE {table}"), [])?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    pub fn default_snapshot_key(project_path: Option<&str>) -> String {
+        snapshot_key_for(project_path)
+    }
+
+    pub fn upsert_snapshot_request(
+        &self,
+        repo_id: &str,
+        project_path: Option<&str>,
+        config_fingerprint: &str,
+        source_generation_seq: Option<u64>,
+    ) -> Result<CodeCitySnapshotStatus> {
+        let snapshot_key = snapshot_key_for(project_path);
+        let now = chrono::Utc::now().to_rfc3339();
+        self.sqlite.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO codecity_snapshots_current (
+                    repo_id, snapshot_key, project_path, config_fingerprint,
+                    source_generation_seq, state, stale, updated_at, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, NULL)
+                ON CONFLICT (repo_id, snapshot_key) DO UPDATE SET
+                    project_path = excluded.project_path,
+                    config_fingerprint = excluded.config_fingerprint,
+                    source_generation_seq = excluded.source_generation_seq,
+                    state = excluded.state,
+                    stale = 1,
+                    updated_at = excluded.updated_at,
+                    last_error = NULL",
+                params![
+                    repo_id,
+                    &snapshot_key,
+                    normalise_project_path(project_path).as_deref(),
+                    config_fingerprint,
+                    source_generation_seq.map(sql_i64),
+                    CodeCitySnapshotState::Queued.as_str(),
+                    &now,
+                ],
+            )
+            .context("upserting CodeCity snapshot request")?;
+            self.load_snapshot_status(repo_id, &snapshot_key, source_generation_seq)
+        })
+    }
+
+    pub fn mark_snapshot_running(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+        run_id: &str,
+        source_generation_seq: u64,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.sqlite.with_connection(|conn| {
+            conn.execute(
+                "UPDATE codecity_snapshots_current
+                 SET state = ?1, source_generation_seq = ?2, run_id = ?3,
+                     stale = CASE
+                         WHEN last_success_generation_seq IS NULL THEN 0
+                         WHEN last_success_generation_seq < ?2 THEN 1
+                         ELSE 0
+                     END,
+                     updated_at = ?4, last_error = NULL
+                 WHERE repo_id = ?5 AND snapshot_key = ?6",
+                params![
+                    CodeCitySnapshotState::Running.as_str(),
+                    sql_i64(source_generation_seq),
+                    run_id,
+                    now,
+                    repo_id,
+                    snapshot_key,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn mark_snapshot_failed(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+        source_generation_seq: u64,
+        error: &str,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.sqlite.with_connection(|conn| {
+            conn.execute(
+                "UPDATE codecity_snapshots_current
+                 SET state = ?1, source_generation_seq = ?2,
+                     stale = CASE WHEN world_json IS NULL THEN 0 ELSE 1 END,
+                     updated_at = ?3, last_error = ?4
+                 WHERE repo_id = ?5 AND snapshot_key = ?6",
+                params![
+                    CodeCitySnapshotState::Failed.as_str(),
+                    sql_i64(source_generation_seq),
+                    now,
+                    error,
+                    repo_id,
+                    snapshot_key,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn replace_codecity_snapshot(
+        &self,
+        snapshot_key: &str,
+        project_path: Option<&str>,
+        source_generation_seq: u64,
+        world: &CodeCityWorldPayload,
+        snapshot: &CodeCityPhase4Snapshot,
+    ) -> Result<()> {
+        self.replace_phase4_snapshot_for_key(snapshot_key, snapshot)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let world_json = serde_json::to_string(world)?;
+        self.sqlite.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO codecity_snapshots_current (
+                    repo_id, snapshot_key, project_path, config_fingerprint,
+                    source_generation_seq, last_success_generation_seq, state, stale,
+                    run_id, commit_sha, generated_at, updated_at, last_error, world_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, 0, ?7, ?8, ?9, ?10, NULL, ?11)
+                ON CONFLICT (repo_id, snapshot_key) DO UPDATE SET
+                    project_path = excluded.project_path,
+                    config_fingerprint = excluded.config_fingerprint,
+                    source_generation_seq = excluded.source_generation_seq,
+                    last_success_generation_seq = excluded.last_success_generation_seq,
+                    state = excluded.state,
+                    stale = 0,
+                    run_id = excluded.run_id,
+                    commit_sha = excluded.commit_sha,
+                    generated_at = excluded.generated_at,
+                    updated_at = excluded.updated_at,
+                    last_error = NULL,
+                    world_json = excluded.world_json",
+                params![
+                    world.repo_id,
+                    snapshot_key,
+                    normalise_project_path(project_path).as_deref(),
+                    world.config_fingerprint,
+                    sql_i64(source_generation_seq),
+                    CodeCitySnapshotState::Ready.as_str(),
+                    snapshot.run_id,
+                    snapshot.commit_sha,
+                    world.health.generated_at,
+                    now,
+                    world_json,
+                ],
+            )
+            .context("replacing CodeCity snapshot metadata")?;
+            Ok(())
+        })
+    }
+
+    pub fn load_codecity_snapshot(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+        latest_generation_seq: Option<u64>,
+    ) -> Result<Option<CodeCityStoredSnapshot>> {
+        let Some(status) = self.load_optional_snapshot_status(repo_id, snapshot_key)? else {
+            return Ok(None);
+        };
+        let status = with_staleness(status, latest_generation_seq);
+        let world = self.load_snapshot_world(repo_id, snapshot_key)?;
+        let phase4 = self.load_phase4_snapshot_for_key(repo_id, snapshot_key)?;
+        Ok(Some(CodeCityStoredSnapshot {
+            status,
+            world,
+            phase4,
+        }))
+    }
+
+    pub fn load_snapshot_status(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+        latest_generation_seq: Option<u64>,
+    ) -> Result<CodeCitySnapshotStatus> {
+        let status = self
+            .load_optional_snapshot_status(repo_id, snapshot_key)?
+            .unwrap_or_else(|| missing_snapshot_status(repo_id, snapshot_key, None, ""));
+        Ok(with_staleness(status, latest_generation_seq))
+    }
+
+    pub fn load_snapshot_requests(&self, repo_id: &str) -> Result<Vec<CodeCitySnapshotStatus>> {
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT snapshot_key, project_path, config_fingerprint, source_generation_seq,
+                        last_success_generation_seq, state, stale, run_id, commit_sha,
+                        generated_at, updated_at, last_error
+                 FROM codecity_snapshots_current
+                 WHERE repo_id = ?1
+                 ORDER BY snapshot_key ASC",
+            )?;
+            let rows = stmt.query_map(params![repo_id], |row| {
+                let state: String = row.get(5)?;
+                Ok(CodeCitySnapshotStatus {
+                    snapshot_key: row.get(0)?,
+                    project_path: row.get(1)?,
+                    config_fingerprint: row.get(2)?,
+                    source_generation_seq: row
+                        .get::<_, Option<i64>>(3)?
+                        .and_then(|value| u64::try_from(value).ok()),
+                    last_success_generation_seq: row
+                        .get::<_, Option<i64>>(4)?
+                        .and_then(|value| u64::try_from(value).ok()),
+                    state: parse_snapshot_state(&state),
+                    stale: row.get::<_, i64>(6)? != 0,
+                    run_id: row.get(7)?,
+                    commit_sha: row.get(8)?,
+                    generated_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                    last_error: row.get(11)?,
+                    repo_id: repo_id.to_string(),
+                })
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(anyhow::Error::from)
+        })
+    }
+
+    fn load_optional_snapshot_status(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+    ) -> Result<Option<CodeCitySnapshotStatus>> {
+        self.sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT project_path, config_fingerprint, source_generation_seq,
+                        last_success_generation_seq, state, stale, run_id, commit_sha,
+                        generated_at, updated_at, last_error
+                 FROM codecity_snapshots_current
+                 WHERE repo_id = ?1 AND snapshot_key = ?2",
+                params![repo_id, snapshot_key],
+                |row| {
+                    let state: String = row.get(4)?;
+                    Ok(CodeCitySnapshotStatus {
+                        state: parse_snapshot_state(&state),
+                        stale: row.get::<_, i64>(5)? != 0,
+                        repo_id: repo_id.to_string(),
+                        project_path: row.get(0)?,
+                        snapshot_key: snapshot_key.to_string(),
+                        config_fingerprint: row.get(1)?,
+                        source_generation_seq: row
+                            .get::<_, Option<i64>>(2)?
+                            .and_then(|value| u64::try_from(value).ok()),
+                        last_success_generation_seq: row
+                            .get::<_, Option<i64>>(3)?
+                            .and_then(|value| u64::try_from(value).ok()),
+                        run_id: row.get(6)?,
+                        commit_sha: row.get(7)?,
+                        generated_at: row.get(8)?,
+                        updated_at: row.get(9)?,
+                        last_error: row.get(10)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+    }
+
+    fn load_snapshot_world(
+        &self,
+        repo_id: &str,
+        snapshot_key: &str,
+    ) -> Result<Option<CodeCityWorldPayload>> {
+        let raw = self.sqlite.with_connection(|conn| {
+            conn.query_row(
+                "SELECT world_json FROM codecity_snapshots_current
+                 WHERE repo_id = ?1 AND snapshot_key = ?2",
+                params![repo_id, snapshot_key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })?;
+        raw.flatten()
+            .map(|value| serde_json::from_str(&value).context("decoding persisted CodeCity world"))
+            .transpose()
     }
 
     pub fn try_apply_current_snapshot(&self, world: &mut CodeCityWorldPayload) -> Result<bool> {
@@ -346,4 +656,87 @@ struct PersistedFileHealth {
     health_confidence: f64,
     colour: String,
     summary: CodeCityBuildingHealthSummary,
+}
+
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+        params![table],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+    .map_err(anyhow::Error::from)
+}
+
+fn table_has_column(conn: &rusqlite::Connection, table: &str, column: &str) -> Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in columns {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn sql_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+pub fn normalise_project_path(project_path: Option<&str>) -> Option<String> {
+    project_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != ".")
+        .map(|value| value.trim_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn snapshot_key_for(project_path: Option<&str>) -> String {
+    let Some(project_path) = normalise_project_path(project_path) else {
+        return CODECITY_DEFAULT_SNAPSHOT_KEY.to_string();
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(project_path.as_bytes());
+    let digest = hex::encode(hasher.finalize());
+    format!("project:{}", &digest[..16])
+}
+
+pub fn missing_snapshot_status(
+    repo_id: &str,
+    snapshot_key: &str,
+    project_path: Option<&str>,
+    config_fingerprint: &str,
+) -> CodeCitySnapshotStatus {
+    CodeCitySnapshotStatus {
+        state: CodeCitySnapshotState::Missing,
+        stale: false,
+        repo_id: repo_id.to_string(),
+        project_path: normalise_project_path(project_path),
+        snapshot_key: snapshot_key.to_string(),
+        config_fingerprint: config_fingerprint.to_string(),
+        ..CodeCitySnapshotStatus::default()
+    }
+}
+
+pub fn with_staleness(
+    mut status: CodeCitySnapshotStatus,
+    latest_generation_seq: Option<u64>,
+) -> CodeCitySnapshotStatus {
+    if let (Some(latest), Some(applied)) =
+        (latest_generation_seq, status.last_success_generation_seq)
+    {
+        status.stale = applied < latest;
+    }
+    status
+}
+
+fn parse_snapshot_state(value: &str) -> CodeCitySnapshotState {
+    match value {
+        "queued" => CodeCitySnapshotState::Queued,
+        "running" => CodeCitySnapshotState::Running,
+        "ready" => CodeCitySnapshotState::Ready,
+        "failed" => CodeCitySnapshotState::Failed,
+        _ => CodeCitySnapshotState::Missing,
+    }
 }

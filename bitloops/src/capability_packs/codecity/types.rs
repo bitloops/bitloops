@@ -11,6 +11,8 @@ pub const CODECITY_ARCHITECTURE_STAGE_ID: &str = "codecity_architecture";
 pub const CODECITY_VIOLATIONS_STAGE_ID: &str = "codecity_violations";
 pub const CODECITY_FILE_DETAIL_STAGE_ID: &str = "codecity_file_detail";
 pub const CODECITY_ARCS_STAGE_ID: &str = "codecity_arcs";
+pub const CODECITY_SNAPSHOT_CONSUMER_ID: &str = "codecity.snapshot";
+pub const CODECITY_DEFAULT_SNAPSHOT_KEY: &str = "root";
 pub const CODECITY_ROOT_BOUNDARY_ID: &str = "boundary:root";
 pub const CODECITY_UNCLASSIFIED_ZONE: &str = "unclassified";
 
@@ -25,6 +27,8 @@ pub struct CodeCityWorldPayload {
     pub repo_id: String,
     pub commit_sha: Option<String>,
     pub config_fingerprint: String,
+    #[serde(default)]
+    pub snapshot_status: CodeCitySnapshotStatus,
     pub summary: CodeCitySummary,
     pub health: CodeCityHealthOverview,
     pub legends: CodeCityLegends,

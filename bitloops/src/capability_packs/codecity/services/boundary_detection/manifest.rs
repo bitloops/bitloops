@@ -8,6 +8,24 @@ use crate::capability_packs::codecity::types::{
     CODECITY_ROOT_BOUNDARY_ID, CodeCityBoundaryKind, CodeCityBoundarySource, CodeCityDiagnostic,
 };
 
+const MANIFEST_FILE_NAMES: &[&str] = &[
+    "package.json",
+    "go.mod",
+    "Cargo.toml",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "BUILD",
+    "BUILD.bazel",
+    "project.json",
+    "lerna.json",
+    "nx.json",
+    "pnpm-workspace.yaml",
+];
+
 #[derive(Debug, Clone)]
 pub(super) struct ManifestDescriptor {
     pub(super) ecosystem: Option<String>,
@@ -49,6 +67,7 @@ pub(super) fn discover_manifest_roots(
     repo_root: &Path,
     analysis_root: &str,
     files: &[String],
+    indexed_files: &[String],
     diagnostics: &mut Vec<CodeCityDiagnostic>,
 ) -> BTreeMap<String, ManifestDescriptor> {
     let mut manifests = BTreeMap::new();
@@ -72,6 +91,24 @@ pub(super) fn discover_manifest_roots(
             );
         }
     }
+
+    for indexed_file in indexed_files {
+        let Some((root_path, manifest_name, ecosystem)) = indexed_manifest_root(indexed_file)
+        else {
+            continue;
+        };
+        if !root_is_within_scope(&root_path, analysis_root) {
+            continue;
+        }
+        manifests
+            .entry(root_path)
+            .or_insert_with(|| ManifestDescriptor {
+                ecosystem,
+                source: CodeCityBoundarySource::Manifest,
+                kind: CodeCityBoundaryKind::Explicit,
+            });
+    }
+
     manifests
 }
 
@@ -117,25 +154,7 @@ fn ancestor_directories_within_scope(path: &str, analysis_root: &str) -> Vec<Str
 }
 
 fn find_manifest_in_dir(dir: &Path) -> Option<(String, Option<String>)> {
-    let candidates = [
-        "package.json",
-        "go.mod",
-        "Cargo.toml",
-        "pom.xml",
-        "build.gradle",
-        "build.gradle.kts",
-        "pyproject.toml",
-        "setup.py",
-        "setup.cfg",
-        "BUILD",
-        "BUILD.bazel",
-        "project.json",
-        "lerna.json",
-        "nx.json",
-        "pnpm-workspace.yaml",
-    ];
-
-    for candidate in candidates {
+    for candidate in MANIFEST_FILE_NAMES {
         if dir.join(candidate).exists() {
             return Some((candidate.to_string(), infer_ecosystem(candidate)));
         }
@@ -150,6 +169,41 @@ fn find_manifest_in_dir(dir: &Path) -> Option<(String, Option<String>)> {
     }
 
     None
+}
+
+fn indexed_manifest_root(path: &str) -> Option<(String, String, Option<String>)> {
+    let path = Path::new(path);
+    let manifest_name = path.file_name().and_then(OsStr::to_str)?;
+    if !is_manifest_name(manifest_name) {
+        return None;
+    }
+
+    let root = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(|parent| parent.to_string_lossy().to_string())
+        .unwrap_or_else(|| ".".to_string());
+
+    Some((
+        root,
+        manifest_name.to_string(),
+        infer_ecosystem(manifest_name),
+    ))
+}
+
+fn is_manifest_name(name: &str) -> bool {
+    MANIFEST_FILE_NAMES.contains(&name)
+        || name.ends_with(".csproj")
+        || name.ends_with(".fsproj")
+        || name.ends_with(".sln")
+}
+
+fn root_is_within_scope(root_path: &str, analysis_root: &str) -> bool {
+    analysis_root == "."
+        || root_path == analysis_root
+        || root_path
+            .strip_prefix(analysis_root)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn infer_manifest_source(

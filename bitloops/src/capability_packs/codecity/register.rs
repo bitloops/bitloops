@@ -1,13 +1,16 @@
 use anyhow::Result;
+use std::sync::Arc;
 
 use crate::host::capability_host::CapabilityRegistrar;
 
+use super::current_state::CodeCitySnapshotConsumer;
 use super::query_examples::CODECITY_QUERY_EXAMPLES;
 use super::schema::CODECITY_SCHEMA_MODULE;
 use super::stages::{
     build_codecity_architecture_stage, build_codecity_arcs_stage, build_codecity_boundaries_stage,
     build_codecity_file_detail_stage, build_codecity_violations_stage, build_codecity_world_stage,
 };
+use super::types::{CODECITY_CAPABILITY_ID, CODECITY_SNAPSHOT_CONSUMER_ID};
 
 pub fn register_codecity_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
     registrar.register_stage(build_codecity_world_stage())?;
@@ -16,6 +19,23 @@ pub fn register_codecity_pack(registrar: &mut dyn CapabilityRegistrar) -> Result
     registrar.register_stage(build_codecity_violations_stage())?;
     registrar.register_stage(build_codecity_file_detail_stage())?;
     registrar.register_stage(build_codecity_arcs_stage())?;
+    registrar.register_mailbox(
+        crate::host::capability_host::CapabilityMailboxRegistration::new(
+            CODECITY_CAPABILITY_ID,
+            CODECITY_SNAPSHOT_CONSUMER_ID,
+            crate::host::capability_host::CapabilityMailboxPolicy::Cursor,
+            crate::host::capability_host::CapabilityMailboxHandler::CurrentStateConsumer(
+                CODECITY_SNAPSHOT_CONSUMER_ID,
+            ),
+        ),
+    )?;
+    registrar.register_current_state_consumer(
+        crate::host::capability_host::CurrentStateConsumerRegistration::new(
+            CODECITY_CAPABILITY_ID,
+            CODECITY_SNAPSHOT_CONSUMER_ID,
+            Arc::new(CodeCitySnapshotConsumer),
+        ),
+    )?;
     registrar.register_schema_module(CODECITY_SCHEMA_MODULE)?;
     registrar.register_query_examples(CODECITY_QUERY_EXAMPLES)?;
     Ok(())
