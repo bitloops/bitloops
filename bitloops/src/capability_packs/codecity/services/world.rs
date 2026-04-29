@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::architecture::analyse_codecity_architecture;
+use super::architecture::{CodeCityArchitectureAnalysis, analyse_codecity_architecture};
 use super::config::CodeCityConfig;
 use super::graph_metrics::{build_file_graph, compute_importance};
 use super::height::{build_floors_for_file, building_loc, total_height};
@@ -24,6 +24,17 @@ pub fn build_codecity_world(
     commit_sha: Option<String>,
     config: CodeCityConfig,
     repo_root: &Path,
+) -> Result<CodeCityWorldPayload> {
+    let analysis = analyse_codecity_architecture(source, &config, repo_root);
+    build_codecity_world_from_analysis(source, repo_id, commit_sha, &config, &analysis)
+}
+
+pub fn build_codecity_world_from_analysis(
+    source: &CodeCitySourceGraph,
+    repo_id: &str,
+    commit_sha: Option<String>,
+    config: &CodeCityConfig,
+    analysis: &CodeCityArchitectureAnalysis,
 ) -> Result<CodeCityWorldPayload> {
     let config_fingerprint = config.fingerprint()?;
     let mut diagnostics = source.diagnostics.clone();
@@ -191,7 +202,6 @@ pub fn build_codecity_world(
             .then_with(|| left.path.cmp(&right.path))
     });
 
-    let analysis = analyse_codecity_architecture(source, &config, repo_root);
     diagnostics.extend(analysis.diagnostics.clone());
     let report_by_boundary = analysis
         .boundary_reports

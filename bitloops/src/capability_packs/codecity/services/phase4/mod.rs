@@ -62,6 +62,7 @@ struct ArcViolationSpec {
     pattern: CodeCityViolationPattern,
     rule: CodeCityViolationRule,
     severity: CodeCityViolationSeverity,
+    id_discriminator: Option<String>,
     message: String,
     explanation: String,
     recommendation: Option<String>,
@@ -174,6 +175,7 @@ pub fn build_phase4_snapshot(
         Vec::new()
     };
     violations.sort_by(compare_violations);
+    violations = merge_duplicate_violations(violations);
     apply_violation_state_to_file_arcs(&mut file_arcs, &violations);
 
     CodeCityPhase4Snapshot {
@@ -199,6 +201,53 @@ pub(super) fn compare_violations(
         .then_with(|| left.from_path.cmp(&right.from_path))
         .then_with(|| left.to_path.cmp(&right.to_path))
         .then_with(|| left.id.cmp(&right.id))
+}
+
+fn merge_duplicate_violations(
+    violations: Vec<CodeCityArchitectureViolation>,
+) -> Vec<CodeCityArchitectureViolation> {
+    let mut index_by_id = BTreeMap::<String, usize>::new();
+    let mut merged = Vec::<CodeCityArchitectureViolation>::new();
+
+    for violation in violations {
+        if let Some(index) = index_by_id.get(&violation.id).copied() {
+            merge_violation_evidence(&mut merged[index], violation);
+        } else {
+            index_by_id.insert(violation.id.clone(), merged.len());
+            merged.push(violation);
+        }
+    }
+
+    merged
+}
+
+fn merge_violation_evidence(
+    target: &mut CodeCityArchitectureViolation,
+    source: CodeCityArchitectureViolation,
+) {
+    let mut seen_ids = target.evidence_ids.iter().cloned().collect::<BTreeSet<_>>();
+    for evidence_id in source.evidence_ids {
+        if seen_ids.insert(evidence_id.clone()) {
+            target.evidence_ids.push(evidence_id);
+        }
+    }
+
+    let mut seen_evidence = target
+        .evidence
+        .iter()
+        .map(|row| row.evidence_id.clone())
+        .collect::<BTreeSet<_>>();
+    for evidence in source.evidence {
+        if seen_evidence.insert(evidence.evidence_id.clone()) {
+            target.evidence.push(evidence);
+        }
+    }
+
+    target.confidence = target.confidence.max(source.confidence);
+    target.suppressed |= source.suppressed;
+    if target.recommendation.is_none() {
+        target.recommendation = source.recommendation;
+    }
 }
 
 pub(super) fn compare_render_arcs(

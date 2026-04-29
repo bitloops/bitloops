@@ -13,6 +13,8 @@ use crate::capability_packs::codecity::types::{
     CodeCityMacroGraph, CodeCityZoneAssignment,
 };
 
+const MAX_INTERACTIVE_ARCHITECTURE_FILES: usize = 2048;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodeCityArchitectureAnalysis {
     pub boundaries: Vec<CodeCityBoundary>,
@@ -50,6 +52,10 @@ pub fn analyse_codecity_architecture_from_boundary_result(
             .filter_map(|(path, boundary_id)| (boundary_id == &boundary.id).then_some(path.clone()))
             .collect::<Vec<_>>();
         let graph = build_graph_from_paths(&files, &source.edges);
+        if graph.paths.len() > MAX_INTERACTIVE_ARCHITECTURE_FILES {
+            boundary_reports.push(large_boundary_report(boundary, &graph));
+            continue;
+        }
         let communities = super::community_detection::detect_communities(
             &graph,
             config.boundaries.community_max_iterations,
@@ -155,6 +161,46 @@ pub fn analyse_codecity_architecture_from_boundary_result(
         zone_assignments,
         summary_report,
         diagnostics,
+    }
+}
+
+fn large_boundary_report(
+    boundary: &CodeCityBoundary,
+    graph: &super::graph_metrics::FileGraph,
+) -> CodeCityBoundaryArchitectureReport {
+    let node_count = graph.paths.len();
+    let edge_count = graph.edges.len();
+    let density = if node_count <= 1 {
+        0.0
+    } else {
+        edge_count as f64 / (node_count * (node_count - 1)) as f64
+    };
+
+    CodeCityBoundaryArchitectureReport {
+        boundary_id: boundary.id.clone(),
+        primary_pattern: CodeCityArchitecturePattern::Unclassified,
+        primary_score: 0.0,
+        secondary_pattern: None,
+        secondary_score: None,
+        scores: Default::default(),
+        metrics: crate::capability_packs::codecity::types::CodeCityBoundaryGraphMetrics {
+            node_count,
+            edge_count,
+            density,
+            community_count: 1,
+            ..Default::default()
+        },
+        evidence: Vec::new(),
+        diagnostics: vec![CodeCityDiagnostic {
+            code: "codecity.architecture.too_large".to_string(),
+            severity: "info".to_string(),
+            message: format!(
+                "Boundary `{}` has {node_count} files, so detailed architecture classification was skipped for interactive rendering.",
+                boundary.id
+            ),
+            path: None,
+            boundary_id: Some(boundary.id.clone()),
+        }],
     }
 }
 

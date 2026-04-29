@@ -160,19 +160,38 @@ pub(super) fn reap_terminated_child_processes() -> Result<usize> {
     Ok(0)
 }
 
-pub(super) fn wait_for_runtime_cleanup(runtime_path: &Path, timeout: Duration) -> Result<()> {
+pub(super) fn wait_for_shutdown_cleanup(
+    pid: u32,
+    runtime_path: &Path,
+    timeout: Duration,
+) -> Result<()> {
     let _ = runtime_path;
     let started = Instant::now();
-    while read_runtime_state(Path::new("."))?.is_some() && started.elapsed() <= timeout {
+    loop {
+        let process_exited = process_has_exited_or_was_reaped(pid)?;
+        let runtime_cleaned = read_runtime_state(Path::new("."))?.is_none();
+        if process_exited && runtime_cleaned {
+            return Ok(());
+        }
+        if started.elapsed() > timeout {
+            bail!(
+                "Bitloops daemon did not shut down within {} seconds (process_exited={}, runtime_cleaned={})",
+                timeout.as_secs(),
+                process_exited,
+                runtime_cleaned
+            );
+        }
         std::thread::sleep(Duration::from_millis(100));
     }
-    if read_runtime_state(Path::new("."))?.is_some() {
-        bail!(
-            "Bitloops daemon did not shut down within {} seconds",
-            timeout.as_secs()
-        );
+}
+
+fn process_has_exited_or_was_reaped(pid: u32) -> Result<bool> {
+    #[cfg(unix)]
+    if reap_terminated_child_process(pid, Duration::ZERO)? {
+        return Ok(true);
     }
-    Ok(())
+
+    process_is_running(pid).map(|running| !running)
 }
 
 pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
@@ -269,11 +288,17 @@ mod tests {
     #[cfg(not(windows))]
     use super::unix_kill_zero_indicates_running;
     #[cfg(unix)]
-    use super::{process_is_running, reap_terminated_child_process};
+    use super::{process_is_running, reap_terminated_child_process, wait_for_shutdown_cleanup};
+    #[cfg(unix)]
+    use crate::test_support::process_state::enter_process_state;
+    #[cfg(unix)]
+    use std::path::Path;
     #[cfg(unix)]
     use std::process::Command;
     #[cfg(unix)]
     use std::time::Duration;
+    #[cfg(unix)]
+    use tempfile::TempDir;
 
     #[test]
     fn daemon_http_client_only_relaxes_loopback_https_urls() {
@@ -320,6 +345,34 @@ mod tests {
         assert!(
             !process_is_running(pid).expect("inspect child process state after reap"),
             "expected reaped child to disappear from process table"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_cleanup_waits_for_child_process_exit_even_without_runtime_state() {
+        let cwd = TempDir::new().expect("temp cwd");
+        let state_root = TempDir::new().expect("temp state root");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            Some(cwd.path()),
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+        let child = Command::new("sh")
+            .args(["-c", "sleep 0.05"])
+            .spawn()
+            .expect("spawn short-lived child");
+        let pid = child.id();
+        drop(child);
+
+        wait_for_shutdown_cleanup(pid, Path::new("unused"), Duration::from_secs(1))
+            .expect("wait for child shutdown cleanup");
+        assert!(
+            !process_is_running(pid).expect("inspect child process state after shutdown wait"),
+            "expected shutdown cleanup to wait until the child is gone"
         );
     }
 }

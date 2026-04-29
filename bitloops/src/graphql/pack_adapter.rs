@@ -77,6 +77,10 @@ fn resolve_stage_owner<'a>(
 
 fn build_query_context(scope: &ResolverScope, repo_id: &str) -> Value {
     let mut query_context = Map::new();
+    let repo_id = scope
+        .repository()
+        .map(|repository| repository.repo_id())
+        .unwrap_or(repo_id);
     query_context.insert(
         "resolved_commit_sha".to_string(),
         scope
@@ -136,7 +140,9 @@ fn normalise_stage_arg_value(value: Value) -> Result<Value> {
 mod tests {
     use serde_json::json;
 
-    use super::normalise_stage_args;
+    use crate::graphql::scope::SelectedRepository;
+
+    use super::{build_query_context, normalise_stage_args};
 
     #[test]
     fn normalise_stage_args_preserves_scalar_json_values() {
@@ -170,5 +176,31 @@ mod tests {
             err.to_string()
                 .contains("string, number, boolean, or null values")
         );
+    }
+
+    #[test]
+    fn build_query_context_prefers_scoped_repository_id() {
+        let repository = SelectedRepository::new(
+            "repo-selected".to_string(),
+            "github".to_string(),
+            "bitloops".to_string(),
+            "bitloops".to_string(),
+            "github://bitloops/bitloops".to_string(),
+            Some("main".to_string()),
+            None,
+        );
+        let scope = crate::graphql::ResolverScope::default().with_repository(repository);
+
+        let context = build_query_context(&scope, "repo-default");
+
+        assert_eq!(context["repo_id"], "repo-selected");
+    }
+
+    #[test]
+    fn build_query_context_falls_back_to_default_repository_id() {
+        let context =
+            build_query_context(&crate::graphql::ResolverScope::default(), "repo-default");
+
+        assert_eq!(context["repo_id"], "repo-default");
     }
 }

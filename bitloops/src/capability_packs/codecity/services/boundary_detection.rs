@@ -13,6 +13,8 @@ use crate::capability_packs::codecity::types::{
     CodeCityDiagnostic, CodeCityEntryPoint,
 };
 
+const MAX_INTERACTIVE_IMPLICIT_BOUNDARY_FILES: usize = 2048;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodeCityBoundaryDetectionResult {
     pub boundaries: Vec<CodeCityBoundary>,
@@ -232,21 +234,24 @@ fn discover_manifest_roots(
     diagnostics: &mut Vec<CodeCityDiagnostic>,
 ) -> BTreeMap<String, ManifestDescriptor> {
     let mut manifests = BTreeMap::new();
-    for file in files {
-        for ancestor in ancestor_directories_within_scope(file, analysis_root) {
-            let absolute = repo_root.join(&ancestor);
-            if let Some((manifest_name, ecosystem)) = find_manifest_in_dir(&absolute) {
-                let source = infer_manifest_source(
-                    &absolute.join(&manifest_name),
-                    &manifest_name,
-                    diagnostics,
-                );
-                manifests.entry(ancestor).or_insert(ManifestDescriptor {
+    let candidate_directories = files
+        .iter()
+        .flat_map(|file| ancestor_directories_within_scope(file, analysis_root))
+        .collect::<BTreeSet<_>>();
+
+    for ancestor in candidate_directories {
+        let absolute = repo_root.join(&ancestor);
+        if let Some((manifest_name, ecosystem)) = find_manifest_in_dir(&absolute) {
+            let source =
+                infer_manifest_source(&absolute.join(&manifest_name), &manifest_name, diagnostics);
+            manifests.insert(
+                ancestor,
+                ManifestDescriptor {
                     ecosystem,
                     source,
                     kind: CodeCityBoundaryKind::Explicit,
-                });
-            }
+                },
+            );
         }
     }
     manifests
@@ -577,6 +582,22 @@ fn split_implicit_boundaries(
             diagnostics: Vec::new(),
         };
     }
+    if boundary.files.len() > MAX_INTERACTIVE_IMPLICIT_BOUNDARY_FILES {
+        return BoundarySplitResult {
+            boundaries: Vec::new(),
+            diagnostics: vec![CodeCityDiagnostic {
+                code: "codecity.boundary.implicit_split_too_large".to_string(),
+                severity: "info".to_string(),
+                message: format!(
+                    "Boundary `{}` has {} files, so implicit community splitting was skipped for interactive rendering.",
+                    boundary.boundary.id,
+                    boundary.files.len()
+                ),
+                path: None,
+                boundary_id: Some(boundary.boundary.id.clone()),
+            }],
+        };
+    }
 
     let graph = build_graph_from_paths(&boundary.files, &source.edges);
     let communities = detect_communities(&graph, config.boundaries.community_max_iterations);
@@ -898,6 +919,26 @@ mod tests {
 
         assert_eq!(result.boundaries.len(), 1);
         assert_eq!(result.boundaries[0].id, CODECITY_ROOT_BOUNDARY_ID);
+    }
+
+    #[test]
+    fn skips_implicit_split_for_large_interactive_boundaries() {
+        let temp = tempdir().expect("tempdir");
+        let files = (0..=super::MAX_INTERACTIVE_IMPLICIT_BOUNDARY_FILES)
+            .map(|index| format!("src/file_{index}.ts"))
+            .collect::<Vec<_>>();
+        let file_refs = files.iter().map(String::as_str).collect::<Vec<_>>();
+        let source = graph(&file_refs, &[]);
+
+        let result = detect_boundaries(&source, &CodeCityConfig::default(), temp.path());
+
+        assert_eq!(result.boundaries.len(), 1);
+        assert_eq!(result.boundaries[0].id, CODECITY_ROOT_BOUNDARY_ID);
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "codecity.boundary.implicit_split_too_large"
+            })
+        );
     }
 
     #[test]

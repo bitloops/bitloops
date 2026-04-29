@@ -20,7 +20,6 @@ use super::workplane::{
 impl EnrichmentCoordinator {
     pub(crate) async fn run_loop(self: std::sync::Arc<Self>, pool: EnrichmentWorkerPool) {
         loop {
-            self.ensure_worker_capacity();
             match self.process_next_job(pool).await {
                 Ok(true) => continue,
                 Ok(false) => {}

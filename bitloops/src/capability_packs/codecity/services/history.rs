@@ -67,7 +67,7 @@ pub fn collect_file_history(
     }
 
     let request_paths = paths.iter().cloned().collect::<Vec<_>>();
-    let events = gateway.load_file_history(
+    let events = match gateway.load_file_history(
         repo_root,
         GitHistoryRequest {
             paths: request_paths.as_slice(),
@@ -75,7 +75,25 @@ pub fn collect_file_history(
             until_commit_sha,
             bug_patterns,
         },
-    )?;
+    ) {
+        Ok(events) => events,
+        Err(error) => {
+            diagnostics.push(CodeCityDiagnostic {
+                code: "codecity.health.history_unavailable".to_string(),
+                severity: "warning".to_string(),
+                message: format!(
+                    "Git history could not be loaded; churn, bug-fix history, and author concentration were excluded from CodeCity health scoring. {error:#}"
+                ),
+                path: None,
+                boundary_id: None,
+            });
+            return Ok(HistoryCollection {
+                by_path,
+                git_history_available: false,
+                diagnostics,
+            });
+        }
+    };
 
     if events.is_empty() {
         diagnostics.push(CodeCityDiagnostic {
@@ -205,6 +223,22 @@ mod tests {
         }
     }
 
+    struct FailingHistoryGateway;
+
+    impl GitHistoryGateway for FailingHistoryGateway {
+        fn available(&self) -> bool {
+            true
+        }
+
+        fn load_file_history(
+            &self,
+            _repo_root: &Path,
+            _request: GitHistoryRequest<'_>,
+        ) -> Result<Vec<FileHistoryEvent>> {
+            anyhow::bail!("git log failed")
+        }
+    }
+
     fn event(path: &str, sha: &str, email: &str, is_bug_fix: bool) -> FileHistoryEvent {
         FileHistoryEvent {
             path: path.to_string(),
@@ -242,6 +276,29 @@ mod tests {
         assert_eq!(metric.distinct_authors, 2);
         assert_eq!(metric.author_concentration, Some(0.5));
         assert!(result.git_history_available);
+        Ok(())
+    }
+
+    #[test]
+    fn file_history_failure_degrades_to_unavailable_metrics() -> Result<()> {
+        let result = collect_file_history(
+            &FailingHistoryGateway,
+            Path::new("."),
+            ["src/lib.rs".to_string()],
+            0,
+            Some("HEAD"),
+            &["fix".to_string()],
+        )?;
+
+        assert!(!result.git_history_available);
+        assert_eq!(
+            result.by_path["src/lib.rs"].source,
+            crate::capability_packs::codecity::types::MetricSource::Unavailable
+        );
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "codecity.health.history_unavailable"
+                && diagnostic.message.contains("git log failed")
+        }));
         Ok(())
     }
 }

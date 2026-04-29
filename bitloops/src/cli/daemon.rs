@@ -97,8 +97,7 @@ async fn run_start_with_io(
         return Ok(());
     }
 
-    let report = daemon::status().await?;
-    if report.service.is_some() {
+    if daemon::service_metadata()?.is_some() {
         let state =
             daemon::start_service(&daemon_config, config, preflight.startup_telemetry).await?;
         println!(

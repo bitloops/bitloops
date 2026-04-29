@@ -401,10 +401,10 @@ pub fn resolve_blob_local_path_for_repo(
     }
 }
 
-/// Default relative paths for local backends (resolved against repo_root at use-time).
-const DEFAULT_SQLITE_PATH: &str = ".bitloops/stores/relational/relational.db";
-const DEFAULT_DUCKDB_PATH: &str = ".bitloops/stores/event/events.duckdb";
-const DEFAULT_BLOB_LOCAL_PATH: &str = ".bitloops/stores/blob";
+/// Default relative paths for local daemon backends.
+const DEFAULT_SQLITE_PATH: &str = "stores/relational/relational.db";
+const DEFAULT_DUCKDB_PATH: &str = "stores/event/events.duckdb";
+const DEFAULT_BLOB_LOCAL_PATH: &str = "stores/blob";
 
 pub(crate) fn resolve_store_backend_config_with(
     file_cfg: StoreFileConfig,

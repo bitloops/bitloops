@@ -242,23 +242,18 @@ fn test_repo_identity(repo_root: &Path) -> RepoIdentity {
 fn sqlite_backends(repo_root: &Path) -> StoreBackendConfig {
     StoreBackendConfig {
         relational: RelationalBackendConfig {
-            sqlite_path: Some(".bitloops/devql.sqlite".to_string()),
+            sqlite_path: Some("stores/devql.sqlite".to_string()),
             postgres_dsn: None,
         },
         events: EventsBackendConfig {
-            duckdb_path: Some(".bitloops/events.duckdb".to_string()),
+            duckdb_path: Some("stores/events.duckdb".to_string()),
             clickhouse_url: None,
             clickhouse_user: None,
             clickhouse_password: None,
             clickhouse_database: None,
         },
         blobs: BlobStorageConfig {
-            local_path: Some(
-                repo_root
-                    .join(".bitloops/blob")
-                    .to_string_lossy()
-                    .to_string(),
-            ),
+            local_path: Some(repo_root.join("stores/blob").to_string_lossy().to_string()),
             s3_bucket: None,
             s3_region: None,
             s3_access_key_id: None,
@@ -272,23 +267,18 @@ fn sqlite_backends(repo_root: &Path) -> StoreBackendConfig {
 fn postgres_backends(repo_root: &Path) -> StoreBackendConfig {
     StoreBackendConfig {
         relational: RelationalBackendConfig {
-            sqlite_path: Some(".bitloops/devql.sqlite".to_string()),
+            sqlite_path: Some("stores/devql.sqlite".to_string()),
             postgres_dsn: Some("postgres://localhost:5432/bitloops".to_string()),
         },
         events: EventsBackendConfig {
-            duckdb_path: Some(".bitloops/events.duckdb".to_string()),
+            duckdb_path: Some("stores/events.duckdb".to_string()),
             clickhouse_url: Some("http://localhost:8123".to_string()),
             clickhouse_user: Some("user".to_string()),
             clickhouse_password: Some("secret".to_string()),
             clickhouse_database: Some("analytics".to_string()),
         },
         blobs: BlobStorageConfig {
-            local_path: Some(
-                repo_root
-                    .join(".bitloops/blob")
-                    .to_string_lossy()
-                    .to_string(),
-            ),
+            local_path: Some(repo_root.join("stores/blob").to_string_lossy().to_string()),
             s3_bucket: None,
             s3_region: None,
             s3_access_key_id: None,
@@ -445,7 +435,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
         None,
     );
 
-    let sqlite_path = repo_root.join(".bitloops/devql.sqlite");
+    let sqlite_path = repo_root.join("stores/devql.sqlite");
     assert!(!sqlite_path.exists());
 
     runtime
@@ -499,7 +489,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
         None,
     );
 
-    let sqlite_path = repo_root.join(".bitloops/devql.sqlite");
+    let sqlite_path = repo_root.join("stores/devql.sqlite");
     runtime
         .apply_devql_sqlite_ddl(
             "CREATE TABLE runtime_contexts_test_table (id INTEGER PRIMARY KEY);",

@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bitloops init` no longer fails when Test Harness discovery sees ignored virtualenv fixtures**: structural test mapping now sources candidate test files from Git-visible paths so `.gitignore` exclusions such as `.venv` are honoured, and full mapping records unreadable or legacy-encoded test files as discovery issues instead of failing the current-state consumer. This prevents Big5 or other non-UTF-8 dependency test fixtures from aborting `Applying codebase updates` during init while still allowing normal repository tests to be discovered.
+- **Daemon shutdown now waits for the process to release DuckDB event-store locks**: `bitloops daemon stop` now waits for both runtime-state cleanup and actual daemon process exit, and the daemon only deletes its runtime marker at the late shutdown path after the dashboard server has finished. This prevents `events.duckdb` from remaining locked after the CLI reports that a service-managed daemon has stopped.
+
 ## [0.0.20] - 2026-04-28
 
 ### Changed

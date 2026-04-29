@@ -258,3 +258,67 @@ fn legends_include_violation_rule_explanations() {
             .any(|rule| rule.rule == CodeCityViolationRule::LayeredUpwardDependency)
     );
 }
+
+#[test]
+fn duplicate_violation_ids_merge_evidence() {
+    let merged = merge_duplicate_violations(vec![
+        violation_fixture("violation-1", "evidence-1", 0.4, false),
+        violation_fixture("violation-1", "evidence-2", 0.8, true),
+    ]);
+
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].evidence_ids, vec!["evidence-1", "evidence-2"]);
+    assert_eq!(
+        merged[0]
+            .evidence
+            .iter()
+            .map(|row| row.evidence_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["evidence-1", "evidence-2"]
+    );
+    assert_eq!(merged[0].confidence, 0.8);
+    assert!(merged[0].suppressed);
+}
+
+fn violation_fixture(
+    violation_id: &str,
+    evidence_id: &str,
+    confidence: f64,
+    suppressed: bool,
+) -> CodeCityArchitectureViolation {
+    CodeCityArchitectureViolation {
+        id: violation_id.to_string(),
+        run_id: "run-1".to_string(),
+        commit_sha: Some("commit-1".to_string()),
+        boundary_id: Some(CODECITY_ROOT_BOUNDARY_ID.to_string()),
+        boundary_root: Some(".".to_string()),
+        pattern: CodeCityViolationPattern::Layered,
+        rule: CodeCityViolationRule::LayeredUpwardDependency,
+        severity: CodeCityViolationSeverity::High,
+        from_path: "src/domain.rs".to_string(),
+        to_path: Some("src/api.rs".to_string()),
+        from_zone: Some("core".to_string()),
+        to_zone: Some("edge".to_string()),
+        from_boundary_id: Some(CODECITY_ROOT_BOUNDARY_ID.to_string()),
+        to_boundary_id: Some(CODECITY_ROOT_BOUNDARY_ID.to_string()),
+        arc_id: Some("arc-1".to_string()),
+        message: "message".to_string(),
+        explanation: "explanation".to_string(),
+        recommendation: None,
+        evidence_ids: vec![evidence_id.to_string()],
+        evidence: vec![CodeCityViolationEvidence {
+            evidence_id: evidence_id.to_string(),
+            edge_id: Some(format!("edge-{evidence_id}")),
+            edge_kind: "imports".to_string(),
+            from_symbol_id: Some("from".to_string()),
+            to_symbol_id: Some("to".to_string()),
+            from_artefact_id: Some("artefact-from".to_string()),
+            to_artefact_id: Some("artefact-to".to_string()),
+            start_line: Some(1),
+            end_line: Some(1),
+            to_symbol_ref: Some("crate::api".to_string()),
+        }],
+        confidence,
+        suppressed,
+    }
+}

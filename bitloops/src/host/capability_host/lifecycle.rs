@@ -352,12 +352,14 @@ mod tests {
 
     fn prepare_repo_root(temp: &TempDir) -> PathBuf {
         let repo_root = temp.path().join("repo");
-        fs::create_dir_all(repo_root.join(paths::BITLOOPS_RELATIONAL_STORE_DIR))
-            .expect("create relational dir");
-        fs::create_dir_all(repo_root.join(paths::BITLOOPS_EVENT_STORE_DIR))
-            .expect("create event dir");
-        fs::create_dir_all(repo_root.join(paths::BITLOOPS_BLOB_STORE_DIR))
-            .expect("create blob dir");
+        for path in [
+            paths::default_relational_db_path(&repo_root),
+            paths::default_events_db_path(&repo_root),
+        ] {
+            fs::create_dir_all(path.parent().expect("default store path has parent"))
+                .expect("create store dir");
+        }
+        fs::create_dir_all(paths::default_blob_store_path(&repo_root)).expect("create blob dir");
         repo_root
     }
 

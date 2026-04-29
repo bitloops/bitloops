@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::graph_metrics::FileGraph;
 
+const MAX_COMMUNITY_DETECTION_NODES: usize = 512;
+const MAX_COMMUNITY_DETECTION_EDGES: usize = 4096;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeCityCommunity {
     pub id: String,
@@ -40,6 +43,16 @@ pub fn detect_communities(graph: &FileGraph, max_iterations: usize) -> CodeCityC
             }],
             community_by_path: BTreeMap::from([(path, "community_1".to_string())]),
         };
+    }
+
+    if graph.edges.is_empty() {
+        return single_community_result(graph);
+    }
+
+    if graph.paths.len() > MAX_COMMUNITY_DETECTION_NODES
+        || graph.edges.len() > MAX_COMMUNITY_DETECTION_EDGES
+    {
+        return single_community_result(graph);
     }
 
     let undirected = undirected_weights(graph);
@@ -94,6 +107,21 @@ pub fn detect_communities(graph: &FileGraph, max_iterations: usize) -> CodeCityC
 
     normalise_assignment(graph, &mut assignment);
     build_result(graph, &assignment, current_modularity)
+}
+
+fn single_community_result(graph: &FileGraph) -> CodeCityCommunityResult {
+    let paths = graph.paths.clone();
+    CodeCityCommunityResult {
+        modularity: 0.0,
+        communities: vec![CodeCityCommunity {
+            id: "community_1".to_string(),
+            paths: paths.clone(),
+        }],
+        community_by_path: paths
+            .into_iter()
+            .map(|path| (path, "community_1".to_string()))
+            .collect(),
+    }
 }
 
 fn build_result(
@@ -157,12 +185,22 @@ fn neighbour_communities(
 }
 
 fn normalise_assignment(graph: &FileGraph, assignment: &mut [usize]) {
-    let mut ordered = assignment
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>()
+    let mut min_path_by_community = BTreeMap::<usize, &str>::new();
+    for (index, community) in assignment.iter().copied().enumerate() {
+        let path = graph.paths[index].as_str();
+        min_path_by_community
+            .entry(community)
+            .and_modify(|current| {
+                if path < *current {
+                    *current = path;
+                }
+            })
+            .or_insert(path);
+    }
+
+    let mut ordered = min_path_by_community
         .into_iter()
-        .map(|community| (community_key(graph, assignment, community), community))
+        .map(|(community, path)| (path.to_string(), community))
         .collect::<Vec<_>>();
     ordered.sort();
 
@@ -215,27 +253,30 @@ fn modularity_for_assignment(
     }
 
     let twice_m = total_weight * 2.0;
-    let mut modularity = 0.0_f64;
-
-    for left in 0..graph.paths.len() {
-        for right in 0..graph.paths.len() {
-            if assignment[left] != assignment[right] {
-                continue;
-            }
-
-            let key = if left < right {
-                (left, right)
-            } else {
-                (right, left)
-            };
-            let adjacency = if left == right {
-                0.0
-            } else {
-                *undirected.get(&key).unwrap_or(&0.0)
-            };
-            modularity += adjacency - (degree[left] * degree[right] / twice_m);
+    let mut internal_adjacency_by_community = BTreeMap::<usize, f64>::new();
+    for (&(left, right), &weight) in undirected {
+        if assignment[left] == assignment[right] {
+            *internal_adjacency_by_community
+                .entry(assignment[left])
+                .or_insert(0.0) += weight * 2.0;
         }
     }
+
+    let mut degree_by_community = BTreeMap::<usize, f64>::new();
+    for (index, value) in degree.iter().copied().enumerate() {
+        *degree_by_community.entry(assignment[index]).or_insert(0.0) += value;
+    }
+
+    let modularity = degree_by_community
+        .into_iter()
+        .map(|(community, degree_sum)| {
+            internal_adjacency_by_community
+                .get(&community)
+                .copied()
+                .unwrap_or(0.0)
+                - (degree_sum * degree_sum / twice_m)
+        })
+        .sum::<f64>();
 
     (modularity / twice_m).max(0.0)
 }
@@ -289,5 +330,36 @@ mod tests {
         let result = detect_communities(&graph, 12);
 
         assert_eq!(result.communities.len(), 1);
+    }
+
+    #[test]
+    fn keeps_single_cluster_for_graph_without_edges() {
+        let graph = graph(&["a", "b", "c"], &[]);
+
+        let result = detect_communities(&graph, 12);
+
+        assert_eq!(result.communities.len(), 1);
+        assert_eq!(result.communities[0].paths, vec!["a", "b", "c"]);
+        assert_eq!(result.community_by_path["a"], "community_1");
+        assert_eq!(result.modularity, 0.0);
+    }
+
+    #[test]
+    fn skips_expensive_detection_for_large_interactive_graphs() {
+        let paths = (0..=super::MAX_COMMUNITY_DETECTION_NODES)
+            .map(|index| format!("file_{index}.rs"))
+            .collect::<Vec<_>>();
+        let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
+        let edges = (0..super::MAX_COMMUNITY_DETECTION_NODES)
+            .map(|index| (index, index + 1))
+            .collect::<Vec<_>>();
+        let graph = graph(&path_refs, &edges);
+
+        let result = detect_communities(&graph, 12);
+
+        assert_eq!(result.communities.len(), 1);
+        assert_eq!(result.communities[0].paths.len(), path_refs.len());
+        assert_eq!(result.community_by_path["file_0.rs"], "community_1");
+        assert_eq!(result.modularity, 0.0);
     }
 }

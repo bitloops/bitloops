@@ -76,6 +76,8 @@ pub(super) async fn run_server(
     let on_shutdown_config = daemon_config.clone();
     let on_ready_service_metadata_path = service_metadata_path.clone();
     let on_ready_service_name = options.service_name.clone();
+    let runtime_state_written = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let on_ready_runtime_state_written = std::sync::Arc::clone(&runtime_state_written);
     let ready_hook: DashboardReadyHook = std::sync::Arc::new(move |ready| {
         write_runtime_state(
             &runtime_state_path(&on_ready_config.config_root),
@@ -98,6 +100,7 @@ pub(super) async fn run_server(
                 updated_at_unix: unix_timestamp_now(),
             },
         )?;
+        on_ready_runtime_state_written.store(true, std::sync::atomic::Ordering::SeqCst);
 
         if matches!(options.mode, DaemonMode::Service)
             && let Ok(Some(mut metadata)) =
@@ -112,12 +115,9 @@ pub(super) async fn run_server(
     });
     let on_shutdown = std::sync::Arc::new(move || {
         stop_bound_repo_watchers_for_daemon_shutdown(&on_shutdown_config);
-        if let Err(err) = delete_runtime_state() {
-            log::warn!("failed to clear daemon runtime state on shutdown: {err:#}");
-        }
     });
 
-    api::run_with_options(
+    let result = api::run_with_options(
         config,
         DashboardRuntimeOptions {
             ready_subject: options.ready_subject.to_string(),
@@ -132,7 +132,15 @@ pub(super) async fn run_server(
             repo_registry_path: Some(daemon_config.repo_registry_path.clone()),
         },
     )
-    .await
+    .await;
+
+    if runtime_state_written.load(std::sync::atomic::Ordering::SeqCst)
+        && let Err(err) = delete_runtime_state()
+    {
+        log::warn!("failed to clear daemon runtime state on shutdown: {err:#}");
+    }
+
+    result
 }
 
 pub(super) async fn ensure_service_managed_repo_runtime(
@@ -197,8 +205,11 @@ pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {
                 && state.service_name.as_deref() == Some(GLOBAL_SUPERVISOR_SERVICE_NAME) =>
         {
             terminate_process(state.pid)?;
-            wait_for_runtime_cleanup(&runtime_state_path(Path::new(".")), STOP_TIMEOUT)?;
-            let _ = reap_terminated_child_process(state.pid, STOP_TIMEOUT);
+            wait_for_shutdown_cleanup(
+                state.pid,
+                &runtime_state_path(Path::new(".")),
+                STOP_TIMEOUT,
+            )?;
             Ok(())
         }
         Some(state) => bail!(

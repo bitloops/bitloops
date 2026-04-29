@@ -118,6 +118,7 @@ fn evaluate_layered_rules(
                 pattern: CodeCityViolationPattern::Layered,
                 rule,
                 severity,
+                id_discriminator: None,
                 message,
                 explanation,
                 recommendation,
@@ -160,6 +161,7 @@ fn evaluate_hexagonal_rules(
                 pattern: CodeCityViolationPattern::Hexagonal,
                 rule,
                 severity,
+                id_discriminator: None,
                 message,
                 explanation,
                 recommendation,
@@ -294,6 +296,7 @@ fn evaluate_modular_rules(
                 pattern: CodeCityViolationPattern::Modular,
                 rule: CodeCityViolationRule::ModularInternalCrossModuleDependency,
                 severity: CodeCityViolationSeverity::High,
+                id_discriminator: None,
                 message: format!(
                     "{} depends on internal file {} across module boundaries.",
                     arc.from_path, arc.to_path
@@ -330,6 +333,7 @@ fn evaluate_modular_rules(
                 pattern: CodeCityViolationPattern::Modular,
                 rule: CodeCityViolationRule::ModularBroadBridgeFile,
                 severity: CodeCityViolationSeverity::Medium,
+                id_discriminator: Some(path.clone()),
                 message: format!(
                     "{} bridges {} detected modules and is becoming an implicit shared dependency hub.",
                     path,
@@ -415,6 +419,7 @@ fn evaluate_event_driven_rules(
                 pattern: CodeCityViolationPattern::EventDriven,
                 rule: CodeCityViolationRule::EventDrivenDirectPeerDependency,
                 severity: CodeCityViolationSeverity::Medium,
+                id_discriminator: None,
                 message: format!(
                     "{} directly depends on peer {} in an event-driven boundary.",
                     arc.from_path, arc.to_path
@@ -448,6 +453,7 @@ fn evaluate_cross_boundary_rules(
                 pattern: CodeCityViolationPattern::CrossBoundary,
                 rule: CodeCityViolationRule::CrossBoundaryHighCoupling,
                 severity: CodeCityViolationSeverity::Medium,
+                id_discriminator: None,
                 message: format!(
                     "{} depends heavily on {} with weighted coupling {:.2}.",
                     arc.from_path, arc.to_path, arc.weight
@@ -525,6 +531,7 @@ fn evaluate_cross_boundary_rules(
                 pattern: CodeCityViolationPattern::Cycle,
                 rule: CodeCityViolationRule::CrossBoundaryCycle,
                 severity: CodeCityViolationSeverity::High,
+                id_discriminator: None,
                 message: format!(
                     "Boundaries {} and {} participate in a macro-level dependency cycle.",
                     arc.from_boundary_id.as_deref().unwrap_or("unknown"),
@@ -555,18 +562,19 @@ fn violation_for_arc(
                 .map(|row| violation_evidence(row))
         })
         .collect::<Vec<_>>();
+    let mut id_parts = vec![
+        ctx.world.repo_id.as_str(),
+        spec.pattern.as_str(),
+        spec.rule.as_str(),
+        arc.from_path.as_str(),
+        arc.to_path.as_str(),
+        arc.arc_id.as_str(),
+    ];
+    if let Some(discriminator) = spec.id_discriminator.as_deref() {
+        id_parts.push(discriminator);
+    }
     CodeCityArchitectureViolation {
-        id: stable_id(
-            "codecity-violation",
-            &[
-                ctx.world.repo_id.as_str(),
-                spec.pattern.as_str(),
-                spec.rule.as_str(),
-                arc.from_path.as_str(),
-                arc.to_path.as_str(),
-                arc.arc_id.as_str(),
-            ],
-        ),
+        id: stable_id("codecity-violation", &id_parts),
         run_id: ctx.run_id.to_string(),
         commit_sha: ctx.world.commit_sha.clone(),
         boundary_id: (!boundary_id.is_empty()).then(|| boundary_id.to_string()),
