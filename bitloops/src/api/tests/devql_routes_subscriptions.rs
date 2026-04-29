@@ -1006,6 +1006,246 @@ async fn devql_interaction_queries_work_in_slim_and_global_scopes() {
 }
 
 #[tokio::test]
+async fn devql_post_route_resolves_historical_context_captured_evidence() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          target: selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext {
+              overview
+              schema
+              items(first: 10) {
+                checkpointId
+                sessionId
+                turnId
+                agentType
+                model
+                matchReason
+                matchStrength
+                promptPreview
+                turnSummary
+                transcriptPreview
+                filesModified
+                fileRelations {
+                  filepath
+                  changeKind
+                  pathAfter
+                }
+                toolEvents {
+                  toolKind
+                  inputSummary
+                  outputSummary
+                  command
+                }
+              }
+            }
+          }
+          caller: selectArtefacts(by: { path: "src/caller.ts" }) {
+            historicalContext {
+              items(first: 10) {
+                checkpointId
+                turnId
+                promptPreview
+                turnSummary
+                transcriptPreview
+                filesModified
+                toolEvents {
+                  toolKind
+                }
+              }
+            }
+          }
+          symbolOnly: selectArtefacts(by: { symbolFqn: "src/target.ts::target" }) {
+            historicalContext(evidenceKind: SYMBOL_PROVENANCE) {
+              items(first: 10) {
+                checkpointId
+                matchReason
+              }
+            }
+          }
+          geminiSince: selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext(agent: "gemini", since: "2026-03-26T09:25:00Z") {
+              items(first: 10) {
+                checkpointId
+                agentType
+                matchReason
+              }
+            }
+          }
+          sinceOnly: selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext(since: "2026-03-26T09:25:00Z") {
+              items(first: 10) {
+                checkpointId
+                agentType
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+
+    let target = &payload["data"]["target"]["historicalContext"];
+    assert_eq!(target["overview"]["totalCount"], 2);
+    assert_eq!(target["overview"]["evidenceCounts"]["symbolProvenance"], 1);
+    assert_eq!(target["overview"]["evidenceCounts"]["fileRelation"], 2);
+    assert!(target["schema"].as_str().is_some_and(|schema| {
+        schema.contains("promptPreview") && schema.contains("HistoricalToolEvent")
+    }));
+
+    let target_items = target["items"].as_array().expect("target items array");
+    let symbol_item = target_items
+        .iter()
+        .find(|item| item["checkpointId"] == "checkpoint-historical-primary")
+        .expect("symbol provenance item");
+    assert_eq!(symbol_item["matchReason"], "SYMBOL_PROVENANCE");
+    assert_eq!(symbol_item["matchStrength"], "HIGH");
+    assert_eq!(symbol_item["turnId"], "turn-historical-primary");
+    assert_eq!(symbol_item["agentType"], "codex");
+    assert_eq!(symbol_item["model"], "gpt-5.4");
+    assert_eq!(
+        symbol_item["promptPreview"],
+        "Captured prompt for target change"
+    );
+    assert_eq!(
+        symbol_item["turnSummary"],
+        "Captured summary for target change"
+    );
+    assert_eq!(
+        symbol_item["transcriptPreview"],
+        "Captured transcript fragment for target change"
+    );
+    assert_eq!(symbol_item["filesModified"], json!(["src/target.ts"]));
+    assert!(
+        symbol_item["fileRelations"]
+            .as_array()
+            .expect("file relations")
+            .iter()
+            .any(|relation| relation["pathAfter"] == "src/target.ts"
+                && relation["changeKind"] == "modify"),
+        "expected target file relation in {symbol_item:?}"
+    );
+    assert_eq!(symbol_item["toolEvents"][0]["toolKind"], "edit");
+    assert_eq!(
+        symbol_item["toolEvents"][0]["inputSummary"],
+        "Edit src/target.ts"
+    );
+    assert_eq!(
+        symbol_item["toolEvents"][0]["outputSummary"],
+        "Updated target implementation"
+    );
+    assert_eq!(
+        symbol_item["toolEvents"][0]["command"],
+        "apply_patch src/target.ts"
+    );
+
+    let path_only_item = target_items
+        .iter()
+        .find(|item| item["checkpointId"] == "checkpoint-historical-gemini")
+        .expect("path-only file relation item");
+    assert_eq!(path_only_item["matchReason"], "FILE_RELATION");
+    assert_eq!(path_only_item["matchStrength"], "MEDIUM");
+    assert!(path_only_item["turnId"].is_null());
+    assert_eq!(path_only_item["filesModified"], json!(["src/target.ts"]));
+    assert_eq!(path_only_item["toolEvents"], json!([]));
+
+    let caller_items = payload["data"]["caller"]["historicalContext"]["items"]
+        .as_array()
+        .expect("caller items array");
+    let partial = caller_items
+        .iter()
+        .find(|item| item["checkpointId"] == "checkpoint-historical-partial")
+        .expect("partial checkpoint evidence item");
+    assert!(partial["turnId"].is_null());
+    assert_eq!(partial["promptPreview"], "Touch caller only");
+    assert!(partial["turnSummary"].is_null());
+    assert!(partial["transcriptPreview"].is_null());
+    assert_eq!(partial["filesModified"], json!(["src/caller.ts"]));
+    assert_eq!(partial["toolEvents"], json!([]));
+
+    assert_eq!(
+        payload["data"]["symbolOnly"]["historicalContext"]["items"],
+        json!([{
+            "checkpointId": "checkpoint-historical-primary",
+            "matchReason": "SYMBOL_PROVENANCE"
+        }])
+    );
+    assert_eq!(
+        payload["data"]["geminiSince"]["historicalContext"]["items"],
+        json!([{
+            "checkpointId": "checkpoint-historical-gemini",
+            "agentType": "gemini",
+            "matchReason": "FILE_RELATION"
+        }])
+    );
+    assert_eq!(
+        payload["data"]["sinceOnly"]["historicalContext"]["items"],
+        json!([{
+            "checkpointId": "checkpoint-historical-gemini",
+            "agentType": "gemini"
+        }])
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_returns_empty_historical_context_for_empty_history() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          selectArtefacts(by: { path: "src/orphan.ts" }) {
+            historicalContext {
+              overview
+              schema
+              items(first: 10) {
+                checkpointId
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let historical_context = &payload["data"]["selectArtefacts"]["historicalContext"];
+    assert_eq!(historical_context["overview"]["totalCount"], 0);
+    assert!(historical_context["schema"].is_null());
+    assert_eq!(historical_context["items"], json!([]));
+}
+
+#[tokio::test]
 async fn devql_post_route_executes_slim_checkpoint_and_telemetry_queries() {
     let repo = seed_dashboard_repo_with_duckdb_events();
     let app = build_dashboard_router(test_state(

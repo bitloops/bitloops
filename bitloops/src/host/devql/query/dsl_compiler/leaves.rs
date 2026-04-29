@@ -4,7 +4,8 @@ use super::args::{
     compile_artefact_args, compile_checkpoint_args, compile_clone_summary_args,
     compile_clones_args, compile_coverage_args, compile_deps_args, compile_deps_summary_args,
     compile_knowledge_args, compile_select_artefacts_args, compile_selection_checkpoint_args,
-    compile_selection_clones_args, compile_selection_deps_args, compile_selection_tests_args,
+    compile_selection_clones_args, compile_selection_deps_args,
+    compile_selection_historical_context_args, compile_selection_tests_args,
     compile_telemetry_args, compile_tests_args, connection_field, first_arg,
 };
 use super::document_builder::GraphqlSelection;
@@ -71,6 +72,12 @@ fn compile_select_artefacts_leaf(
             compile_selection_checkpoint_args(parsed)?,
             selection_stage_selections(&parsed.select_fields)?,
         )
+    } else if parsed.has_historical_context_stage {
+        GraphqlField::new(
+            "historicalContext",
+            compile_selection_historical_context_args(parsed)?,
+            selection_stage_selections(&parsed.select_fields)?,
+        )
     } else if parsed.has_clones_stage {
         GraphqlField::new(
             "codeMatches",
@@ -90,7 +97,9 @@ fn compile_select_artefacts_leaf(
             selection_stage_selections(&parsed.select_fields)?,
         )
     } else {
-        bail!("selectArtefacts(...) requires checkpoints(), clones(), dependencies(), or tests()");
+        bail!(
+            "selectArtefacts(...) requires checkpoints(), historicalContext(), clones(), dependencies(), or tests()"
+        );
     };
 
     Ok(GraphqlField::new(

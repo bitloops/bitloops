@@ -147,6 +147,7 @@ pub(super) fn validate_graphql_compiler_support(
         }
 
         let terminal_stage_count = usize::from(parsed.has_checkpoints_stage)
+            + usize::from(parsed.has_historical_context_stage)
             + usize::from(parsed.has_clones_stage)
             + usize::from(parsed.has_deps_stage)
             + usize::from(matches!(
@@ -155,7 +156,7 @@ pub(super) fn validate_graphql_compiler_support(
             ));
         if terminal_stage_count == 0 {
             bail!(
-                "selectArtefacts(...) requires checkpoints(), clones(), dependencies(), or tests()"
+                "selectArtefacts(...) requires checkpoints(), historicalContext(), clones(), dependencies(), or tests()"
             );
         }
         if terminal_stage_count > 1 {
@@ -192,6 +193,10 @@ pub(super) fn validate_graphql_compiler_support(
 
     if parsed.has_chat_history_stage && !parsed.has_artefacts_stage {
         bail!("chatHistory() requires an artefacts() stage in the query");
+    }
+
+    if parsed.has_historical_context_stage {
+        bail!("historicalContext() is only supported after selectArtefacts(...) in v1");
     }
 
     if parsed.has_clones_stage && !parsed.has_artefacts_stage {

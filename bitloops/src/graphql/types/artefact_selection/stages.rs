@@ -1,8 +1,9 @@
-use async_graphql::{ComplexObject, Result, SimpleObject, types::Json};
+use async_graphql::{ComplexObject, Enum, ID, Result, SimpleObject, types::Json};
 use serde_json::Value;
 
 use super::super::{
-    Checkpoint, DependencyEdge, ExpandHintParameter, JsonScalar, TestHarnessTestsResult,
+    Checkpoint, CheckpointFileRelation, DateTimeScalar, DependencyEdge, ExpandHintParameter,
+    JsonScalar, TestHarnessTestsResult,
 };
 use super::support::take_stage_items;
 
@@ -34,6 +35,62 @@ pub(super) struct TestsStageData {
     pub(super) summary: Value,
     pub(super) schema: Option<String>,
     pub(super) items: Vec<TestHarnessTestsResult>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct HistoricalContextStageData {
+    pub(super) summary: Value,
+    pub(super) schema: Option<String>,
+    pub(super) items: Vec<HistoricalContextItem>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum HistoricalEvidenceKind {
+    SymbolProvenance,
+    FileRelation,
+    LineOverlap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum HistoricalMatchReason {
+    SymbolProvenance,
+    FileRelation,
+    LineOverlap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub enum HistoricalMatchStrength {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct HistoricalToolEvent {
+    pub tool_kind: Option<String>,
+    pub input_summary: Option<String>,
+    pub output_summary: Option<String>,
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Clone, SimpleObject)]
+pub struct HistoricalContextItem {
+    pub checkpoint_id: ID,
+    pub session_id: String,
+    pub turn_id: Option<String>,
+    pub agent_type: Option<String>,
+    pub model: Option<String>,
+    pub event_time: DateTimeScalar,
+    pub match_reason: HistoricalMatchReason,
+    pub match_strength: HistoricalMatchStrength,
+    pub prompt_preview: Option<String>,
+    pub turn_summary: Option<String>,
+    pub transcript_preview: Option<String>,
+    pub files_modified: Vec<String>,
+    pub file_relations: Vec<CheckpointFileRelation>,
+    pub tool_events: Vec<HistoricalToolEvent>,
+    #[graphql(skip)]
+    pub(crate) evidence_kinds: Vec<HistoricalMatchReason>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -98,6 +155,16 @@ pub struct TestsStageResult {
     pub(crate) items: Vec<TestHarnessTestsResult>,
 }
 
+#[derive(Debug, Clone, SimpleObject)]
+#[graphql(complex)]
+pub struct HistoricalContextStageResult {
+    #[graphql(name = "overview")]
+    pub summary: JsonScalar,
+    pub schema: Option<String>,
+    #[graphql(skip)]
+    pub(crate) items: Vec<HistoricalContextItem>,
+}
+
 impl From<CheckpointStageData> for CheckpointStageResult {
     fn from(data: CheckpointStageData) -> Self {
         Self {
@@ -132,6 +199,16 @@ impl From<DependencyStageData> for DependencyStageResult {
 
 impl From<TestsStageData> for TestsStageResult {
     fn from(data: TestsStageData) -> Self {
+        Self {
+            summary: Json(data.summary),
+            schema: data.schema,
+            items: data.items,
+        }
+    }
+}
+
+impl From<HistoricalContextStageData> for HistoricalContextStageResult {
+    fn from(data: HistoricalContextStageData) -> Self {
         Self {
             summary: Json(data.summary),
             schema: data.schema,
@@ -184,6 +261,16 @@ impl TestsStageResult {
         &self,
         #[graphql(default = 20)] first: i32,
     ) -> Result<Vec<TestHarnessTestsResult>> {
+        take_stage_items(&self.items, first)
+    }
+}
+
+#[ComplexObject]
+impl HistoricalContextStageResult {
+    async fn items(
+        &self,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<Vec<HistoricalContextItem>> {
         take_stage_items(&self.items, first)
     }
 }

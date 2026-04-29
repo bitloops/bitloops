@@ -1,5 +1,101 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CheckpointSelectionEvidenceKind {
+    SymbolProvenance,
+    FileRelation,
+    LineOverlap,
+}
+
+impl CheckpointSelectionEvidenceKind {
+    pub(crate) fn as_rank(self) -> i64 {
+        match self {
+            Self::LineOverlap => 3,
+            Self::SymbolProvenance => 2,
+            Self::FileRelation => 1,
+        }
+    }
+
+    fn from_rank(rank: i64) -> Option<Self> {
+        match rank {
+            3 => Some(Self::LineOverlap),
+            2 => Some(Self::SymbolProvenance),
+            1 => Some(Self::FileRelation),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CheckpointSelectionMatchStrength {
+    High,
+    Medium,
+    Low,
+}
+
+impl CheckpointSelectionMatchStrength {
+    pub(crate) fn from_evidence_kind(kind: CheckpointSelectionEvidenceKind) -> Self {
+        match kind {
+            CheckpointSelectionEvidenceKind::LineOverlap => Self::High,
+            CheckpointSelectionEvidenceKind::SymbolProvenance => Self::High,
+            CheckpointSelectionEvidenceKind::FileRelation => Self::Medium,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckpointSelectionMatch {
+    pub checkpoint_id: String,
+    pub event_time: String,
+    pub evidence_kind: CheckpointSelectionEvidenceKind,
+    pub evidence_kinds: Vec<CheckpointSelectionEvidenceKind>,
+    pub match_strength: CheckpointSelectionMatchStrength,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckpointSelectionRawMatch {
+    checkpoint_id: String,
+    event_time: String,
+    evidence_rank: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CheckpointSelectionAccumulator {
+    event_time: String,
+    evidence_kinds: Vec<CheckpointSelectionEvidenceKind>,
+}
+
+impl CheckpointSelectionAccumulator {
+    fn new(event_time: String, evidence_kind: CheckpointSelectionEvidenceKind) -> Self {
+        Self {
+            event_time,
+            evidence_kinds: vec![evidence_kind],
+        }
+    }
+
+    fn observe(&mut self, event_time: String, evidence_kind: CheckpointSelectionEvidenceKind) {
+        if event_time > self.event_time {
+            self.event_time = event_time;
+        }
+        if !self.evidence_kinds.contains(&evidence_kind) {
+            self.evidence_kinds.push(evidence_kind);
+            self.evidence_kinds
+                .sort_by_key(|kind| std::cmp::Reverse(kind.as_rank()));
+        }
+    }
+
+    fn into_match(self, checkpoint_id: String) -> CheckpointSelectionMatch {
+        let evidence_kind = self.evidence_kinds[0];
+        CheckpointSelectionMatch {
+            checkpoint_id,
+            event_time: self.event_time,
+            evidence_kind,
+            evidence_kinds: self.evidence_kinds,
+            match_strength: CheckpointSelectionMatchStrength::from_evidence_kind(evidence_kind),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CheckpointFileSnapshotMatch {
     pub checkpoint_id: String,
@@ -241,9 +337,10 @@ fn build_checkpoint_selection_lookup_sql(
         ));
         clauses.extend(activity_filter.sql_clauses("ca"));
         selects.push(format!(
-            "SELECT ca.checkpoint_id, ca.event_time \
+            "SELECT ca.checkpoint_id, ca.event_time, {} AS evidence_rank \
                FROM checkpoint_artefacts ca \
               WHERE {}",
+            CheckpointSelectionEvidenceKind::SymbolProvenance.as_rank(),
             clauses.join(" AND "),
         ));
     }
@@ -258,9 +355,10 @@ fn build_checkpoint_selection_lookup_sql(
         let mut clauses = vec![format!("cf.repo_id = '{}'", esc_pg(repo_id)), path_clause];
         clauses.extend(activity_filter.sql_clauses("cf"));
         selects.push(format!(
-            "SELECT cf.checkpoint_id, cf.event_time \
+            "SELECT cf.checkpoint_id, cf.event_time, {} AS evidence_rank \
                FROM checkpoint_files cf \
               WHERE {}",
+            CheckpointSelectionEvidenceKind::FileRelation.as_rank(),
             clauses.join(" AND "),
         ));
     }
@@ -270,10 +368,9 @@ fn build_checkpoint_selection_lookup_sql(
     }
 
     Some(format!(
-        "SELECT checkpoint_id, MAX(event_time) AS event_time \
+        "SELECT checkpoint_id, event_time, evidence_rank \
            FROM ({}) selection_matches \
-       GROUP BY checkpoint_id \
-       ORDER BY event_time DESC, checkpoint_id DESC",
+       ORDER BY event_time DESC, evidence_rank DESC, checkpoint_id DESC",
         selects.join(" UNION ALL "),
     ))
 }
@@ -450,16 +547,73 @@ impl<'a> CheckpointFileGateway<'a> {
         paths: &[String],
         activity_filter: CheckpointFileActivityFilter<'_>,
     ) -> Result<Vec<CheckpointArtefactMatch>> {
+        self.list_checkpoint_selection_matches(repo_id, symbol_ids, paths, activity_filter)
+            .await
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| CheckpointArtefactMatch {
+                        checkpoint_id: row.checkpoint_id,
+                        event_time: row.event_time,
+                    })
+                    .collect()
+            })
+    }
+
+    pub(crate) async fn list_checkpoint_selection_matches(
+        &self,
+        repo_id: &str,
+        symbol_ids: &[String],
+        paths: &[String],
+        activity_filter: CheckpointFileActivityFilter<'_>,
+    ) -> Result<Vec<CheckpointSelectionMatch>> {
         let Some(sql) =
             build_checkpoint_selection_lookup_sql(repo_id, symbol_ids, paths, activity_filter)
         else {
             return Ok(Vec::new());
         };
         let rows = self.relational.query_rows(&sql).await?;
-        rows.into_iter()
-            .map(checkpoint_artefact_match_from_row)
-            .collect()
+        checkpoint_selection_matches_from_rows(rows)
     }
+}
+
+fn checkpoint_selection_matches_from_rows(
+    rows: Vec<Value>,
+) -> Result<Vec<CheckpointSelectionMatch>> {
+    let mut by_checkpoint =
+        std::collections::BTreeMap::<String, CheckpointSelectionAccumulator>::new();
+
+    for row in rows {
+        let row = checkpoint_selection_raw_match_from_row(row)?;
+        let evidence_kind = CheckpointSelectionEvidenceKind::from_rank(row.evidence_rank)
+            .with_context(|| {
+                format!(
+                    "invalid `evidence_rank` in checkpoint provenance row: {}",
+                    row.evidence_rank
+                )
+            })?;
+        by_checkpoint
+            .entry(row.checkpoint_id)
+            .and_modify(|entry| entry.observe(row.event_time.clone(), evidence_kind))
+            .or_insert_with(|| CheckpointSelectionAccumulator::new(row.event_time, evidence_kind));
+    }
+
+    let mut rows = by_checkpoint
+        .into_iter()
+        .map(|(checkpoint_id, entry)| entry.into_match(checkpoint_id))
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .event_time
+            .cmp(&left.event_time)
+            .then_with(|| {
+                right
+                    .evidence_kind
+                    .as_rank()
+                    .cmp(&left.evidence_kind.as_rank())
+            })
+            .then_with(|| right.checkpoint_id.cmp(&left.checkpoint_id))
+    });
+    Ok(rows)
 }
 
 fn checkpoint_match_from_row(row: Value) -> Result<CheckpointFileSnapshotMatch> {
@@ -539,11 +693,31 @@ fn checkpoint_artefact_copy_lineage_from_row(
     })
 }
 
-fn checkpoint_artefact_match_from_row(row: Value) -> Result<CheckpointArtefactMatch> {
-    Ok(CheckpointArtefactMatch {
+fn checkpoint_selection_raw_match_from_row(row: Value) -> Result<CheckpointSelectionRawMatch> {
+    Ok(CheckpointSelectionRawMatch {
         checkpoint_id: json_required_text_field(&row, "checkpoint_id")?,
         event_time: json_required_text_field(&row, "event_time")?,
+        evidence_rank: json_required_i64_field(&row, "evidence_rank")?,
     })
+}
+
+fn json_required_i64_field(row: &Value, field: &str) -> Result<i64> {
+    let value = row
+        .get(field)
+        .with_context(|| format!("missing `{field}` in checkpoint provenance row"))?;
+    if let Some(value) = value.as_i64() {
+        return Ok(value);
+    }
+    if let Some(value) = value.as_u64() {
+        return i64::try_from(value).with_context(|| format!("`{field}` does not fit in i64"));
+    }
+    if let Some(value) = value.as_str() {
+        return value
+            .trim()
+            .parse::<i64>()
+            .with_context(|| format!("parsing `{field}` from checkpoint provenance row"));
+    }
+    bail!("invalid `{field}` in checkpoint provenance row")
 }
 
 fn json_required_text_field(row: &Value, field: &str) -> Result<String> {

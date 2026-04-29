@@ -628,6 +628,63 @@ fn compile_slim_select_artefacts_search_selector() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_historical_context_defaults_to_overview() {
+    let parsed = parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->historicalContext()"#)
+        .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_maps_args_and_explicit_selection() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(agent:"codex",since:"2026-04-01",evidence_kind:"file_relation")->select(overview,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext(agent: "codex", since: "2026-04-01T00:00:00Z", evidenceKind: FILE_RELATION) {
+      overview
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_rejects_historical_context_outside_select_artefacts() {
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->artefacts()->historicalContext()"#)
+        .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("historical context should fail");
+
+    assert!(
+        err.to_string()
+            .contains("historicalContext() is only supported after selectArtefacts(...)"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_search_selector_with_search_mode() {
     let parsed = parse_devql_query(
         r#"selectArtefacts(search:"Method::HEAD",search_mode:"lexical")->checkpoints()"#,

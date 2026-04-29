@@ -10,8 +10,11 @@ use super::{Artefact, LineRangeInput};
 
 pub use stages::{
     CheckpointStageResult, CloneExpandHint, CloneStageResult, DependencyExpandHint,
-    DependencyStageResult, TestsStageResult,
+    DependencyStageResult, HistoricalContextItem, HistoricalContextStageResult,
+    HistoricalEvidenceKind, HistoricalMatchReason, HistoricalMatchStrength, HistoricalToolEvent,
+    TestsStageResult,
 };
+pub(crate) use support::captured_preview;
 use support::{dedup_strings, saturating_i32};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

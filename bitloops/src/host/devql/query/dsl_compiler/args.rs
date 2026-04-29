@@ -78,6 +78,28 @@ pub(super) fn compile_selection_checkpoint_args(
     Ok(args)
 }
 
+pub(super) fn compile_selection_historical_context_args(
+    parsed: &ParsedDevqlQuery,
+) -> Result<Vec<GraphqlArgument>> {
+    let mut args = Vec::new();
+    if let Some(agent) = parsed.historical_context.agent.as_deref() {
+        args.push(GraphqlArgument::new("agent", quote_graphql_string(agent)));
+    }
+    if let Some(since) = parsed.historical_context.since.as_deref() {
+        args.push(GraphqlArgument::new(
+            "since",
+            compile_datetime_literal(since)?,
+        ));
+    }
+    if let Some(evidence_kind) = parsed.historical_context.evidence_kind.as_deref() {
+        args.push(GraphqlArgument::new(
+            "evidenceKind",
+            enum_literal(evidence_kind),
+        ));
+    }
+    Ok(args)
+}
+
 pub(super) fn compile_telemetry_args(parsed: &ParsedDevqlQuery) -> Result<Vec<GraphqlArgument>> {
     let mut args = Vec::new();
     if let Some(event_type) = parsed.telemetry.event_type.as_deref() {

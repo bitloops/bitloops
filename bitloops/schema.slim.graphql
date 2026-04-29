@@ -108,6 +108,7 @@ type ArtefactSelection {
 	codeMatches(relationKind: String, minScore: Float): CloneStageResult!
 	dependencies(kind: EdgeKind, direction: DependenciesDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
+	historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
 }
 
 input ArtefactSelectorInput {
@@ -503,6 +504,54 @@ type HealthStatus {
 	relational: HealthBackendStatus!
 	events: HealthBackendStatus!
 	blob: HealthBackendStatus!
+}
+
+type HistoricalContextItem {
+	checkpointId: ID!
+	sessionId: String!
+	turnId: String
+	agentType: String
+	model: String
+	eventTime: DateTime!
+	matchReason: HistoricalMatchReason!
+	matchStrength: HistoricalMatchStrength!
+	promptPreview: String
+	turnSummary: String
+	transcriptPreview: String
+	filesModified: [String!]!
+	fileRelations: [CheckpointFileRelation!]!
+	toolEvents: [HistoricalToolEvent!]!
+}
+
+type HistoricalContextStageResult {
+	overview: JSON!
+	schema: String
+	items(first: Int! = 20): [HistoricalContextItem!]!
+}
+
+enum HistoricalEvidenceKind {
+	SYMBOL_PROVENANCE
+	FILE_RELATION
+	LINE_OVERLAP
+}
+
+enum HistoricalMatchReason {
+	SYMBOL_PROVENANCE
+	FILE_RELATION
+	LINE_OVERLAP
+}
+
+enum HistoricalMatchStrength {
+	HIGH
+	MEDIUM
+	LOW
+}
+
+type HistoricalToolEvent {
+	toolKind: String
+	inputSummary: String
+	outputSummary: String
+	command: String
 }
 
 type IngestResult {
