@@ -5,7 +5,8 @@ use crate::capability_packs::codecity::services::config::CodeCityConfig;
 use crate::capability_packs::codecity::services::source_graph::load_current_source_graph;
 use crate::capability_packs::codecity::services::world::build_codecity_world;
 use crate::capability_packs::codecity::types::{
-    codecity_current_scope_required_stage_response, codecity_source_data_unavailable_stage_response,
+    CODECITY_WORLD_STAGE_ID, codecity_current_scope_required_stage_response,
+    codecity_source_data_unavailable_stage_response,
 };
 use crate::host::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRequest, StageResponse,
@@ -38,7 +39,9 @@ impl StageHandler for CodeCityWorldStageHandler {
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
             if resolved_commit.is_some() {
-                return Ok(codecity_current_scope_required_stage_response());
+                return Ok(codecity_current_scope_required_stage_response(
+                    CODECITY_WORLD_STAGE_ID,
+                ));
             }
 
             let project_path = request
@@ -66,14 +69,15 @@ impl StageHandler for CodeCityWorldStageHandler {
             ) {
                 Ok(source) => source,
                 Err(err) if is_source_data_unavailable_error(&err) => {
-                    return Ok(codecity_source_data_unavailable_stage_response(format!(
-                        "{err:#}"
-                    )));
+                    return Ok(codecity_source_data_unavailable_stage_response(
+                        CODECITY_WORLD_STAGE_ID,
+                        format!("{err:#}"),
+                    ));
                 }
                 Err(err) => return Err(err),
             };
 
-            let mut world = build_codecity_world(source, &repo_id, None, config)?;
+            let mut world = build_codecity_world(source, &repo_id, None, config, ctx.repo_root())?;
             if world.buildings.len() > limit {
                 world.buildings.truncate(limit);
             }

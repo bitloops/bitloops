@@ -11,9 +11,11 @@ use crate::models::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodeCitySourceGraph {
+    pub project_path: Option<String>,
     pub files: Vec<CodeCitySourceFile>,
     pub artefacts: Vec<CodeCitySourceArtefact>,
     pub edges: Vec<CodeCitySourceEdge>,
+    pub external_dependency_hints: Vec<CodeCityExternalDependencyHint>,
     pub diagnostics: Vec<CodeCityDiagnostic>,
 }
 
@@ -36,6 +38,7 @@ pub struct CodeCitySourceArtefact {
     pub language_kind: Option<String>,
     pub parent_artefact_id: Option<String>,
     pub parent_symbol_id: Option<String>,
+    pub signature: Option<String>,
     pub start_line: i64,
     pub end_line: i64,
 }
@@ -48,6 +51,16 @@ pub struct CodeCitySourceEdge {
     pub from_symbol_id: String,
     pub to_symbol_id: Option<String>,
     pub edge_kind: String,
+    pub metadata: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeCityExternalDependencyHint {
+    pub from_path: String,
+    pub to_symbol_ref: Option<String>,
+    pub edge_kind: String,
+    pub metadata: String,
+    pub reason: String,
 }
 
 pub fn load_current_source_graph(
@@ -115,6 +128,7 @@ pub(crate) fn build_source_graph_from_records(
                 language_kind: artefact.language_kind,
                 parent_artefact_id: artefact.parent_artefact_id,
                 parent_symbol_id: artefact.parent_symbol_id,
+                signature: artefact.signature,
                 start_line: artefact.start_line,
                 end_line: artefact.end_line,
             });
@@ -122,6 +136,7 @@ pub(crate) fn build_source_graph_from_records(
     }
 
     let mut edges = Vec::new();
+    let mut external_dependency_hints = Vec::new();
     let mut unresolved_targets = 0usize;
     let mut cross_scope_edges = 0usize;
     let mut self_edges = 0usize;
@@ -149,6 +164,13 @@ pub(crate) fn build_source_graph_from_records(
             });
 
         let Some(target_path) = target_path else {
+            external_dependency_hints.push(CodeCityExternalDependencyHint {
+                from_path: edge.path.clone(),
+                to_symbol_ref: edge.to_symbol_ref.clone(),
+                edge_kind: normalise_edge_kind(&edge.edge_kind),
+                metadata: edge.metadata.clone(),
+                reason: "unresolved".to_string(),
+            });
             unresolved_targets += 1;
             continue;
         };
@@ -159,6 +181,13 @@ pub(crate) fn build_source_graph_from_records(
         }
 
         if !included_paths.contains(&target_path) {
+            external_dependency_hints.push(CodeCityExternalDependencyHint {
+                from_path: edge.path.clone(),
+                to_symbol_ref: edge.to_symbol_ref.clone(),
+                edge_kind: normalise_edge_kind(&edge.edge_kind),
+                metadata: edge.metadata.clone(),
+                reason: "out_of_scope".to_string(),
+            });
             cross_scope_edges += 1;
             continue;
         }
@@ -170,6 +199,7 @@ pub(crate) fn build_source_graph_from_records(
             from_symbol_id: edge.from_symbol_id,
             to_symbol_id: edge.to_symbol_id,
             edge_kind: normalise_edge_kind(&edge.edge_kind),
+            metadata: edge.metadata,
         });
     }
 
@@ -182,6 +212,7 @@ pub(crate) fn build_source_graph_from_records(
                 "{unresolved_targets} dependency edge(s) could not be resolved to a target file and were excluded from CodeCity metrics."
             ),
             path: None,
+            boundary_id: None,
         });
     }
     if cross_scope_edges > 0 {
@@ -192,6 +223,7 @@ pub(crate) fn build_source_graph_from_records(
                 "{cross_scope_edges} dependency edge(s) crossed the active project scope and were excluded from CodeCity metrics."
             ),
             path: None,
+            boundary_id: None,
         });
     }
     if self_edges > 0 {
@@ -202,13 +234,16 @@ pub(crate) fn build_source_graph_from_records(
                 "{self_edges} same-file dependency edge(s) were ignored for CodeCity scoring."
             ),
             path: None,
+            boundary_id: None,
         });
     }
 
     CodeCitySourceGraph {
+        project_path: project_path.map(str::to_string),
         files,
         artefacts,
         edges,
+        external_dependency_hints,
         diagnostics,
     }
 }

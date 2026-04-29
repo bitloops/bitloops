@@ -1,6 +1,12 @@
+pub mod architecture;
+pub mod architecture_classifiers;
+pub mod boundary_detection;
+pub mod community_detection;
 pub mod config;
 pub mod graph_metrics;
 pub mod height;
 pub mod layout;
+pub mod macro_graph;
 pub mod source_graph;
 pub mod world;
+pub mod zone_assignment;

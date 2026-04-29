@@ -250,6 +250,7 @@ mod tests {
             language_kind: Some("fixture".to_string()),
             parent_artefact_id: parent_artefact_id.map(str::to_string),
             parent_symbol_id: None,
+            signature: None,
             start_line,
             end_line,
         }

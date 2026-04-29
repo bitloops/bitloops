@@ -10,10 +10,10 @@ use crate::graphql::{
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
-    CodeCityWorldResult, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
-    DependencyEdgeConnection, DepsFilterInput, FileContext, KnowledgeItemConnection,
-    KnowledgeItemEdge, KnowledgeProvider, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    CodeCityArchitectureResult, CodeCityWorldResult, ConnectionPagination, DateTimeScalar,
+    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext,
+    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope,
+    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -397,16 +397,22 @@ impl Project {
         decode_stage_single("test_harness_tests_summary", rows)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[graphql(name = "codeCityWorld")]
     async fn code_city_world(
         &self,
         ctx: &Context<'_>,
         #[graphql(default = 500)] first: i32,
         #[graphql(name = "includeDependencyArcs")] include_dependency_arcs: Option<bool>,
+        #[graphql(name = "includeBoundaries")] include_boundaries: Option<bool>,
+        #[graphql(name = "includeArchitecture")] include_architecture: Option<bool>,
+        #[graphql(name = "includeMacroEdges")] include_macro_edges: Option<bool>,
+        #[graphql(name = "includeZoneDiagnostics")] include_zone_diagnostics: Option<bool>,
+        #[graphql(name = "architectureEnabled")] architecture_enabled: Option<bool>,
     ) -> Result<CodeCityWorldResult> {
         if self.scope.temporal_scope().is_some() {
             return Err(bad_user_input_error(
-                "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in phase 1",
+                "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 2",
             ));
         }
 
@@ -417,12 +423,56 @@ impl Project {
         .resolve(
             &self.scope,
             Vec::new(),
-            Some(build_codecity_stage_args(include_dependency_arcs)),
+            Some(build_codecity_stage_args(
+                include_dependency_arcs,
+                include_boundaries,
+                include_architecture,
+                include_macro_edges,
+                include_zone_diagnostics,
+                architecture_enabled,
+            )),
             stage_limit(first)?,
         )
         .await
         .map_err(|err| map_stage_adapter_error("project codeCityWorld", err))?;
         decode_stage_single("codecity_world", rows)
+    }
+
+    #[graphql(name = "codeCityArchitecture")]
+    async fn code_city_architecture(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 500)] first: i32,
+        #[graphql(name = "includeMacroEdges")] include_macro_edges: Option<bool>,
+        #[graphql(name = "includeZoneDiagnostics")] include_zone_diagnostics: Option<bool>,
+        #[graphql(name = "architectureEnabled")] architecture_enabled: Option<bool>,
+    ) -> Result<CodeCityArchitectureResult> {
+        if self.scope.temporal_scope().is_some() {
+            return Err(bad_user_input_error(
+                "`codeCityArchitecture` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 2",
+            ));
+        }
+
+        let rows = StageResolverAdapter::new(
+            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+            "codecity_architecture",
+        )
+        .resolve(
+            &self.scope,
+            Vec::new(),
+            Some(build_codecity_stage_args(
+                None,
+                None,
+                None,
+                include_macro_edges,
+                include_zone_diagnostics,
+                architecture_enabled,
+            )),
+            stage_limit(first)?,
+        )
+        .await
+        .map_err(|err| map_stage_adapter_error("project codeCityArchitecture", err))?;
+        decode_stage_single("codecity_architecture", rows)
     }
 }
 
@@ -460,12 +510,49 @@ fn build_tests_stage_args(
     Ok(Value::Object(args))
 }
 
-fn build_codecity_stage_args(include_dependency_arcs: Option<bool>) -> Value {
+fn build_codecity_stage_args(
+    include_dependency_arcs: Option<bool>,
+    include_boundaries: Option<bool>,
+    include_architecture: Option<bool>,
+    include_macro_edges: Option<bool>,
+    include_zone_diagnostics: Option<bool>,
+    architecture_enabled: Option<bool>,
+) -> Value {
     let mut args = serde_json::Map::new();
     if let Some(include_dependency_arcs) = include_dependency_arcs {
         args.insert(
             "include_dependency_arcs".to_string(),
             Value::Bool(include_dependency_arcs),
+        );
+    }
+    if let Some(include_boundaries) = include_boundaries {
+        args.insert(
+            "include_boundaries".to_string(),
+            Value::Bool(include_boundaries),
+        );
+    }
+    if let Some(include_architecture) = include_architecture {
+        args.insert(
+            "include_architecture".to_string(),
+            Value::Bool(include_architecture),
+        );
+    }
+    if let Some(include_macro_edges) = include_macro_edges {
+        args.insert(
+            "include_macro_edges".to_string(),
+            Value::Bool(include_macro_edges),
+        );
+    }
+    if let Some(include_zone_diagnostics) = include_zone_diagnostics {
+        args.insert(
+            "include_zone_diagnostics".to_string(),
+            Value::Bool(include_zone_diagnostics),
+        );
+    }
+    if let Some(architecture_enabled) = architecture_enabled {
+        args.insert(
+            "architecture_enabled".to_string(),
+            Value::Bool(architecture_enabled),
         );
     }
     Value::Object(args)

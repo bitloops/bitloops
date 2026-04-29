@@ -33,7 +33,7 @@ pub use artefact_selection::{
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
-pub use codecity::CodeCityWorldResult;
+pub use codecity::{CodeCityArchitectureResult, CodeCityWorldResult};
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,

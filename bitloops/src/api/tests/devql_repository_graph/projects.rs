@@ -166,6 +166,8 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
                       fileCount
                       artefactCount
                       dependencyCount
+                      boundaryCount
+                      macroEdgeCount
                       includedFileCount
                       excludedFileCount
                       maxImportance
@@ -177,8 +179,73 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
                       depth
                       gap
                     }
+                    boundaries {
+                      id
+                      rootPath
+                      kind
+                      source
+                      fileCount
+                      sharedLibrary
+                      atomic
+                      architecture {
+                        primaryPattern
+                        primaryScore
+                        mudScore
+                        modularity
+                      }
+                      layout {
+                        strategy
+                        zoneCount
+                      }
+                    }
+                    macroGraph {
+                      topology
+                      boundaryCount
+                      edgeCount
+                      density
+                      edges {
+                        fromBoundaryId
+                        toBoundaryId
+                        weight
+                        fileEdgeCount
+                      }
+                    }
+                    architecture {
+                      macroTopology
+                      primaryPattern
+                      primaryScore
+                      secondaryPattern
+                      secondaryScore
+                      mudScore
+                      mudWarning
+                      boundaryReports {
+                        boundaryId
+                        primaryPattern
+                        primaryScore
+                        secondaryPattern
+                        secondaryScore
+                      }
+                      diagnostics {
+                        code
+                        boundaryId
+                      }
+                    }
+                    boundaryLayouts {
+                      boundaryId
+                      strategy
+                      zoneCount
+                      width
+                      depth
+                      x
+                      z
+                    }
                     buildings {
                       path
+                      boundaryId
+                      zone
+                      inferredZone
+                      conventionZone
+                      architectureRole
                       importance {
                         score
                         blastRadius
@@ -247,6 +314,8 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     assert_eq!(world["summary"]["fileCount"], 3);
     assert_eq!(world["summary"]["artefactCount"], 2);
     assert_eq!(world["summary"]["dependencyCount"], 1);
+    assert_eq!(world["summary"]["boundaryCount"], 1);
+    assert_eq!(world["summary"]["macroEdgeCount"], 0);
     assert_eq!(world["summary"]["includedFileCount"], 2);
     assert_eq!(world["summary"]["excludedFileCount"], 1);
     assert_close(&world["summary"]["maxImportance"], 0.85);
@@ -260,6 +329,16 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     assert_eq!(buildings.len(), 2);
     assert_eq!(buildings[0]["path"], "packages/api/src/target.ts");
     assert_eq!(buildings[1]["path"], "packages/api/src/caller.ts");
+    assert_eq!(buildings[0]["boundaryId"], "boundary:root");
+    assert_eq!(buildings[0]["zone"], "edge");
+    assert_eq!(buildings[0]["inferredZone"], "application");
+    assert_eq!(buildings[0]["conventionZone"], "edge");
+    assert!(buildings[0]["architectureRole"].as_str().is_some());
+    assert_eq!(buildings[1]["boundaryId"], "boundary:root");
+    assert_eq!(buildings[1]["zone"], "edge");
+    assert_eq!(buildings[1]["inferredZone"], "edge");
+    assert_eq!(buildings[1]["conventionZone"], "edge");
+    assert!(buildings[1]["architectureRole"].as_str().is_some());
 
     assert_close(&buildings[0]["importance"]["score"], 0.85);
     assert_eq!(buildings[0]["importance"]["blastRadius"], 1);
@@ -324,6 +403,72 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
         }])
     );
 
+    assert_eq!(
+        world["boundaries"],
+        json!([{
+            "id": "boundary:root",
+            "rootPath": ".",
+            "kind": "ROOT_FALLBACK",
+            "source": "FALLBACK",
+            "fileCount": 2,
+            "sharedLibrary": false,
+            "atomic": true,
+            "architecture": {
+                "primaryPattern": "LAYERED",
+                "primaryScore": world["boundaries"][0]["architecture"]["primaryScore"],
+                "mudScore": world["boundaries"][0]["architecture"]["mudScore"],
+                "modularity": world["boundaries"][0]["architecture"]["modularity"]
+            },
+            "layout": {
+                "strategy": "PHASE_1_GRID_TREEMAP",
+                "zoneCount": 1
+            }
+        }])
+    );
+    assert_eq!(
+        world["macroGraph"],
+        json!({
+            "topology": "SINGLE_BOUNDARY",
+            "boundaryCount": 1,
+            "edgeCount": 0,
+            "density": 0.0,
+            "edges": []
+        })
+    );
+    assert_eq!(world["architecture"]["macroTopology"], "SINGLE_BOUNDARY");
+    assert_eq!(world["architecture"]["primaryPattern"], "LAYERED");
+    assert_eq!(world["architecture"]["mudWarning"], false);
+    assert_eq!(
+        world["architecture"]["boundaryReports"],
+        json!([{
+            "boundaryId": "boundary:root",
+            "primaryPattern": "LAYERED",
+            "primaryScore": world["architecture"]["boundaryReports"][0]["primaryScore"],
+            "secondaryPattern": world["architecture"]["boundaryReports"][0]["secondaryPattern"],
+            "secondaryScore": world["architecture"]["boundaryReports"][0]["secondaryScore"]
+        }])
+    );
+    assert_eq!(
+        world["boundaryLayouts"],
+        json!([{
+            "boundaryId": "boundary:root",
+            "strategy": "PHASE_1_GRID_TREEMAP",
+            "zoneCount": 1,
+            "width": world["boundaryLayouts"][0]["width"],
+            "depth": world["boundaryLayouts"][0]["depth"],
+            "x": 0.0,
+            "z": 0.0
+        }])
+    );
+    assert_close(
+        &world["boundaryLayouts"][0]["width"],
+        world["layout"]["width"].as_f64().expect("layout width"),
+    );
+    assert_close(
+        &world["boundaryLayouts"][0]["depth"],
+        world["layout"]["depth"].as_f64().expect("layout depth"),
+    );
+
     let diagnostic_codes = world["diagnostics"]
         .as_array()
         .expect("diagnostics array")
@@ -338,6 +483,7 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     assert!(diagnostic_codes.contains(&"codecity.source.cross_scope_edges_ignored".to_string()));
     assert!(diagnostic_codes.contains(&"codecity.health.deferred".to_string()));
     assert!(diagnostic_codes.contains(&"codecity.loc.line_span_phase1".to_string()));
+    assert!(diagnostic_codes.contains(&"codecity.zone.disagreement".to_string()));
 
     let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     let temporal = schema
@@ -372,10 +518,170 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     );
     assert!(
         temporal.errors[0].message.contains(
-            "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in phase 1"
+            "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 2"
         ),
         "unexpected error message: {}",
         temporal.errors[0].message
+    );
+}
+
+#[tokio::test]
+async fn devql_project_codecity_architecture_returns_typed_phase2_payload() {
+    let repo = seed_graphql_monorepo_repo();
+    let schema = crate::graphql::build_schema(crate::graphql::DevqlGraphqlContext::new(
+        repo.path().to_path_buf(),
+        super::super::super::db::DashboardDbPools::default(),
+    ));
+
+    let response = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: "packages/api") {
+                  codeCityArchitecture(first: 10) {
+                    capability
+                    stage
+                    status
+                    summary {
+                      boundaryCount
+                      macroEdgeCount
+                      macroTopology
+                      primaryPattern
+                      mudWarningCount
+                    }
+                    macroGraph {
+                      topology
+                      boundaryCount
+                      edgeCount
+                      density
+                      edges {
+                        fromBoundaryId
+                        toBoundaryId
+                        weight
+                        fileEdgeCount
+                      }
+                    }
+                    architecture {
+                      macroTopology
+                      primaryPattern
+                      primaryScore
+                      secondaryPattern
+                      secondaryScore
+                      mudScore
+                      mudWarning
+                      boundaryReports {
+                        boundaryId
+                        primaryPattern
+                      }
+                    }
+                    boundaries {
+                      id
+                      rootPath
+                      kind
+                      source
+                      fileCount
+                      sharedLibrary
+                      atomic
+                      architecture {
+                        primaryPattern
+                        primaryScore
+                      }
+                    }
+                    boundaryReports {
+                      boundaryId
+                      primaryPattern
+                      primaryScore
+                      scores {
+                        layered
+                        pipeAndFilter
+                        ballOfMud
+                      }
+                      metrics {
+                        nodeCount
+                        edgeCount
+                        longestPathLen
+                      }
+                      evidence {
+                        name
+                        value
+                      }
+                    }
+                    diagnostics {
+                      code
+                      boundaryId
+                    }
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let json = response.data.into_json().expect("graphql data to json");
+    let payload = &json["repo"]["project"]["codeCityArchitecture"];
+    assert_eq!(payload["capability"], "codecity");
+    assert_eq!(payload["stage"], "codecity_architecture");
+    assert_eq!(payload["status"], "ok");
+    assert_eq!(payload["summary"]["boundaryCount"], 1);
+    assert_eq!(payload["summary"]["macroEdgeCount"], 0);
+    assert_eq!(payload["summary"]["macroTopology"], "SINGLE_BOUNDARY");
+    assert_eq!(payload["summary"]["primaryPattern"], "LAYERED");
+    assert_eq!(payload["summary"]["mudWarningCount"], 0);
+    assert_eq!(
+        payload["macroGraph"],
+        json!({
+            "topology": "SINGLE_BOUNDARY",
+            "boundaryCount": 1,
+            "edgeCount": 0,
+            "density": 0.0,
+            "edges": []
+        })
+    );
+    assert_eq!(payload["architecture"]["macroTopology"], "SINGLE_BOUNDARY");
+    assert_eq!(payload["architecture"]["primaryPattern"], "LAYERED");
+    assert_eq!(payload["architecture"]["mudWarning"], false);
+    assert_eq!(
+        payload["architecture"]["boundaryReports"],
+        json!([{
+            "boundaryId": "boundary:root",
+            "primaryPattern": "LAYERED"
+        }])
+    );
+    assert_eq!(
+        payload["boundaries"],
+        json!([{
+            "id": "boundary:root",
+            "rootPath": ".",
+            "kind": "ROOT_FALLBACK",
+            "source": "FALLBACK",
+            "fileCount": 2,
+            "sharedLibrary": false,
+            "atomic": true,
+            "architecture": {
+                "primaryPattern": "LAYERED",
+                "primaryScore": payload["boundaries"][0]["architecture"]["primaryScore"]
+            }
+        }])
+    );
+    assert_eq!(payload["boundaryReports"][0]["boundaryId"], "boundary:root");
+    assert_eq!(payload["boundaryReports"][0]["primaryPattern"], "LAYERED");
+    assert_eq!(payload["boundaryReports"][0]["metrics"]["nodeCount"], 2);
+    assert_eq!(payload["boundaryReports"][0]["metrics"]["edgeCount"], 1);
+    assert_eq!(
+        payload["boundaryReports"][0]["metrics"]["longestPathLen"],
+        1
+    );
+    assert_eq!(
+        payload["boundaryReports"][0]["evidence"][0]["name"],
+        "layer_clarity"
     );
 }
 

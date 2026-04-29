@@ -4,10 +4,14 @@ use crate::host::capability_host::CapabilityRegistrar;
 
 use super::query_examples::CODECITY_QUERY_EXAMPLES;
 use super::schema::CODECITY_SCHEMA_MODULE;
-use super::stages::build_codecity_world_stage;
+use super::stages::{
+    build_codecity_architecture_stage, build_codecity_boundaries_stage, build_codecity_world_stage,
+};
 
 pub fn register_codecity_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
     registrar.register_stage(build_codecity_world_stage())?;
+    registrar.register_stage(build_codecity_architecture_stage())?;
+    registrar.register_stage(build_codecity_boundaries_stage())?;
     registrar.register_schema_module(CODECITY_SCHEMA_MODULE)?;
     registrar.register_query_examples(CODECITY_QUERY_EXAMPLES)?;
     Ok(())
@@ -19,7 +23,8 @@ mod tests {
 
     use super::*;
     use crate::capability_packs::codecity::types::{
-        CODECITY_CAPABILITY_ID, CODECITY_WORLD_STAGE_ID,
+        CODECITY_ARCHITECTURE_STAGE_ID, CODECITY_BOUNDARIES_STAGE_ID, CODECITY_CAPABILITY_ID,
+        CODECITY_WORLD_STAGE_ID,
     };
     use crate::host::capability_host::{QueryExample, SchemaModule, StageRegistration};
 
@@ -62,7 +67,11 @@ mod tests {
 
         assert_eq!(
             registrar.stages,
-            vec![(CODECITY_CAPABILITY_ID, CODECITY_WORLD_STAGE_ID)]
+            vec![
+                (CODECITY_CAPABILITY_ID, CODECITY_WORLD_STAGE_ID),
+                (CODECITY_CAPABILITY_ID, CODECITY_ARCHITECTURE_STAGE_ID),
+                (CODECITY_CAPABILITY_ID, CODECITY_BOUNDARIES_STAGE_ID),
+            ]
         );
         assert_eq!(registrar.schema_modules, vec![CODECITY_SCHEMA_MODULE]);
         assert_eq!(registrar.query_examples, CODECITY_QUERY_EXAMPLES);

@@ -301,11 +301,166 @@ input ClonesFilterInput {
 	neighbors: Int
 }
 
+type CodeCityArchitectureEvidenceResult {
+	name: String!
+	value: Float!
+	description: String!
+}
+
+enum CodeCityArchitecturePatternResult {
+	LAYERED
+	HEXAGONAL
+	MODULAR
+	EVENT_DRIVEN
+	PIPE_AND_FILTER
+	BALL_OF_MUD
+	UNCLASSIFIED
+}
+
+type CodeCityArchitectureReportResult {
+	macroTopology: CodeCityMacroTopologyResult!
+	primaryPattern: CodeCityArchitecturePatternResult!
+	primaryScore: Float!
+	secondaryPattern: CodeCityArchitecturePatternResult
+	secondaryScore: Float
+	mudScore: Float!
+	mudWarning: Boolean!
+	boundaryReports: [CodeCityBoundaryArchitectureReportResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+type CodeCityArchitectureResult {
+	capability: String!
+	stage: String!
+	status: String!
+	repoId: String!
+	commitSha: String
+	configFingerprint: String!
+	summary: CodeCityArchitectureStageSummaryResult!
+	macroGraph: CodeCityMacroGraphResult
+	architecture: CodeCityArchitectureReportResult!
+	boundaries: [CodeCityBoundaryResult!]!
+	boundaryReports: [CodeCityBoundaryArchitectureReportResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+type CodeCityArchitectureScoresResult {
+	layered: Float!
+	hexagonal: Float!
+	modular: Float!
+	eventDriven: Float!
+	pipeAndFilter: Float!
+	ballOfMud: Float!
+}
+
+type CodeCityArchitectureStageSummaryResult {
+	boundaryCount: Int!
+	macroEdgeCount: Int!
+	macroTopology: CodeCityMacroTopologyResult!
+	primaryPattern: CodeCityArchitecturePatternResult!
+	mudWarningCount: Int!
+}
+
+type CodeCityBoundaryArchitectureReportResult {
+	boundaryId: String!
+	primaryPattern: CodeCityArchitecturePatternResult!
+	primaryScore: Float!
+	secondaryPattern: CodeCityArchitecturePatternResult
+	secondaryScore: Float
+	scores: CodeCityArchitectureScoresResult!
+	metrics: CodeCityBoundaryGraphMetricsResult!
+	evidence: [CodeCityArchitectureEvidenceResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+type CodeCityBoundaryArchitectureSummaryResult {
+	primaryPattern: CodeCityArchitecturePatternResult!
+	primaryScore: Float!
+	secondaryPattern: CodeCityArchitecturePatternResult
+	mudScore: Float!
+	modularity: Float!
+}
+
+type CodeCityBoundaryGraphMetricsResult {
+	nodeCount: Int!
+	edgeCount: Int!
+	density: Float!
+	cycleEdgeCount: Int!
+	largestSccSize: Int!
+	sccCount: Int!
+	backEdgeRatio: Float!
+	modularity: Float!
+	communityCount: Int!
+	maxFanIn: Int!
+	medianFanIn: Float!
+	maxFanOut: Int!
+	medianFanOut: Float!
+	averagePathLength: Float
+	clusteringCoefficient: Float!
+	corePeripheryScore: Float!
+	directCouplingRatio: Float!
+	branchingFactor: Float!
+	longestPathLen: Int!
+	chainDominance: Float!
+}
+
+enum CodeCityBoundaryKindResult {
+	EXPLICIT
+	RUNTIME
+	IMPLICIT
+	ROOT_FALLBACK
+}
+
+type CodeCityBoundaryLayoutPreviewResult {
+	strategy: CodeCityLayoutStrategyResult!
+	zoneCount: Int!
+}
+
+type CodeCityBoundaryLayoutSummaryResult {
+	boundaryId: String!
+	strategy: CodeCityLayoutStrategyResult!
+	zoneCount: Int!
+	width: Float!
+	depth: Float!
+	x: Float!
+	z: Float!
+}
+
+type CodeCityBoundaryResult {
+	id: String!
+	name: String!
+	rootPath: String!
+	kind: CodeCityBoundaryKindResult!
+	ecosystem: String
+	parentBoundaryId: String
+	source: CodeCityBoundarySourceResult!
+	fileCount: Int!
+	artefactCount: Int!
+	dependencyCount: Int!
+	entryPoints: [CodeCityEntryPointResult!]!
+	sharedLibrary: Boolean!
+	atomic: Boolean!
+	architecture: CodeCityBoundaryArchitectureSummaryResult
+	layout: CodeCityBoundaryLayoutPreviewResult
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+enum CodeCityBoundarySourceResult {
+	MANIFEST
+	WORKSPACE_MANIFEST
+	ENTRY_POINT
+	COMMUNITY_DETECTION
+	FALLBACK
+}
+
 type CodeCityBuildingResult {
 	path: String!
 	language: String!
 	boundaryId: String!
 	zone: String!
+	inferredZone: String
+	conventionZone: String
+	architectureRole: String
 	importance: CodeCityImportanceResult!
 	size: CodeCitySizeResult!
 	geometry: CodeCityGeometryResult!
@@ -325,6 +480,13 @@ type CodeCityDiagnosticResult {
 	severity: String!
 	message: String!
 	path: String
+	boundaryId: String
+}
+
+type CodeCityEntryPointResult {
+	path: String!
+	entryKind: String!
+	closureFileCount: Int!
 }
 
 type CodeCityFloorResult {
@@ -371,6 +533,41 @@ type CodeCityLayoutResult {
 	gap: Float!
 }
 
+enum CodeCityLayoutStrategyResult {
+	PHASE_1_GRID_TREEMAP
+	HEXAGONAL_RINGS
+	LAYERED_BANDS
+	MODULAR_ISLANDS
+	PIPE_AND_FILTER_STRIP
+	MUD_FORCE_DIRECTED
+	PLAIN_TREEMAP
+}
+
+type CodeCityMacroEdgeResult {
+	fromBoundaryId: String!
+	toBoundaryId: String!
+	weight: Int!
+	fileEdgeCount: Int!
+}
+
+type CodeCityMacroGraphResult {
+	topology: CodeCityMacroTopologyResult!
+	boundaryCount: Int!
+	edgeCount: Int!
+	density: Float!
+	modularity: Float
+	edges: [CodeCityMacroEdgeResult!]!
+}
+
+enum CodeCityMacroTopologyResult {
+	SINGLE_BOUNDARY
+	STAR
+	LAYERED
+	FEDERATED
+	TANGLED
+	UNKNOWN
+}
+
 type CodeCitySizeResult {
 	loc: Int!
 	artefactCount: Int!
@@ -381,6 +578,8 @@ type CodeCitySummaryResult {
 	fileCount: Int!
 	artefactCount: Int!
 	dependencyCount: Int!
+	boundaryCount: Int!
+	macroEdgeCount: Int!
 	includedFileCount: Int!
 	excludedFileCount: Int!
 	maxImportance: Float!
@@ -396,6 +595,10 @@ type CodeCityWorldResult {
 	configFingerprint: String!
 	summary: CodeCitySummaryResult!
 	layout: CodeCityLayoutResult!
+	boundaries: [CodeCityBoundaryResult!]!
+	macroGraph: CodeCityMacroGraphResult
+	architecture: CodeCityArchitectureReportResult
+	boundaryLayouts: [CodeCityBoundaryLayoutSummaryResult!]!
 	buildings: [CodeCityBuildingResult!]!
 	dependencyArcs: [CodeCityDependencyArcResult!]!
 	diagnostics: [CodeCityDiagnosticResult!]!
@@ -990,7 +1193,8 @@ type Project {
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
-	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean): CodeCityWorldResult!
+	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean, includeBoundaries: Boolean, includeArchitecture: Boolean, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean): CodeCityWorldResult!
+	codeCityArchitecture(first: Int! = 500, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean): CodeCityArchitectureResult!
 }
 
 input RefreshKnowledgeInput {
