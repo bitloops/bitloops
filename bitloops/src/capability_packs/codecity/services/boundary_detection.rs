@@ -646,7 +646,12 @@ fn split_implicit_boundaries(
                 source,
                 BoundaryBuildSpec {
                     root_path: boundary.boundary.root_path.clone(),
-                    id: format!("{}:implicit:{}", boundary.boundary.id, slugify(&name)),
+                    id: format!(
+                        "{}:implicit:{}:{}",
+                        boundary.boundary.id,
+                        slugify(&name),
+                        index + 1
+                    ),
                     name,
                     kind: CodeCityBoundaryKind::Implicit,
                     ecosystem: boundary.boundary.ecosystem.clone(),
@@ -842,6 +847,8 @@ fn slugify(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use tempfile::tempdir;
 
     use super::detect_boundaries;
@@ -935,10 +942,43 @@ mod tests {
         assert_eq!(result.boundaries.len(), 1);
         assert_eq!(result.boundaries[0].id, CODECITY_ROOT_BOUNDARY_ID);
         assert!(
-            result.diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "codecity.boundary.implicit_split_too_large"
-            })
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "codecity.boundary.implicit_split_too_large")
         );
+    }
+
+    #[test]
+    fn implicit_boundary_ids_are_unique_when_names_repeat() {
+        let temp = tempdir().expect("tempdir");
+        let files = [
+            "src/module/a_one.ts",
+            "src/module/a_two.ts",
+            "src/module/b_one.ts",
+            "src/module/b_two.ts",
+        ];
+        let edges = [
+            ("src/module/a_one.ts", "src/module/a_two.ts"),
+            ("src/module/a_two.ts", "src/module/a_one.ts"),
+            ("src/module/b_one.ts", "src/module/b_two.ts"),
+            ("src/module/b_two.ts", "src/module/b_one.ts"),
+        ];
+        let source = graph(&files, &edges);
+        let mut config = CodeCityConfig::default();
+        config.boundaries.min_implicit_boundary_files = 2;
+        config.boundaries.community_modularity_threshold = 0.0;
+
+        let result = detect_boundaries(&source, &config, temp.path());
+        let unique_count = result
+            .boundaries
+            .iter()
+            .map(|boundary| boundary.id.as_str())
+            .collect::<BTreeSet<_>>()
+            .len();
+
+        assert!(result.boundaries.len() > 1);
+        assert_eq!(result.boundaries.len(), unique_count);
     }
 
     #[test]
