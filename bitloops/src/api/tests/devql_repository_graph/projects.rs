@@ -1102,6 +1102,37 @@ async fn devql_project_queries_validate_project_paths() {
         Some(&async_graphql::Value::from("BAD_USER_INPUT"))
     );
 
+    let root_project = schema
+        .execute(async_graphql::Request::new(
+            r#"
+            {
+              repo(name: "demo") {
+                project(path: ".") {
+                  path
+                  file(path: "packages/api/src/caller.ts") {
+                    path
+                  }
+                }
+              }
+            }
+            "#,
+        ))
+        .await;
+    assert!(
+        root_project.errors.is_empty(),
+        "graphql errors: {:?}",
+        root_project.errors
+    );
+    let root_json = root_project
+        .data
+        .into_json()
+        .expect("root project data to json");
+    assert_eq!(root_json["repo"]["project"]["path"], ".");
+    assert_eq!(
+        root_json["repo"]["project"]["file"]["path"],
+        "packages/api/src/caller.ts"
+    );
+
     let not_directory = schema
         .execute(async_graphql::Request::new(
             r#"
