@@ -1,6 +1,8 @@
 use super::config::{ColourConfig, HeightConfig};
 use super::source_graph::{CodeCitySourceArtefact, CodeCitySourceFile};
-use crate::capability_packs::codecity::types::CodeCityFloor;
+use crate::capability_packs::codecity::types::{
+    CodeCityFloor, CodeCityHealthEvidence, CodeCityHealthMetrics,
+};
 
 pub fn build_floors_for_file(
     file: &CodeCitySourceFile,
@@ -62,6 +64,9 @@ pub fn build_floors_for_file(
                 health_risk: None,
                 colour: colours.no_data.clone(),
                 health_status: "insufficient_data".to_string(),
+                health_confidence: 0.0,
+                health_metrics: CodeCityHealthMetrics::default(),
+                health_evidence: CodeCityHealthEvidence::default(),
             }
         })
         .collect()
@@ -112,6 +117,9 @@ fn synthetic_file_floor(
         health_risk: None,
         colour: colours.no_data.clone(),
         health_status: "insufficient_data".to_string(),
+        health_confidence: 0.0,
+        health_metrics: CodeCityHealthMetrics::default(),
+        health_evidence: CodeCityHealthEvidence::default(),
     }
 }
 

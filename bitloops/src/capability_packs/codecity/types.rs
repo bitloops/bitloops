@@ -1,14 +1,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::capability_packs::codecity::services::config::CodeCityHealthConfig;
 use crate::host::capability_host::StageResponse;
 
 pub const CODECITY_CAPABILITY_ID: &str = "codecity";
 pub const CODECITY_WORLD_STAGE_ID: &str = "codecity_world";
 pub const CODECITY_BOUNDARIES_STAGE_ID: &str = "codecity_boundaries";
 pub const CODECITY_ARCHITECTURE_STAGE_ID: &str = "codecity_architecture";
+pub const CODECITY_VIOLATIONS_STAGE_ID: &str = "codecity_violations";
+pub const CODECITY_FILE_DETAIL_STAGE_ID: &str = "codecity_file_detail";
+pub const CODECITY_ARCS_STAGE_ID: &str = "codecity_arcs";
 pub const CODECITY_ROOT_BOUNDARY_ID: &str = "boundary:root";
 pub const CODECITY_UNCLASSIFIED_ZONE: &str = "unclassified";
+
+mod phase4;
+pub use phase4::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CodeCityWorldPayload {
@@ -19,12 +26,15 @@ pub struct CodeCityWorldPayload {
     pub commit_sha: Option<String>,
     pub config_fingerprint: String,
     pub summary: CodeCitySummary,
+    pub health: CodeCityHealthOverview,
+    pub legends: CodeCityLegends,
     pub layout: CodeCityLayoutSummary,
     pub boundaries: Vec<CodeCityBoundary>,
     pub macro_graph: Option<CodeCityMacroGraph>,
     pub architecture: Option<CodeCityArchitectureReport>,
     pub boundary_layouts: Vec<CodeCityBoundaryLayoutSummary>,
     pub buildings: Vec<CodeCityBuilding>,
+    pub arcs: Vec<CodeCityRenderArc>,
     pub dependency_arcs: Vec<CodeCityDependencyArc>,
     pub diagnostics: Vec<CodeCityDiagnostic>,
 }
@@ -67,6 +77,14 @@ pub struct CodeCitySummary {
     pub macro_edge_count: usize,
     pub included_file_count: usize,
     pub excluded_file_count: usize,
+    pub unhealthy_floor_count: usize,
+    pub insufficient_health_data_count: usize,
+    pub coverage_available: bool,
+    pub git_history_available: bool,
+    pub violation_count: usize,
+    pub high_severity_violation_count: usize,
+    pub visible_arc_count: usize,
+    pub cross_boundary_arc_count: usize,
     pub max_importance: f64,
     pub max_height: f64,
 }
@@ -111,6 +129,12 @@ pub struct CodeCityBuilding {
     pub importance: CodeCityImportance,
     pub size: CodeCitySize,
     pub geometry: CodeCityGeometry,
+    pub health_risk: Option<f64>,
+    pub health_status: String,
+    pub health_confidence: f64,
+    pub colour: String,
+    pub health_summary: CodeCityBuildingHealthSummary,
+    pub diagnostic_badges: Vec<CodeCityDiagnosticBadge>,
     pub floors: Vec<CodeCityFloor>,
 }
 
@@ -159,6 +183,181 @@ pub struct CodeCityFloor {
     pub health_risk: Option<f64>,
     pub colour: String,
     pub health_status: String,
+    pub health_confidence: f64,
+    pub health_metrics: CodeCityHealthMetrics,
+    pub health_evidence: CodeCityHealthEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthOverview {
+    pub status: String,
+    pub analysis_window_months: u32,
+    pub generated_at: Option<String>,
+    pub confidence: f64,
+    pub missing_signals: Vec<String>,
+    pub coverage_available: bool,
+    pub git_history_available: bool,
+    pub weights: CodeCityHealthWeights,
+}
+
+impl CodeCityHealthOverview {
+    pub fn not_requested(analysis_window_months: u32, weights: CodeCityHealthWeights) -> Self {
+        Self {
+            status: "not_requested".to_string(),
+            analysis_window_months,
+            generated_at: None,
+            confidence: 0.0,
+            missing_signals: Vec::new(),
+            coverage_available: false,
+            git_history_available: false,
+            weights,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthWeights {
+    pub churn: f64,
+    pub complexity: f64,
+    pub bugs: f64,
+    pub coverage: f64,
+    pub author_concentration: f64,
+}
+
+impl From<&CodeCityHealthConfig> for CodeCityHealthWeights {
+    fn from(config: &CodeCityHealthConfig) -> Self {
+        Self {
+            churn: config.churn_weight,
+            complexity: config.complexity_weight,
+            bugs: config.bug_weight,
+            coverage: config.coverage_weight,
+            author_concentration: config.author_concentration_weight,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCityBuildingHealthSummary {
+    pub floor_count: usize,
+    pub high_risk_floor_count: usize,
+    pub insufficient_data_floor_count: usize,
+    pub average_risk: Option<f64>,
+    pub max_risk: Option<f64>,
+    pub missing_signals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthMetrics {
+    pub churn: u64,
+    pub complexity: f64,
+    pub bug_count: u64,
+    pub coverage: Option<f64>,
+    pub author_concentration: Option<f64>,
+}
+
+impl Default for CodeCityHealthMetrics {
+    fn default() -> Self {
+        Self {
+            churn: 0,
+            complexity: 0.0,
+            bug_count: 0,
+            coverage: None,
+            author_concentration: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthEvidence {
+    pub commits_touching: u64,
+    pub bug_fix_commits: u64,
+    pub distinct_authors: u64,
+    pub covered_lines: Option<u64>,
+    pub total_coverable_lines: Option<u64>,
+    pub complexity_source: String,
+    pub coverage_source: String,
+    pub git_history_source: String,
+    pub missing_signals: Vec<String>,
+}
+
+impl Default for CodeCityHealthEvidence {
+    fn default() -> Self {
+        Self {
+            commits_touching: 0,
+            bug_fix_commits: 0,
+            distinct_authors: 0,
+            covered_lines: None,
+            total_coverable_lines: None,
+            complexity_source: MetricSource::Unavailable.as_str().to_string(),
+            coverage_source: MetricSource::Unavailable.as_str().to_string(),
+            git_history_source: MetricSource::Unavailable.as_str().to_string(),
+            missing_signals: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthStatus {
+    Ok,
+    Partial,
+    InsufficientData,
+    NotRequested,
+}
+
+impl HealthStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Partial => "partial",
+            Self::InsufficientData => "insufficient_data",
+            Self::NotRequested => "not_requested",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthSignal {
+    Churn,
+    Complexity,
+    Bugs,
+    Coverage,
+    AuthorConcentration,
+}
+
+impl HealthSignal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Churn => "churn",
+            Self::Complexity => "complexity",
+            Self::Bugs => "bugs",
+            Self::Coverage => "coverage",
+            Self::AuthorConcentration => "author_concentration",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricSource {
+    Exact,
+    ArtefactLevel,
+    FileLevelFallback,
+    StructuralProxy,
+    Unavailable,
+}
+
+impl MetricSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::ArtefactLevel => "artefact_level",
+            Self::FileLevelFallback => "file_level_fallback",
+            Self::StructuralProxy => "structural_proxy",
+            Self::Unavailable => "unavailable",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -196,6 +395,7 @@ pub struct CodeCityBoundary {
     pub atomic: bool,
     pub architecture: Option<CodeCityBoundaryArchitectureSummary>,
     pub layout: Option<CodeCityBoundaryLayoutPreview>,
+    pub violation_summary: CodeCityViolationSummary,
     pub diagnostics: Vec<CodeCityDiagnostic>,
 }
 

@@ -268,6 +268,60 @@ input ClonesFilterInput {
 	neighbors: Int
 }
 
+type CodeCityArcConnectionEdgeResult {
+	node: CodeCityRenderArcResult!
+	cursor: String!
+}
+
+type CodeCityArcConnectionResult {
+	totalCount: Int!
+	edges: [CodeCityArcConnectionEdgeResult!]!
+	pageInfo: PageInfo!
+}
+
+input CodeCityArcFilterInput {
+	kind: CodeCityArcKindResult
+	visibility: CodeCityArcVisibilityResult
+	severity: CodeCityViolationSeverityResult
+	boundaryId: String
+	path: String
+	direction: CodeCityDependencyDirectionResult
+	includeHidden: Boolean
+}
+
+type CodeCityArcGeometryResult {
+	fromX: Float!
+	fromY: Float!
+	fromZ: Float!
+	toX: Float!
+	toY: Float!
+	toZ: Float!
+	controlY: Float!
+}
+
+type CodeCityArcKindLegendResult {
+	kind: CodeCityArcKindResult!
+	label: String!
+	defaultVisible: Boolean!
+	description: String!
+}
+
+enum CodeCityArcKindResult {
+	DEPENDENCY
+	VIOLATION
+	CROSS_BOUNDARY
+	CYCLE
+	BRIDGE
+}
+
+enum CodeCityArcVisibilityResult {
+	HIDDEN_BY_DEFAULT
+	VISIBLE_ON_SELECTION
+	VISIBLE_AT_MEDIUM_ZOOM
+	VISIBLE_AT_WORLD_ZOOM
+	ALWAYS_VISIBLE
+}
+
 type CodeCityArchitectureEvidenceResult {
 	name: String!
 	value: Float!
@@ -409,6 +463,7 @@ type CodeCityBoundaryResult {
 	atomic: Boolean!
 	architecture: CodeCityBoundaryArchitectureSummaryResult
 	layout: CodeCityBoundaryLayoutPreviewResult
+	violationSummary: CodeCityViolationSummaryResult!
 	diagnostics: [CodeCityDiagnosticResult!]!
 }
 
@@ -418,6 +473,15 @@ enum CodeCityBoundarySourceResult {
 	ENTRY_POINT
 	COMMUNITY_DETECTION
 	FALLBACK
+}
+
+type CodeCityBuildingHealthSummaryResult {
+	floorCount: Int!
+	highRiskFloorCount: Int!
+	insufficientDataFloorCount: Int!
+	averageRisk: Float
+	maxRisk: Float
+	missingSignals: [String!]!
 }
 
 type CodeCityBuildingResult {
@@ -431,6 +495,12 @@ type CodeCityBuildingResult {
 	importance: CodeCityImportanceResult!
 	size: CodeCitySizeResult!
 	geometry: CodeCityGeometryResult!
+	healthRisk: Float
+	healthStatus: String!
+	healthConfidence: Float!
+	colour: String!
+	healthSummary: CodeCityBuildingHealthSummaryResult!
+	diagnosticBadges: [CodeCityDiagnosticBadgeResult!]!
 	floors: [CodeCityFloorResult!]!
 }
 
@@ -440,6 +510,38 @@ type CodeCityDependencyArcResult {
 	edgeCount: Int!
 	arcKind: String!
 	severity: String
+}
+
+type CodeCityDependencyConnectionEdgeResult {
+	node: CodeCityFileDependencyArcResult!
+	cursor: String!
+}
+
+type CodeCityDependencyConnectionResult {
+	totalCount: Int!
+	edges: [CodeCityDependencyConnectionEdgeResult!]!
+}
+
+enum CodeCityDependencyDirectionResult {
+	INCOMING
+	OUTGOING
+	BOTH
+}
+
+enum CodeCityDiagnosticBadgeKindResult {
+	ARCHITECTURE_VIOLATION
+	CROSS_BOUNDARY_COUPLING
+	CYCLE_PARTICIPANT
+	BRIDGE_FILE
+	HEALTH_RISK
+	INSUFFICIENT_DATA
+}
+
+type CodeCityDiagnosticBadgeResult {
+	kind: CodeCityDiagnosticBadgeKindResult!
+	severity: CodeCityViolationSeverityResult!
+	count: Int!
+	tooltip: String!
 }
 
 type CodeCityDiagnosticResult {
@@ -456,6 +558,46 @@ type CodeCityEntryPointResult {
 	closureFileCount: Int!
 }
 
+type CodeCityFileArchitectureContextResult {
+	boundaryId: String
+	boundaryName: String
+	primaryPattern: CodeCityArchitecturePatternResult
+}
+
+type CodeCityFileDependencyArcResult {
+	arcId: String!
+	runId: String!
+	commitSha: String
+	fromPath: String!
+	toPath: String!
+	fromBoundaryId: String
+	toBoundaryId: String
+	fromZone: String
+	toZone: String
+	edgeCount: Int!
+	importCount: Int!
+	callCount: Int!
+	referenceCount: Int!
+	exportCount: Int!
+	inheritanceCount: Int!
+	weight: Float!
+	crossBoundary: Boolean!
+	hasViolation: Boolean!
+	highestSeverity: CodeCityViolationSeverityResult
+	evidenceIds: [String!]!
+}
+
+type CodeCityFileDetailResult {
+	status: String!
+	path: String!
+	building: CodeCityBuildingResult!
+	architectureContext: CodeCityFileArchitectureContextResult!
+	incomingDependencies: CodeCityDependencyConnectionResult!
+	outgoingDependencies: CodeCityDependencyConnectionResult!
+	violations: [CodeCityViolationResult!]!
+	relatedArcs: [CodeCityRenderArcResult!]!
+}
+
 type CodeCityFloorResult {
 	artefactId: String
 	symbolId: String
@@ -470,6 +612,9 @@ type CodeCityFloorResult {
 	healthRisk: Float
 	colour: String!
 	healthStatus: String!
+	healthConfidence: Float!
+	healthMetrics: CodeCityHealthMetricsResult!
+	healthEvidence: CodeCityHealthEvidenceResult!
 }
 
 type CodeCityGeometryResult {
@@ -481,6 +626,45 @@ type CodeCityGeometryResult {
 	sideLength: Float!
 	footprintArea: Float!
 	height: Float!
+}
+
+type CodeCityHealthEvidenceResult {
+	commitsTouching: Int!
+	bugFixCommits: Int!
+	distinctAuthors: Int!
+	coveredLines: Int
+	totalCoverableLines: Int
+	complexitySource: String!
+	coverageSource: String!
+	gitHistorySource: String!
+	missingSignals: [String!]!
+}
+
+type CodeCityHealthMetricsResult {
+	churn: Int!
+	complexity: Float!
+	bugCount: Int!
+	coverage: Float
+	authorConcentration: Float
+}
+
+type CodeCityHealthOverviewResult {
+	status: String!
+	analysisWindowMonths: Int!
+	generatedAt: String
+	confidence: Float!
+	missingSignals: [String!]!
+	coverageAvailable: Boolean!
+	gitHistoryAvailable: Boolean!
+	weights: CodeCityHealthWeightsResult!
+}
+
+type CodeCityHealthWeightsResult {
+	churn: Float!
+	complexity: Float!
+	bugs: Float!
+	coverage: Float!
+	authorConcentration: Float!
 }
 
 type CodeCityImportanceResult {
@@ -510,6 +694,12 @@ enum CodeCityLayoutStrategyResult {
 	PLAIN_TREEMAP
 }
 
+type CodeCityLegendsResult {
+	arcKinds: [CodeCityArcKindLegendResult!]!
+	violationRules: [CodeCityViolationRuleLegendResult!]!
+	severities: [CodeCitySeverityLegendResult!]!
+}
+
 type CodeCityMacroEdgeResult {
 	fromBoundaryId: String!
 	toBoundaryId: String!
@@ -535,6 +725,30 @@ enum CodeCityMacroTopologyResult {
 	UNKNOWN
 }
 
+type CodeCityRenderArcResult {
+	id: String!
+	kind: CodeCityArcKindResult!
+	visibility: CodeCityArcVisibilityResult!
+	severity: CodeCityViolationSeverityResult
+	fromPath: String
+	toPath: String
+	fromBoundaryId: String
+	toBoundaryId: String
+	sourceArcId: String
+	violationId: String
+	weight: Float!
+	label: String
+	tooltip: String
+	geometry: CodeCityArcGeometryResult!
+	metadataJson: String!
+}
+
+type CodeCitySeverityLegendResult {
+	severity: CodeCityViolationSeverityResult!
+	label: String!
+	description: String!
+}
+
 type CodeCitySizeResult {
 	loc: Int!
 	artefactCount: Int!
@@ -549,8 +763,129 @@ type CodeCitySummaryResult {
 	macroEdgeCount: Int!
 	includedFileCount: Int!
 	excludedFileCount: Int!
+	unhealthyFloorCount: Int!
+	insufficientHealthDataCount: Int!
+	coverageAvailable: Boolean!
+	gitHistoryAvailable: Boolean!
+	violationCount: Int!
+	highSeverityViolationCount: Int!
+	visibleArcCount: Int!
+	crossBoundaryArcCount: Int!
 	maxImportance: Float!
 	maxHeight: Float!
+}
+
+type CodeCityViolationConnectionEdgeResult {
+	node: CodeCityViolationResult!
+	cursor: String!
+}
+
+type CodeCityViolationConnectionResult {
+	totalCount: Int!
+	edges: [CodeCityViolationConnectionEdgeResult!]!
+	pageInfo: PageInfo!
+}
+
+type CodeCityViolationEvidenceResult {
+	evidenceId: String!
+	edgeId: String
+	edgeKind: String!
+	fromSymbolId: String
+	toSymbolId: String
+	fromArtefactId: String
+	toArtefactId: String
+	startLine: Int
+	endLine: Int
+	toSymbolRef: String
+}
+
+input CodeCityViolationFilterInput {
+	severity: CodeCityViolationSeverityResult
+	severities: [CodeCityViolationSeverityResult!]
+	pattern: CodeCityViolationPatternResult
+	rule: CodeCityViolationRuleResult
+	boundaryId: String
+	path: String
+	fromPath: String
+	toPath: String
+	includeSuppressed: Boolean
+}
+
+enum CodeCityViolationPatternResult {
+	LAYERED
+	HEXAGONAL
+	MODULAR
+	EVENT_DRIVEN
+	CROSS_BOUNDARY
+	CYCLE
+	MUD
+}
+
+type CodeCityViolationResult {
+	id: String!
+	runId: String!
+	commitSha: String
+	boundaryId: String
+	boundaryRoot: String
+	pattern: CodeCityViolationPatternResult!
+	rule: CodeCityViolationRuleResult!
+	severity: CodeCityViolationSeverityResult!
+	fromPath: String!
+	toPath: String
+	fromZone: String
+	toZone: String
+	fromBoundaryId: String
+	toBoundaryId: String
+	arcId: String
+	message: String!
+	explanation: String!
+	recommendation: String
+	evidenceIds: [String!]!
+	evidence: [CodeCityViolationEvidenceResult!]!
+	confidence: Float!
+	suppressed: Boolean!
+}
+
+type CodeCityViolationRuleCountResult {
+	rule: CodeCityViolationRuleResult!
+	count: Int!
+	severity: CodeCityViolationSeverityResult!
+}
+
+type CodeCityViolationRuleLegendResult {
+	rule: CodeCityViolationRuleResult!
+	pattern: CodeCityViolationPatternResult!
+	severity: CodeCityViolationSeverityResult!
+	description: String!
+}
+
+enum CodeCityViolationRuleResult {
+	LAYERED_UPWARD_DEPENDENCY
+	LAYERED_SKIPPED_LAYER
+	HEXAGONAL_CORE_IMPORTS_PERIPHERY
+	HEXAGONAL_CORE_IMPORTS_EXTERNAL
+	HEXAGONAL_APPLICATION_IMPORTS_EDGE
+	MODULAR_INTERNAL_CROSS_MODULE_DEPENDENCY
+	MODULAR_BROAD_BRIDGE_FILE
+	EVENT_DRIVEN_DIRECT_PEER_DEPENDENCY
+	CROSS_BOUNDARY_CYCLE
+	CROSS_BOUNDARY_HIGH_COUPLING
+}
+
+enum CodeCityViolationSeverityResult {
+	HIGH
+	MEDIUM
+	LOW
+	INFO
+}
+
+type CodeCityViolationSummaryResult {
+	total: Int!
+	high: Int!
+	medium: Int!
+	low: Int!
+	info: Int!
+	byRule: [CodeCityViolationRuleCountResult!]!
 }
 
 type CodeCityWorldResult {
@@ -561,12 +896,15 @@ type CodeCityWorldResult {
 	commitSha: String
 	configFingerprint: String!
 	summary: CodeCitySummaryResult!
+	health: CodeCityHealthOverviewResult!
+	legends: CodeCityLegendsResult!
 	layout: CodeCityLayoutResult!
 	boundaries: [CodeCityBoundaryResult!]!
 	macroGraph: CodeCityMacroGraphResult
 	architecture: CodeCityArchitectureReportResult
 	boundaryLayouts: [CodeCityBoundaryLayoutSummaryResult!]!
 	buildings: [CodeCityBuildingResult!]!
+	arcs: [CodeCityRenderArcResult!]!
 	dependencyArcs: [CodeCityDependencyArcResult!]!
 	diagnostics: [CodeCityDiagnosticResult!]!
 }
@@ -1142,8 +1480,11 @@ type Project {
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
-	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean, includeBoundaries: Boolean, includeArchitecture: Boolean, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean): CodeCityWorldResult!
+	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean, includeBoundaries: Boolean, includeArchitecture: Boolean, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean, includeHealth: Boolean, analysisWindowMonths: Int): CodeCityWorldResult!
 	codeCityArchitecture(first: Int! = 500, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean): CodeCityArchitectureResult!
+	codeCityViolations(filter: CodeCityViolationFilterInput, first: Int, after: String, last: Int, before: String): CodeCityViolationConnectionResult!
+	codeCityFile(path: String!, incomingFirst: Int, outgoingFirst: Int): CodeCityFileDetailResult!
+	codeCityArcs(filter: CodeCityArcFilterInput, first: Int, after: String, last: Int, before: String): CodeCityArcConnectionResult!
 }
 
 type QueryRoot {

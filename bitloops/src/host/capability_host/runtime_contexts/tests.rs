@@ -16,8 +16,8 @@ use crate::host::capability_host::contexts::{
     CapabilityMigrationContext, KnowledgeExecutionContext, KnowledgeIngestContext,
 };
 use crate::host::capability_host::gateways::{
-    BlobPayloadGateway, CanonicalGraphGateway, LanguageServicesGateway, ProvenanceBuilder,
-    RelationalGateway, StoreHealthGateway,
+    BlobPayloadGateway, CanonicalGraphGateway, EmptyGitHistoryGateway, LanguageServicesGateway,
+    ProvenanceBuilder, RelationalGateway, StoreHealthGateway,
 };
 use crate::host::devql::RepoIdentity;
 use crate::host::inference::LocalInferenceGateway;
@@ -364,6 +364,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let git_history = EmptyGitHistoryGateway;
     let inference = empty_inference_gateway();
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
@@ -379,6 +380,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
         &provenance,
         &graph,
         &stores,
+        &git_history,
         &inference,
         None,
         languages,
@@ -417,6 +419,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let git_history = EmptyGitHistoryGateway;
     let inference = empty_inference_gateway();
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
@@ -432,6 +435,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
         &provenance,
         &graph,
         &stores,
+        &git_history,
         &inference,
         None,
         languages,
@@ -469,6 +473,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let git_history = EmptyGitHistoryGateway;
     let inference = empty_inference_gateway();
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
@@ -484,6 +489,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
         &provenance,
         &graph,
         &stores,
+        &git_history,
         &inference,
         None,
         languages,
@@ -548,6 +554,7 @@ fn clone_edges_rebuild_relational_requires_devql_attachment() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let git_history = EmptyGitHistoryGateway;
     let inference = empty_inference_gateway();
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
@@ -563,6 +570,7 @@ fn clone_edges_rebuild_relational_requires_devql_attachment() {
         &provenance,
         &graph,
         &stores,
+        &git_history,
         &inference,
         None,
         languages,
@@ -598,6 +606,7 @@ fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let git_history = EmptyGitHistoryGateway;
     let inference = empty_inference_gateway();
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
@@ -613,6 +622,7 @@ fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
         &provenance,
         &graph,
         &stores,
+        &git_history,
         &inference,
         None,
         languages,
@@ -649,6 +659,7 @@ fn health_context_config_view_reads_capability_slice() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let git_history = EmptyGitHistoryGateway;
     let inference = empty_inference_gateway();
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
@@ -664,6 +675,7 @@ fn health_context_config_view_reads_capability_slice() {
         &provenance,
         &graph,
         &stores,
+        &git_history,
         &inference,
         None,
         languages,
@@ -695,6 +707,7 @@ fn knowledge_contexts_delegate_to_dummy_repositories() {
     let provenance = DummyProvenance;
     let graph = DummyGraph;
     let stores = DummyStores;
+    let git_history = EmptyGitHistoryGateway;
     let inference = empty_inference_gateway();
     let languages = builtin_language_services().expect("built-in language services");
     let runtime = LocalCapabilityRuntime::new(
@@ -710,6 +723,7 @@ fn knowledge_contexts_delegate_to_dummy_repositories() {
         &provenance,
         &graph,
         &stores,
+        &git_history,
         &inference,
         None,
         languages,

@@ -13,8 +13,10 @@ use crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPa
 use crate::host::capability_host::CapabilityMailboxRegistration;
 use crate::host::capability_host::gateways::{
     CanonicalGraphGateway, CapabilityMailboxStatus, CapabilityWorkplaneEnqueueResult,
-    CapabilityWorkplaneGateway, CapabilityWorkplaneJob, ProvenanceBuilder, StoreHealthGateway,
+    CapabilityWorkplaneGateway, CapabilityWorkplaneJob, FileHistoryEvent, GitHistoryGateway,
+    GitHistoryRequest, ProvenanceBuilder, StoreHealthGateway,
 };
+use crate::host::checkpoints::strategy::manual_commit::{run_git, try_head_hash};
 use crate::host::runtime_store::{
     RepoSqliteRuntimeStore, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
     SemanticSummaryMailboxItemInsert,
@@ -50,6 +52,106 @@ impl StoreHealthGateway for LocalStoreHealthGateway {
     fn check_blobs(&self) -> Result<()> {
         Ok(())
     }
+}
+
+pub struct LocalGitHistoryGateway;
+
+impl GitHistoryGateway for LocalGitHistoryGateway {
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn resolve_head(&self, repo_root: &Path) -> Result<Option<String>> {
+        try_head_hash(repo_root)
+    }
+
+    fn load_file_history(
+        &self,
+        repo_root: &Path,
+        request: GitHistoryRequest<'_>,
+    ) -> Result<Vec<FileHistoryEvent>> {
+        if request.paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let since = format!("--since=@{}", request.since_unix);
+        let revision = request.until_commit_sha.unwrap_or("HEAD");
+        let format = "--format=%x1e%H%x1f%an%x1f%ae%x1f%ct%x1f%s";
+        let mut args = vec![
+            "log".to_string(),
+            revision.to_string(),
+            since,
+            "--name-only".to_string(),
+            format.to_string(),
+            "--no-color".to_string(),
+            "--".to_string(),
+        ];
+        args.extend(request.paths.iter().cloned());
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let raw = run_git(repo_root, &arg_refs)?;
+        Ok(parse_file_history_log(&raw, request.bug_patterns))
+    }
+}
+
+fn parse_file_history_log(raw: &str, bug_patterns: &[String]) -> Vec<FileHistoryEvent> {
+    let mut events = Vec::new();
+    for record in raw.split('\u{1e}') {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+        let mut lines = record.lines();
+        let Some(header) = lines.next() else {
+            continue;
+        };
+        let mut parts = header.split('\u{1f}');
+        let Some(commit_sha) = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let author_name = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let author_email = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let committed_at_unix = parts
+            .next()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or_default();
+        let message = parts.next().unwrap_or_default().trim().to_string();
+        let is_bug_fix = message_matches_bug_patterns(&message, bug_patterns);
+
+        for path in lines.map(str::trim).filter(|line| !line.is_empty()) {
+            events.push(FileHistoryEvent {
+                path: path.to_string(),
+                commit_sha: commit_sha.to_string(),
+                author_name: author_name.clone(),
+                author_email: author_email.clone(),
+                committed_at_unix,
+                message: message.clone(),
+                is_bug_fix,
+                changed_ranges: Vec::new(),
+            });
+        }
+    }
+    events
+}
+
+fn message_matches_bug_patterns(message: &str, bug_patterns: &[String]) -> bool {
+    let message = message.to_ascii_lowercase();
+    bug_patterns
+        .iter()
+        .map(|pattern| pattern.trim().to_ascii_lowercase())
+        .filter(|pattern| !pattern.is_empty())
+        .any(|pattern| message.contains(&pattern))
 }
 
 #[derive(Clone)]

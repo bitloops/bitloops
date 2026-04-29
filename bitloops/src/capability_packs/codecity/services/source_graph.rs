@@ -49,8 +49,14 @@ pub struct CodeCitySourceEdge {
     pub from_path: String,
     pub to_path: String,
     pub from_symbol_id: String,
+    pub from_artefact_id: String,
     pub to_symbol_id: Option<String>,
+    pub to_artefact_id: Option<String>,
+    pub to_symbol_ref: Option<String>,
     pub edge_kind: String,
+    pub language: String,
+    pub start_line: Option<i64>,
+    pub end_line: Option<i64>,
     pub metadata: String,
 }
 
@@ -197,8 +203,14 @@ pub(crate) fn build_source_graph_from_records(
             from_path: edge.path,
             to_path: target_path,
             from_symbol_id: edge.from_symbol_id,
+            from_artefact_id: edge.from_artefact_id,
             to_symbol_id: edge.to_symbol_id,
+            to_artefact_id: edge.to_artefact_id,
+            to_symbol_ref: edge.to_symbol_ref,
             edge_kind: normalise_edge_kind(&edge.edge_kind),
+            language: edge.language,
+            start_line: edge.start_line,
+            end_line: edge.end_line,
             metadata: edge.metadata,
         });
     }

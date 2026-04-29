@@ -170,8 +170,27 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
                       macroEdgeCount
                       includedFileCount
                       excludedFileCount
+                      unhealthyFloorCount
+                      insufficientHealthDataCount
+                      coverageAvailable
+                      gitHistoryAvailable
                       maxImportance
                       maxHeight
+                    }
+                    health {
+                      status
+                      analysisWindowMonths
+                      confidence
+                      missingSignals
+                      coverageAvailable
+                      gitHistoryAvailable
+                      weights {
+                        churn
+                        complexity
+                        bugs
+                        coverage
+                        authorConcentration
+                      }
                     }
                     layout {
                       layoutKind
@@ -269,6 +288,18 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
                         footprintArea
                         height
                       }
+                      healthRisk
+                      healthStatus
+                      healthConfidence
+                      colour
+                      healthSummary {
+                        floorCount
+                        highRiskFloorCount
+                        insufficientDataFloorCount
+                        averageRisk
+                        maxRisk
+                        missingSignals
+                      }
                       floors {
                         name
                         canonicalKind
@@ -277,8 +308,28 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
                         loc
                         floorIndex
                         floorHeight
+                        healthRisk
                         colour
                         healthStatus
+                        healthConfidence
+                        healthMetrics {
+                          churn
+                          complexity
+                          bugCount
+                          coverage
+                          authorConcentration
+                        }
+                        healthEvidence {
+                          commitsTouching
+                          bugFixCommits
+                          distinctAuthors
+                          coveredLines
+                          totalCoverableLines
+                          complexitySource
+                          coverageSource
+                          gitHistorySource
+                          missingSignals
+                        }
                       }
                     }
                     dependencyArcs {
@@ -310,7 +361,8 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     assert_eq!(world["stage"], "codecity_world");
     assert_eq!(world["status"], "ok");
     assert_eq!(world["repoId"], repo_id);
-    assert_eq!(world["commitSha"], serde_json::Value::Null);
+    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(world["commitSha"], commit_sha);
     assert_eq!(world["summary"]["fileCount"], 3);
     assert_eq!(world["summary"]["artefactCount"], 2);
     assert_eq!(world["summary"]["dependencyCount"], 1);
@@ -318,8 +370,23 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     assert_eq!(world["summary"]["macroEdgeCount"], 0);
     assert_eq!(world["summary"]["includedFileCount"], 2);
     assert_eq!(world["summary"]["excludedFileCount"], 1);
+    assert_eq!(world["summary"]["unhealthyFloorCount"], 0);
+    assert_eq!(world["summary"]["insufficientHealthDataCount"], 0);
+    assert_eq!(world["summary"]["coverageAvailable"], false);
+    assert_eq!(world["summary"]["gitHistoryAvailable"], true);
     assert_close(&world["summary"]["maxImportance"], 0.85);
     assert_close(&world["summary"]["maxHeight"], 0.36);
+    assert_eq!(world["health"]["status"], "partial");
+    assert_eq!(world["health"]["analysisWindowMonths"], 6);
+    assert_close(&world["health"]["confidence"], 0.85);
+    assert_eq!(world["health"]["missingSignals"], json!(["coverage"]));
+    assert_eq!(world["health"]["coverageAvailable"], false);
+    assert_eq!(world["health"]["gitHistoryAvailable"], true);
+    assert_close(&world["health"]["weights"]["churn"], 0.30);
+    assert_close(&world["health"]["weights"]["complexity"], 0.25);
+    assert_close(&world["health"]["weights"]["bugs"], 0.20);
+    assert_close(&world["health"]["weights"]["coverage"], 0.15);
+    assert_close(&world["health"]["weights"]["authorConcentration"], 0.10);
     assert_eq!(world["layout"]["layoutKind"], "phase1_grid_treemap");
     assert_close(&world["layout"]["gap"], 0.5);
     assert_close(&world["layout"]["width"], 13.141498903022176);
@@ -352,19 +419,51 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     assert_close(&buildings[0]["geometry"]["z"], 0.25);
     assert_close(&buildings[0]["geometry"]["width"], 11.141498903022176);
     assert_close(&buildings[0]["geometry"]["height"], 0.36);
+    assert_eq!(buildings[0]["healthStatus"], "partial");
+    assert_close(&buildings[0]["healthConfidence"], 0.85);
+    assert_close(&buildings[0]["healthSummary"]["maxRisk"], 0.0);
     assert_eq!(
-        buildings[0]["floors"],
-        json!([{
-            "name": "target",
-            "canonicalKind": "function",
-            "startLine": 1,
-            "endLine": 3,
-            "loc": 3,
-            "floorIndex": 0,
-            "floorHeight": 0.36,
-            "colour": "#888888",
-            "healthStatus": "insufficient_data"
-        }])
+        buildings[0]["healthSummary"]["missingSignals"],
+        json!(["coverage"])
+    );
+    let target_floor = &buildings[0]["floors"][0];
+    assert_eq!(target_floor["name"], "target");
+    assert_eq!(target_floor["canonicalKind"], "function");
+    assert_eq!(target_floor["startLine"], 1);
+    assert_eq!(target_floor["endLine"], 3);
+    assert_eq!(target_floor["loc"], 3);
+    assert_eq!(target_floor["floorIndex"], 0);
+    assert_close(&target_floor["floorHeight"], 0.36);
+    assert_eq!(target_floor["colour"], "#6B8FA3");
+    assert_eq!(target_floor["healthStatus"], "partial");
+    assert_close(&target_floor["healthRisk"], 0.0);
+    assert_close(&target_floor["healthConfidence"], 0.85);
+    assert_eq!(target_floor["healthMetrics"]["churn"], 1);
+    assert_close(&target_floor["healthMetrics"]["complexity"], 1.0);
+    assert_eq!(target_floor["healthMetrics"]["bugCount"], 0);
+    assert_eq!(
+        target_floor["healthMetrics"]["coverage"],
+        serde_json::Value::Null
+    );
+    assert_close(&target_floor["healthMetrics"]["authorConcentration"], 1.0);
+    assert_eq!(target_floor["healthEvidence"]["commitsTouching"], 1);
+    assert_eq!(target_floor["healthEvidence"]["bugFixCommits"], 0);
+    assert_eq!(target_floor["healthEvidence"]["distinctAuthors"], 1);
+    assert_eq!(
+        target_floor["healthEvidence"]["coverageSource"],
+        "unavailable"
+    );
+    assert_eq!(
+        target_floor["healthEvidence"]["gitHistorySource"],
+        "file_level_fallback"
+    );
+    assert_eq!(
+        target_floor["healthEvidence"]["complexitySource"],
+        "structural_proxy"
+    );
+    assert_eq!(
+        target_floor["healthEvidence"]["missingSignals"],
+        json!(["coverage"])
     );
 
     assert_close(&buildings[1]["importance"]["score"], 0.0);
@@ -378,19 +477,50 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
     assert_close(&buildings[1]["geometry"]["z"], 0.25);
     assert_close(&buildings[1]["geometry"]["width"], 1.0);
     assert_close(&buildings[1]["geometry"]["height"], 0.36);
+    assert_eq!(buildings[1]["healthStatus"], "partial");
+    assert_close(&buildings[1]["healthConfidence"], 0.85);
+    assert_close(&buildings[1]["healthSummary"]["maxRisk"], 0.25 / 0.85);
     assert_eq!(
-        buildings[1]["floors"],
-        json!([{
-            "name": "caller",
-            "canonicalKind": "function",
-            "startLine": 4,
-            "endLine": 6,
-            "loc": 3,
-            "floorIndex": 0,
-            "floorHeight": 0.36,
-            "colour": "#888888",
-            "healthStatus": "insufficient_data"
-        }])
+        buildings[1]["healthSummary"]["missingSignals"],
+        json!(["coverage"])
+    );
+    let caller_floor = &buildings[1]["floors"][0];
+    assert_eq!(caller_floor["name"], "caller");
+    assert_eq!(caller_floor["canonicalKind"], "function");
+    assert_eq!(caller_floor["startLine"], 4);
+    assert_eq!(caller_floor["endLine"], 6);
+    assert_eq!(caller_floor["loc"], 3);
+    assert_eq!(caller_floor["floorIndex"], 0);
+    assert_close(&caller_floor["floorHeight"], 0.36);
+    assert_eq!(caller_floor["healthStatus"], "partial");
+    assert_close(&caller_floor["healthRisk"], 0.25 / 0.85);
+    assert_close(&caller_floor["healthConfidence"], 0.85);
+    assert_eq!(caller_floor["healthMetrics"]["churn"], 1);
+    assert_close(&caller_floor["healthMetrics"]["complexity"], 2.0);
+    assert_eq!(caller_floor["healthMetrics"]["bugCount"], 0);
+    assert_eq!(
+        caller_floor["healthMetrics"]["coverage"],
+        serde_json::Value::Null
+    );
+    assert_close(&caller_floor["healthMetrics"]["authorConcentration"], 1.0);
+    assert_eq!(caller_floor["healthEvidence"]["commitsTouching"], 1);
+    assert_eq!(caller_floor["healthEvidence"]["bugFixCommits"], 0);
+    assert_eq!(caller_floor["healthEvidence"]["distinctAuthors"], 1);
+    assert_eq!(
+        caller_floor["healthEvidence"]["coverageSource"],
+        "unavailable"
+    );
+    assert_eq!(
+        caller_floor["healthEvidence"]["gitHistorySource"],
+        "file_level_fallback"
+    );
+    assert_eq!(
+        caller_floor["healthEvidence"]["complexitySource"],
+        "structural_proxy"
+    );
+    assert_eq!(
+        caller_floor["healthEvidence"]["missingSignals"],
+        json!(["coverage"])
     );
 
     assert_eq!(
@@ -481,11 +611,11 @@ async fn devql_project_codecity_world_scopes_current_data_and_rejects_temporal_s
         })
         .collect::<Vec<_>>();
     assert!(diagnostic_codes.contains(&"codecity.source.cross_scope_edges_ignored".to_string()));
-    assert!(diagnostic_codes.contains(&"codecity.health.deferred".to_string()));
+    assert!(diagnostic_codes.contains(&"codecity.health.coverage_not_indexed".to_string()));
+    assert!(diagnostic_codes.contains(&"codecity.health.history_file_level_fallback".to_string()));
     assert!(diagnostic_codes.contains(&"codecity.loc.line_span_phase1".to_string()));
     assert!(diagnostic_codes.contains(&"codecity.zone.disagreement".to_string()));
 
-    let commit_sha = git_ok(repo.path(), &["rev-parse", "HEAD"]);
     let temporal = schema
         .execute(async_graphql::Request::new(format!(
             r#"

@@ -255,6 +255,7 @@ mod tests {
             atomic: true,
             architecture: None,
             layout: None,
+            violation_summary: Default::default(),
             diagnostics: Vec::new(),
         }
     }
@@ -285,8 +286,14 @@ mod tests {
                 from_path: "apps/api/src/a.ts".to_string(),
                 to_path: "libs/core/src/b.ts".to_string(),
                 from_symbol_id: "a".to_string(),
+                from_artefact_id: "artefact-a".to_string(),
                 to_symbol_id: Some("b".to_string()),
+                to_artefact_id: Some("artefact-b".to_string()),
+                to_symbol_ref: Some("libs/core/src/b.ts::b".to_string()),
                 edge_kind: "imports".to_string(),
+                language: "typescript".to_string(),
+                start_line: Some(1),
+                end_line: Some(1),
                 metadata: "{}".to_string(),
             }],
             external_dependency_hints: Vec::new(),

@@ -242,6 +242,7 @@ mod tests {
             atomic: true,
             architecture: None,
             layout: None,
+            violation_summary: Default::default(),
             diagnostics: Vec::new(),
         }
     }

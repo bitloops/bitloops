@@ -1,11 +1,15 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use crate::capability_packs::codecity::services::architecture::analyse_codecity_architecture;
 use crate::capability_packs::codecity::services::config::CodeCityConfig;
+use crate::capability_packs::codecity::services::health::apply_health_overlay;
+use crate::capability_packs::codecity::services::phase4::enrich_world_with_phase4;
 use crate::capability_packs::codecity::services::source_graph::load_current_source_graph;
 use crate::capability_packs::codecity::services::world::build_codecity_world;
+use crate::capability_packs::codecity::storage::SqliteCodeCityRepository;
 use crate::capability_packs::codecity::types::{
-    CODECITY_WORLD_STAGE_ID, codecity_current_scope_required_stage_response,
+    CODECITY_WORLD_STAGE_ID, CodeCityDiagnostic, codecity_current_scope_required_stage_response,
     codecity_source_data_unavailable_stage_response,
 };
 use crate::host::capability_host::{
@@ -77,7 +81,96 @@ impl StageHandler for CodeCityWorldStageHandler {
                 Err(err) => return Err(err),
             };
 
-            let mut world = build_codecity_world(source, &repo_id, None, config, ctx.repo_root())?;
+            let current_head = ctx
+                .git_history()
+                .resolve_head(ctx.repo_root())
+                .unwrap_or(None);
+            let mut world = build_codecity_world(
+                &source,
+                &repo_id,
+                current_head,
+                config.clone(),
+                ctx.repo_root(),
+            )?;
+            let codecity_repo = SqliteCodeCityRepository::open_for_repo_root(ctx.repo_root())
+                .and_then(|repo| {
+                    repo.initialise_schema()?;
+                    Ok(repo)
+                });
+            let loaded_health = if config.include_health {
+                match codecity_repo.as_ref() {
+                    Ok(repo) => repo.try_apply_current_snapshot(&mut world)?,
+                    Err(_) => false,
+                }
+            } else {
+                false
+            };
+            if !loaded_health {
+                apply_health_overlay(
+                    &mut world,
+                    &source,
+                    &config,
+                    ctx.repo_root(),
+                    ctx.git_history(),
+                    ctx.test_harness_store(),
+                )?;
+                if config.include_health {
+                    match codecity_repo.as_ref() {
+                        Ok(repo) => {
+                            if let Err(err) = repo.replace_current_snapshot(&world) {
+                                world.diagnostics.push(CodeCityDiagnostic {
+                                    code: "codecity.health.persistence_unavailable".to_string(),
+                                    severity: "warning".to_string(),
+                                    message: format!(
+                                        "CodeCity health was computed but could not be persisted: {err:#}"
+                                    ),
+                                    path: None,
+                                    boundary_id: None,
+                                });
+                            }
+                        }
+                        Err(err) => {
+                            world.diagnostics.push(CodeCityDiagnostic {
+                                code: "codecity.health.persistence_unavailable".to_string(),
+                                severity: "warning".to_string(),
+                                message: format!(
+                                    "CodeCity health was computed but no snapshot store was available: {err:#}"
+                                ),
+                                path: None,
+                                boundary_id: None,
+                            });
+                        }
+                    }
+                }
+            }
+            let analysis = analyse_codecity_architecture(&source, &config, ctx.repo_root());
+            let phase4_snapshot = enrich_world_with_phase4(&source, &analysis, &mut world, &config);
+            match codecity_repo.as_ref() {
+                Ok(repo) => {
+                    if let Err(err) = repo.replace_phase4_snapshot(&phase4_snapshot) {
+                        world.diagnostics.push(CodeCityDiagnostic {
+                            code: "codecity.phase4.persistence_unavailable".to_string(),
+                            severity: "warning".to_string(),
+                            message: format!(
+                                "CodeCity architecture diagnostics were computed but could not be persisted: {err:#}"
+                            ),
+                            path: None,
+                            boundary_id: None,
+                        });
+                    }
+                }
+                Err(err) => {
+                    world.diagnostics.push(CodeCityDiagnostic {
+                        code: "codecity.phase4.persistence_unavailable".to_string(),
+                        severity: "warning".to_string(),
+                        message: format!(
+                            "CodeCity architecture diagnostics were computed but no snapshot store was available: {err:#}"
+                        ),
+                        path: None,
+                        boundary_id: None,
+                    });
+                }
+            }
             if world.buildings.len() > limit {
                 world.buildings.truncate(limit);
             }

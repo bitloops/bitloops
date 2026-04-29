@@ -11,15 +11,20 @@ pub struct CodeCityConfig {
     pub height: HeightConfig,
     pub layout: LayoutConfig,
     pub colours: ColourConfig,
+    pub health: CodeCityHealthConfig,
     pub exclusions: Vec<String>,
     pub include_dependency_arcs: bool,
     pub include_boundaries: bool,
     pub include_architecture: bool,
     pub include_macro_edges: bool,
     pub include_zone_diagnostics: bool,
+    pub include_health: bool,
     pub boundaries: CodeCityBoundaryConfig,
     pub architecture: CodeCityArchitectureConfig,
     pub zones: CodeCityZoneConfig,
+    pub violations: CodeCityViolationConfig,
+    pub arcs: CodeCityArcConfig,
+    pub selection: CodeCitySelectionConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -55,6 +60,19 @@ pub struct ColourConfig {
     pub healthy: String,
     pub moderate: String,
     pub high_risk: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthConfig {
+    pub analysis_window_months: u32,
+    pub minimum_history_age_days: u32,
+    pub churn_weight: f64,
+    pub complexity_weight: f64,
+    pub bug_weight: f64,
+    pub coverage_weight: f64,
+    pub author_concentration_weight: f64,
+    pub bug_commit_patterns: Vec<String>,
+    pub insufficient_data_requires_non_complexity_signal: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -101,6 +119,38 @@ pub struct CodeCityZoneConventions {
     pub ports: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityViolationConfig {
+    pub enabled: bool,
+    pub include_secondary_architecture_patterns: bool,
+    pub include_cross_boundary_rules: bool,
+    pub include_cycle_diagnostics: bool,
+    pub modular_bridge_module_threshold: usize,
+    pub cross_boundary_high_coupling_absolute_threshold: f64,
+    pub cross_boundary_high_coupling_percentile: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityArcConfig {
+    pub enabled: bool,
+    pub base_arc_lift: f64,
+    pub arc_lift_scale: f64,
+    pub start_offset: f64,
+    pub end_offset: f64,
+    pub max_world_arcs: usize,
+    pub max_violation_arcs: usize,
+    pub max_selection_arcs: usize,
+    pub include_cycle_arcs: bool,
+    pub include_bridge_arcs: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCitySelectionConfig {
+    pub incoming_limit: usize,
+    pub outgoing_limit: usize,
+    pub violation_limit: usize,
+}
+
 impl Default for CodeCityConfig {
     fn default() -> Self {
         Self {
@@ -131,6 +181,23 @@ impl Default for CodeCityConfig {
                 moderate: "#D4A04A".to_string(),
                 high_risk: "#C23B22".to_string(),
             },
+            health: CodeCityHealthConfig {
+                analysis_window_months: 6,
+                minimum_history_age_days: 14,
+                churn_weight: 0.30,
+                complexity_weight: 0.25,
+                bug_weight: 0.20,
+                coverage_weight: 0.15,
+                author_concentration_weight: 0.10,
+                bug_commit_patterns: vec![
+                    "fix".to_string(),
+                    "bug".to_string(),
+                    "patch".to_string(),
+                    "hotfix".to_string(),
+                    "revert".to_string(),
+                ],
+                insufficient_data_requires_non_complexity_signal: true,
+            },
             exclusions: vec![
                 "vendor/**".to_string(),
                 "node_modules/**".to_string(),
@@ -143,6 +210,7 @@ impl Default for CodeCityConfig {
             include_architecture: true,
             include_macro_edges: true,
             include_zone_diagnostics: true,
+            include_health: true,
             boundaries: CodeCityBoundaryConfig {
                 manifest_files: vec![
                     "package.json".to_string(),
@@ -245,6 +313,32 @@ impl Default for CodeCityConfig {
                     ],
                 },
             },
+            violations: CodeCityViolationConfig {
+                enabled: true,
+                include_secondary_architecture_patterns: true,
+                include_cross_boundary_rules: true,
+                include_cycle_diagnostics: true,
+                modular_bridge_module_threshold: 4,
+                cross_boundary_high_coupling_absolute_threshold: 10.0,
+                cross_boundary_high_coupling_percentile: 0.90,
+            },
+            arcs: CodeCityArcConfig {
+                enabled: true,
+                base_arc_lift: 5.0,
+                arc_lift_scale: 0.15,
+                start_offset: 0.5,
+                end_offset: 0.5,
+                max_world_arcs: 200,
+                max_violation_arcs: 500,
+                max_selection_arcs: 200,
+                include_cycle_arcs: true,
+                include_bridge_arcs: true,
+            },
+            selection: CodeCitySelectionConfig {
+                incoming_limit: 100,
+                outgoing_limit: 100,
+                violation_limit: 50,
+            },
         }
     }
 }
@@ -275,8 +369,15 @@ impl CodeCityConfig {
                 "include_zone_diagnostics" => {
                     config.include_zone_diagnostics = bool_arg("include_zone_diagnostics", value)?;
                 }
+                "include_health" => {
+                    config.include_health = bool_arg("include_health", value)?;
+                }
                 "architecture_enabled" => {
                     config.architecture.enabled = bool_arg("architecture_enabled", value)?;
+                }
+                "analysis_window_months" => {
+                    config.health.analysis_window_months =
+                        integer_arg("analysis_window_months", value)?;
                 }
                 "min_footprint" => {
                     config.importance.min_footprint = numeric_arg("min_footprint", value)?;
@@ -319,6 +420,14 @@ impl CodeCityConfig {
             ("base_floor_height", self.height.base_floor_height),
             ("loc_scale", self.height.loc_scale),
             ("max_height", self.height.max_height),
+            ("churn_weight", self.health.churn_weight),
+            ("complexity_weight", self.health.complexity_weight),
+            ("bug_weight", self.health.bug_weight),
+            ("coverage_weight", self.health.coverage_weight),
+            (
+                "author_concentration_weight",
+                self.health.author_concentration_weight,
+            ),
             ("building_gap", self.layout.building_gap),
             ("building_padding", self.layout.building_padding),
             ("target_aspect_ratio", self.layout.target_aspect_ratio),
@@ -352,6 +461,19 @@ impl CodeCityConfig {
                 "secondary_pattern_threshold",
                 self.architecture.secondary_pattern_threshold,
             ),
+            (
+                "cross_boundary_high_coupling_absolute_threshold",
+                self.violations
+                    .cross_boundary_high_coupling_absolute_threshold,
+            ),
+            (
+                "cross_boundary_high_coupling_percentile",
+                self.violations.cross_boundary_high_coupling_percentile,
+            ),
+            ("base_arc_lift", self.arcs.base_arc_lift),
+            ("arc_lift_scale", self.arcs.arc_lift_scale),
+            ("start_offset", self.arcs.start_offset),
+            ("end_offset", self.arcs.end_offset),
         ] {
             if !value.is_finite() {
                 bail!("`{name}` must be finite");
@@ -371,6 +493,23 @@ impl CodeCityConfig {
             ("pagerank_threshold", self.importance.pagerank_threshold),
             ("base_floor_height", self.height.base_floor_height),
             ("loc_scale", self.height.loc_scale),
+            ("churn_weight", self.health.churn_weight),
+            ("complexity_weight", self.health.complexity_weight),
+            ("bug_weight", self.health.bug_weight),
+            ("coverage_weight", self.health.coverage_weight),
+            (
+                "author_concentration_weight",
+                self.health.author_concentration_weight,
+            ),
+            (
+                "cross_boundary_high_coupling_absolute_threshold",
+                self.violations
+                    .cross_boundary_high_coupling_absolute_threshold,
+            ),
+            ("base_arc_lift", self.arcs.base_arc_lift),
+            ("arc_lift_scale", self.arcs.arc_lift_scale),
+            ("start_offset", self.arcs.start_offset),
+            ("end_offset", self.arcs.end_offset),
             ("building_gap", self.layout.building_gap),
             ("building_padding", self.layout.building_padding),
             ("world_gap", self.layout.world_gap),
@@ -389,6 +528,38 @@ impl CodeCityConfig {
         }
         if self.height.max_height <= 0.0 {
             bail!("`max_height` must be greater than 0");
+        }
+        if !(1..=60).contains(&self.health.analysis_window_months) {
+            bail!("`analysis_window_months` must be between 1 and 60");
+        }
+        if self.health.minimum_history_age_days > 365 {
+            bail!("`minimum_history_age_days` must be less than or equal to 365");
+        }
+        let total_health_weight = self.health.churn_weight
+            + self.health.complexity_weight
+            + self.health.bug_weight
+            + self.health.coverage_weight
+            + self.health.author_concentration_weight;
+        if total_health_weight <= 0.0 {
+            bail!("at least one CodeCity health weight must be positive");
+        }
+        for (name, colour) in [
+            ("no_data", self.colours.no_data.as_str()),
+            ("healthy", self.colours.healthy.as_str()),
+            ("moderate", self.colours.moderate.as_str()),
+            ("high_risk", self.colours.high_risk.as_str()),
+        ] {
+            if !is_six_digit_hex_colour(colour) {
+                bail!("`{name}` must be a six-digit hex colour");
+            }
+        }
+        if self
+            .health
+            .bug_commit_patterns
+            .iter()
+            .any(|pattern| pattern.trim().is_empty())
+        {
+            bail!("bug commit patterns must not be empty");
         }
         if self.layout.target_aspect_ratio <= 0.0 {
             bail!("`target_aspect_ratio` must be greater than 0");
@@ -414,6 +585,9 @@ impl CodeCityConfig {
         if !(0.0..=1.0).contains(&self.architecture.secondary_pattern_threshold) {
             bail!("`secondary_pattern_threshold` must be between 0 and 1");
         }
+        if !(0.0..=1.0).contains(&self.violations.cross_boundary_high_coupling_percentile) {
+            bail!("`cross_boundary_high_coupling_percentile` must be between 0 and 1");
+        }
         if self.boundaries.min_runtime_boundary_files == 0 {
             bail!("`min_runtime_boundary_files` must be greater than 0");
         }
@@ -422,6 +596,21 @@ impl CodeCityConfig {
         }
         if self.boundaries.community_max_iterations == 0 {
             bail!("`community_max_iterations` must be greater than 0");
+        }
+        if self.violations.modular_bridge_module_threshold == 0 {
+            bail!("`modular_bridge_module_threshold` must be greater than 0");
+        }
+        if self.arcs.max_world_arcs == 0 {
+            bail!("`max_world_arcs` must be greater than 0");
+        }
+        if self.arcs.max_violation_arcs == 0 {
+            bail!("`max_violation_arcs` must be greater than 0");
+        }
+        if self.arcs.max_selection_arcs == 0 {
+            bail!("`max_selection_arcs` must be greater than 0");
+        }
+        if self.selection.incoming_limit == 0 || self.selection.outgoing_limit == 0 {
+            bail!("selection dependency limits must be greater than 0");
         }
 
         Ok(())
@@ -445,6 +634,20 @@ fn bool_arg(name: &str, value: &Value) -> Result<bool> {
     value
         .as_bool()
         .ok_or_else(|| anyhow!("`{name}` must be a boolean"))
+}
+
+fn integer_arg(name: &str, value: &Value) -> Result<u32> {
+    let raw = value
+        .as_u64()
+        .ok_or_else(|| anyhow!("`{name}` must be an unsigned integer"))?;
+    u32::try_from(raw).map_err(|_| anyhow!("`{name}` is too large"))
+}
+
+fn is_six_digit_hex_colour(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix('#') else {
+        return false;
+    };
+    hex.len() == 6 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
@@ -478,7 +681,9 @@ mod tests {
             "include_architecture": false,
             "include_macro_edges": false,
             "include_zone_diagnostics": false,
+            "include_health": false,
             "architecture_enabled": false,
+            "analysis_window_months": 12,
             "min_footprint": 2.0,
             "max_footprint": 20.0,
             "base_floor_height": 0.5,
@@ -491,7 +696,9 @@ mod tests {
         assert!(!config.include_architecture);
         assert!(!config.include_macro_edges);
         assert!(!config.include_zone_diagnostics);
+        assert!(!config.include_health);
         assert!(!config.architecture.enabled);
+        assert_eq!(config.health.analysis_window_months, 12);
         assert_eq!(config.importance.min_footprint, 2.0);
         assert_eq!(config.importance.max_footprint, 20.0);
         assert_eq!(config.height.base_floor_height, 0.5);
@@ -517,5 +724,27 @@ mod tests {
         assert_eq!(config.boundaries.overlap_merge_threshold, 0.7);
         assert_eq!(config.architecture.mud_warning_threshold, 0.4);
         config.validate()
+    }
+
+    #[test]
+    fn invalid_health_config_is_rejected() {
+        let mut config = CodeCityConfig::default();
+        config.health.analysis_window_months = 0;
+        let err = config
+            .validate()
+            .expect_err("zero analysis window must fail");
+        assert!(err.to_string().contains("analysis_window_months"));
+
+        let mut config = CodeCityConfig::default();
+        config.health.churn_weight = -0.1;
+        let err = config
+            .validate()
+            .expect_err("negative health weight must fail");
+        assert!(err.to_string().contains("churn_weight"));
+
+        let mut config = CodeCityConfig::default();
+        config.colours.healthy = "6B8FA3".to_string();
+        let err = config.validate().expect_err("invalid colour must fail");
+        assert!(err.to_string().contains("healthy"));
     }
 }

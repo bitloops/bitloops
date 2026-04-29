@@ -10,10 +10,12 @@ use crate::graphql::{
 use super::{
     ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
     CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
-    CodeCityArchitectureResult, CodeCityWorldResult, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext,
-    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope,
-    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    CodeCityArcConnectionResult, CodeCityArcFilterInput, CodeCityArchitectureResult,
+    CodeCityFileDetailResult, CodeCityViolationConnectionResult, CodeCityViolationFilterInput,
+    CodeCityWorldResult, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, KnowledgeItemConnection,
+    KnowledgeItemEdge, KnowledgeProvider, TemporalScope, TestHarnessCommitSummary,
+    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -409,10 +411,19 @@ impl Project {
         #[graphql(name = "includeMacroEdges")] include_macro_edges: Option<bool>,
         #[graphql(name = "includeZoneDiagnostics")] include_zone_diagnostics: Option<bool>,
         #[graphql(name = "architectureEnabled")] architecture_enabled: Option<bool>,
+        #[graphql(name = "includeHealth")] include_health: Option<bool>,
+        #[graphql(name = "analysisWindowMonths")] analysis_window_months: Option<i32>,
     ) -> Result<CodeCityWorldResult> {
         if self.scope.temporal_scope().is_some() {
             return Err(bad_user_input_error(
                 "`codeCityWorld` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 2",
+            ));
+        }
+        if let Some(months) = analysis_window_months
+            && !(1..=60).contains(&months)
+        {
+            return Err(bad_user_input_error(
+                "`analysisWindowMonths` must be between 1 and 60",
             ));
         }
 
@@ -423,14 +434,16 @@ impl Project {
         .resolve(
             &self.scope,
             Vec::new(),
-            Some(build_codecity_stage_args(
+            Some(build_codecity_stage_args(CodeCityStageArgs {
                 include_dependency_arcs,
                 include_boundaries,
                 include_architecture,
                 include_macro_edges,
                 include_zone_diagnostics,
                 architecture_enabled,
-            )),
+                include_health,
+                analysis_window_months,
+            })),
             stage_limit(first)?,
         )
         .await
@@ -460,19 +473,126 @@ impl Project {
         .resolve(
             &self.scope,
             Vec::new(),
-            Some(build_codecity_stage_args(
-                None,
-                None,
-                None,
+            Some(build_codecity_stage_args(CodeCityStageArgs {
                 include_macro_edges,
                 include_zone_diagnostics,
                 architecture_enabled,
-            )),
+                ..CodeCityStageArgs::default()
+            })),
             stage_limit(first)?,
         )
         .await
         .map_err(|err| map_stage_adapter_error("project codeCityArchitecture", err))?;
         decode_stage_single("codecity_architecture", rows)
+    }
+
+    #[graphql(name = "codeCityViolations")]
+    async fn code_city_violations(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<CodeCityViolationFilterInput>,
+        first: Option<i32>,
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<CodeCityViolationConnectionResult> {
+        if self.scope.temporal_scope().is_some() {
+            return Err(bad_user_input_error(
+                "`codeCityViolations` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 4",
+            ));
+        }
+        let pagination = ConnectionPagination::from_graphql(
+            100,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let args = build_codecity_violations_args(filter, &pagination);
+        let rows = StageResolverAdapter::new(
+            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+            "codecity_violations",
+        )
+        .resolve(&self.scope, Vec::new(), Some(args), pagination.limit())
+        .await
+        .map_err(|err| map_stage_adapter_error("project codeCityViolations", err))?;
+        decode_stage_single("codecity_violations", rows)
+    }
+
+    #[graphql(name = "codeCityFile")]
+    async fn code_city_file(
+        &self,
+        ctx: &Context<'_>,
+        path: String,
+        #[graphql(name = "incomingFirst")] incoming_first: Option<i32>,
+        #[graphql(name = "outgoingFirst")] outgoing_first: Option<i32>,
+    ) -> Result<CodeCityFileDetailResult> {
+        if self.scope.temporal_scope().is_some() {
+            return Err(bad_user_input_error(
+                "`codeCityFile` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 4",
+            ));
+        }
+        let normalized = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .resolve_scope_path(&self.scope, &path, false)
+            .map_err(bad_user_input_error)?;
+        let incoming_first = optional_positive_limit("incomingFirst", incoming_first)?;
+        let outgoing_first = optional_positive_limit("outgoingFirst", outgoing_first)?;
+        let mut args = serde_json::Map::new();
+        args.insert("path".to_string(), Value::String(normalized.clone()));
+        if let Some(limit) = incoming_first {
+            args.insert(
+                "incoming_first".to_string(),
+                Value::Number(serde_json::Number::from(limit as i64)),
+            );
+        }
+        if let Some(limit) = outgoing_first {
+            args.insert(
+                "outgoing_first".to_string(),
+                Value::Number(serde_json::Number::from(limit as i64)),
+            );
+        }
+        let rows = StageResolverAdapter::new(
+            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+            "codecity_file_detail",
+        )
+        .resolve(&self.scope, Vec::new(), Some(Value::Object(args)), 1)
+        .await
+        .map_err(|err| map_stage_adapter_error("project codeCityFile", err))?;
+        decode_stage_single("codecity_file_detail", rows)
+    }
+
+    #[graphql(name = "codeCityArcs")]
+    async fn code_city_arcs(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<CodeCityArcFilterInput>,
+        first: Option<i32>,
+        after: Option<String>,
+        last: Option<i32>,
+        before: Option<String>,
+    ) -> Result<CodeCityArcConnectionResult> {
+        if self.scope.temporal_scope().is_some() {
+            return Err(bad_user_input_error(
+                "`codeCityArcs` does not support historical or temporary `asOf(...)` scopes in CodeCity phase 4",
+            ));
+        }
+        let pagination = ConnectionPagination::from_graphql(
+            200,
+            first,
+            after.as_deref(),
+            last,
+            before.as_deref(),
+        )?;
+        let args = build_codecity_arcs_args(filter, &pagination);
+        let rows = StageResolverAdapter::new(
+            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+            "codecity_arcs",
+        )
+        .resolve(&self.scope, Vec::new(), Some(args), pagination.limit())
+        .await
+        .map_err(|err| map_stage_adapter_error("project codeCityArcs", err))?;
+        decode_stage_single("codecity_arcs", rows)
     }
 }
 
@@ -481,6 +601,18 @@ fn stage_limit(first: i32) -> Result<usize> {
         return Err(bad_user_input_error("`first` must be greater than 0"));
     }
     Ok(first as usize)
+}
+
+fn optional_positive_limit(name: &str, value: Option<i32>) -> Result<Option<usize>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value <= 0 {
+        return Err(bad_user_input_error(format!(
+            "`{name}` must be greater than 0"
+        )));
+    }
+    Ok(Some(value as usize))
 }
 
 fn build_tests_stage_args(
@@ -510,15 +642,30 @@ fn build_tests_stage_args(
     Ok(Value::Object(args))
 }
 
-fn build_codecity_stage_args(
+#[derive(Default)]
+struct CodeCityStageArgs {
     include_dependency_arcs: Option<bool>,
     include_boundaries: Option<bool>,
     include_architecture: Option<bool>,
     include_macro_edges: Option<bool>,
     include_zone_diagnostics: Option<bool>,
     architecture_enabled: Option<bool>,
-) -> Value {
+    include_health: Option<bool>,
+    analysis_window_months: Option<i32>,
+}
+
+fn build_codecity_stage_args(stage_args: CodeCityStageArgs) -> Value {
     let mut args = serde_json::Map::new();
+    let CodeCityStageArgs {
+        include_dependency_arcs,
+        include_boundaries,
+        include_architecture,
+        include_macro_edges,
+        include_zone_diagnostics,
+        architecture_enabled,
+        include_health,
+        analysis_window_months,
+    } = stage_args;
     if let Some(include_dependency_arcs) = include_dependency_arcs {
         args.insert(
             "include_dependency_arcs".to_string(),
@@ -555,7 +702,143 @@ fn build_codecity_stage_args(
             Value::Bool(architecture_enabled),
         );
     }
+    if let Some(include_health) = include_health {
+        args.insert("include_health".to_string(), Value::Bool(include_health));
+    }
+    if let Some(analysis_window_months) = analysis_window_months {
+        args.insert(
+            "analysis_window_months".to_string(),
+            Value::Number(serde_json::Number::from(analysis_window_months as i64)),
+        );
+    }
     Value::Object(args)
+}
+
+fn build_codecity_violations_args(
+    filter: Option<CodeCityViolationFilterInput>,
+    pagination: &ConnectionPagination,
+) -> Value {
+    let mut args = serde_json::Map::new();
+    insert_pagination_args(&mut args, pagination);
+    if let Some(filter) = filter {
+        if let Some(severity) = filter.severity {
+            args.insert(
+                "severity".to_string(),
+                Value::String(severity.as_stage_value().to_string()),
+            );
+        }
+        if let Some(severities) = filter.severities
+            && !severities.is_empty()
+        {
+            args.insert(
+                "severities".to_string(),
+                Value::Array(
+                    severities
+                        .into_iter()
+                        .map(|severity| Value::String(severity.as_stage_value().to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(pattern) = filter.pattern {
+            args.insert(
+                "pattern".to_string(),
+                Value::String(pattern.as_stage_value().to_string()),
+            );
+        }
+        if let Some(rule) = filter.rule {
+            args.insert(
+                "rule".to_string(),
+                Value::String(rule.as_stage_value().to_string()),
+            );
+        }
+        insert_optional_string(&mut args, "boundary_id", filter.boundary_id);
+        insert_optional_string(&mut args, "path", filter.path);
+        insert_optional_string(&mut args, "from_path", filter.from_path);
+        insert_optional_string(&mut args, "to_path", filter.to_path);
+        if let Some(include_suppressed) = filter.include_suppressed {
+            args.insert(
+                "include_suppressed".to_string(),
+                Value::Bool(include_suppressed),
+            );
+        }
+    }
+    Value::Object(args)
+}
+
+fn build_codecity_arcs_args(
+    filter: Option<CodeCityArcFilterInput>,
+    pagination: &ConnectionPagination,
+) -> Value {
+    let mut args = serde_json::Map::new();
+    insert_pagination_args(&mut args, pagination);
+    if let Some(filter) = filter {
+        if let Some(kind) = filter.kind {
+            args.insert(
+                "kind".to_string(),
+                Value::String(kind.as_stage_value().to_string()),
+            );
+        }
+        if let Some(visibility) = filter.visibility {
+            args.insert(
+                "visibility".to_string(),
+                Value::String(visibility.as_stage_value().to_string()),
+            );
+        }
+        if let Some(severity) = filter.severity {
+            args.insert(
+                "severity".to_string(),
+                Value::String(severity.as_stage_value().to_string()),
+            );
+        }
+        insert_optional_string(&mut args, "boundary_id", filter.boundary_id);
+        insert_optional_string(&mut args, "path", filter.path);
+        if let Some(direction) = filter.direction {
+            args.insert(
+                "direction".to_string(),
+                Value::String(direction.as_stage_value().to_string()),
+            );
+        }
+        if let Some(include_hidden) = filter.include_hidden {
+            args.insert("include_hidden".to_string(), Value::Bool(include_hidden));
+        }
+    }
+    Value::Object(args)
+}
+
+fn insert_pagination_args(
+    args: &mut serde_json::Map<String, Value>,
+    pagination: &ConnectionPagination,
+) {
+    match pagination {
+        ConnectionPagination::Forward { limit, after } => {
+            args.insert(
+                "first".to_string(),
+                Value::Number(serde_json::Number::from(*limit as i64)),
+            );
+            insert_optional_string(args, "after", after.clone());
+        }
+        ConnectionPagination::Backward { limit, before } => {
+            args.insert(
+                "last".to_string(),
+                Value::Number(serde_json::Number::from(*limit as i64)),
+            );
+            insert_optional_string(args, "before", before.clone());
+        }
+    }
+}
+
+fn insert_optional_string(
+    args: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<String>,
+) {
+    if let Some(value) = value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        args.insert(key.to_string(), Value::String(value));
+    }
 }
 
 fn project_stage_row_from_artefact(artefact: &super::Artefact) -> Value {
@@ -601,6 +884,7 @@ fn map_stage_adapter_error(scope: &str, err: anyhow::Error) -> async_graphql::Er
         || message.contains("ambiguous DevQL stage")
         || message.contains("extension args must")
         || message.contains("requires a resolved commit")
+        || message.contains("unknown CodeCity path")
     {
         return bad_user_input_error(message);
     }

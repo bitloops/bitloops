@@ -12,13 +12,14 @@ use super::layout::{apply_architecture_layout, apply_phase1_layout};
 use super::source_graph::CodeCitySourceGraph;
 use crate::capability_packs::codecity::types::{
     CODECITY_CAPABILITY_ID, CODECITY_ROOT_BOUNDARY_ID, CODECITY_WORLD_STAGE_ID,
-    CodeCityBoundaryLayoutSummary, CodeCityBuilding, CodeCityDiagnostic, CodeCityGeometry,
-    CodeCityImportance, CodeCityLayoutStrategy, CodeCityLayoutSummary, CodeCitySize,
-    CodeCitySummary, CodeCityWorldPayload,
+    CodeCityBoundaryLayoutSummary, CodeCityBuilding, CodeCityBuildingHealthSummary,
+    CodeCityDiagnostic, CodeCityGeometry, CodeCityHealthOverview, CodeCityHealthWeights,
+    CodeCityImportance, CodeCityLayoutStrategy, CodeCityLayoutSummary, CodeCityLegends,
+    CodeCitySize, CodeCitySummary, CodeCityWorldPayload,
 };
 
 pub fn build_codecity_world(
-    source: CodeCitySourceGraph,
+    source: &CodeCitySourceGraph,
     repo_id: &str,
     commit_sha: Option<String>,
     config: CodeCityConfig,
@@ -38,15 +39,6 @@ pub fn build_codecity_world(
         .filter(|artefact| !is_file_artefact(artefact))
         .count();
 
-    diagnostics.push(CodeCityDiagnostic {
-        code: "codecity.health.deferred".to_string(),
-        severity: "info".to_string(),
-        message:
-            "Phase 2 still uses neutral floor colours because health inputs are not computed yet."
-                .to_string(),
-        path: None,
-        boundary_id: None,
-    });
     diagnostics.push(CodeCityDiagnostic {
         code: "codecity.loc.line_span_phase1".to_string(),
         severity: "info".to_string(),
@@ -83,15 +75,29 @@ pub fn build_codecity_world(
                 macro_edge_count: 0,
                 included_file_count: 0,
                 excluded_file_count: source.files.len(),
+                unhealthy_floor_count: 0,
+                insufficient_health_data_count: 0,
+                coverage_available: false,
+                git_history_available: false,
+                violation_count: 0,
+                high_severity_violation_count: 0,
+                visible_arc_count: 0,
+                cross_boundary_arc_count: 0,
                 max_importance: 0.0,
                 max_height: 0.0,
             },
+            health: CodeCityHealthOverview::not_requested(
+                config.health.analysis_window_months,
+                CodeCityHealthWeights::from(&config.health),
+            ),
+            legends: CodeCityLegends::default(),
             layout: CodeCityLayoutSummary::default(),
             boundaries: Vec::new(),
             macro_graph: None,
             architecture: None,
             boundary_layouts: Vec::new(),
             buildings: Vec::new(),
+            arcs: Vec::new(),
             dependency_arcs: Vec::new(),
             diagnostics,
         });
@@ -154,6 +160,16 @@ pub fn build_codecity_world(
                     depth: side_length,
                     ..CodeCityGeometry::default()
                 },
+                health_risk: None,
+                health_status: "insufficient_data".to_string(),
+                health_confidence: 0.0,
+                colour: config.colours.no_data.clone(),
+                health_summary: CodeCityBuildingHealthSummary {
+                    floor_count: floors.len(),
+                    insufficient_data_floor_count: floors.len(),
+                    ..CodeCityBuildingHealthSummary::default()
+                },
+                diagnostic_badges: Vec::new(),
                 floors,
             }
         })
@@ -175,7 +191,7 @@ pub fn build_codecity_world(
             .then_with(|| left.path.cmp(&right.path))
     });
 
-    let analysis = analyse_codecity_architecture(&source, &config, repo_root);
+    let analysis = analyse_codecity_architecture(source, &config, repo_root);
     diagnostics.extend(analysis.diagnostics.clone());
     let report_by_boundary = analysis
         .boundary_reports
@@ -289,9 +305,25 @@ pub fn build_codecity_world(
             macro_edge_count: analysis.macro_graph.edge_count,
             included_file_count: buildings.len(),
             excluded_file_count: source.files.len().saturating_sub(buildings.len()),
+            unhealthy_floor_count: 0,
+            insufficient_health_data_count: buildings
+                .iter()
+                .map(|building| building.floors.len())
+                .sum(),
+            coverage_available: false,
+            git_history_available: false,
+            violation_count: 0,
+            high_severity_violation_count: 0,
+            visible_arc_count: 0,
+            cross_boundary_arc_count: 0,
             max_importance,
             max_height,
         },
+        health: CodeCityHealthOverview::not_requested(
+            config.health.analysis_window_months,
+            CodeCityHealthWeights::from(&config.health),
+        ),
+        legends: CodeCityLegends::default(),
         layout,
         boundaries: if config.include_boundaries {
             boundaries
@@ -304,6 +336,7 @@ pub fn build_codecity_world(
             .then_some(analysis.summary_report.clone()),
         boundary_layouts,
         buildings,
+        arcs: Vec::new(),
         dependency_arcs,
         diagnostics,
     })

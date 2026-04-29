@@ -116,6 +116,18 @@ fn normalise_stage_args(args: Option<Value>) -> Result<Value> {
 fn normalise_stage_arg_value(value: Value) -> Result<Value> {
     match value {
         Value::Null | Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(value),
+        Value::Array(items) => {
+            let mut normalised = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::Null | Value::String(_) | Value::Number(_) | Value::Bool(_) => {
+                        normalised.push(item)
+                    }
+                    _ => bail!("extension args arrays must contain only scalar values"),
+                }
+            }
+            Ok(Value::Array(normalised))
+        }
         _ => bail!("extension args must contain only string, number, boolean, or null values"),
     }
 }

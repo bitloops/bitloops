@@ -380,8 +380,9 @@ mod tests {
     use crate::capability_packs::codecity::services::config::CodeCityConfig;
     use crate::capability_packs::codecity::types::{
         CodeCityArchitecturePattern, CodeCityBoundary, CodeCityBoundaryArchitectureReport,
-        CodeCityBoundaryKind, CodeCityBoundarySource, CodeCityBuilding, CodeCityFloor,
-        CodeCityGeometry, CodeCityImportance, CodeCityMacroGraph, CodeCityMacroTopology,
+        CodeCityBoundaryKind, CodeCityBoundarySource, CodeCityBuilding,
+        CodeCityBuildingHealthSummary, CodeCityFloor, CodeCityGeometry, CodeCityHealthEvidence,
+        CodeCityHealthMetrics, CodeCityImportance, CodeCityMacroGraph, CodeCityMacroTopology,
         CodeCitySize, CodeCityZone, CodeCityZoneAssignment,
     };
 
@@ -404,6 +405,16 @@ mod tests {
                 side_length,
                 ..CodeCityGeometry::default()
             },
+            health_risk: None,
+            health_status: "insufficient_data".to_string(),
+            health_confidence: 0.0,
+            colour: "#888888".to_string(),
+            health_summary: CodeCityBuildingHealthSummary {
+                floor_count: 1,
+                insufficient_data_floor_count: 1,
+                ..CodeCityBuildingHealthSummary::default()
+            },
+            diagnostic_badges: Vec::new(),
             floors: vec![CodeCityFloor {
                 artefact_id: None,
                 symbol_id: None,
@@ -418,6 +429,9 @@ mod tests {
                 health_risk: None,
                 colour: "#888888".to_string(),
                 health_status: "insufficient_data".to_string(),
+                health_confidence: 0.0,
+                health_metrics: CodeCityHealthMetrics::default(),
+                health_evidence: CodeCityHealthEvidence::default(),
             }],
         }
     }
@@ -439,6 +453,7 @@ mod tests {
             atomic: true,
             architecture: None,
             layout: None,
+            violation_summary: Default::default(),
             diagnostics: Vec::new(),
         }
     }

@@ -25,7 +25,7 @@ use super::capability_config::build_capability_config_root;
 use super::language_services::{BuiltinLanguageServicesGateway, builtin_language_services};
 use super::local_gateways::{
     DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalCapabilityWorkplaneGateway,
-    LocalStoreHealthGateway,
+    LocalGitHistoryGateway, LocalStoreHealthGateway,
 };
 use super::local_runtime::LocalCapabilityRuntime;
 
@@ -44,6 +44,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub provenance: DefaultProvenanceBuilder,
     pub graph: LocalCanonicalGraphGateway,
     pub stores: LocalStoreHealthGateway,
+    pub git_history: LocalGitHistoryGateway,
     pub inference: LocalInferenceGateway,
     pub test_harness: Option<std::sync::Mutex<BitloopsTestHarnessRepository>>,
     pub languages: &'static BuiltinLanguageServicesGateway,
@@ -95,6 +96,7 @@ impl LocalCapabilityRuntimeResources {
             provenance: DefaultProvenanceBuilder,
             graph: LocalCanonicalGraphGateway,
             stores,
+            git_history: LocalGitHistoryGateway,
             inference,
             test_harness,
             languages: builtin_language_services()?,
@@ -133,6 +135,7 @@ impl LocalCapabilityRuntimeResources {
             &self.provenance,
             &self.graph,
             &self.stores,
+            &self.git_history,
             &self.inference,
             self.test_harness.as_ref(),
             self.languages,
