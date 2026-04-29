@@ -192,6 +192,7 @@ pub(super) async fn stop() -> Result<()> {
         let runtime = read_runtime_state(Path::new("."))?;
 
         if let Some(metadata) = service {
+            stop_current_repo_watcher_if_present();
             let supervisor_running = match supervisor_available() {
                 Ok(running) => running,
                 Err(err) => {
@@ -217,6 +218,7 @@ pub(super) async fn stop() -> Result<()> {
             if runtime_path.exists() {
                 wait_for_runtime_cleanup(&runtime_path, STOP_TIMEOUT)?;
             }
+            stop_supervisor_service_if_idle();
             log::info!("daemon stop completed for service-managed runtime");
             let _ = metadata;
             return Ok(());
@@ -229,6 +231,7 @@ pub(super) async fn stop() -> Result<()> {
             runtime.pid,
             runtime.mode
         );
+        stop_current_repo_watcher_if_present();
         terminate_process(runtime.pid)?;
         wait_for_runtime_cleanup(&runtime_state_path(Path::new(".")), STOP_TIMEOUT)?;
         log::info!("daemon stop completed");
@@ -316,6 +319,42 @@ fn current_repo_scope() -> Option<(std::path::PathBuf, crate::host::devql::RepoI
     let repo_root = crate::utils::paths::repo_root().ok()?;
     let repo = crate::host::devql::resolve_repo_identity(&repo_root).ok()?;
     Some((repo_root, repo))
+}
+
+fn stop_current_repo_watcher_if_present() {
+    let Some((repo_root, _repo)) = current_repo_scope() else {
+        return;
+    };
+    let Ok(config_root) = crate::config::resolve_bound_daemon_config_root_for_repo(&repo_root)
+    else {
+        return;
+    };
+    if let Err(err) = crate::host::devql::watch::stop_watcher(&repo_root, &config_root) {
+        log::warn!(
+            "failed to stop DevQL watcher during daemon teardown for {}: {err:#}",
+            repo_root.display()
+        );
+    }
+}
+
+fn stop_supervisor_service_if_idle() {
+    let Some(metadata) = read_supervisor_service_metadata()
+        .map_err(|err| {
+            log::warn!("failed to load daemon supervisor service metadata during stop: {err:#}");
+            err
+        })
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    if let Err(err) = stop_configured_supervisor_service(&metadata) {
+        log::warn!("failed to stop daemon supervisor service during stop: {err:#}");
+        return;
+    }
+    if let Err(err) = delete_supervisor_runtime_state() {
+        log::warn!("failed to clear daemon supervisor runtime state during stop: {err:#}");
+    }
 }
 
 fn current_repo_init_runtime_snapshot(

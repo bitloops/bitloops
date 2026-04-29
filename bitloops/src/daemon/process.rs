@@ -93,6 +93,73 @@ pub(super) fn terminate_process(pid: u32) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+pub(super) fn reap_terminated_child_process(pid: u32, timeout: Duration) -> Result<bool> {
+    if pid > i32::MAX as u32 {
+        return Ok(false);
+    }
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if result == pid as libc::pid_t {
+            return Ok(true);
+        }
+        if result == 0 {
+            if Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(Duration::from_millis(25));
+            continue;
+        }
+
+        let raw_os_error = std::io::Error::last_os_error().raw_os_error();
+        match raw_os_error {
+            Some(libc::ECHILD) => return Ok(false),
+            Some(libc::EINTR) => continue,
+            _ => {
+                return Err(std::io::Error::last_os_error())
+                    .context("waiting for Bitloops daemon child process");
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn reap_terminated_child_process(_pid: u32, _timeout: Duration) -> Result<bool> {
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub(super) fn reap_terminated_child_processes() -> Result<usize> {
+    let mut reaped = 0_usize;
+    loop {
+        let mut status = 0;
+        let result = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+        if result > 0 {
+            reaped += 1;
+            continue;
+        }
+        if result == 0 {
+            return Ok(reaped);
+        }
+
+        let raw_os_error = std::io::Error::last_os_error().raw_os_error();
+        return match raw_os_error {
+            Some(libc::ECHILD) => Ok(reaped),
+            Some(libc::EINTR) => continue,
+            _ => Err(std::io::Error::last_os_error())
+                .context("reaping Bitloops daemon child processes"),
+        };
+    }
+}
+
+#[cfg(not(unix))]
+pub(super) fn reap_terminated_child_processes() -> Result<usize> {
+    Ok(0)
+}
+
 pub(super) fn wait_for_runtime_cleanup(runtime_path: &Path, timeout: Duration) -> Result<()> {
     let _ = runtime_path;
     let started = Instant::now();
@@ -201,6 +268,12 @@ mod tests {
     use super::should_accept_invalid_daemon_certs;
     #[cfg(not(windows))]
     use super::unix_kill_zero_indicates_running;
+    #[cfg(unix)]
+    use super::{process_is_running, reap_terminated_child_process};
+    #[cfg(unix)]
+    use std::process::Command;
+    #[cfg(unix)]
+    use std::time::Duration;
 
     #[test]
     fn daemon_http_client_only_relaxes_loopback_https_urls() {
@@ -221,5 +294,32 @@ mod tests {
         assert!(!unix_kill_zero_indicates_running(-1, Some(libc::ESRCH)));
         assert!(!unix_kill_zero_indicates_running(-1, Some(libc::EINVAL)));
         assert!(unix_kill_zero_indicates_running(0, None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reaps_exited_child_process_by_pid() {
+        let child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn short-lived child");
+        let pid = child.id();
+        drop(child);
+
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            process_is_running(pid).expect("inspect child process state before reap"),
+            "expected exited child to remain visible until it is reaped"
+        );
+
+        assert!(
+            reap_terminated_child_process(pid, Duration::from_secs(1))
+                .expect("reap child process by pid"),
+            "expected exited child to be reaped"
+        );
+        assert!(
+            !process_is_running(pid).expect("inspect child process state after reap"),
+            "expected reaped child to disappear from process table"
+        );
     }
 }

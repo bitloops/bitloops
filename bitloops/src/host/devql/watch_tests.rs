@@ -3,6 +3,7 @@ use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::log_capture::capture_logs_async;
 use crate::test_support::process_state::with_env_var;
 
+use std::process::Command;
 use tempfile::TempDir;
 
 use super::*;
@@ -12,9 +13,68 @@ fn seed_runtime_store() -> (TempDir, PathBuf, RepoSqliteRuntimeStore) {
     let repo_root = dir.path().join("repo");
     fs::create_dir_all(&repo_root).expect("create repo root");
     init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    fs::write(
+        repo_root.join(".bitloops.local.toml"),
+        "[capture]\nenabled = true\nstrategy = \"manual-commit\"\n",
+    )
+    .expect("write repo-local watcher policy");
     let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
         .expect("open repo runtime store");
     (dir, repo_root, store)
+}
+
+#[cfg(unix)]
+fn spawn_detached_long_lived_process() -> u32 {
+    let output = Command::new("sh")
+        .args(["-c", "sleep 60 >/dev/null 2>&1 & echo $!"])
+        .output()
+        .expect("spawn detached long-lived process");
+    assert!(
+        output.status.success(),
+        "failed to spawn detached long-lived process: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("detached pid stdout should be utf8")
+        .trim()
+        .parse()
+        .expect("detached pid should parse")
+}
+
+#[cfg(windows)]
+fn spawn_detached_long_lived_process() -> u32 {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "$p = Start-Process -FilePath ping -ArgumentList '-n 60 127.0.0.1' -WindowStyle Hidden -PassThru; $p.Id",
+        ])
+        .output()
+        .expect("spawn detached long-lived process");
+    assert!(
+        output.status.success(),
+        "failed to spawn detached long-lived process: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("detached pid stdout should be utf8")
+        .trim()
+        .parse()
+        .expect("detached pid should parse")
+}
+
+fn wait_for_pid_exit(pid: u32) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if !process_is_running(pid) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "expected process {pid} to exit during watcher teardown"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[test]
@@ -359,6 +419,117 @@ fn current_watcher_restart_token_hashes_the_current_binary() {
     let token = current_watcher_restart_token().expect("restart token");
     assert_eq!(token.len(), 64);
     assert!(token.chars().all(|ch| ch.is_ascii_hexdigit()));
+}
+
+#[test]
+fn stop_watcher_terminates_registered_process_and_clears_registration() {
+    let (_dir, repo_root, store) = seed_runtime_store();
+    let watcher_pid = spawn_detached_long_lived_process();
+
+    store
+        .save_watcher_registration(
+            watcher_pid,
+            "stop-token",
+            &repo_root,
+            crate::host::runtime_store::RepoWatcherRegistrationState::Ready,
+        )
+        .expect("seed watcher registration");
+
+    stop_watcher(&repo_root, _dir.path()).expect("stop watcher");
+
+    wait_for_pid_exit(watcher_pid);
+    assert!(
+        store
+            .load_watcher_registration()
+            .expect("load watcher registration after stop")
+            .is_none(),
+        "watcher stop should clear the owned registration"
+    );
+}
+
+#[test]
+fn watcher_lifecycle_exits_when_registration_is_cleared() {
+    let (_dir, repo_root, store) = seed_runtime_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        _dir.path().to_path_buf(),
+        repo_root.clone(),
+        crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo identity"),
+    )
+    .expect("build watcher config");
+
+    assert_eq!(
+        evaluate_watcher_exit_reason(
+            &cfg,
+            &store,
+            42,
+            "missing-token",
+            Instant::now(),
+            Duration::from_secs(60),
+            false,
+        )
+        .expect("evaluate watcher lifecycle"),
+        Some(WatcherExitReason::RegistrationLost)
+    );
+}
+
+#[test]
+fn watcher_lifecycle_exits_after_idle_timeout_without_pending_batch() {
+    let (_dir, repo_root, store) = seed_runtime_store();
+    let pid = 42;
+    let token = "idle-token";
+    store
+        .save_watcher_registration(
+            pid,
+            token,
+            &repo_root,
+            crate::host::runtime_store::RepoWatcherRegistrationState::Ready,
+        )
+        .expect("seed watcher registration");
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        _dir.path().to_path_buf(),
+        repo_root.clone(),
+        crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo identity"),
+    )
+    .expect("build watcher config");
+
+    assert_eq!(
+        evaluate_watcher_exit_reason(
+            &cfg,
+            &store,
+            pid,
+            token,
+            Instant::now() - Duration::from_secs(5),
+            Duration::from_secs(1),
+            false,
+        )
+        .expect("evaluate watcher lifecycle"),
+        Some(WatcherExitReason::Idle)
+    );
+    assert_eq!(
+        evaluate_watcher_exit_reason(
+            &cfg,
+            &store,
+            pid,
+            token,
+            Instant::now() - Duration::from_secs(5),
+            Duration::from_secs(1),
+            true,
+        )
+        .expect("evaluate watcher lifecycle with pending batch"),
+        None
+    );
+}
+
+#[test]
+fn watcher_idle_timeout_uses_env_override_when_present() {
+    assert_eq!(
+        watcher_idle_timeout_from_env(Some("7")),
+        Duration::from_secs(7)
+    );
+    assert_eq!(
+        watcher_idle_timeout_from_env(Some("not-a-number")),
+        DEFAULT_WATCHER_IDLE_TIMEOUT
+    );
 }
 
 #[tokio::test]
