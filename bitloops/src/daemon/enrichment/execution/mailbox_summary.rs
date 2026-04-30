@@ -19,8 +19,8 @@ use crate::capability_packs::semantic_clones::{
     build_delete_current_symbol_semantics_for_artefact_sql,
     build_repair_current_semantic_projection_from_historical_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
-    build_symbol_feature_persist_rows_sql,
-    ensure_required_llm_summary_output, parse_semantic_index_state_rows,
+    build_symbol_feature_persist_rows_sql, ensure_required_llm_summary_output,
+    parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{

@@ -172,8 +172,7 @@ fn resolve_effective_mailbox_intent_from_status(
             .unwrap_or(false)
     };
     let summary_slot_live = resolve_selected_summary_slot(config).is_some();
-    let summary_refresh_live =
-        config.summary_mode == SemanticSummaryMode::Off || summary_slot_live;
+    let summary_refresh_live = config.summary_mode == SemanticSummaryMode::Off || summary_slot_live;
     let code_live = config.embedding_mode != SemanticCloneEmbeddingMode::Off
         && embedding_slot_for_representation(config, EmbeddingRepresentationKind::Code).is_some();
     let summary_embedding_live = summary_slot_live

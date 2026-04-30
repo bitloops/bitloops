@@ -1825,7 +1825,7 @@ WHERE repo_id = '{}' AND path = '{}'",
 
 #[tokio::test]
 async fn prepare_summary_mailbox_batch_skipped_fresh_input_without_docstring_summary_repairs_current_without_summary_embedding_follow_up()
-{
+ {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
         repo.path(),

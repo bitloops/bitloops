@@ -394,7 +394,9 @@ mod tests {
             "summary_mode=off should keep docstring-backed summaries"
         );
         assert!(
-            !selection.provider.persists_summaries_for(&without_docstring),
+            !selection
+                .provider
+                .persists_summaries_for(&without_docstring),
             "summary_mode=off should not revive template-only summaries"
         );
         assert!(
