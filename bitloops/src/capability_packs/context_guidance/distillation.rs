@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -26,25 +26,66 @@ pub struct GuidanceToolEvidence {
     pub command: Option<String>,
 }
 
+const MAX_PROMPT_CHARS: usize = 1_000;
+const MAX_TRANSCRIPT_CHARS: usize = 6_000;
+const MAX_FILES_MODIFIED: usize = 50;
+const MAX_FILE_PATH_CHARS: usize = 300;
+const MAX_TOOL_EVENTS: usize = 6;
+const MAX_TOOL_COMMAND_CHARS: usize = 200;
+const MAX_TOOL_INPUT_CHARS: usize = 300;
+const MAX_TOOL_OUTPUT_CHARS: usize = 600;
+const GUIDANCE_OUTPUT_SCHEMA_INSTRUCTION: &str = r#"Return only one JSON object in this exact shape:
+{"summary":{"intent":"string","outcome":"string","decisions":["string"],"rejectedApproaches":["string"],"patterns":["string"],"verification":["string"],"openItems":["string"]},"guidanceFacts":[{"category":"DECISION|CONSTRAINT|PATTERN|RISK|VERIFICATION|CONTEXT","kind":"short_snake_case","guidance":"string","evidenceExcerpt":"string","appliesTo":{"paths":["string"],"symbols":["string"]},"confidence":"HIGH|MEDIUM|LOW"}]}
+The summary.intent and summary.outcome fields are required strings.
+The guidanceFacts field must be a flat array of fact objects.
+Do not nest facts under category keys such as decision, verification, or doNotRepeat.
+Do not return summary.context or guidanceFacts.decision objects."#;
+
 pub fn build_guidance_distillation_prompt(input: &GuidanceDistillationInput) -> String {
-    let files_modified = input.files_modified.join("\n- ");
+    let files_modified = bounded_files_modified(&input.files_modified);
     let tool_events = input
         .tool_events
         .iter()
+        .take(MAX_TOOL_EVENTS)
         .map(|event| {
             format!(
                 "- kind: {}\n  command: {}\n  input: {}\n  output: {}",
-                event.tool_kind.as_deref().unwrap_or(""),
-                event.command.as_deref().unwrap_or(""),
-                event.input_summary.as_deref().unwrap_or(""),
-                event.output_summary.as_deref().unwrap_or("")
+                bounded_text(
+                    event.tool_kind.as_deref().unwrap_or(""),
+                    MAX_TOOL_COMMAND_CHARS
+                ),
+                bounded_text(
+                    event.command.as_deref().unwrap_or(""),
+                    MAX_TOOL_COMMAND_CHARS
+                ),
+                bounded_text(
+                    event.input_summary.as_deref().unwrap_or(""),
+                    MAX_TOOL_INPUT_CHARS
+                ),
+                bounded_text(
+                    event.output_summary.as_deref().unwrap_or(""),
+                    MAX_TOOL_OUTPUT_CHARS
+                )
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let omitted_tool_events = input.tool_events.len().saturating_sub(MAX_TOOL_EVENTS);
+    let tool_events = if omitted_tool_events == 0 {
+        tool_events
+    } else if tool_events.is_empty() {
+        format!("- omitted_tool_events: {omitted_tool_events}")
+    } else {
+        format!("{tool_events}\n- omitted_tool_events: {omitted_tool_events}")
+    };
+    let prompt = bounded_text(input.prompt.as_deref().unwrap_or(""), MAX_PROMPT_CHARS);
+    let transcript = bounded_text(
+        input.transcript_fragment.as_deref().unwrap_or(""),
+        MAX_TRANSCRIPT_CHARS,
+    );
 
     format!(
-        "Return only JSON with keys summary and guidanceFacts.\n\
+        "{schema}\n\
 Emit guidance only when supported by supplied evidence. Prefer decisions, rejected approaches, and do-not-repeat lessons. \
 Use concise evidenceExcerpt text copied or tightly paraphrased from the history. \
 Use appliesTo.paths only from modified or explicitly referenced paths. \
@@ -61,17 +102,57 @@ prompt:\n{prompt}\n\n\
 transcript:\n{transcript}\n\n\
 files_modified:\n- {files_modified}\n\n\
 tool_events:\n{tool_events}",
+        schema = GUIDANCE_OUTPUT_SCHEMA_INSTRUCTION,
         checkpoint_id = input.checkpoint_id.as_deref().unwrap_or(""),
         session_id = input.session_id.as_str(),
         turn_id = input.turn_id.as_deref().unwrap_or(""),
         event_time = input.event_time.as_deref().unwrap_or(""),
         agent_type = input.agent_type.as_deref().unwrap_or(""),
         model = input.model.as_deref().unwrap_or(""),
-        prompt = input.prompt.as_deref().unwrap_or(""),
-        transcript = input.transcript_fragment.as_deref().unwrap_or(""),
+        prompt = prompt,
+        transcript = transcript,
         files_modified = files_modified,
         tool_events = tool_events,
     )
+}
+
+fn bounded_files_modified(paths: &[String]) -> String {
+    let values = paths
+        .iter()
+        .take(MAX_FILES_MODIFIED)
+        .map(|path| bounded_text(path, MAX_FILE_PATH_CHARS))
+        .collect::<Vec<_>>();
+    let omitted = paths.len().saturating_sub(MAX_FILES_MODIFIED);
+    if omitted == 0 {
+        values.join("\n- ")
+    } else {
+        format!("{}\n- omitted_paths: {omitted}", values.join("\n- "))
+    }
+}
+
+fn bounded_text(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let marker = "\n[... omitted for context guidance prompt budget ...]\n";
+    let marker_chars = marker.chars().count();
+    if max_chars <= marker_chars {
+        return trimmed.chars().take(max_chars).collect();
+    }
+    let available = max_chars - marker_chars;
+    let head_chars = available / 2;
+    let tail_chars = available - head_chars;
+    let head = trimmed.chars().take(head_chars).collect::<String>();
+    let tail = trimmed
+        .chars()
+        .rev()
+        .take(tail_chars)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{head}{marker}{tail}")
 }
 
 pub fn parse_guidance_distillation_output(raw: &str) -> Result<GuidanceDistillationOutput> {
@@ -102,10 +183,245 @@ fn parse_guidance_distillation_output_with_default_path(
 ) -> Result<GuidanceDistillationOutput> {
     let payload = extract_json_object_from_text(raw)
         .ok_or_else(|| anyhow!("guidance distillation output did not contain a JSON object"))?;
-    let parsed: GuidanceDistillationOutput = serde_json::from_str(&payload).map_err(|err| {
-        anyhow!("guidance distillation output has invalid summary, guidanceFacts, category, or confidence: {err}")
-    })?;
+    let parsed = match serde_json::from_str::<GuidanceDistillationOutput>(&payload) {
+        Ok(parsed) => parsed,
+        Err(err) => parse_flexible_guidance_distillation_output(&payload).map_err(|_| {
+            anyhow!(
+                "guidance distillation output has invalid summary, guidanceFacts, category, or confidence: {err}"
+            )
+        })?,
+    };
     validate_guidance_distillation_output(trim_guidance_distillation_output(parsed), default_path)
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlexibleGuidanceDistillationOutput {
+    summary: FlexibleGuidanceSessionSummary,
+    guidance_facts: Vec<FlexibleGuidanceFactDraft>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlexibleGuidanceSessionSummary {
+    intent: Option<String>,
+    outcome: Option<String>,
+    #[serde(default)]
+    decisions: Vec<String>,
+    #[serde(default)]
+    rejected_approaches: Vec<String>,
+    #[serde(default)]
+    patterns: Vec<String>,
+    #[serde(default)]
+    verification: Vec<String>,
+    #[serde(default)]
+    open_items: Vec<String>,
+    context: Option<FlexibleGuidanceSummaryContext>,
+    file: Option<String>,
+    function: Option<String>,
+    purpose: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlexibleGuidanceSummaryContext {
+    session: Option<FlexibleGuidanceSummarySession>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlexibleGuidanceSummarySession {
+    focus: Option<String>,
+    outcome: Option<String>,
+    #[serde(default)]
+    key_decisions: BTreeMap<String, String>,
+    #[serde(default)]
+    tool_usage: BTreeMap<String, String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum FlexibleGuidanceFactDraft {
+    Canonical(super::types::GuidanceFactDraft),
+    Nested(BTreeMap<NestedGuidanceFactKey, FlexibleNestedGuidanceFact>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum NestedGuidanceFactKey {
+    Decision,
+    Constraint,
+    Pattern,
+    Risk,
+    Verification,
+    Context,
+    DoNotRepeat,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlexibleNestedGuidanceFact {
+    kind: Option<String>,
+    guidance: Option<String>,
+    rationale: Option<String>,
+    evidence: Option<String>,
+    evidence_excerpt: Option<String>,
+    #[serde(default)]
+    applies_to: super::types::GuidanceAppliesTo,
+    confidence: Option<super::types::GuidanceFactConfidence>,
+}
+
+fn parse_flexible_guidance_distillation_output(raw: &str) -> Result<GuidanceDistillationOutput> {
+    let parsed: FlexibleGuidanceDistillationOutput = serde_json::from_str(raw)?;
+    let facts = parsed
+        .guidance_facts
+        .into_iter()
+        .filter_map(flexible_guidance_fact_to_draft)
+        .collect::<Vec<_>>();
+    let summary = flexible_summary_to_summary(parsed.summary);
+
+    Ok(GuidanceDistillationOutput {
+        summary,
+        guidance_facts: facts,
+    })
+}
+
+fn flexible_summary_to_summary(
+    summary: FlexibleGuidanceSessionSummary,
+) -> super::types::GuidanceSessionSummary {
+    let FlexibleGuidanceSessionSummary {
+        intent,
+        outcome,
+        mut decisions,
+        rejected_approaches,
+        patterns,
+        mut verification,
+        open_items,
+        context,
+        file,
+        function,
+        purpose,
+    } = summary;
+    let session = context.and_then(|context| context.session);
+
+    if let Some(session) = &session {
+        decisions.extend(
+            session
+                .key_decisions
+                .values()
+                .filter_map(|value| non_empty_string(value.clone())),
+        );
+        verification.extend(
+            session
+                .tool_usage
+                .values()
+                .filter_map(|value| non_empty_string(value.clone())),
+        );
+    }
+
+    let session_focus = session.as_ref().and_then(|session| session.focus.clone());
+    let session_outcome = session.and_then(|session| session.outcome);
+    let intent = first_non_empty([
+        intent,
+        session_focus,
+        purpose.clone(),
+        summary_subject(file, function),
+    ])
+    .unwrap_or_else(|| "Distill context guidance from session history.".to_string());
+    let outcome = first_non_empty([
+        outcome,
+        session_outcome,
+        purpose,
+        Some("Produced evidence-backed guidance facts from the session.".to_string()),
+    ])
+    .unwrap_or_default();
+
+    super::types::GuidanceSessionSummary {
+        intent,
+        outcome,
+        decisions,
+        rejected_approaches,
+        patterns,
+        verification,
+        open_items,
+    }
+}
+
+fn flexible_guidance_fact_to_draft(
+    fact: FlexibleGuidanceFactDraft,
+) -> Option<super::types::GuidanceFactDraft> {
+    match fact {
+        FlexibleGuidanceFactDraft::Canonical(fact) => Some(fact),
+        FlexibleGuidanceFactDraft::Nested(entries) => entries
+            .into_iter()
+            .find_map(|(key, body)| nested_guidance_fact_to_draft(key, body)),
+    }
+}
+
+fn nested_guidance_fact_to_draft(
+    key: NestedGuidanceFactKey,
+    fact: FlexibleNestedGuidanceFact,
+) -> Option<super::types::GuidanceFactDraft> {
+    let category = nested_fact_category(key);
+    let kind = first_non_empty([fact.kind, Some(nested_fact_kind(key).to_string())])?;
+    let guidance = first_non_empty([fact.guidance, fact.rationale.clone()])?;
+    let evidence_excerpt = first_non_empty([fact.evidence_excerpt, fact.evidence])?;
+    Some(super::types::GuidanceFactDraft {
+        category,
+        kind,
+        guidance,
+        evidence_excerpt,
+        applies_to: fact.applies_to,
+        confidence: fact
+            .confidence
+            .unwrap_or(super::types::GuidanceFactConfidence::Medium),
+    })
+}
+
+fn nested_fact_category(key: NestedGuidanceFactKey) -> super::types::GuidanceFactCategory {
+    match key {
+        NestedGuidanceFactKey::Decision => super::types::GuidanceFactCategory::Decision,
+        NestedGuidanceFactKey::Constraint | NestedGuidanceFactKey::DoNotRepeat => {
+            super::types::GuidanceFactCategory::Constraint
+        }
+        NestedGuidanceFactKey::Pattern => super::types::GuidanceFactCategory::Pattern,
+        NestedGuidanceFactKey::Risk => super::types::GuidanceFactCategory::Risk,
+        NestedGuidanceFactKey::Verification => super::types::GuidanceFactCategory::Verification,
+        NestedGuidanceFactKey::Context => super::types::GuidanceFactCategory::Context,
+    }
+}
+
+fn nested_fact_kind(key: NestedGuidanceFactKey) -> &'static str {
+    match key {
+        NestedGuidanceFactKey::Decision => "decision",
+        NestedGuidanceFactKey::Constraint => "constraint",
+        NestedGuidanceFactKey::Pattern => "pattern",
+        NestedGuidanceFactKey::Risk => "risk",
+        NestedGuidanceFactKey::Verification => "verification",
+        NestedGuidanceFactKey::Context => "context",
+        NestedGuidanceFactKey::DoNotRepeat => "do_not_repeat",
+    }
+}
+
+fn first_non_empty(values: impl IntoIterator<Item = Option<String>>) -> Option<String> {
+    values
+        .into_iter()
+        .find_map(|value| value.and_then(non_empty_string))
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let trimmed = value.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+fn summary_subject(file: Option<String>, function: Option<String>) -> Option<String> {
+    let file = non_empty_string(file?)?;
+    match function.and_then(non_empty_string) {
+        Some(function) => Some(format!(
+            "Distill context guidance for {function} in {file}."
+        )),
+        None => Some(format!("Distill context guidance for {file}.")),
+    }
 }
 
 fn validate_guidance_distillation_output(
@@ -179,7 +495,8 @@ mod tests {
 
     use super::{
         GuidanceDistillationInput, GuidanceDistiller, GuidanceToolEvidence,
-        parse_guidance_distillation_output, parse_guidance_distillation_output_for_input,
+        build_guidance_distillation_prompt, parse_guidance_distillation_output,
+        parse_guidance_distillation_output_for_input,
     };
     use crate::capability_packs::context_guidance::types::{
         GuidanceFactCategory, GuidanceFactConfidence,
@@ -256,6 +573,115 @@ mod tests {
 
         assert_eq!(parsed.guidance_facts.len(), 1);
         Ok(())
+    }
+
+    #[test]
+    fn parse_guidance_distillation_output_accepts_nested_model_fact_shape() -> Result<()> {
+        let raw = r#"{
+  "summary": {
+    "context": {
+      "session": {
+        "focus": "Refactoring axum-macros/src/from_request.rs to simplify extract_fields.",
+        "keyDecisions": {
+          "span_preservation": "Used quote_spanned! with ty_span to maintain original error-pointing behavior."
+        },
+        "toolUsage": {
+          "tests": "Ran cargo test -p axum-macros and targeted from_request tests."
+        }
+      }
+    }
+  },
+  "guidanceFacts": [
+    {
+      "decision": {
+        "appliesTo": {
+          "paths": ["axum-macros/src/from_request.rs"],
+          "symbols": []
+        },
+        "rationale": "Avoided modifying infer_state_type_from_field_types to prevent unnecessary churn.",
+        "evidence": "That function already delegates to crate::infer_state_types."
+      }
+    },
+    {
+      "verification": {
+        "appliesTo": {
+          "paths": ["axum-macros/src/from_request.rs"],
+          "symbols": []
+        },
+        "rationale": "Ensured macro-generated code preserves span context for error reporting.",
+        "evidence": "Span preservation: every newly-built TokenStream uses quote_spanned! with ty_span."
+      }
+    },
+    {
+      "doNotRepeat": {
+        "appliesTo": {
+          "paths": [],
+          "symbols": ["wrap_extraction"]
+        },
+        "rationale": "Keep map_err classification centralized in wrap_extraction.",
+        "evidence": "Classification + map_err computation lives inside wrap_extraction."
+      }
+    }
+  ]
+}"#;
+
+        let parsed = parse_guidance_distillation_output(raw)?;
+
+        assert_eq!(
+            parsed.summary.intent,
+            "Refactoring axum-macros/src/from_request.rs to simplify extract_fields."
+        );
+        assert_eq!(parsed.guidance_facts.len(), 3);
+        assert_eq!(
+            parsed.guidance_facts[0].category,
+            GuidanceFactCategory::Decision
+        );
+        assert_eq!(
+            parsed.guidance_facts[1].category,
+            GuidanceFactCategory::Verification
+        );
+        assert_eq!(
+            parsed.guidance_facts[2].category,
+            GuidanceFactCategory::Constraint
+        );
+        assert_eq!(parsed.guidance_facts[2].kind, "do_not_repeat");
+        assert_eq!(
+            parsed.guidance_facts[0].confidence,
+            GuidanceFactConfidence::Medium
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_guidance_distillation_output_rejects_unsupported_nested_fact_keys() {
+        let raw = r#"{
+  "summary": {
+    "context": {
+      "session": {
+        "focus": "Refactoring axum-macros/src/from_request.rs."
+      }
+    }
+  },
+  "guidanceFacts": [
+    {
+      "surprise": {
+        "appliesTo": {
+          "paths": ["axum-macros/src/from_request.rs"],
+          "symbols": []
+        },
+        "rationale": "This category is not part of the schema.",
+        "evidence": "Unsupported nested key."
+      }
+    }
+  ]
+}"#;
+
+        assert!(
+            parse_guidance_distillation_output(raw)
+                .expect_err("unsupported nested fact key should fail")
+                .to_string()
+                .contains("guidanceFacts")
+        );
     }
 
     #[test]
@@ -345,6 +771,48 @@ mod tests {
 
         assert!(parsed.guidance_facts.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn build_guidance_distillation_prompt_bounds_large_history_input() {
+        let mut input = input_with_one_modified_file();
+        input.prompt = Some("large prompt ".repeat(1_000));
+        input.transcript_fragment = Some("large transcript ".repeat(10_000));
+        input.files_modified = (0..80)
+            .map(|index| format!("src/generated/path_{index}.rs"))
+            .collect();
+        input.tool_events = (0..20)
+            .map(|index| GuidanceToolEvidence {
+                tool_kind: Some("shell".to_string()),
+                input_summary: Some(format!("input {index} {}", "x".repeat(5_000))),
+                output_summary: Some(format!("output {index} {}", "y".repeat(5_000))),
+                command: Some(format!("cargo check {index} {}", "z".repeat(5_000))),
+            })
+            .collect();
+
+        let prompt = build_guidance_distillation_prompt(&input);
+
+        assert!(prompt.len() < 20_000);
+        assert!(prompt.contains("omitted for context guidance prompt budget"));
+        assert!(prompt.contains("omitted_tool_events: 14"));
+        assert!(prompt.contains("omitted_paths: 30"));
+        assert!(prompt.contains("src/generated/path_0.rs"));
+    }
+
+    #[test]
+    fn build_guidance_distillation_prompt_declares_flat_schema_contract() {
+        let prompt = build_guidance_distillation_prompt(&input_with_one_modified_file());
+
+        assert!(prompt.contains("\"summary\""));
+        assert!(prompt.contains("\"intent\""));
+        assert!(prompt.contains("\"outcome\""));
+        assert!(prompt.contains("\"guidanceFacts\""));
+        assert!(prompt.contains("\"category\""));
+        assert!(prompt.contains("\"evidenceExcerpt\""));
+        assert!(prompt.contains("\"confidence\""));
+        assert!(prompt.contains("flat array"));
+        assert!(prompt.contains("Do not nest facts under category keys"));
+        assert!(prompt.contains("Do not return summary.context"));
     }
 
     struct FakeTextGenerationService {
