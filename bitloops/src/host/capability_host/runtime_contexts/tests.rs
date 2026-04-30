@@ -3,13 +3,18 @@ use super::language_services::builtin_language_services;
 use super::local_gateways::{DefaultProvenanceBuilder, LocalStoreHealthGateway};
 use super::local_runtime::LocalCapabilityRuntime;
 use crate::adapters::connectors::{ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter};
+use crate::capability_packs::context_guidance::storage::{
+    ContextGuidanceRepository, ListSelectedContextGuidanceInput, PersistGuidanceOutcome,
+    PersistedGuidanceFact, PersistedGuidanceTarget, PersistedGuidanceTargetSummary,
+};
 use crate::capability_packs::knowledge::storage::{
     KnowledgeDocumentRepository, KnowledgeItemRow, KnowledgeRelationAssertionRow,
     KnowledgeRelationalRepository, KnowledgeSourceRow,
 };
 use crate::config::{
-    AtlassianProviderConfig, BlobStorageConfig, EventsBackendConfig, GithubProviderConfig,
-    ProviderConfig, RelationalBackendConfig, StoreBackendConfig,
+    AtlassianProviderConfig, BlobStorageConfig, ContextGuidanceConfig,
+    ContextGuidanceInferenceBindings, EventsBackendConfig, GithubProviderConfig, ProviderConfig,
+    RelationalBackendConfig, StoreBackendConfig,
 };
 use crate::host::capability_host::contexts::{
     CapabilityExecutionContext, CapabilityHealthContext, CapabilityIngestContext,
@@ -138,6 +143,70 @@ impl RelationalGateway for DummyRelationalGateway {
     }
 }
 
+struct DummyContextGuidanceRepository;
+
+impl ContextGuidanceRepository for DummyContextGuidanceRepository {
+    fn persist_history_guidance_distillation(
+        &self,
+        _repo_id: &str,
+        _input: &crate::capability_packs::context_guidance::distillation::GuidanceDistillationInput,
+        _output: &crate::capability_packs::context_guidance::types::GuidanceDistillationOutput,
+        _source_model: Option<&str>,
+        _source_profile: Option<&str>,
+    ) -> Result<PersistGuidanceOutcome> {
+        bail!("context guidance persistence is not used in runtime_contexts tests")
+    }
+
+    fn persist_knowledge_guidance_distillation(
+        &self,
+        _repo_id: &str,
+        _input: &crate::capability_packs::context_guidance::distillation::KnowledgeGuidanceDistillationInput,
+        _output: &crate::capability_packs::context_guidance::types::GuidanceDistillationOutput,
+        _source_model: Option<&str>,
+        _source_profile: Option<&str>,
+    ) -> Result<PersistGuidanceOutcome> {
+        bail!("context guidance persistence is not used in runtime_contexts tests")
+    }
+
+    fn list_selected_context_guidance(
+        &self,
+        _input: ListSelectedContextGuidanceInput,
+    ) -> Result<Vec<PersistedGuidanceFact>> {
+        bail!("context guidance queries are not used in runtime_contexts tests")
+    }
+
+    fn list_active_guidance_for_target(
+        &self,
+        _repo_id: &str,
+        _target_type: &str,
+        _target_value: &str,
+        _limit: usize,
+    ) -> Result<Vec<PersistedGuidanceFact>> {
+        bail!("context guidance queries are not used in runtime_contexts tests")
+    }
+
+    fn apply_target_compaction(
+        &self,
+        _repo_id: &str,
+        _input: crate::capability_packs::context_guidance::storage::ApplyTargetCompactionInput,
+    ) -> Result<crate::capability_packs::context_guidance::storage::ApplyTargetCompactionOutcome>
+    {
+        bail!("context guidance compaction is not used in runtime_contexts tests")
+    }
+
+    fn list_target_summaries(
+        &self,
+        _repo_id: &str,
+        _targets: &[PersistedGuidanceTarget],
+    ) -> Result<Vec<PersistedGuidanceTargetSummary>> {
+        bail!("context guidance target summaries are not used in runtime_contexts tests")
+    }
+
+    fn health_check(&self, _repo_id: &str) -> Result<()> {
+        Ok(())
+    }
+}
+
 struct DummyKnowledgeRelationalRepository;
 
 impl KnowledgeRelationalRepository for DummyKnowledgeRelationalRepository {
@@ -155,6 +224,14 @@ impl KnowledgeRelationalRepository for DummyKnowledgeRelationalRepository {
 
     fn insert_relation_assertion(&self, _relation: &KnowledgeRelationAssertionRow) -> Result<()> {
         Ok(())
+    }
+
+    fn list_relation_assertions_for_knowledge_version(
+        &self,
+        _repo_id: &str,
+        _knowledge_item_version_id: &str,
+    ) -> Result<Vec<KnowledgeRelationAssertionRow>> {
+        Ok(Vec::new())
     }
 
     fn find_item(&self, _repo_id: &str, _source_id: &str) -> Result<Option<KnowledgeItemRow>> {
@@ -307,6 +384,7 @@ fn build_capability_config_root_uses_sqlite_duckdb_labels() {
         &backends,
         &ProviderConfig::default(),
         &crate::config::SemanticClonesConfig::default(),
+        &ContextGuidanceConfig::default(),
         &crate::config::EmbeddingsConfig::default(),
     );
 
@@ -322,6 +400,7 @@ fn build_capability_config_root_uses_postgres_clickhouse_labels() {
         &backends,
         &ProviderConfig::default(),
         &crate::config::SemanticClonesConfig::default(),
+        &ContextGuidanceConfig::default(),
         &crate::config::EmbeddingsConfig::default(),
     );
 
@@ -330,6 +409,29 @@ fn build_capability_config_root_uses_postgres_clickhouse_labels() {
         json!("postgres")
     );
     assert_eq!(root["knowledge"]["backends"]["events"], json!("clickhouse"));
+}
+
+#[test]
+fn build_capability_config_root_exposes_context_guidance_inference_binding() {
+    let temp = tempdir().expect("tempdir");
+    let backends = sqlite_backends(temp.path());
+    let context_guidance = ContextGuidanceConfig {
+        inference: ContextGuidanceInferenceBindings {
+            guidance_generation: Some("guidance_local".to_string()),
+        },
+    };
+    let root = build_capability_config_root(
+        &backends,
+        &ProviderConfig::default(),
+        &crate::config::SemanticClonesConfig::default(),
+        &context_guidance,
+        &crate::config::EmbeddingsConfig::default(),
+    );
+
+    assert_eq!(
+        root["context_guidance"]["inference"]["guidance_generation"],
+        json!("guidance_local")
+    );
 }
 
 #[test]
@@ -355,6 +457,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
         "other": { "value": 7 }
     });
     let relational = DummyRelationalGateway;
+    let context_guidance = DummyContextGuidanceRepository;
     let knowledge_relational = DummyKnowledgeRelationalRepository;
     let knowledge_documents = DummyKnowledgeDocumentRepository;
     let blob_payloads = DummyBlobPayloads;
@@ -372,6 +475,7 @@ fn runtime_exposes_repo_repo_root_and_config_view() {
         &config_root,
         &backends,
         &relational,
+        &context_guidance,
         &knowledge_relational,
         &knowledge_documents,
         &blob_payloads,
@@ -408,6 +512,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
     let provider_config = ProviderConfig::default();
     let config_root = json!({});
     let relational = DummyRelationalGateway;
+    let context_guidance = DummyContextGuidanceRepository;
     let knowledge_relational = DummyKnowledgeRelationalRepository;
     let knowledge_documents = DummyKnowledgeDocumentRepository;
     let blob_payloads = DummyBlobPayloads;
@@ -425,6 +530,7 @@ fn apply_devql_sqlite_ddl_noops_when_postgres_configured() {
         &config_root,
         &backends,
         &relational,
+        &context_guidance,
         &knowledge_relational,
         &knowledge_documents,
         &blob_payloads,
@@ -460,6 +566,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
     let provider_config = ProviderConfig::default();
     let config_root = json!({});
     let relational = DummyRelationalGateway;
+    let context_guidance = DummyContextGuidanceRepository;
     let knowledge_relational = DummyKnowledgeRelationalRepository;
     let knowledge_documents = DummyKnowledgeDocumentRepository;
     let blob_payloads = DummyBlobPayloads;
@@ -477,6 +584,7 @@ fn apply_devql_sqlite_ddl_creates_and_executes_sqlite_ddl() {
         &config_root,
         &backends,
         &relational,
+        &context_guidance,
         &knowledge_relational,
         &knowledge_documents,
         &blob_payloads,
@@ -539,6 +647,7 @@ fn clone_edges_rebuild_relational_requires_devql_attachment() {
     let backends = sqlite_backends(repo_root);
     let config_root = json!({});
     let relational = DummyRelationalGateway;
+    let context_guidance = DummyContextGuidanceRepository;
     let knowledge_relational = DummyKnowledgeRelationalRepository;
     let knowledge_documents = DummyKnowledgeDocumentRepository;
     let blob_payloads = DummyBlobPayloads;
@@ -556,6 +665,7 @@ fn clone_edges_rebuild_relational_requires_devql_attachment() {
         &config_root,
         &backends,
         &relational,
+        &context_guidance,
         &knowledge_relational,
         &knowledge_documents,
         &blob_payloads,
@@ -589,6 +699,7 @@ fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
     let backends = sqlite_backends(repo_root);
     let config_root = json!({});
     let relational = DummyRelationalGateway;
+    let context_guidance = DummyContextGuidanceRepository;
     let knowledge_relational = DummyKnowledgeRelationalRepository;
     let knowledge_documents = DummyKnowledgeDocumentRepository;
     let blob_payloads = DummyBlobPayloads;
@@ -606,6 +717,7 @@ fn ingest_context_exposes_invoking_capability_and_ingester_ids() {
         &config_root,
         &backends,
         &relational,
+        &context_guidance,
         &knowledge_relational,
         &knowledge_documents,
         &blob_payloads,
@@ -640,6 +752,7 @@ fn health_context_config_view_reads_capability_slice() {
     let backends = sqlite_backends(repo_root);
     let config_root = json!({ "health-cap": { "ok": true } });
     let relational = DummyRelationalGateway;
+    let context_guidance = DummyContextGuidanceRepository;
     let knowledge_relational = DummyKnowledgeRelationalRepository;
     let knowledge_documents = DummyKnowledgeDocumentRepository;
     let blob_payloads = DummyBlobPayloads;
@@ -657,6 +770,7 @@ fn health_context_config_view_reads_capability_slice() {
         &config_root,
         &backends,
         &relational,
+        &context_guidance,
         &knowledge_relational,
         &knowledge_documents,
         &blob_payloads,
@@ -686,6 +800,7 @@ fn knowledge_contexts_delegate_to_dummy_repositories() {
     let backends = sqlite_backends(repo_root);
     let config_root = json!({});
     let relational = DummyRelationalGateway;
+    let context_guidance = DummyContextGuidanceRepository;
     let knowledge_relational = DummyKnowledgeRelationalRepository;
     let knowledge_documents = DummyKnowledgeDocumentRepository;
     let blob_payloads = DummyBlobPayloads;
@@ -703,6 +818,7 @@ fn knowledge_contexts_delegate_to_dummy_repositories() {
         &config_root,
         &backends,
         &relational,
+        &context_guidance,
         &knowledge_relational,
         &knowledge_documents,
         &blob_payloads,

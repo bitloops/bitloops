@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use crate::cli::embeddings::EmbeddingsRuntime;
+use crate::cli::inference::TextGenerationRuntime;
 
 pub(crate) const DEFAULT_INIT_INGEST_BACKFILL: usize = 50;
 
@@ -115,6 +116,20 @@ pub struct InitArgs {
     #[arg(long, default_value_t = false)]
     pub no_summaries: bool,
 
+    /// Select which text-generation runtime to configure for context guidance during init.
+    #[arg(long, value_enum)]
+    pub context_guidance_runtime: Option<TextGenerationRuntime>,
+
+    /// Skip context guidance setup during init.
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with = "context_guidance_runtime",
+        conflicts_with = "context_guidance_gateway_url",
+        conflicts_with = "context_guidance_api_key_env"
+    )]
+    pub no_context_guidance: bool,
+
     /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
     #[arg(long)]
     pub embeddings_gateway_url: Option<String>,
@@ -122,6 +137,14 @@ pub struct InitArgs {
     /// Environment variable that contains the platform gateway bearer token.
     #[arg(long, default_value = "BITLOOPS_PLATFORM_GATEWAY_TOKEN")]
     pub embeddings_api_key_env: String,
+
+    /// Public platform chat completions endpoint used when `--context-guidance-runtime platform` is selected.
+    #[arg(long)]
+    pub context_guidance_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token for context guidance.
+    #[arg(long)]
+    pub context_guidance_api_key_env: Option<String>,
 }
 
 fn parse_backfill_value(raw: &str) -> std::result::Result<usize, String> {

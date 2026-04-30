@@ -10,6 +10,12 @@ pub trait KnowledgeRelationalRepository: Send + Sync {
 
     fn insert_relation_assertion(&self, relation: &KnowledgeRelationAssertionRow) -> Result<()>;
 
+    fn list_relation_assertions_for_knowledge_version(
+        &self,
+        repo_id: &str,
+        knowledge_item_version_id: &str,
+    ) -> Result<Vec<KnowledgeRelationAssertionRow>>;
+
     fn find_item(&self, repo_id: &str, source_id: &str) -> Result<Option<KnowledgeItemRow>>;
 
     fn find_item_by_id(

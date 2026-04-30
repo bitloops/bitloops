@@ -4,6 +4,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::daemon::types::unix_timestamp_now;
 use crate::host::relational_store::DefaultRelationalStore;
+use crate::host::runtime_store::WorkplaneJobRecord;
 
 use super::coordinator::EnrichmentCoordinator;
 use super::execution;
@@ -53,7 +54,20 @@ impl EnrichmentCoordinator {
             let Some(batch) =
                 claim_summary_mailbox_batch(&self.workplane_store, &self.runtime_store, &state)?
             else {
-                return Ok(false);
+                let Some(job) = claim_next_workplane_job(
+                    &self.workplane_store,
+                    &self.runtime_store,
+                    &state,
+                    EnrichmentWorkerPool::SummaryRefresh,
+                )?
+                else {
+                    return Ok(false);
+                };
+                state.last_action = Some(format!("running:{}", job.mailbox_name));
+                self.save_state(&mut state)?;
+                drop(state);
+                drop(_guard);
+                return self.execute_claimed_workplane_job(job).await;
             };
             state.last_action = Some("running:summary_refresh".to_string());
             self.save_state(&mut state)?;
@@ -287,10 +301,13 @@ impl EnrichmentCoordinator {
             self.save_state(&mut state)?;
             job
         };
+
+        self.execute_claimed_workplane_job(job).await
+    }
+
+    async fn execute_claimed_workplane_job(&self, job: WorkplaneJobRecord) -> Result<bool> {
         publish_job_runtime_event(&job);
-
         let outcome = execution::execute_workplane_job(&job).await;
-
         {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;

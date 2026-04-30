@@ -10,10 +10,12 @@ use crate::cli::embeddings::{
     platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
-    PreparedSummarySetupAction, SummarySetupSelection, configure_cloud_summary_generation,
-    configure_local_summary_generation, platform_summary_gateway_url_override,
-    prepare_cloud_summary_generation_plan, prepare_local_summary_generation_plan,
-    summary_generation_configured,
+    ContextGuidanceSetupSelection, PreparedSummarySetupAction, SummarySetupSelection,
+    TextGenerationRuntime, configure_cloud_context_guidance_generation,
+    configure_cloud_summary_generation, configure_local_context_guidance_generation,
+    configure_local_summary_generation, platform_context_guidance_gateway_url_override,
+    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
+    prepare_local_summary_generation_plan, summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -27,7 +29,8 @@ use crate::utils::platform_dirs::bitloops_home_dir;
 use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitAgentSelection, InitArgs,
-    InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions, choose_final_setup_options,
+    InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions,
+    choose_context_guidance_setup_during_init, choose_final_setup_options,
     choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
     maybe_enable_default_daemon_service, maybe_install_default_daemon, normalize_cli_exclusions,
     normalize_exclude_from_paths, should_install_embeddings_during_init,
@@ -49,6 +52,19 @@ fn resolve_cli_agents(values: &[String]) -> Result<Vec<String>> {
     }
 
     Ok(resolved)
+}
+
+fn validate_context_guidance_init_args(args: &InitArgs) -> Result<()> {
+    if args.context_guidance_runtime == Some(TextGenerationRuntime::Local)
+        && (args.context_guidance_gateway_url.is_some()
+            || args.context_guidance_api_key_env.is_some())
+    {
+        bail!(
+            "`--context-guidance-gateway-url` and `--context-guidance-api-key-env` require `--context-guidance-runtime platform`"
+        );
+    }
+
+    Ok(())
 }
 
 fn shell_escape_display_path(path: &Path) -> String {
@@ -235,6 +251,7 @@ pub(crate) async fn run_for_project_root(
     if args.backfill.is_some() && args.ingest == Some(false) {
         bail!("`bitloops init --backfill` cannot be combined with `--ingest=false`.");
     }
+    validate_context_guidance_init_args(&args)?;
     let effective_ingest = if args.backfill.is_some() {
         Some(true)
     } else {
@@ -422,6 +439,14 @@ pub(crate) async fn run_for_project_root(
     if matches!(summary_selection, SummarySetupSelection::Cloud) {
         login_required = true;
     }
+    let context_guidance_selection =
+        choose_context_guidance_setup_during_init(project_root, &args, out, input).await?;
+    if matches!(
+        context_guidance_selection,
+        ContextGuidanceSetupSelection::Cloud
+    ) {
+        login_required = true;
+    }
     if login_required {
         crate::cli::login::ensure_logged_in().await?;
     }
@@ -474,6 +499,42 @@ pub(crate) async fn run_for_project_root(
             }
         }
         SummarySetupSelection::Skip => {}
+    }
+    match context_guidance_selection {
+        ContextGuidanceSetupSelection::Cloud => {
+            let api_key_env = args
+                .context_guidance_api_key_env
+                .as_deref()
+                .unwrap_or(crate::cli::inference::DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV);
+            let gateway_url_override = platform_context_guidance_gateway_url_override(
+                args.context_guidance_gateway_url.as_deref(),
+            );
+            let message = configure_cloud_context_guidance_generation(
+                project_root,
+                gateway_url_override.as_deref(),
+                Some(api_key_env),
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops init completed, but context guidance setup failed: {err:#}"
+                )
+            })?;
+            writeln!(out, "{message}")?;
+        }
+        ContextGuidanceSetupSelection::Local => {
+            configure_local_context_guidance_generation(
+                project_root,
+                out,
+                input,
+                telemetry_consent::can_prompt_interactively(),
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops init completed, but context guidance setup failed: {err:#}"
+                )
+            })?;
+        }
+        ContextGuidanceSetupSelection::Skip => {}
     }
     let code_embeddings_selected = matches!(
         embeddings_selection,

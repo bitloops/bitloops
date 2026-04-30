@@ -16,6 +16,12 @@ pub enum KnowledgeRef {
     Artefact {
         artefact_id: String,
     },
+    Path {
+        path: String,
+    },
+    SymbolFqn {
+        symbol_fqn: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,5 +44,11 @@ pub enum ResolvedKnowledgeTargetRef {
     },
     Artefact {
         artefact_id: String,
+    },
+    Path {
+        path: String,
+    },
+    SymbolFqn {
+        symbol_fqn: String,
     },
 }

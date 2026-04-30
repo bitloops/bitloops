@@ -2,17 +2,18 @@ use serde_json::json;
 use std::path::Path;
 
 use super::unified_config::{
-    UnifiedSettings, merge_layers, resolve_dashboard_from_unified,
-    resolve_embedding_capability_from_unified, resolve_embeddings_from_unified,
+    UnifiedSettings, merge_layers, resolve_context_guidance_from_unified,
+    resolve_dashboard_from_unified, resolve_embedding_capability_from_unified,
+    resolve_embeddings_from_unified, resolve_inference_capability_from_unified,
     resolve_provider_from_unified, resolve_semantic_clones_from_unified,
     resolve_store_backend_from_unified, resolve_watch_from_unified,
 };
 use super::{
-    DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS, DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS,
-    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS,
-    DashboardLocalDashboardConfig, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
-    InferenceTask, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
-    SemanticSummaryMode,
+    ContextGuidanceInferenceBindings, DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS,
+    DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
+    DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS, DashboardLocalDashboardConfig, ENV_WATCH_DEBOUNCE_MS,
+    ENV_WATCH_POLL_FALLBACK_MS, InferenceTask, SemanticCloneEmbeddingMode,
+    SemanticClonesInferenceBindings, SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -191,6 +192,51 @@ fn semantic_clones_and_inference_from_unified_read_slot_bindings() {
     assert_eq!(llm_profile.max_output_tokens, Some(200));
     assert_eq!(capability.semantic_clones, semantic_clones);
     assert_eq!(capability.inference, inference);
+}
+
+#[test]
+fn context_guidance_and_inference_from_unified_read_slot_binding() {
+    let settings = UnifiedSettings {
+        context_guidance: Some(json!({
+            "inference": {
+                "guidance_generation": "guidance_local"
+            }
+        })),
+        inference: Some(json!({
+            "profiles": {
+                "guidance_local": {
+                    "task": "text_generation",
+                    "driver": "bitloops_platform_chat",
+                    "runtime": "bitloops_inference",
+                    "model": "guidance-model",
+                    "temperature": "0.1",
+                    "max_output_tokens": 4096
+                }
+            }
+        })),
+        ..Default::default()
+    };
+
+    let context_guidance = resolve_context_guidance_from_unified(&settings, no_env);
+    let capability =
+        resolve_inference_capability_from_unified(&settings, Path::new("/config"), no_env);
+
+    assert_eq!(
+        context_guidance.inference,
+        ContextGuidanceInferenceBindings {
+            guidance_generation: Some("guidance_local".to_string()),
+        }
+    );
+    assert_eq!(capability.context_guidance, context_guidance);
+    assert_eq!(
+        capability
+            .inference
+            .profiles
+            .get("guidance_local")
+            .expect("guidance profile")
+            .task,
+        InferenceTask::TextGeneration
+    );
 }
 
 #[test]

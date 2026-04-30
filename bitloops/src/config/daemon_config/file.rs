@@ -52,6 +52,8 @@ struct DaemonTomlFile {
     #[serde(default)]
     semantic_clones: Option<Value>,
     #[serde(default)]
+    context_guidance: Option<Value>,
+    #[serde(default)]
     inference: Option<Value>,
     #[serde(default)]
     dashboard: Option<Value>,
@@ -138,6 +140,7 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
             stores: file.stores,
             knowledge: file.knowledge,
             semantic_clones: file.semantic_clones,
+            context_guidance: file.context_guidance,
             inference: file.inference,
             dashboard: file.dashboard,
             watch: None,

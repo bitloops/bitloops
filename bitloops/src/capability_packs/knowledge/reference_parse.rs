@@ -60,6 +60,12 @@ pub fn parse_knowledge_ref(raw: &str) -> Result<KnowledgeRef> {
         "artefact" => Ok(KnowledgeRef::Artefact {
             artefact_id: value.to_string(),
         }),
+        "path" => Ok(KnowledgeRef::Path {
+            path: value.to_string(),
+        }),
+        "symbol_fqn" => Ok(KnowledgeRef::SymbolFqn {
+            symbol_fqn: value.to_string(),
+        }),
         _ => bail!("unsupported knowledge ref kind `{kind}`"),
     }
 }

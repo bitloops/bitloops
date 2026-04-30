@@ -1,7 +1,7 @@
 //! `bitloops enable` / `bitloops disable` command implementation.
 
 use std::collections::BTreeSet;
-use std::io::{self, BufRead, BufReader, IsTerminal, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -18,9 +18,12 @@ use crate::cli::embeddings::{
     platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
-    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
-    platform_summary_gateway_url_override, prompt_summary_setup_selection,
-    summary_generation_configured,
+    ContextGuidanceSetupSelection, SummarySetupSelection, TextGenerationRuntime,
+    configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
+    configure_local_context_guidance_generation, configure_local_summary_generation,
+    context_guidance_generation_configured, platform_context_guidance_gateway_url_override,
+    platform_summary_gateway_url_override, prompt_context_guidance_setup_selection,
+    prompt_summary_setup_selection, summary_generation_configured,
 };
 use crate::cli::root::DisableArgs;
 use crate::cli::telemetry_consent;
@@ -41,6 +44,15 @@ use crate::config::settings::{
 #[cfg(test)]
 use crate::config::settings::{settings_local_path, settings_path};
 use crate::host::checkpoints::session::create_session_backend_or_local;
+
+mod shell_completion;
+
+#[cfg(test)]
+pub(crate) use shell_completion::run_post_install_shell_completion_with_io;
+pub use shell_completion::{
+    SHELL_COMPLETION_COMMENT, append_shell_completion, run_post_install_shell_completion,
+    shell_completion_target,
+};
 
 #[derive(Args, Debug, Clone)]
 pub struct EnableArgs {
@@ -96,6 +108,22 @@ pub struct EnableArgs {
     /// Environment variable that contains the platform gateway bearer token.
     #[arg(long)]
     pub embeddings_api_key_env: Option<String>,
+
+    /// Configure context guidance text generation when capture is enabled.
+    #[arg(long, default_value_t = false)]
+    pub install_context_guidance: bool,
+
+    /// Select which text-generation runtime to configure for context guidance.
+    #[arg(long, value_enum)]
+    pub context_guidance_runtime: Option<TextGenerationRuntime>,
+
+    /// Public platform chat completions endpoint used when platform context guidance is selected.
+    #[arg(long)]
+    pub context_guidance_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token for context guidance.
+    #[arg(long)]
+    pub context_guidance_api_key_env: Option<String>,
 }
 
 const ENABLE_NO_FLAGS_ERROR: &str = "`bitloops enable` without flags requires an interactive terminal; pass explicit flags such as `--capture` or `--devql-guidance`";
@@ -179,6 +207,14 @@ fn ensure_repo_local_policy_excluded(git_root: &Path, project_root: &Path) -> Re
         .with_context(|| format!("writing {}", exclude_path.display()))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+fn load_from_file_or_default(path: &Path) -> BitloopsSettings {
+    let Some(repo_root) = path.parent() else {
+        return BitloopsSettings::default();
+    };
+    settings::load_settings(repo_root).unwrap_or_default()
 }
 
 fn reconcile_repo_watcher(repo_root: &Path) {
@@ -349,6 +385,26 @@ fn enable_uses_embeddings_flags(args: &EnableArgs) -> bool {
         || args.embeddings_api_key_env.is_some()
 }
 
+fn enable_uses_context_guidance_flags(args: &EnableArgs) -> bool {
+    args.install_context_guidance
+        || args.context_guidance_runtime.is_some()
+        || args.context_guidance_gateway_url.is_some()
+        || args.context_guidance_api_key_env.is_some()
+}
+
+fn validate_context_guidance_enable_args(args: &EnableArgs) -> Result<()> {
+    if args.context_guidance_runtime == Some(TextGenerationRuntime::Local)
+        && (args.context_guidance_gateway_url.is_some()
+            || args.context_guidance_api_key_env.is_some())
+    {
+        bail!(
+            "`--context-guidance-gateway-url` and `--context-guidance-api-key-env` require `--context-guidance-runtime platform`"
+        );
+    }
+
+    Ok(())
+}
+
 /// Main handler for `bitloops enable`.
 pub async fn run(args: EnableArgs) -> Result<()> {
     if args.local && args.project {
@@ -366,6 +422,8 @@ pub(crate) async fn run_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<()> {
+    validate_context_guidance_enable_args(&args)?;
+
     if let Some(agent) = args.agent.as_deref() {
         bail!(
             "`bitloops enable --agent {agent}` is no longer supported. \
@@ -402,6 +460,11 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
     if enable_uses_embeddings_flags(&args) && !capture_selected {
         bail!(
             "`--install-embeddings`, `--embeddings-runtime`, `--embeddings-gateway-url`, and `--embeddings-api-key-env` require `--capture`"
+        );
+    }
+    if enable_uses_context_guidance_flags(&args) && !capture_selected {
+        bail!(
+            "`--install-context-guidance`, `--context-guidance-runtime`, `--context-guidance-gateway-url`, and `--context-guidance-api-key-env` require `--capture`"
         );
     }
 
@@ -533,30 +596,70 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
         }
     }
 
-    if !capture_selected || !capture_was_disabled {
+    if !capture_selected {
         return Ok(());
     }
 
-    match choose_summary_setup(&cwd, out, input).await? {
-        SummarySetupSelection::Cloud => {
-            crate::cli::login::ensure_logged_in().await?;
-            let gateway_url_override = platform_summary_gateway_url_override();
-            let message = configure_cloud_summary_generation(&cwd, gateway_url_override.as_deref())
+    if capture_was_disabled {
+        match choose_summary_setup(&cwd, out, input).await? {
+            SummarySetupSelection::Cloud => {
+                crate::cli::login::ensure_logged_in().await?;
+                let gateway_url_override = platform_summary_gateway_url_override();
+                let message = configure_cloud_summary_generation(
+                    &cwd,
+                    gateway_url_override.as_deref(),
+                )
                 .map_err(|err| {
                     anyhow::anyhow!(
                         "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
                     )
                 })?;
-            writeln!(out, "{message}")?;
+                writeln!(out, "{message}")?;
+            }
+            SummarySetupSelection::Local => {
+                configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+            }
+            SummarySetupSelection::Skip => {}
         }
-        SummarySetupSelection::Local => {
-            configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
-                anyhow::anyhow!(
-                    "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+    }
+
+    if capture_was_disabled || enable_uses_context_guidance_flags(&args) {
+        match choose_context_guidance_setup(&cwd, &args, capture_was_disabled, out, input).await? {
+            ContextGuidanceSetupSelection::Cloud => {
+                crate::cli::login::ensure_logged_in().await?;
+                let api_key_env = args.context_guidance_api_key_env.as_deref().unwrap_or(
+                    crate::cli::inference::DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
+                );
+                let gateway_url_override = platform_context_guidance_gateway_url_override(
+                    args.context_guidance_gateway_url.as_deref(),
+                );
+                let message = configure_cloud_context_guidance_generation(
+                    &cwd,
+                    gateway_url_override.as_deref(),
+                    Some(api_key_env),
                 )
-            })?;
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops capture was enabled, but context guidance setup failed: {err:#}"
+                    )
+                })?;
+                writeln!(out, "{message}")?;
+            }
+            ContextGuidanceSetupSelection::Local => {
+                configure_local_context_guidance_generation(&cwd, out, input, true).map_err(
+                    |err| {
+                        anyhow::anyhow!(
+                            "Bitloops capture was enabled, but context guidance setup failed: {err:#}"
+                        )
+                    },
+                )?;
+            }
+            ContextGuidanceSetupSelection::Skip => {}
         }
-        SummarySetupSelection::Skip => {}
     }
     Ok(())
 }
@@ -626,6 +729,40 @@ async fn choose_summary_setup(
         .is_some();
 
     prompt_summary_setup_selection(out, input, true, false, cloud_logged_in)
+}
+
+async fn choose_context_guidance_setup(
+    repo_root: &Path,
+    args: &EnableArgs,
+    prompt_allowed: bool,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<ContextGuidanceSetupSelection> {
+    if enable_uses_context_guidance_flags(args) {
+        return Ok(
+            match args
+                .context_guidance_runtime
+                .unwrap_or(TextGenerationRuntime::Platform)
+            {
+                TextGenerationRuntime::Local => ContextGuidanceSetupSelection::Local,
+                TextGenerationRuntime::Platform => ContextGuidanceSetupSelection::Cloud,
+            },
+        );
+    }
+
+    if !prompt_allowed || !telemetry_consent::can_prompt_interactively() {
+        return Ok(ContextGuidanceSetupSelection::Skip);
+    }
+
+    if context_guidance_generation_configured(repo_root) {
+        return Ok(ContextGuidanceSetupSelection::Skip);
+    }
+
+    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
+        .await?
+        .is_some();
+
+    prompt_context_guidance_setup_selection(out, input, true, false, cloud_logged_in)
 }
 
 pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
@@ -714,8 +851,6 @@ pub fn check_disabled_guard(start: &Path, out: &mut dyn Write) -> bool {
     }
 }
 
-pub const SHELL_COMPLETION_COMMENT: &str = "# Bitloops CLI shell completion";
-
 #[cfg(test)]
 pub fn run_enable_with_strategy(
     repo_root: &Path,
@@ -784,143 +919,6 @@ pub fn remove_bitloops_directory(repo_root: &Path) -> Result<()> {
         return Ok(());
     }
     fs::remove_dir_all(&bitloops_dir).context("removing .bitloops directory")
-}
-
-#[cfg(test)]
-fn load_from_file_or_default(path: &Path) -> BitloopsSettings {
-    let Some(repo_root) = path.parent() else {
-        return BitloopsSettings::default();
-    };
-    settings::load_settings(repo_root).unwrap_or_default()
-}
-
-pub fn shell_completion_target(home: &Path) -> Result<(String, PathBuf, String)> {
-    let shell = env::var("SHELL").unwrap_or_default();
-    if shell.contains("zsh") {
-        return Ok((
-            "Zsh".to_string(),
-            home.join(".zshrc"),
-            "autoload -Uz compinit && compinit && source <(bitloops completion zsh)".to_string(),
-        ));
-    }
-    if shell.contains("bash") {
-        let mut rc = home.join(".bashrc");
-        if home.join(".bash_profile").exists() {
-            rc = home.join(".bash_profile");
-        }
-        return Ok((
-            "Bash".to_string(),
-            rc,
-            "source <(bitloops completion bash)".to_string(),
-        ));
-    }
-    if shell.contains("fish") {
-        return Ok((
-            "Fish".to_string(),
-            home.join(".config").join("fish").join("config.fish"),
-            "bitloops completion fish | source".to_string(),
-        ));
-    }
-    bail!("unsupported shell")
-}
-
-pub fn append_shell_completion(rc_file: &Path, completion_line: &str) -> Result<()> {
-    if let Some(parent) = rc_file.parent() {
-        fs::create_dir_all(parent).context("creating shell rc directory")?;
-    }
-    let mut f = fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(rc_file)
-        .with_context(|| format!("opening {}", rc_file.display()))?;
-    writeln!(f)?;
-    writeln!(f, "{SHELL_COMPLETION_COMMENT}")?;
-    writeln!(f, "{completion_line}")?;
-    Ok(())
-}
-
-fn is_completion_configured(rc_file: &Path) -> bool {
-    fs::read_to_string(rc_file)
-        .map(|content| content.contains("bitloops completion"))
-        .unwrap_or(false)
-}
-
-fn prompt_enable_shell_completion(
-    w: &mut dyn Write,
-    input: &mut dyn BufRead,
-    shell_name: &str,
-) -> Result<bool> {
-    write!(
-        w,
-        "Enable shell completion? (detected: {shell_name}) [y/N]: "
-    )?;
-    w.flush()?;
-
-    let mut line = String::new();
-    let read = input
-        .read_line(&mut line)
-        .context("reading shell completion prompt response")?;
-    if read == 0 {
-        return Ok(false);
-    }
-
-    let answer = line.trim().to_ascii_lowercase();
-    Ok(matches!(answer.as_str(), "y" | "yes"))
-}
-
-pub(crate) fn run_post_install_shell_completion_with_io(
-    w: &mut dyn Write,
-    input: &mut dyn BufRead,
-) -> Result<()> {
-    let home = env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?;
-
-    let (shell_name, rc_file, completion_line) = match shell_completion_target(&home) {
-        Ok(target) => target,
-        Err(err) if err.to_string().contains("unsupported shell") => {
-            writeln!(
-                w,
-                "Note: Shell completion not available for your shell. Supported: zsh, bash, fish."
-            )?;
-            return Ok(());
-        }
-        Err(err) => return Err(err),
-    };
-
-    if is_completion_configured(&rc_file) {
-        writeln!(
-            w,
-            "✓ Shell completion already configured in {}",
-            rc_file.display()
-        )?;
-        return Ok(());
-    }
-
-    if !prompt_enable_shell_completion(w, input, &shell_name)? {
-        return Ok(());
-    }
-
-    append_shell_completion(&rc_file, &completion_line)
-        .with_context(|| format!("failed to update {}", rc_file.display()))?;
-    writeln!(w, "✓ Shell completion added to {}", rc_file.display())?;
-    writeln!(w, "  Restart your shell to activate")?;
-    Ok(())
-}
-
-pub fn run_post_install_shell_completion(w: &mut dyn Write) -> Result<()> {
-    let stdin = io::stdin();
-    if !stdin.is_terminal() {
-        writeln!(
-            w,
-            "Note: Shell completion setup skipped: non-interactive environment."
-        )?;
-        return Ok(());
-    }
-
-    let mut input = BufReader::new(stdin.lock());
-    run_post_install_shell_completion_with_io(w, &mut input)
 }
 
 #[cfg(test)]

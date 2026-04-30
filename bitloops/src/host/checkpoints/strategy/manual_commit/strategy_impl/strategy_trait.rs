@@ -1,4 +1,5 @@
 use super::*;
+use crate::capability_packs::context_guidance::enqueue_stored_history_guidance_distillation;
 use crate::host::interactions::db_store::SqliteInteractionSpool;
 use crate::host::interactions::interaction_repository::create_interaction_repository;
 use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
@@ -709,6 +710,20 @@ impl ManualCommitStrategy {
                                 updated_turn.turn_id
                             )
                         })?;
+                    }
+                    if let Some(assigned_checkpoint_id) = updated_turn.checkpoint_id.as_deref()
+                        && let Err(err) = enqueue_stored_history_guidance_distillation(
+                            &self.repo_root,
+                            interaction_repository.repo_id(),
+                            updated_turn.session_id.as_str(),
+                            Some(updated_turn.turn_id.as_str()),
+                            Some(assigned_checkpoint_id),
+                        )
+                    {
+                        eprintln!(
+                            "[bitloops] Warning: failed to enqueue context guidance history distillation for interaction turn `{}` ({session_context}): {err:#}",
+                            updated_turn.turn_id
+                        );
                     }
                 }
 

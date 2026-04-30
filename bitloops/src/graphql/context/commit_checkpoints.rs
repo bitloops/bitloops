@@ -13,14 +13,15 @@ use std::path::Path;
 use tokio::task;
 
 impl DevqlGraphqlContext {
-    pub(crate) async fn list_selected_symbol_checkpoints(
+    pub(crate) async fn list_selected_checkpoints(
         &self,
         scope: &ResolverScope,
         symbol_ids: &[String],
+        paths: &[String],
         agent: Option<&str>,
         since: Option<&DateTimeScalar>,
     ) -> Result<Vec<Checkpoint>> {
-        if symbol_ids.is_empty() {
+        if symbol_ids.is_empty() && paths.is_empty() {
             return Ok(Vec::new());
         }
 
@@ -41,9 +42,10 @@ impl DevqlGraphqlContext {
         let relational = relational_store.to_local_inner();
         let matches =
             crate::host::devql::checkpoint_provenance::CheckpointFileGateway::new(&relational)
-                .list_checkpoint_ids_for_symbol_ids(
+                .list_checkpoint_ids_for_selection(
                     &repo_id,
                     symbol_ids,
+                    paths,
                     crate::host::devql::checkpoint_provenance::CheckpointFileActivityFilter {
                         agent,
                         since: since.map(DateTimeScalar::as_str),
