@@ -1,8 +1,9 @@
 use super::*;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::clear_repo_symbol_embedding_rows;
-use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
-use crate::capability_packs::semantic_clones::runtime_config::resolve_semantic_clones_config;
+use crate::capability_packs::semantic_clones::runtime_config::{
+    SummaryProviderMode, resolve_semantic_clones_config, resolve_summary_provider,
+};
 use crate::capability_packs::semantic_clones::upsert_semantic_feature_rows;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
@@ -802,8 +803,19 @@ async fn seed_current_state_and_semantics(
         !inputs.is_empty(),
         "expected current semantic inputs after sync for daemon embedding test"
     );
-    let summary_provider = Arc::new(NoopSemanticSummaryProvider);
-    upsert_semantic_feature_rows(&relational, &inputs, summary_provider)
+    let repo = resolve_repo_identity(repo_root).expect("resolve repo identity for summary seed");
+    let capability_host =
+        build_capability_host(repo_root, repo).expect("build capability host for summary seed");
+    let semantic_clones =
+        resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
+    let summary_provider = resolve_summary_provider(
+        &semantic_clones,
+        &capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID),
+        SummaryProviderMode::ConfiguredStrict,
+    )
+    .expect("resolve summary provider for semantic seed")
+    .provider;
+    upsert_semantic_feature_rows(&relational, &inputs, Arc::clone(&summary_provider))
         .await
         .expect("upsert semantic rows");
 
@@ -814,7 +826,7 @@ async fn seed_current_state_and_semantics(
                 input.artefact_id.clone(),
                 semantic_features::build_semantic_feature_input_hash(
                     input,
-                    &NoopSemanticSummaryProvider,
+                    summary_provider.as_ref(),
                 ),
             )
         })
