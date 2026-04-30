@@ -55,7 +55,11 @@ available, fall back to targeted repo search or file reads.
    hint, read that hint before composing the next query.
 7. Expand only one relevant stage or `artefacts(first: ...)` if the overview
    shows that more detail is needed.
-8. If DevQL returns nothing useful, fall back to targeted repo search or file
+8. When DevQL returns `path`, `startLine`, and `endLine`, use a bounded read
+   around that range first: start about 20 lines before `startLine` and stop
+   about 40 lines after `endLine`. Escalate to a full-file read only when the
+   bounded context is insufficient.
+9. If DevQL returns nothing useful, fall back to targeted repo search or file
    reads.
 
 ## Query Templates
@@ -101,6 +105,9 @@ bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", line
   narrowing an already-understood search problem.
 - Do not ignore `expandHint` or other response hints when DevQL already tells
   you how to drill down.
+- Do not read an entire file first when DevQL already returned `path`,
+  `startLine`, and `endLine`; start with a bounded read around the range,
+  roughly 20 lines before `startLine` through 40 lines after `endLine`.
 - Do not start with stage-specific detail queries before selecting a concrete
   artefact.
 - Do not use DevQL for edits, builds, tests, formatting, or git operations.
