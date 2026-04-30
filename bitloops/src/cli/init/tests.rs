@@ -1911,14 +1911,14 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 assert!(config.contains("codex_hooks = true"));
                 let repo_skill = repo
                     .path()
-                    .join(".agents/skills/bitloops/using-devql/SKILL.md");
+                    .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
                 assert!(
                     repo_skill.exists(),
                     "expected Codex repo-local skill to be installed"
                 );
                 let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                     .expect("read git exclude");
-                assert!(exclude.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
+                assert!(exclude.contains(".agents/skills/bitloops/devql-explore-first/SKILL.md"));
                 assert!(!repo.path().join(".claude/settings.json").exists());
             });
         },
@@ -2127,7 +2127,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         assert!(
             !repo
                 .path()
-                .join(".agents/skills/bitloops/using-devql/SKILL.md")
+                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
@@ -2232,7 +2232,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
 
         let repo_skill = repo
             .path()
-            .join(".agents/skills/bitloops/using-devql/SKILL.md");
+            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
         assert!(repo.path().join(".codex/hooks.json").exists());
         assert!(
             repo_skill.exists(),
@@ -2264,10 +2264,10 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
             },
         )
         .expect("codex session-start route");
-        let stdout = outcome.stdout.expect("stdout");
-        assert!(stdout.contains("This repo has DevQL"));
-        assert!(stdout.contains("use DevQL first"));
-        assert!(stdout.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
+        assert!(
+            outcome.stdout.is_none(),
+            "Codex session start should validate the minimal skill without injecting bootstrap text"
+        );
     });
 }
 

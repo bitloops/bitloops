@@ -10,8 +10,9 @@ Use `searchMode: LEXICAL` for identifiers, literals, paths, and snippets.\n\
 Keep `search` in the default `AUTO` mode for approximate or conceptual lookup, and inspect `searchBreakdown` when `AUTO` needs a wider net.\n\
 Use `IDENTITY`, `CODE`, or `SUMMARY` only for advanced narrowing, then use `overview` once the selection is concrete.\n\
 When DevQL returns a follow-up hint such as `expandHint`, use that hint to choose the next query.\n\
+When DevQL returns `path`, `startLine`, and `endLine`, prefer bounded reads around those ranges before full-file reads, roughly 20 lines before `startLine` through 40 lines after `endLine`.\n\
 If DevQL is unavailable in this session or returns no useful artefacts, fall back to targeted repo search or file reads.\n\
-Read the repo-local guidance at `{surface_path}` for the full workflow.\n\
+The repo-local guidance at `{surface_path}` is available as an optional reference if the concise rules above are insufficient.\n\
 </EXTREMELY_IMPORTANT>"
     )
 }
@@ -25,6 +26,7 @@ Use `searchMode: LEXICAL` for identifiers, literals, and snippets; keep `AUTO` f
 Use `IDENTITY`, `CODE`, or `SUMMARY` only for intentional narrowing. \
 Once the selection is concrete, use `overview` before broader repo search. \
 If the response includes `expandHint`, use it to drive the next query. \
+When DevQL returns `path`, `startLine`, and `endLine`, use bounded reads around those ranges before full-file reads, roughly 20 lines before `startLine` through 40 lines after `endLine`. \
 If DevQL is unavailable or returns no useful artefacts, fall back to targeted repo search or file reads. \
 Read `{surface_path}` before broad search."
     )
@@ -90,6 +92,14 @@ mod tests {
         assert!(text.contains("overview"));
         assert!(text.contains("expandHint"));
         assert!(text.contains("fall back to targeted repo search or file reads"));
+        assert!(text.contains("startLine"));
+        assert!(text.contains("endLine"));
+        assert!(text.contains("bounded reads"));
+        assert!(text.contains("20 lines before"));
+        assert!(text.contains("40 lines after"));
+        assert!(text.contains("full-file reads"));
+        assert!(text.contains("available as an optional reference"));
+        assert!(!text.contains("Read the repo-local guidance"));
         assert!(!text.contains("fuzzyName"));
         assert!(!text.contains("naturalLanguage"));
         assert!(!text.contains("semanticQuery"));
@@ -109,6 +119,12 @@ mod tests {
         assert!(guidance.contains("expandHint"));
         assert!(guidance.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
         assert!(guidance.contains("fall back to targeted repo search or file reads"));
+        assert!(guidance.contains("startLine"));
+        assert!(guidance.contains("endLine"));
+        assert!(guidance.contains("bounded reads"));
+        assert!(guidance.contains("20 lines before"));
+        assert!(guidance.contains("40 lines after"));
+        assert!(guidance.contains("full-file reads"));
         assert!(!guidance.contains("fuzzyName"));
         assert!(!guidance.contains("naturalLanguage"));
         assert!(!guidance.contains("semanticQuery"));
