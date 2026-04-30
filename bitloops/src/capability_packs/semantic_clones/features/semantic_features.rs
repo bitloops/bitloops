@@ -17,8 +17,9 @@ use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature}
 pub use self::semantic::SymbolSemanticsRow;
 pub(crate) use self::semantic::synthesize_deterministic_summary;
 pub use self::semantic::{
-    DeterministicFallbackSummaryProvider, NoopSemanticSummaryProvider, SemanticSummaryCandidate,
-    SemanticSummaryProvider, summary_provider_from_service,
+    DeterministicFallbackSummaryProvider, DocstringOnlySummaryProvider,
+    NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
+    summary_provider_from_service,
 };
 use self::semantic::{build_semantics_row, normalize_summary_text};
 

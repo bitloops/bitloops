@@ -116,7 +116,7 @@ pub fn resolve_summary_provider(
 
     if config.summary_mode == SemanticSummaryMode::Off {
         return Ok(SummaryProviderSelection {
-            provider: Arc::new(features::NoopSemanticSummaryProvider),
+            provider: Arc::new(features::DocstringOnlySummaryProvider),
             degraded_reason: None,
             slot_name: None,
             profile_name: None,
@@ -351,5 +351,55 @@ mod tests {
         };
 
         assert!(!embeddings_enabled(&config));
+    }
+
+    #[test]
+    fn summary_mode_off_uses_docstring_only_summary_provider() {
+        let gateway = DummyInferenceGateway {
+            text_generation: Arc::new(DummyTextGenerationService),
+        };
+        let mut config = semantic_config();
+        config.summary_mode = SemanticSummaryMode::Off;
+
+        let selection =
+            resolve_summary_provider(&config, &gateway, SummaryProviderMode::ConfiguredDegrade)
+                .expect("summary-off provider should resolve");
+
+        let with_docstring = features::SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/lib.rs".to_string(),
+            language: "rust".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/lib.rs::do_work".to_string(),
+            name: "do_work".to_string(),
+            signature: Some("fn do_work()".to_string()),
+            modifiers: vec!["pub".to_string()],
+            body: "work()".to_string(),
+            docstring: Some("Performs work.".to_string()),
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec![],
+            content_hash: Some("hash-1".to_string()),
+        };
+        let without_docstring = features::SemanticFeatureInput {
+            docstring: None,
+            ..with_docstring.clone()
+        };
+
+        assert!(
+            selection.provider.persists_summaries_for(&with_docstring),
+            "summary_mode=off should keep docstring-backed summaries"
+        );
+        assert!(
+            !selection.provider.persists_summaries_for(&without_docstring),
+            "summary_mode=off should not revive template-only summaries"
+        );
+        assert!(
+            selection.slot_name.is_none(),
+            "summary_mode=off should not resolve a text-generation slot"
+        );
     }
 }

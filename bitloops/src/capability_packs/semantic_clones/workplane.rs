@@ -5,8 +5,8 @@ use std::path::Path;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::config::{
-    SemanticCloneEmbeddingMode, SemanticClonesConfig, resolve_bound_daemon_config_path_for_repo,
-    resolve_daemon_config_path_for_repo,
+    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
+    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
 };
 use crate::host::capability_host::gateways::CapabilityWorkplaneGateway;
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
@@ -171,16 +171,18 @@ fn resolve_effective_mailbox_intent_from_status(
             .map(|status| status.intent_active)
             .unwrap_or(false)
     };
-    let summary_live = resolve_selected_summary_slot(config).is_some();
+    let summary_slot_live = resolve_selected_summary_slot(config).is_some();
+    let summary_refresh_live =
+        config.summary_mode == SemanticSummaryMode::Off || summary_slot_live;
     let code_live = config.embedding_mode != SemanticCloneEmbeddingMode::Off
         && embedding_slot_for_representation(config, EmbeddingRepresentationKind::Code).is_some();
-    let summary_embedding_live = summary_live
+    let summary_embedding_live = summary_slot_live
         && config.embedding_mode != SemanticCloneEmbeddingMode::Off
         && embedding_slot_for_representation(config, EmbeddingRepresentationKind::Summary)
             .is_some();
 
     SemanticClonesMailboxIntentState {
-        summary_refresh_active: summary_live,
+        summary_refresh_active: summary_refresh_live,
         code_embeddings_active: repo_intent(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX) || code_live,
         summary_embeddings_active: summary_embedding_live,
         clone_rebuild_active: repo_intent(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
@@ -320,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_refresh_deactivates_when_summary_mode_is_off() {
+    fn summary_mode_off_keeps_docstring_summary_refresh_active_without_summary_embeddings() {
         let config = SemanticClonesConfig {
             summary_mode: SemanticSummaryMode::Off,
             ..SemanticClonesConfig::default()
@@ -329,7 +331,8 @@ mod tests {
         let intent =
             resolve_effective_mailbox_intent_from_status(&status_with_active_intents(), &config);
 
-        assert!(!intent.summary_refresh_active);
+        assert!(intent.summary_refresh_active);
+        assert!(!intent.summary_embeddings_active);
     }
 
     #[test]

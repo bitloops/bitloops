@@ -30,6 +30,17 @@ pub(crate) fn build_delete_current_symbol_semantics_sql(repo_id: &str, path: &st
     )
 }
 
+pub(crate) fn build_delete_current_symbol_semantics_for_artefact_sql(
+    repo_id: &str,
+    artefact_id: &str,
+) -> String {
+    format!(
+        "DELETE FROM symbol_semantics_current WHERE repo_id = '{}' AND artefact_id = '{}'",
+        esc_pg(repo_id),
+        esc_pg(artefact_id),
+    )
+}
+
 #[allow(dead_code)]
 pub(crate) fn build_delete_current_symbol_features_sql(repo_id: &str, path: &str) -> String {
     format!(

@@ -8,6 +8,7 @@ use super::storage::{
     build_conditional_current_semantic_persist_rows_sql,
     build_conditional_current_symbol_feature_persist_rows_sql,
     build_current_semantic_persist_rows_sql, build_current_symbol_feature_persist_rows_sql,
+    build_delete_current_symbol_semantics_for_artefact_sql,
     build_delete_current_symbol_features_for_paths_sql, build_delete_current_symbol_features_sql,
     build_delete_current_symbol_semantics_for_paths_sql, build_delete_current_symbol_semantics_sql,
     build_repair_current_semantic_projection_from_historical_sql,
@@ -17,8 +18,9 @@ use super::storage::{
 use super::summary::ensure_required_llm_summary_output;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::capability_packs::semantic_clones::{
-    clear_current_search_document_rows_for_path, ensure_search_documents_schema,
-    persist_current_search_document_row, persist_search_document_row,
+    clear_current_search_document_rows_for_artefact, clear_current_search_document_rows_for_path,
+    ensure_search_documents_schema, persist_current_search_document_row,
+    persist_search_document_row,
 };
 use crate::host::devql::RelationalStorage;
 
@@ -32,7 +34,7 @@ pub(crate) async fn upsert_semantic_feature_rows(
     ensure_search_documents_schema(relational).await?;
 
     for input in inputs {
-        let persist_summaries = summary_provider.persists_summaries();
+        let persist_summaries = summary_provider.persists_summaries_for(input);
         let next_input_hash =
             semantic::build_semantic_feature_input_hash(input, summary_provider.as_ref());
         let state = load_semantic_index_state(relational, &input.artefact_id).await?;
@@ -48,12 +50,16 @@ pub(crate) async fn upsert_semantic_feature_rows(
                 std::slice::from_ref(&input.artefact_id),
             )
             .await?;
-            persist_existing_semantic_feature_rows_to_current_for_matching_input(
-                relational,
-                input,
-                &next_input_hash,
-            )
-            .await?;
+            if persist_summaries {
+                persist_existing_semantic_feature_rows_to_current_for_matching_input(
+                    relational,
+                    input,
+                    &next_input_hash,
+                )
+                .await?;
+            } else {
+                clear_current_summary_rows_for_artefact(relational, input).await?;
+            }
             stats.skipped += 1;
             continue;
         }
@@ -76,6 +82,7 @@ pub(crate) async fn upsert_semantic_feature_rows(
             persist_symbol_feature_rows(relational, &rows).await?;
             persist_current_symbol_feature_rows_for_matching_input(relational, &input, &rows)
                 .await?;
+            clear_current_summary_rows_for_artefact(relational, &input).await?;
         }
         stats.upserted += 1;
     }
@@ -102,7 +109,7 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
 
     let mut stats = semantic::SemanticFeatureIngestionStats::default();
     for input in inputs {
-        let persist_summaries = summary_provider.persists_summaries();
+        let persist_summaries = summary_provider.persists_summaries_for(input);
         let symbol_id = input.symbol_id.clone();
         let input = input.clone();
         let summary_provider_for_row = Arc::clone(&summary_provider);
@@ -132,6 +139,7 @@ pub(crate) async fn upsert_current_semantic_feature_rows(
                 &rows,
             )
             .await?;
+            clear_current_summary_rows_for_artefact(relational, &input).await?;
         }
         stats.upserted += 1;
     }
@@ -206,6 +214,20 @@ async fn persist_symbol_feature_rows(
             rows,
             relational.dialect(),
         )?)
+        .await
+}
+
+async fn clear_current_summary_rows_for_artefact(
+    relational: &RelationalStorage,
+    input: &semantic::SemanticFeatureInput,
+) -> Result<()> {
+    relational
+        .exec_serialized(&build_delete_current_symbol_semantics_for_artefact_sql(
+            &input.repo_id,
+            &input.artefact_id,
+        ))
+        .await?;
+    clear_current_search_document_rows_for_artefact(relational, &input.repo_id, &input.artefact_id)
         .await
 }
 

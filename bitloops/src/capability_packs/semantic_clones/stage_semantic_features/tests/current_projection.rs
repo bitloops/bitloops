@@ -182,6 +182,128 @@ async fn historical_semantic_upsert_without_summary_provider_persists_features_o
 }
 
 #[tokio::test]
+async fn historical_semantic_upsert_with_summary_mode_off_provider_keeps_docstring_summaries() {
+    let relational = sqlite_relational_with_current_projection_schema().await;
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                start_byte, end_byte, modifiers, updated_at
+            ) VALUES (
+                'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'artefact-1', 'rust',
+                'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
+            );
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'content-1');",
+        )
+        .await
+        .expect("seed current projection rows");
+
+    let stats = upsert_semantic_feature_rows(
+        &relational,
+        &[sample_semantic_input("artefact-1", "content-1")],
+        Arc::new(semantic::DocstringOnlySummaryProvider),
+    )
+    .await
+    .expect("upsert docstring-only semantic rows");
+
+    assert_eq!(stats.upserted, 1);
+
+    let semantic_rows = relational
+        .query_rows(
+            "SELECT docstring_summary, llm_summary, summary
+             FROM symbol_semantics
+             WHERE artefact_id = 'artefact-1'",
+        )
+        .await
+        .expect("load historical semantic rows");
+    assert_eq!(semantic_rows.len(), 1);
+    assert_eq!(
+        semantic_rows[0]
+            .get("docstring_summary")
+            .and_then(Value::as_str),
+        Some("Performs work.")
+    );
+    assert_eq!(
+        semantic_rows[0].get("llm_summary").and_then(Value::as_str),
+        None
+    );
+    assert_eq!(
+        semantic_rows[0].get("summary").and_then(Value::as_str),
+        Some("Function artefact. Performs work.")
+    );
+}
+
+#[tokio::test]
+async fn historical_semantic_upsert_with_summary_mode_off_provider_skips_template_only_rows() {
+    let relational = sqlite_relational_with_current_projection_schema().await;
+    relational
+        .exec(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, start_line, end_line,
+                start_byte, end_byte, modifiers, updated_at
+            ) VALUES (
+                'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'artefact-1', 'rust',
+                'function', 'function', 'src/lib.rs::artefact-1', 1, 3, 0, 24, '[]', datetime('now')
+            );
+            INSERT INTO current_file_state (repo_id, path, analysis_mode, effective_content_id)
+            VALUES ('repo-1', 'src/lib.rs', 'code', 'content-1');
+            INSERT INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+            ) VALUES (
+                'artefact-1', 'repo-1', 'src/lib.rs', 'content-1', 'symbol-artefact-1', 'old-hash',
+                NULL, NULL, 'Function artefact 1.', 'Function artefact 1.', 0.35, NULL
+            );",
+        )
+        .await
+        .expect("seed current projection rows");
+
+    let mut input = sample_semantic_input("artefact-1", "content-1");
+    input.docstring = None;
+
+    let stats = upsert_semantic_feature_rows(
+        &relational,
+        &[input],
+        Arc::new(semantic::DocstringOnlySummaryProvider),
+    )
+    .await
+    .expect("upsert docstring-less semantic rows");
+
+    assert_eq!(stats.upserted, 1);
+
+    let semantic_rows = relational
+        .query_rows(
+            "SELECT COUNT(*) AS count
+             FROM symbol_semantics
+             WHERE artefact_id = 'artefact-1'",
+        )
+        .await
+        .expect("count historical semantic rows");
+    assert_eq!(
+        semantic_rows[0].get("count").and_then(Value::as_i64),
+        Some(0)
+    );
+
+    let current_semantic_rows = relational
+        .query_rows(
+            "SELECT COUNT(*) AS count
+             FROM symbol_semantics_current
+             WHERE artefact_id = 'artefact-1'",
+        )
+        .await
+        .expect("count current semantic rows");
+    assert_eq!(
+        current_semantic_rows[0]
+            .get("count")
+            .and_then(Value::as_i64),
+        Some(0)
+    );
+}
+
+#[tokio::test]
 async fn historical_semantic_upsert_does_not_overwrite_diverged_current_projection() {
     let relational = sqlite_relational_with_current_projection_schema().await;
     relational

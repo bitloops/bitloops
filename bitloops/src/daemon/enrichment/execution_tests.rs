@@ -1824,8 +1824,8 @@ WHERE repo_id = '{}' AND path = '{}'",
 }
 
 #[tokio::test]
-async fn prepare_summary_mailbox_batch_skipped_fresh_input_repairs_current_and_enqueues_summary_embedding()
- {
+async fn prepare_summary_mailbox_batch_skipped_fresh_input_without_docstring_summary_repairs_current_without_summary_embedding_follow_up()
+{
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
         repo.path(),
@@ -1905,27 +1905,9 @@ WHERE repo_id = '{}' AND artefact_id = '{}'",
             .any(|sql| sql.contains("symbol_semantics_current")),
         "expected current semantic projection repair SQL"
     );
-    assert_eq!(prepared.commit.embedding_follow_ups.len(), 1);
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0].representation_kind,
-        "summary"
-    );
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0]
-            .artefact_id
-            .as_deref(),
-        Some(selected.artefact_id.as_str())
-    );
-    let expected_dedupe_key = format!(
-        "{}:{}",
-        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-        selected.artefact_id
-    );
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0]
-            .dedupe_key
-            .as_deref(),
-        Some(expected_dedupe_key.as_str())
+    assert!(
+        prepared.commit.embedding_follow_ups.is_empty(),
+        "summary embeddings should only enqueue when the selected input still persists a summary"
     );
 }
 
