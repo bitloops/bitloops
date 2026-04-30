@@ -363,6 +363,11 @@ type ContextGuidanceSource {
 	sessionId: String
 	turnId: String
 	toolKind: String
+	knowledgeItemId: ID
+	knowledgeItemVersionId: ID
+	relationAssertionId: ID
+	provider: String
+	sourceKind: String
 	title: String
 	url: String
 	excerpt: String
@@ -914,6 +919,8 @@ enum KnowledgeTargetType {
 	CHECKPOINT
 	ARTEFACT
 	KNOWLEDGE
+	PATH
+	SYMBOL_FQN
 }
 
 type KnowledgeVersion {
