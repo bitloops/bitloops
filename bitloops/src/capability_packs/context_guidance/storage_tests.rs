@@ -1,10 +1,8 @@
 use super::*;
+use crate::capability_packs::context_guidance::distillation::GuidanceToolEvidence;
 use crate::capability_packs::context_guidance::types::{
     GuidanceAppliesTo, GuidanceFactDraft, GuidanceSessionSummary,
 };
-use crate::host::capability_host::{CapabilityMigrationContext, MigrationRunner};
-use crate::host::devql::RepoIdentity;
-use std::path::{Path, PathBuf};
 
 fn sqlite_pool_with_guidance_schema() -> SqliteConnectionPool {
     let temp = tempfile::NamedTempFile::new().expect("temp db");
@@ -148,6 +146,307 @@ fn persist_and_query_guidance_by_historical_evidence_kind() {
         rows[0].sources[0].evidence_kind.as_deref(),
         Some("FILE_RELATION")
     );
+}
+
+#[test]
+fn persist_knowledge_guidance_records_knowledge_sources() {
+    let repo = repository();
+    let input = KnowledgeGuidanceDistillationInput {
+        knowledge_item_id: "item-1".to_string(),
+        knowledge_item_version_id: "version-1".to_string(),
+        relation_assertion_id: Some("relation-1".to_string()),
+        provider: "github".to_string(),
+        source_kind: "github_issue".to_string(),
+        title: Some("Issue title".to_string()),
+        url: Some("https://github.com/org/repo/issues/1".to_string()),
+        updated_at: Some("2026-04-30T10:00:00Z".to_string()),
+        body_preview: Some("Keep parser boundary centralized.".to_string()),
+        normalized_fields_json: "{}".to_string(),
+        target_paths: vec!["src/target.rs".to_string()],
+        target_symbols: Vec::new(),
+    };
+    let mut output = output(
+        "src/target.rs",
+        GuidanceFactCategory::Decision,
+        "preserve_parser_boundary",
+    );
+    output.guidance_facts[0].applies_to.paths.clear();
+
+    repo.persist_knowledge_guidance_distillation("repo-1", &input, &output, None, None)
+        .expect("persist");
+
+    let rows = repo
+        .list_selected_context_guidance(list_input_for_path("src/target.rs"))
+        .expect("query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].sources[0].source_type, "knowledge.item_version");
+    assert_eq!(
+        rows[0].sources[0].knowledge_item_id.as_deref(),
+        Some("item-1")
+    );
+    assert_eq!(
+        rows[0].sources[0].knowledge_item_version_id.as_deref(),
+        Some("version-1")
+    );
+    assert_eq!(
+        rows[0].sources[0].relation_assertion_id.as_deref(),
+        Some("relation-1")
+    );
+    assert_eq!(
+        rows[0].sources[0].url.as_deref(),
+        Some("https://github.com/org/repo/issues/1")
+    );
+    assert_eq!(rows[0].targets[0].target_value, "src/target.rs");
+}
+
+#[test]
+fn target_compaction_marks_duplicate_facts_inactive() {
+    let repo = repository();
+    let first_input = input("src/target.rs");
+    let second_input = GuidanceDistillationInput {
+        turn_id: Some("turn-2".to_string()),
+        transcript_fragment: Some("Repeated decision with newer wording.".to_string()),
+        ..input("src/target.rs")
+    };
+    let first_output = output(
+        "src/target.rs",
+        GuidanceFactCategory::Decision,
+        "preserve_parser_boundary",
+    );
+    let second_output = output(
+        "src/target.rs",
+        GuidanceFactCategory::Decision,
+        "preserve_parser_boundary",
+    );
+
+    repo.persist_history_guidance_distillation("repo-1", &first_input, &first_output, None, None)
+        .expect("first persist");
+    repo.persist_history_guidance_distillation("repo-1", &second_input, &second_output, None, None)
+        .expect("second persist");
+
+    let rows = repo
+        .list_active_guidance_for_target("repo-1", "path", "src/target.rs", 10)
+        .expect("list target");
+    assert_eq!(rows.len(), 2);
+
+    let retained = rows[0].guidance_id.clone();
+    let duplicate = rows[1].guidance_id.clone();
+    let outcome = repo
+        .apply_target_compaction(
+            "repo-1",
+            ApplyTargetCompactionInput {
+                compaction_run_id: "compaction-1".to_string(),
+                target_type: "path".to_string(),
+                target_value: "src/target.rs".to_string(),
+                retained_guidance_ids: vec![retained.clone()],
+                duplicate_guidance_ids: vec![duplicate],
+                superseded_guidance_ids: Vec::new(),
+                summary_json: r#"{"summary":"Keep parser boundary guidance."}"#.to_string(),
+            },
+        )
+        .expect("compact");
+
+    assert_eq!(outcome.retained_count, 1);
+    assert_eq!(outcome.compacted_count, 1);
+    let rows = repo
+        .list_selected_context_guidance(list_input_for_path("src/target.rs"))
+        .expect("query");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].guidance_id, retained);
+}
+
+#[test]
+fn verification_sources_are_relevant_deduplicated_and_capped() {
+    let repo = repository();
+    let mut input = input("src/target.rs");
+    input.tool_events = vec![
+        GuidanceToolEvidence {
+            tool_kind: Some("Bash".to_string()),
+            input_summary: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
+            output_summary: Some("debug_handler Self receiver regression check passed".to_string()),
+            command: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
+        },
+        GuidanceToolEvidence {
+            tool_kind: Some("Bash".to_string()),
+            input_summary: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
+            output_summary: Some("debug_handler Self receiver regression check passed".to_string()),
+            command: Some("cargo nextest run -p axum-macros debug_handler".to_string()),
+        },
+        GuidanceToolEvidence {
+            tool_kind: Some("Read".to_string()),
+            input_summary: Some("src/unrelated.rs".to_string()),
+            output_summary: Some("receiver behavior regression notes".to_string()),
+            command: None,
+        },
+        GuidanceToolEvidence {
+            tool_kind: Some("Bash".to_string()),
+            input_summary: Some("cargo clippy -p axum-macros".to_string()),
+            output_summary: None,
+            command: Some("cargo clippy -p axum-macros".to_string()),
+        },
+        GuidanceToolEvidence {
+            tool_kind: Some("Bash".to_string()),
+            input_summary: Some(
+                "cargo nextest run -p axum-macros debug_handler secondary".to_string(),
+            ),
+            output_summary: Some("debug_handler secondary regression check passed".to_string()),
+            command: Some("cargo nextest run -p axum-macros debug_handler secondary".to_string()),
+        },
+    ];
+    let output = GuidanceDistillationOutput {
+        summary: output(
+            "src/target.rs",
+            GuidanceFactCategory::Decision,
+            "fixture_summary",
+        )
+        .summary,
+        guidance_facts: vec![GuidanceFactDraft {
+            category: GuidanceFactCategory::Verification,
+            kind: "debug_handler_self_receiver_regression_check".to_string(),
+            guidance: "Run cargo nextest and cargo clippy for debug_handler Self receiver cases because macro receiver behavior can regress.".to_string(),
+            evidence_excerpt: "debug_handler Self receiver regression check passed, and cargo clippy was run.".to_string(),
+            applies_to: GuidanceAppliesTo {
+                paths: vec!["src/target.rs".to_string()],
+                symbols: Vec::new(),
+            },
+            confidence: GuidanceFactConfidence::High,
+        }],
+    };
+
+    repo.persist_history_guidance_distillation("repo-1", &input, &output, None, None)
+        .expect("persist");
+
+    let rows = repo
+        .list_selected_context_guidance(list_input_for_path("src/target.rs"))
+        .expect("query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].sources.len(), 3);
+    assert_eq!(rows[0].sources[0].source_type, "history.turn");
+    assert_eq!(rows[0].sources[1].source_type, "history.tool_event");
+    assert_eq!(
+        rows[0].sources[1].excerpt.as_deref(),
+        Some("debug_handler Self receiver regression check passed")
+    );
+    assert_eq!(rows[0].sources[2].source_type, "history.tool_event");
+    assert_eq!(rows[0].sources[2].tool_kind.as_deref(), Some("Bash"));
+    assert_eq!(rows[0].sources[2].excerpt, None);
+    assert!(
+        rows[0]
+            .sources
+            .iter()
+            .all(|source| source.excerpt.as_deref() != Some("receiver behavior regression notes"))
+    );
+    assert!(
+        rows[0]
+            .sources
+            .iter()
+            .all(|source| source.excerpt.as_deref()
+                != Some("debug_handler secondary regression check passed"))
+    );
+}
+
+#[test]
+fn query_orders_higher_value_guidance_before_weaker_categories() {
+    let repo = repository();
+    let input = input("src/target.rs");
+    let output = GuidanceDistillationOutput {
+        summary: output(
+            "src/target.rs",
+            GuidanceFactCategory::Decision,
+            "fixture_summary",
+        )
+        .summary,
+        guidance_facts: vec![
+            GuidanceFactDraft {
+                category: GuidanceFactCategory::Verification,
+                kind: "specific_regression_check".to_string(),
+                guidance: "Run cargo nextest parser regression cases because macro behavior can regress.".to_string(),
+                evidence_excerpt: "Ran cargo nextest parser regression cases and confirmed behavior.".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.rs".to_string()],
+                    symbols: Vec::new(),
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+            GuidanceFactDraft {
+                category: GuidanceFactCategory::Decision,
+                kind: "preserve_parser_boundary".to_string(),
+                guidance: "Keep parser boundary logic centralized so future changes do not split validation across call sites.".to_string(),
+                evidence_excerpt: "Decision: parser boundary logic was centralized to avoid split validation.".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.rs".to_string()],
+                    symbols: Vec::new(),
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+        ],
+    };
+
+    repo.persist_history_guidance_distillation("repo-1", &input, &output, None, None)
+        .expect("persist");
+
+    let rows = repo
+        .list_selected_context_guidance(ListSelectedContextGuidanceInput {
+            limit: 1,
+            ..list_input_for_path("src/target.rs")
+        })
+        .expect("query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].kind, "preserve_parser_boundary");
+}
+
+#[test]
+fn persisted_guidance_facts_include_lifecycle_metadata() {
+    let repo = repository();
+    let input = input("src/target.rs");
+    let output = output(
+        "src/target.rs",
+        GuidanceFactCategory::Decision,
+        "preserve_parser_boundary",
+    );
+
+    repo.persist_history_guidance_distillation("repo-1", &input, &output, None, None)
+        .expect("persist");
+
+    let rows = repo
+        .list_selected_context_guidance(list_input_for_path("src/target.rs"))
+        .expect("query");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].lifecycle_status, "active");
+    assert!(!rows[0].fact_fingerprint.is_empty());
+    assert!(rows[0].value_score > 0.0);
+}
+
+#[test]
+fn list_selected_context_guidance_excludes_superseded_lifecycle_facts() {
+    let sqlite = sqlite_pool_with_guidance_schema();
+    let repo = SqliteContextGuidanceRepository::new(sqlite.clone());
+    let input = input("src/target.rs");
+    let output = output(
+        "src/target.rs",
+        GuidanceFactCategory::Decision,
+        "preserve_parser_boundary",
+    );
+
+    repo.persist_history_guidance_distillation("repo-1", &input, &output, None, None)
+        .expect("persist");
+    sqlite
+        .execute_batch(
+            "UPDATE context_guidance_facts
+             SET lifecycle_status = 'superseded', superseded_by_guidance_id = 'new-guidance'
+             WHERE repo_id = 'repo-1';",
+        )
+        .expect("mark superseded");
+
+    let rows = repo
+        .list_selected_context_guidance(list_input_for_path("src/target.rs"))
+        .expect("query");
+
+    assert!(rows.is_empty());
 }
 
 #[test]
@@ -317,92 +616,5 @@ fn persistence_does_not_modify_checkpoint_session_summary() {
     assert_eq!(summary, "legacy summary");
 }
 
-struct MigrationTestContext {
-    repo: RepoIdentity,
-    repo_root: PathBuf,
-    sqlite: SqliteConnectionPool,
-}
-
-impl CapabilityMigrationContext for MigrationTestContext {
-    fn repo(&self) -> &RepoIdentity {
-        &self.repo
-    }
-
-    fn repo_root(&self) -> &Path {
-        &self.repo_root
-    }
-
-    fn apply_devql_sqlite_ddl(&self, sql: &str) -> Result<()> {
-        self.sqlite.execute_batch(sql)
-    }
-}
-
-#[test]
-fn migration_initializes_tables_indexes_and_attribution_columns() {
-    let temp = tempfile::NamedTempFile::new().expect("temp db");
-    let path = temp.into_temp_path().keep().expect("keep temp db");
-    let sqlite = SqliteConnectionPool::connect(path).expect("sqlite");
-    let mut ctx = MigrationTestContext {
-        repo: RepoIdentity {
-            provider: "local".to_string(),
-            organization: "bitloops".to_string(),
-            name: "repo".to_string(),
-            identity: "local/repo".to_string(),
-            repo_id: "repo-1".to_string(),
-        },
-        repo_root: PathBuf::from("."),
-        sqlite: sqlite.clone(),
-    };
-
-    match super::super::migrations::CONTEXT_GUIDANCE_MIGRATIONS[0].run {
-        MigrationRunner::Core(run) => run(&mut ctx).expect("migration"),
-        MigrationRunner::Knowledge(_) => panic!("context guidance migration must be core"),
-    }
-
-    let table_names = [
-        "context_guidance_distillation_runs",
-        "context_guidance_facts",
-        "context_guidance_sources",
-        "context_guidance_targets",
-    ];
-    let index_names = [
-        "context_guidance_runs_scope_input_idx",
-        "context_guidance_runs_scope_idx",
-        "context_guidance_facts_repo_category_idx",
-        "context_guidance_facts_run_idx",
-        "context_guidance_sources_guidance_idx",
-        "context_guidance_sources_history_idx",
-        "context_guidance_sources_filter_idx",
-        "context_guidance_sources_knowledge_idx",
-        "context_guidance_targets_lookup_idx",
-        "context_guidance_targets_guidance_idx",
-    ];
-
-    sqlite
-        .with_connection(|conn| {
-            for table in table_names {
-                let count: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                    params![table],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(count, 1, "missing table {table}");
-            }
-            for index in index_names {
-                let count: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
-                    params![index],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(count, 1, "missing index {index}");
-            }
-            let columns = conn
-                .prepare("PRAGMA table_info(context_guidance_distillation_runs)")?
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<Result<Vec<_>, _>>()?;
-            assert!(columns.iter().any(|column| column == "capability_id"));
-            assert!(columns.iter().any(|column| column == "capability_version"));
-            Ok(())
-        })
-        .expect("inspect schema");
-}
+#[path = "storage_migration_tests.rs"]
+mod migration_tests;

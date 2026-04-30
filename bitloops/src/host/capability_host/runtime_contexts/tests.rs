@@ -5,7 +5,7 @@ use super::local_runtime::LocalCapabilityRuntime;
 use crate::adapters::connectors::{ConnectorContext, ConnectorRegistry, KnowledgeConnectorAdapter};
 use crate::capability_packs::context_guidance::storage::{
     ContextGuidanceRepository, ListSelectedContextGuidanceInput, PersistGuidanceOutcome,
-    PersistedGuidanceFact,
+    PersistedGuidanceFact, PersistedGuidanceTarget, PersistedGuidanceTargetSummary,
 };
 use crate::capability_packs::knowledge::storage::{
     KnowledgeDocumentRepository, KnowledgeItemRow, KnowledgeRelationAssertionRow,
@@ -157,11 +157,49 @@ impl ContextGuidanceRepository for DummyContextGuidanceRepository {
         bail!("context guidance persistence is not used in runtime_contexts tests")
     }
 
+    fn persist_knowledge_guidance_distillation(
+        &self,
+        _repo_id: &str,
+        _input: &crate::capability_packs::context_guidance::distillation::KnowledgeGuidanceDistillationInput,
+        _output: &crate::capability_packs::context_guidance::types::GuidanceDistillationOutput,
+        _source_model: Option<&str>,
+        _source_profile: Option<&str>,
+    ) -> Result<PersistGuidanceOutcome> {
+        bail!("context guidance persistence is not used in runtime_contexts tests")
+    }
+
     fn list_selected_context_guidance(
         &self,
         _input: ListSelectedContextGuidanceInput,
     ) -> Result<Vec<PersistedGuidanceFact>> {
         bail!("context guidance queries are not used in runtime_contexts tests")
+    }
+
+    fn list_active_guidance_for_target(
+        &self,
+        _repo_id: &str,
+        _target_type: &str,
+        _target_value: &str,
+        _limit: usize,
+    ) -> Result<Vec<PersistedGuidanceFact>> {
+        bail!("context guidance queries are not used in runtime_contexts tests")
+    }
+
+    fn apply_target_compaction(
+        &self,
+        _repo_id: &str,
+        _input: crate::capability_packs::context_guidance::storage::ApplyTargetCompactionInput,
+    ) -> Result<crate::capability_packs::context_guidance::storage::ApplyTargetCompactionOutcome>
+    {
+        bail!("context guidance compaction is not used in runtime_contexts tests")
+    }
+
+    fn list_target_summaries(
+        &self,
+        _repo_id: &str,
+        _targets: &[PersistedGuidanceTarget],
+    ) -> Result<Vec<PersistedGuidanceTargetSummary>> {
+        bail!("context guidance target summaries are not used in runtime_contexts tests")
     }
 
     fn health_check(&self, _repo_id: &str) -> Result<()> {
@@ -186,6 +224,14 @@ impl KnowledgeRelationalRepository for DummyKnowledgeRelationalRepository {
 
     fn insert_relation_assertion(&self, _relation: &KnowledgeRelationAssertionRow) -> Result<()> {
         Ok(())
+    }
+
+    fn list_relation_assertions_for_knowledge_version(
+        &self,
+        _repo_id: &str,
+        _knowledge_item_version_id: &str,
+    ) -> Result<Vec<KnowledgeRelationAssertionRow>> {
+        Ok(Vec::new())
     }
 
     fn find_item(&self, _repo_id: &str, _source_id: &str) -> Result<Option<KnowledgeItemRow>> {

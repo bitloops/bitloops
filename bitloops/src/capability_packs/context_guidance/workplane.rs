@@ -6,8 +6,12 @@ use crate::host::runtime_store::{CapabilityWorkplaneJobInsert, RepoSqliteRuntime
 
 use super::descriptor::{
     CONTEXT_GUIDANCE_CAPABILITY_ID, CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX,
+    CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_MAILBOX, CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
 };
 use super::distillation::GuidanceDistillationInput;
+use super::evidence::{
+    GuidanceEvidenceInput, GuidanceEvidenceSource, evidence_target_symbols, knowledge_source_label,
+};
 use super::history_input::{HistoryGuidanceInputSelector, hydrate_history_guidance_input};
 use super::storage::guidance_input_hash;
 
@@ -22,6 +26,32 @@ pub enum ContextGuidanceMailboxPayload {
         turn_id: Option<String>,
         input_hash: String,
     },
+    KnowledgeEvidence(Box<KnowledgeEvidencePayload>),
+    #[serde(rename_all = "camelCase")]
+    TargetCompaction {
+        repo_id: String,
+        target_type: String,
+        target_value: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeEvidencePayload {
+    pub repo_id: String,
+    pub knowledge_item_id: String,
+    pub knowledge_item_version_id: String,
+    pub relation_assertion_id: Option<String>,
+    pub provider: String,
+    pub source_kind: String,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub updated_at: Option<String>,
+    pub body_preview: Option<String>,
+    pub normalized_fields_json: String,
+    pub target_paths: Vec<String>,
+    pub target_symbols: Vec<String>,
+    pub input_hash: String,
 }
 
 pub fn history_turn_dedupe_key(
@@ -52,9 +82,47 @@ pub fn history_source_scope_key(
     )
 }
 
-pub fn history_turn_work_item_count(payload: &ContextGuidanceMailboxPayload) -> u64 {
+pub fn context_guidance_work_item_count(payload: &ContextGuidanceMailboxPayload) -> u64 {
     match payload {
         ContextGuidanceMailboxPayload::HistoryTurn { .. } => 1,
+        ContextGuidanceMailboxPayload::KnowledgeEvidence(payload) => {
+            let evidence = knowledge_evidence_input_from_payload(payload);
+            let _ = knowledge_source_label(&evidence);
+            evidence
+                .target_paths
+                .len()
+                .saturating_add(evidence_target_symbols(&evidence).len())
+                .max(1) as u64
+        }
+        ContextGuidanceMailboxPayload::TargetCompaction { .. } => 1,
+    }
+}
+
+pub fn history_turn_work_item_count(payload: &ContextGuidanceMailboxPayload) -> u64 {
+    context_guidance_work_item_count(payload)
+}
+
+fn knowledge_evidence_input_from_payload(
+    payload: &KnowledgeEvidencePayload,
+) -> GuidanceEvidenceInput {
+    GuidanceEvidenceInput {
+        source: GuidanceEvidenceSource::Knowledge {
+            knowledge_item_id: payload.knowledge_item_id.clone(),
+            knowledge_item_version_id: payload.knowledge_item_version_id.clone(),
+            relation_assertion_id: payload.relation_assertion_id.clone(),
+            provider: payload.provider.clone(),
+            source_kind: payload.source_kind.clone(),
+            title: payload.title.clone(),
+            url: payload.url.clone(),
+            updated_at: payload.updated_at.clone(),
+        },
+        title: payload.title.clone(),
+        body: payload.body_preview.clone(),
+        prompt: None,
+        transcript_fragment: None,
+        target_paths: payload.target_paths.clone(),
+        target_symbols: payload.target_symbols.clone(),
+        tool_events: Vec::new(),
     }
 }
 
@@ -79,6 +147,53 @@ pub fn enqueue_history_guidance_distillation(
     );
     workplane.enqueue_jobs(vec![CapabilityWorkplaneJob::new(
         CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX,
+        Some(dedupe_key),
+        serde_json::to_value(payload)?,
+    )])?;
+    Ok(())
+}
+
+pub fn enqueue_knowledge_guidance_distillation(
+    workplane: &dyn CapabilityWorkplaneGateway,
+    repo_id: &str,
+    payload: ContextGuidanceMailboxPayload,
+) -> Result<()> {
+    let dedupe_key = match &payload {
+        ContextGuidanceMailboxPayload::KnowledgeEvidence(payload) => format!(
+            "knowledge_evidence:{}:{}:{}",
+            payload.knowledge_item_version_id,
+            payload.relation_assertion_id.as_deref().unwrap_or("_"),
+            payload.input_hash
+        ),
+        ContextGuidanceMailboxPayload::HistoryTurn { .. }
+        | ContextGuidanceMailboxPayload::TargetCompaction { .. } => {
+            format!("knowledge_evidence:{repo_id}")
+        }
+    };
+    workplane.enqueue_jobs(vec![CapabilityWorkplaneJob::new_for_capability(
+        CONTEXT_GUIDANCE_CAPABILITY_ID,
+        CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_MAILBOX,
+        Some(dedupe_key),
+        serde_json::to_value(payload)?,
+    )])?;
+    Ok(())
+}
+
+pub fn enqueue_target_compaction(
+    workplane: &dyn CapabilityWorkplaneGateway,
+    repo_id: &str,
+    target_type: &str,
+    target_value: &str,
+) -> Result<()> {
+    let payload = ContextGuidanceMailboxPayload::TargetCompaction {
+        repo_id: repo_id.to_string(),
+        target_type: target_type.to_string(),
+        target_value: target_value.to_string(),
+    };
+    let dedupe_key = format!("target_compaction:{repo_id}:{target_type}:{target_value}");
+    workplane.enqueue_jobs(vec![CapabilityWorkplaneJob::new_for_capability(
+        CONTEXT_GUIDANCE_CAPABILITY_ID,
+        CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
         Some(dedupe_key),
         serde_json::to_value(payload)?,
     )])?;
@@ -136,8 +251,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ContextGuidanceMailboxPayload, enqueue_history_guidance_distillation,
-        history_source_scope_key, history_turn_dedupe_key, history_turn_work_item_count,
+        ContextGuidanceMailboxPayload, KnowledgeEvidencePayload, context_guidance_work_item_count,
+        enqueue_history_guidance_distillation, history_source_scope_key, history_turn_dedupe_key,
+        history_turn_work_item_count,
     };
     use crate::capability_packs::context_guidance::distillation::{
         GuidanceDistillationInput, GuidanceToolEvidence,
@@ -249,6 +365,29 @@ mod tests {
         };
 
         assert_eq!(history_turn_work_item_count(&payload), 1);
+    }
+
+    #[test]
+    fn knowledge_evidence_payload_counts_targeted_work_items() {
+        let payload =
+            ContextGuidanceMailboxPayload::KnowledgeEvidence(Box::new(KnowledgeEvidencePayload {
+                repo_id: "repo-1".to_string(),
+                knowledge_item_id: "item-1".to_string(),
+                knowledge_item_version_id: "version-1".to_string(),
+                relation_assertion_id: Some("relation-1".to_string()),
+                provider: "github".to_string(),
+                source_kind: "github_issue".to_string(),
+                title: Some("Issue title".to_string()),
+                url: Some("https://github.com/org/repo/issues/1".to_string()),
+                updated_at: Some("2026-04-30T10:00:00Z".to_string()),
+                body_preview: Some("Decision context".to_string()),
+                normalized_fields_json: "{}".to_string(),
+                target_paths: vec!["src/lib.rs".to_string()],
+                target_symbols: vec!["crate::lib::run".to_string()],
+                input_hash: "hash-1".to_string(),
+            }));
+
+        assert_eq!(context_guidance_work_item_count(&payload), 2);
     }
 
     #[test]

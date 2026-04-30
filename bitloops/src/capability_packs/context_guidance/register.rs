@@ -7,9 +7,17 @@ use crate::host::capability_host::{
 
 use super::descriptor::{
     CONTEXT_GUIDANCE_CAPABILITY_ID, CONTEXT_GUIDANCE_HISTORY_DISTILLATION_INGESTER_ID,
-    CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX, CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
+    CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX,
+    CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_INGESTER_ID,
+    CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_MAILBOX,
+    CONTEXT_GUIDANCE_TARGET_COMPACTION_INGESTER_ID, CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
+    CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
 };
-use super::ingesters::build_context_guidance_history_distillation_ingester;
+use super::ingesters::{
+    build_context_guidance_history_distillation_ingester,
+    build_context_guidance_knowledge_distillation_ingester,
+    build_context_guidance_target_compaction_ingester,
+};
 use super::query_examples::CONTEXT_GUIDANCE_QUERY_EXAMPLES;
 use super::schema::CONTEXT_GUIDANCE_SCHEMA_MODULE;
 use super::stages::build_context_guidance_stage;
@@ -17,12 +25,36 @@ use super::stages::build_context_guidance_stage;
 pub fn register_context_guidance_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
     registrar.register_stage(build_context_guidance_stage())?;
     registrar.register_ingester(build_context_guidance_history_distillation_ingester())?;
+    registrar.register_ingester(build_context_guidance_knowledge_distillation_ingester())?;
+    registrar.register_ingester(build_context_guidance_target_compaction_ingester())?;
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
             CONTEXT_GUIDANCE_CAPABILITY_ID,
             CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX,
             CapabilityMailboxPolicy::Job,
             CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_HISTORY_DISTILLATION_INGESTER_ID),
+        )
+        .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
+            CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
+        )),
+    )?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            CONTEXT_GUIDANCE_CAPABILITY_ID,
+            CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_INGESTER_ID),
+        )
+        .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
+            CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
+        )),
+    )?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            CONTEXT_GUIDANCE_CAPABILITY_ID,
+            CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_TARGET_COMPACTION_INGESTER_ID),
         )
         .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
             CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
@@ -45,7 +77,10 @@ mod tests {
 
     use super::super::descriptor::{
         CONTEXT_GUIDANCE_CAPABILITY_ID, CONTEXT_GUIDANCE_HISTORY_DISTILLATION_INGESTER_ID,
-        CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX, CONTEXT_GUIDANCE_STAGE_ID,
+        CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX,
+        CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_INGESTER_ID,
+        CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_MAILBOX, CONTEXT_GUIDANCE_STAGE_ID,
+        CONTEXT_GUIDANCE_TARGET_COMPACTION_INGESTER_ID, CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
         CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
     };
     use super::register_context_guidance_pack;
@@ -99,12 +134,22 @@ mod tests {
         );
         assert_eq!(
             registrar.ingesters,
-            vec![(
-                CONTEXT_GUIDANCE_CAPABILITY_ID,
-                CONTEXT_GUIDANCE_HISTORY_DISTILLATION_INGESTER_ID
-            )]
+            vec![
+                (
+                    CONTEXT_GUIDANCE_CAPABILITY_ID,
+                    CONTEXT_GUIDANCE_HISTORY_DISTILLATION_INGESTER_ID
+                ),
+                (
+                    CONTEXT_GUIDANCE_CAPABILITY_ID,
+                    CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_INGESTER_ID
+                ),
+                (
+                    CONTEXT_GUIDANCE_CAPABILITY_ID,
+                    CONTEXT_GUIDANCE_TARGET_COMPACTION_INGESTER_ID
+                )
+            ]
         );
-        assert_eq!(registrar.mailboxes.len(), 1);
+        assert_eq!(registrar.mailboxes.len(), 3);
         let mailbox = registrar.mailboxes[0];
         assert_eq!(mailbox.capability_id, CONTEXT_GUIDANCE_CAPABILITY_ID);
         assert_eq!(
@@ -123,6 +168,40 @@ mod tests {
             )
         );
         assert_eq!(mailbox.backlog_policy, CapabilityMailboxBacklogPolicy::None);
+        let mailbox = registrar.mailboxes[1];
+        assert_eq!(mailbox.capability_id, CONTEXT_GUIDANCE_CAPABILITY_ID);
+        assert_eq!(
+            mailbox.mailbox_name,
+            CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_MAILBOX
+        );
+        assert_eq!(mailbox.policy, CapabilityMailboxPolicy::Job);
+        assert_eq!(
+            mailbox.handler,
+            CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_INGESTER_ID)
+        );
+        assert_eq!(
+            mailbox.readiness_policy,
+            CapabilityMailboxReadinessPolicy::TextGenerationSlot(
+                CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT
+            )
+        );
+        let mailbox = registrar.mailboxes[2];
+        assert_eq!(mailbox.capability_id, CONTEXT_GUIDANCE_CAPABILITY_ID);
+        assert_eq!(
+            mailbox.mailbox_name,
+            CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX
+        );
+        assert_eq!(mailbox.policy, CapabilityMailboxPolicy::Job);
+        assert_eq!(
+            mailbox.handler,
+            CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_TARGET_COMPACTION_INGESTER_ID)
+        );
+        assert_eq!(
+            mailbox.readiness_policy,
+            CapabilityMailboxReadinessPolicy::TextGenerationSlot(
+                CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT
+            )
+        );
         assert_eq!(registrar.schema_modules.len(), 1);
         assert_eq!(
             registrar.schema_modules[0].capability_id,

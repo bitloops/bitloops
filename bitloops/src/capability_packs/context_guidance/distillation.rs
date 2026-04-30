@@ -4,6 +4,10 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::host::inference::TextGenerationService;
 
+use super::evidence::{
+    GuidanceEvidenceInput, GuidanceEvidenceSource, GuidanceEvidenceToolEvent, evidence_input_body,
+    evidence_input_title, evidence_target_symbols, knowledge_source_label,
+};
 use super::types::{GuidanceDistillationOutput, trim_guidance_distillation_output};
 
 pub struct GuidanceDistillationInput {
@@ -26,8 +30,25 @@ pub struct GuidanceToolEvidence {
     pub command: Option<String>,
 }
 
+pub struct KnowledgeGuidanceDistillationInput {
+    pub knowledge_item_id: String,
+    pub knowledge_item_version_id: String,
+    pub relation_assertion_id: Option<String>,
+    pub provider: String,
+    pub source_kind: String,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub updated_at: Option<String>,
+    pub body_preview: Option<String>,
+    pub normalized_fields_json: String,
+    pub target_paths: Vec<String>,
+    pub target_symbols: Vec<String>,
+}
+
 const MAX_PROMPT_CHARS: usize = 1_000;
 const MAX_TRANSCRIPT_CHARS: usize = 6_000;
+const MAX_KNOWLEDGE_BODY_CHARS: usize = 6_000;
+const MAX_NORMALIZED_FIELDS_CHARS: usize = 2_000;
 const MAX_FILES_MODIFIED: usize = 50;
 const MAX_FILE_PATH_CHARS: usize = 300;
 const MAX_TOOL_EVENTS: usize = 6;
@@ -39,11 +60,37 @@ const GUIDANCE_OUTPUT_SCHEMA_INSTRUCTION: &str = r#"Return only one JSON object 
 The summary.intent and summary.outcome fields are required strings.
 The guidanceFacts field must be a flat array of fact objects.
 Do not nest facts under category keys such as decision, verification, or doNotRepeat.
-Do not return summary.context or guidanceFacts.decision objects."#;
+Do not return summary.context or guidanceFacts.decision objects.
+Only emit guidance that will help a future coding session. Preserve durable decisions, constraints, risks, reusable patterns, and specific verification requirements. If no durable guidance is supported by evidence, return "guidanceFacts": [].
+Do not emit status updates, completed-work summaries, code-size metrics, line-count reductions, generic "tests passed" facts, generic "ensure quality" advice, or "the agent edited this file" context.
+VERIFICATION facts must name a reusable command/check and explain why a future session should run it.
+CONTEXT facts must describe a durable codebase boundary, invariant, dependency, or ownership fact."#;
 
 pub fn build_guidance_distillation_prompt(input: &GuidanceDistillationInput) -> String {
-    let files_modified = bounded_files_modified(&input.files_modified);
-    let tool_events = input
+    let evidence = history_evidence_input(input);
+    let (checkpoint_id, session_id, turn_id, event_time, agent_type, model) = match &evidence.source
+    {
+        GuidanceEvidenceSource::History {
+            checkpoint_id,
+            session_id,
+            turn_id,
+            event_time,
+            agent_type,
+            model,
+        } => (
+            checkpoint_id.as_deref().unwrap_or(""),
+            session_id.as_str(),
+            turn_id.as_deref().unwrap_or(""),
+            event_time.as_deref().unwrap_or(""),
+            agent_type.as_deref().unwrap_or(""),
+            model.as_deref().unwrap_or(""),
+        ),
+        GuidanceEvidenceSource::Knowledge { .. } => {
+            unreachable!("history prompt uses history source")
+        }
+    };
+    let files_modified = bounded_files_modified(&evidence.target_paths);
+    let tool_events = evidence
         .tool_events
         .iter()
         .take(MAX_TOOL_EVENTS)
@@ -70,7 +117,7 @@ pub fn build_guidance_distillation_prompt(input: &GuidanceDistillationInput) -> 
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let omitted_tool_events = input.tool_events.len().saturating_sub(MAX_TOOL_EVENTS);
+    let omitted_tool_events = evidence.tool_events.len().saturating_sub(MAX_TOOL_EVENTS);
     let tool_events = if omitted_tool_events == 0 {
         tool_events
     } else if tool_events.is_empty() {
@@ -78,19 +125,36 @@ pub fn build_guidance_distillation_prompt(input: &GuidanceDistillationInput) -> 
     } else {
         format!("{tool_events}\n- omitted_tool_events: {omitted_tool_events}")
     };
-    let prompt = bounded_text(input.prompt.as_deref().unwrap_or(""), MAX_PROMPT_CHARS);
+    let title = evidence_input_title(&evidence);
+    let body = evidence_input_body(&evidence);
+    let explicit_symbols = bounded_files_modified(evidence_target_symbols(&evidence));
+    let knowledge_label = knowledge_source_label(&evidence).unwrap_or_default();
+    let prompt = bounded_text(evidence.prompt.as_deref().unwrap_or(""), MAX_PROMPT_CHARS);
     let transcript = bounded_text(
-        input.transcript_fragment.as_deref().unwrap_or(""),
+        evidence.transcript_fragment.as_deref().unwrap_or(""),
         MAX_TRANSCRIPT_CHARS,
     );
+    let transcript = if body.is_empty() {
+        transcript
+    } else if transcript.is_empty() {
+        body
+    } else {
+        format!("{transcript}\n\nbody:\n{body}")
+    };
+    let title_block = if title.is_empty() {
+        String::new()
+    } else {
+        format!("title:\n{title}\n")
+    };
 
     format!(
         "{schema}\n\
-Emit guidance only when supported by supplied evidence. Prefer decisions, rejected approaches, and do-not-repeat lessons. \
+Emit guidance only when supported by supplied evidence from the prompt, transcript, modified paths, or tool events. \
+Prefer decisions, constraints, risks, rejected approaches, and do-not-repeat lessons. \
 Use concise evidenceExcerpt text copied or tightly paraphrased from the history. \
 Use appliesTo.paths only from modified or explicitly referenced paths. \
 Use appliesTo.symbols only when symbols are explicitly named. \
-Use VERIFICATION only when tool evidence shows a test, check, or manual verification.\n\n\
+Use VERIFICATION only for reusable checks future sessions should run for a concrete reason.\n\n\
 Session:\n\
 checkpoint_id: {checkpoint_id}\n\
 session_id: {session_id}\n\
@@ -98,22 +162,132 @@ turn_id: {turn_id}\n\
 event_time: {event_time}\n\
 agent_type: {agent_type}\n\
 model: {model}\n\
+{title_block}\
 prompt:\n{prompt}\n\n\
 transcript:\n{transcript}\n\n\
 files_modified:\n- {files_modified}\n\n\
+explicit_symbols:\n- {explicit_symbols}\n\n\
+knowledge_source:\n{knowledge_label}\n\n\
 tool_events:\n{tool_events}",
         schema = GUIDANCE_OUTPUT_SCHEMA_INSTRUCTION,
-        checkpoint_id = input.checkpoint_id.as_deref().unwrap_or(""),
-        session_id = input.session_id.as_str(),
-        turn_id = input.turn_id.as_deref().unwrap_or(""),
-        event_time = input.event_time.as_deref().unwrap_or(""),
-        agent_type = input.agent_type.as_deref().unwrap_or(""),
-        model = input.model.as_deref().unwrap_or(""),
+        checkpoint_id = checkpoint_id,
+        session_id = session_id,
+        turn_id = turn_id,
+        event_time = event_time,
+        agent_type = agent_type,
+        model = model,
+        title_block = title_block,
         prompt = prompt,
         transcript = transcript,
         files_modified = files_modified,
+        explicit_symbols = explicit_symbols,
+        knowledge_label = knowledge_label,
         tool_events = tool_events,
     )
+}
+
+pub fn build_knowledge_guidance_distillation_prompt(
+    input: &KnowledgeGuidanceDistillationInput,
+) -> String {
+    let evidence = knowledge_evidence_input(input);
+    let GuidanceEvidenceSource::Knowledge {
+        provider,
+        source_kind,
+        title: _,
+        url,
+        updated_at,
+        ..
+    } = &evidence.source
+    else {
+        unreachable!("knowledge prompt uses knowledge source")
+    };
+    let body_preview = bounded_text(
+        evidence_input_body(&evidence).as_str(),
+        MAX_KNOWLEDGE_BODY_CHARS,
+    );
+    let normalized_fields_json =
+        bounded_text(&input.normalized_fields_json, MAX_NORMALIZED_FIELDS_CHARS);
+    let target_paths = bounded_files_modified(&evidence.target_paths);
+    let target_symbols = bounded_files_modified(evidence_target_symbols(&evidence));
+    let title = evidence_input_title(&evidence);
+
+    format!(
+        "{schema}\n\
+Emit guidance only when the supplied knowledge source supports a durable future coding-session decision, constraint, reusable pattern, risk, or specific verification requirement. \
+Use appliesTo.paths only from target_paths. Use appliesTo.symbols only from target_symbols. \
+If the source is merely a status update, completed work summary, or generic note, return an empty guidanceFacts array.\n\n\
+Knowledge source:\n\
+provider: {provider}\n\
+source_kind: {source_kind}\n\
+title: {title}\n\
+url: {url}\n\
+updated_at: {updated_at}\n\n\
+body_preview:\n{body_preview}\n\n\
+normalized_fields_json:\n{normalized_fields_json}\n\n\
+target_paths:\n- {target_paths}\n\n\
+target_symbols:\n- {target_symbols}",
+        schema = GUIDANCE_OUTPUT_SCHEMA_INSTRUCTION,
+        provider = provider,
+        source_kind = source_kind,
+        title = title.as_str(),
+        url = url.as_deref().unwrap_or(""),
+        updated_at = updated_at.as_deref().unwrap_or(""),
+        body_preview = body_preview,
+        normalized_fields_json = normalized_fields_json,
+        target_paths = target_paths,
+        target_symbols = target_symbols,
+    )
+}
+
+fn history_evidence_input(input: &GuidanceDistillationInput) -> GuidanceEvidenceInput {
+    GuidanceEvidenceInput {
+        source: GuidanceEvidenceSource::History {
+            checkpoint_id: input.checkpoint_id.clone(),
+            session_id: input.session_id.clone(),
+            turn_id: input.turn_id.clone(),
+            event_time: input.event_time.clone(),
+            agent_type: input.agent_type.clone(),
+            model: input.model.clone(),
+        },
+        title: None,
+        body: None,
+        prompt: input.prompt.clone(),
+        transcript_fragment: input.transcript_fragment.clone(),
+        target_paths: input.files_modified.clone(),
+        target_symbols: Vec::new(),
+        tool_events: input
+            .tool_events
+            .iter()
+            .map(|event| GuidanceEvidenceToolEvent {
+                tool_kind: event.tool_kind.clone(),
+                input_summary: event.input_summary.clone(),
+                output_summary: event.output_summary.clone(),
+                command: event.command.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn knowledge_evidence_input(input: &KnowledgeGuidanceDistillationInput) -> GuidanceEvidenceInput {
+    GuidanceEvidenceInput {
+        source: GuidanceEvidenceSource::Knowledge {
+            knowledge_item_id: input.knowledge_item_id.clone(),
+            knowledge_item_version_id: input.knowledge_item_version_id.clone(),
+            relation_assertion_id: input.relation_assertion_id.clone(),
+            provider: input.provider.clone(),
+            source_kind: input.source_kind.clone(),
+            title: input.title.clone(),
+            url: input.url.clone(),
+            updated_at: input.updated_at.clone(),
+        },
+        title: input.title.clone(),
+        body: input.body_preview.clone(),
+        prompt: None,
+        transcript_fragment: None,
+        target_paths: input.target_paths.clone(),
+        target_symbols: input.target_symbols.clone(),
+        tool_events: Vec::new(),
+    }
 }
 
 fn bounded_files_modified(paths: &[String]) -> String {
@@ -156,7 +330,7 @@ fn bounded_text(value: &str, max_chars: usize) -> String {
 }
 
 pub fn parse_guidance_distillation_output(raw: &str) -> Result<GuidanceDistillationOutput> {
-    parse_guidance_distillation_output_with_default_path(raw, None)
+    parse_guidance_distillation_output_with_default_targets(raw, &[], &[], false)
 }
 
 pub fn parse_guidance_distillation_output_for_input(
@@ -174,12 +348,22 @@ pub fn parse_guidance_distillation_output_for_input(
     } else {
         None
     };
-    parse_guidance_distillation_output_with_default_path(raw, default_path)
+    match default_path {
+        Some(default_path) => parse_guidance_distillation_output_with_default_targets(
+            raw,
+            &[default_path.to_string()],
+            &[],
+            false,
+        ),
+        None => parse_guidance_distillation_output_with_default_targets(raw, &[], &[], false),
+    }
 }
 
-fn parse_guidance_distillation_output_with_default_path(
+fn parse_guidance_distillation_output_with_default_targets(
     raw: &str,
-    default_path: Option<&str>,
+    default_paths: &[String],
+    default_symbols: &[String],
+    constrain_to_defaults: bool,
 ) -> Result<GuidanceDistillationOutput> {
     let payload = extract_json_object_from_text(raw)
         .ok_or_else(|| anyhow!("guidance distillation output did not contain a JSON object"))?;
@@ -191,7 +375,13 @@ fn parse_guidance_distillation_output_with_default_path(
             )
         })?,
     };
-    validate_guidance_distillation_output(trim_guidance_distillation_output(parsed), default_path)
+    let validated = validate_guidance_distillation_output(
+        trim_guidance_distillation_output(parsed),
+        default_paths,
+        default_symbols,
+        constrain_to_defaults,
+    )?;
+    Ok(super::quality::filter_value_guidance_output(validated))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -276,8 +466,8 @@ fn parse_flexible_guidance_distillation_output(raw: &str) -> Result<GuidanceDist
     let facts = parsed
         .guidance_facts
         .into_iter()
-        .filter_map(flexible_guidance_fact_to_draft)
-        .collect::<Vec<_>>();
+        .map(flexible_guidance_fact_to_draft)
+        .collect::<Result<Vec<_>>>()?;
     let summary = flexible_summary_to_summary(parsed.summary);
 
     Ok(GuidanceDistillationOutput {
@@ -349,24 +539,29 @@ fn flexible_summary_to_summary(
 
 fn flexible_guidance_fact_to_draft(
     fact: FlexibleGuidanceFactDraft,
-) -> Option<super::types::GuidanceFactDraft> {
+) -> Result<super::types::GuidanceFactDraft> {
     match fact {
-        FlexibleGuidanceFactDraft::Canonical(fact) => Some(fact),
+        FlexibleGuidanceFactDraft::Canonical(fact) => Ok(fact),
         FlexibleGuidanceFactDraft::Nested(entries) => entries
             .into_iter()
-            .find_map(|(key, body)| nested_guidance_fact_to_draft(key, body)),
+            .next()
+            .map(|(key, body)| nested_guidance_fact_to_draft(key, body))
+            .unwrap_or_else(|| bail!("nested guidance fact must contain one category")),
     }
 }
 
 fn nested_guidance_fact_to_draft(
     key: NestedGuidanceFactKey,
     fact: FlexibleNestedGuidanceFact,
-) -> Option<super::types::GuidanceFactDraft> {
+) -> Result<super::types::GuidanceFactDraft> {
     let category = nested_fact_category(key);
-    let kind = first_non_empty([fact.kind, Some(nested_fact_kind(key).to_string())])?;
-    let guidance = first_non_empty([fact.guidance, fact.rationale.clone()])?;
-    let evidence_excerpt = first_non_empty([fact.evidence_excerpt, fact.evidence])?;
-    Some(super::types::GuidanceFactDraft {
+    let kind = first_non_empty([fact.kind, Some(nested_fact_kind(key).to_string())])
+        .ok_or_else(|| anyhow!("nested guidance fact kind must be non-empty"))?;
+    let guidance = first_non_empty([fact.guidance, fact.rationale.clone()])
+        .ok_or_else(|| anyhow!("nested guidance fact guidance must be non-empty"))?;
+    let evidence_excerpt = first_non_empty([fact.evidence_excerpt, fact.evidence])
+        .ok_or_else(|| anyhow!("nested guidance fact evidence must be non-empty"))?;
+    Ok(super::types::GuidanceFactDraft {
         category,
         kind,
         guidance,
@@ -426,9 +621,19 @@ fn summary_subject(file: Option<String>, function: Option<String>) -> Option<Str
 
 fn validate_guidance_distillation_output(
     mut output: GuidanceDistillationOutput,
-    default_path: Option<&str>,
+    default_paths: &[String],
+    default_symbols: &[String],
+    constrain_to_defaults: bool,
 ) -> Result<GuidanceDistillationOutput> {
     let mut accepted_facts = Vec::new();
+    let default_path_set = default_paths
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let default_symbol_set = default_symbols
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
     for mut fact in output.guidance_facts {
         if fact.kind.is_empty() {
             bail!("guidance distillation fact kind must be non-empty");
@@ -440,10 +645,26 @@ fn validate_guidance_distillation_output(
             bail!("guidance distillation fact evidenceExcerpt must be non-empty");
         }
         if fact.applies_to.paths.is_empty() && fact.applies_to.symbols.is_empty() {
-            if let Some(default_path) = default_path {
-                fact.applies_to.paths.push(default_path.to_string());
-            } else {
+            if default_paths.is_empty() && default_symbols.is_empty() {
                 continue;
+            } else {
+                fact.applies_to.paths.extend(default_paths.iter().cloned());
+                fact.applies_to
+                    .symbols
+                    .extend(default_symbols.iter().cloned());
+            }
+        } else if constrain_to_defaults {
+            fact.applies_to
+                .paths
+                .retain(|path| default_path_set.contains(path.as_str()));
+            fact.applies_to
+                .symbols
+                .retain(|symbol| default_symbol_set.contains(symbol.as_str()));
+            if fact.applies_to.paths.is_empty() && fact.applies_to.symbols.is_empty() {
+                fact.applies_to.paths.extend(default_paths.iter().cloned());
+                fact.applies_to
+                    .symbols
+                    .extend(default_symbols.iter().cloned());
             }
         }
         accepted_facts.push(fact);
@@ -485,377 +706,28 @@ impl GuidanceDistiller {
         parse_guidance_distillation_output_for_input(&raw, input)
             .context("guidance distillation model output was invalid")
     }
+
+    pub fn distill_knowledge(
+        &self,
+        input: &KnowledgeGuidanceDistillationInput,
+    ) -> Result<GuidanceDistillationOutput> {
+        let raw = self
+            .service
+            .complete(
+                "You distill external project knowledge into concise, evidence-backed guidance facts. Return only JSON.",
+                &build_knowledge_guidance_distillation_prompt(input),
+            )
+            .context("knowledge guidance distillation text generation failed")?;
+        parse_guidance_distillation_output_with_default_targets(
+            &raw,
+            &input.target_paths,
+            &input.target_symbols,
+            true,
+        )
+        .context("knowledge guidance distillation model output was invalid")
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use anyhow::{Result, anyhow};
-
-    use super::{
-        GuidanceDistillationInput, GuidanceDistiller, GuidanceToolEvidence,
-        build_guidance_distillation_prompt, parse_guidance_distillation_output,
-        parse_guidance_distillation_output_for_input,
-    };
-    use crate::capability_packs::context_guidance::types::{
-        GuidanceFactCategory, GuidanceFactConfidence,
-    };
-    use crate::host::inference::TextGenerationService;
-
-    const FIXTURE_JSON: &str = r#"{
-  "summary": {
-    "intent": "Improve attribute parsing.",
-    "outcome": "Replaced fragile keyword-name parsing with token-based rendering.",
-    "decisions": ["Use kw.to_token_stream().to_string() for duplicate keyword diagnostics."],
-    "rejectedApproaches": ["Do not derive keyword names from std::any::type_name."],
-    "patterns": ["Keep duplicate keyword handling centralized."],
-    "verification": ["cargo nextest run --lib artefact_selection passed."],
-    "openItems": []
-  },
-  "guidanceFacts": [
-    {
-      "category": "DECISION",
-      "kind": "rejected_approach",
-      "guidance": "Do not derive attribute keyword names from std::any::type_name.",
-      "evidenceExcerpt": "Replaced std::any::type_name::<K>() parsing with kw.to_token_stream().to_string().",
-      "appliesTo": {
-        "paths": ["axum-macros/src/attr_parsing.rs"],
-        "symbols": []
-      },
-      "confidence": "HIGH"
-    }
-  ]
-}"#;
-
-    fn input_with_one_modified_file() -> GuidanceDistillationInput {
-        GuidanceDistillationInput {
-            checkpoint_id: Some("checkpoint-1".to_string()),
-            session_id: "session-1".to_string(),
-            turn_id: Some("turn-1".to_string()),
-            event_time: Some("2026-04-29T10:00:00Z".to_string()),
-            agent_type: Some("codex".to_string()),
-            model: Some("gpt-5.4".to_string()),
-            prompt: Some("Improve attr parsing".to_string()),
-            transcript_fragment: Some("Replaced fragile keyword-name parsing.".to_string()),
-            files_modified: vec!["axum-macros/src/attr_parsing.rs".to_string()],
-            tool_events: vec![GuidanceToolEvidence {
-                tool_kind: Some("shell".to_string()),
-                input_summary: Some("cargo nextest run --lib artefact_selection".to_string()),
-                output_summary: Some("passed".to_string()),
-                command: Some("cargo nextest run --lib artefact_selection".to_string()),
-            }],
-        }
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_accepts_valid_fixture() -> Result<()> {
-        let parsed = parse_guidance_distillation_output(FIXTURE_JSON)?;
-
-        assert_eq!(parsed.summary.intent, "Improve attribute parsing.");
-        assert_eq!(parsed.guidance_facts.len(), 1);
-        assert_eq!(
-            parsed.guidance_facts[0].category,
-            GuidanceFactCategory::Decision
-        );
-        assert_eq!(
-            parsed.guidance_facts[0].confidence,
-            GuidanceFactConfidence::High
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_accepts_markdown_fence() -> Result<()> {
-        let wrapped = format!("```json\n{FIXTURE_JSON}\n```");
-
-        let parsed = parse_guidance_distillation_output(&wrapped)?;
-
-        assert_eq!(parsed.guidance_facts.len(), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_accepts_nested_model_fact_shape() -> Result<()> {
-        let raw = r#"{
-  "summary": {
-    "context": {
-      "session": {
-        "focus": "Refactoring axum-macros/src/from_request.rs to simplify extract_fields.",
-        "keyDecisions": {
-          "span_preservation": "Used quote_spanned! with ty_span to maintain original error-pointing behavior."
-        },
-        "toolUsage": {
-          "tests": "Ran cargo test -p axum-macros and targeted from_request tests."
-        }
-      }
-    }
-  },
-  "guidanceFacts": [
-    {
-      "decision": {
-        "appliesTo": {
-          "paths": ["axum-macros/src/from_request.rs"],
-          "symbols": []
-        },
-        "rationale": "Avoided modifying infer_state_type_from_field_types to prevent unnecessary churn.",
-        "evidence": "That function already delegates to crate::infer_state_types."
-      }
-    },
-    {
-      "verification": {
-        "appliesTo": {
-          "paths": ["axum-macros/src/from_request.rs"],
-          "symbols": []
-        },
-        "rationale": "Ensured macro-generated code preserves span context for error reporting.",
-        "evidence": "Span preservation: every newly-built TokenStream uses quote_spanned! with ty_span."
-      }
-    },
-    {
-      "doNotRepeat": {
-        "appliesTo": {
-          "paths": [],
-          "symbols": ["wrap_extraction"]
-        },
-        "rationale": "Keep map_err classification centralized in wrap_extraction.",
-        "evidence": "Classification + map_err computation lives inside wrap_extraction."
-      }
-    }
-  ]
-}"#;
-
-        let parsed = parse_guidance_distillation_output(raw)?;
-
-        assert_eq!(
-            parsed.summary.intent,
-            "Refactoring axum-macros/src/from_request.rs to simplify extract_fields."
-        );
-        assert_eq!(parsed.guidance_facts.len(), 3);
-        assert_eq!(
-            parsed.guidance_facts[0].category,
-            GuidanceFactCategory::Decision
-        );
-        assert_eq!(
-            parsed.guidance_facts[1].category,
-            GuidanceFactCategory::Verification
-        );
-        assert_eq!(
-            parsed.guidance_facts[2].category,
-            GuidanceFactCategory::Constraint
-        );
-        assert_eq!(parsed.guidance_facts[2].kind, "do_not_repeat");
-        assert_eq!(
-            parsed.guidance_facts[0].confidence,
-            GuidanceFactConfidence::Medium
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_rejects_unsupported_nested_fact_keys() {
-        let raw = r#"{
-  "summary": {
-    "context": {
-      "session": {
-        "focus": "Refactoring axum-macros/src/from_request.rs."
-      }
-    }
-  },
-  "guidanceFacts": [
-    {
-      "surprise": {
-        "appliesTo": {
-          "paths": ["axum-macros/src/from_request.rs"],
-          "symbols": []
-        },
-        "rationale": "This category is not part of the schema.",
-        "evidence": "Unsupported nested key."
-      }
-    }
-  ]
-}"#;
-
-        assert!(
-            parse_guidance_distillation_output(raw)
-                .expect_err("unsupported nested fact key should fail")
-                .to_string()
-                .contains("guidanceFacts")
-        );
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_requires_summary_and_facts() {
-        let missing_summary = r#"{"guidanceFacts":[]}"#;
-        let missing_facts = r#"{"summary":{"intent":"","outcome":""}}"#;
-
-        assert!(
-            parse_guidance_distillation_output(missing_summary)
-                .expect_err("missing summary should fail")
-                .to_string()
-                .contains("summary")
-        );
-        assert!(
-            parse_guidance_distillation_output(missing_facts)
-                .expect_err("missing guidanceFacts should fail")
-                .to_string()
-                .contains("guidanceFacts")
-        );
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_rejects_unknown_category() {
-        let raw = FIXTURE_JSON.replace("\"DECISION\"", "\"SURPRISE\"");
-
-        assert!(
-            parse_guidance_distillation_output(&raw)
-                .expect_err("unknown category should fail")
-                .to_string()
-                .contains("category")
-        );
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_rejects_empty_guidance_or_evidence() {
-        let empty_guidance = FIXTURE_JSON.replace(
-            "\"Do not derive attribute keyword names from std::any::type_name.\"",
-            "\"\"",
-        );
-        let empty_evidence = FIXTURE_JSON.replace(
-            "\"Replaced std::any::type_name::<K>() parsing with kw.to_token_stream().to_string().\"",
-            "\"\"",
-        );
-
-        assert!(
-            parse_guidance_distillation_output(&empty_guidance)
-                .expect_err("empty guidance should fail")
-                .to_string()
-                .contains("guidance")
-        );
-        assert!(
-            parse_guidance_distillation_output(&empty_evidence)
-                .expect_err("empty evidence should fail")
-                .to_string()
-                .contains("evidenceExcerpt")
-        );
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_defaults_empty_targets_to_single_modified_file()
-    -> Result<()> {
-        let raw = FIXTURE_JSON.replace(
-            r#""paths": ["axum-macros/src/attr_parsing.rs"]"#,
-            r#""paths": []"#,
-        );
-
-        let parsed =
-            parse_guidance_distillation_output_for_input(&raw, &input_with_one_modified_file())?;
-
-        assert_eq!(
-            parsed.guidance_facts[0].applies_to.paths,
-            vec!["axum-macros/src/attr_parsing.rs".to_string()]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn parse_guidance_distillation_output_drops_targetless_facts_when_ambiguous() -> Result<()> {
-        let raw = FIXTURE_JSON.replace(
-            r#""paths": ["axum-macros/src/attr_parsing.rs"]"#,
-            r#""paths": []"#,
-        );
-        let mut input = input_with_one_modified_file();
-        input.files_modified.push("src/other.rs".to_string());
-
-        let parsed = parse_guidance_distillation_output_for_input(&raw, &input)?;
-
-        assert!(parsed.guidance_facts.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn build_guidance_distillation_prompt_bounds_large_history_input() {
-        let mut input = input_with_one_modified_file();
-        input.prompt = Some("large prompt ".repeat(1_000));
-        input.transcript_fragment = Some("large transcript ".repeat(10_000));
-        input.files_modified = (0..80)
-            .map(|index| format!("src/generated/path_{index}.rs"))
-            .collect();
-        input.tool_events = (0..20)
-            .map(|index| GuidanceToolEvidence {
-                tool_kind: Some("shell".to_string()),
-                input_summary: Some(format!("input {index} {}", "x".repeat(5_000))),
-                output_summary: Some(format!("output {index} {}", "y".repeat(5_000))),
-                command: Some(format!("cargo check {index} {}", "z".repeat(5_000))),
-            })
-            .collect();
-
-        let prompt = build_guidance_distillation_prompt(&input);
-
-        assert!(prompt.len() < 20_000);
-        assert!(prompt.contains("omitted for context guidance prompt budget"));
-        assert!(prompt.contains("omitted_tool_events: 14"));
-        assert!(prompt.contains("omitted_paths: 30"));
-        assert!(prompt.contains("src/generated/path_0.rs"));
-    }
-
-    #[test]
-    fn build_guidance_distillation_prompt_declares_flat_schema_contract() {
-        let prompt = build_guidance_distillation_prompt(&input_with_one_modified_file());
-
-        assert!(prompt.contains("\"summary\""));
-        assert!(prompt.contains("\"intent\""));
-        assert!(prompt.contains("\"outcome\""));
-        assert!(prompt.contains("\"guidanceFacts\""));
-        assert!(prompt.contains("\"category\""));
-        assert!(prompt.contains("\"evidenceExcerpt\""));
-        assert!(prompt.contains("\"confidence\""));
-        assert!(prompt.contains("flat array"));
-        assert!(prompt.contains("Do not nest facts under category keys"));
-        assert!(prompt.contains("Do not return summary.context"));
-    }
-
-    struct FakeTextGenerationService {
-        response: Result<String>,
-    }
-
-    impl TextGenerationService for FakeTextGenerationService {
-        fn descriptor(&self) -> String {
-            "fake-guidance-model".to_string()
-        }
-
-        fn complete(&self, _system_prompt: &str, _user_prompt: &str) -> Result<String> {
-            self.response
-                .as_ref()
-                .map(Clone::clone)
-                .map_err(|err| anyhow!("{err:#}"))
-        }
-    }
-
-    #[test]
-    fn guidance_distiller_uses_text_generation_service() -> Result<()> {
-        let distiller = GuidanceDistiller::new(Arc::new(FakeTextGenerationService {
-            response: Ok(FIXTURE_JSON.to_string()),
-        }));
-
-        let parsed = distiller.distill(&input_with_one_modified_file())?;
-
-        assert_eq!(parsed.guidance_facts.len(), 1);
-        Ok(())
-    }
-
-    #[test]
-    fn guidance_distiller_reports_malformed_model_output() {
-        let distiller = GuidanceDistiller::new(Arc::new(FakeTextGenerationService {
-            response: Ok("not json".to_string()),
-        }));
-
-        assert!(
-            distiller
-                .distill(&input_with_one_modified_file())
-                .expect_err("malformed model output should fail")
-                .to_string()
-                .contains("guidance distillation")
-        );
-    }
-}
+#[path = "distillation_tests.rs"]
+mod tests;

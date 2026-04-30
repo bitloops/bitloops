@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::host::capability_host::{
     BoxFuture, CapabilityExecutionContext, StageHandler, StageRegistration, StageRequest,
@@ -10,6 +10,7 @@ use crate::host::capability_host::{
 use super::descriptor::{CONTEXT_GUIDANCE_CAPABILITY_ID, CONTEXT_GUIDANCE_STAGE_ID};
 use super::storage::{
     ListSelectedContextGuidanceInput, PersistedGuidanceFact, PersistedGuidanceSource,
+    PersistedGuidanceTarget, PersistedGuidanceTargetSummary,
 };
 use super::types::{GuidanceFactCategory, GuidanceFactConfidence};
 
@@ -35,7 +36,10 @@ pub struct ContextGuidanceStageSource {
     pub source_type: String,
 }
 
-pub fn build_context_guidance_summary(items: &[ContextGuidanceStageItem]) -> Value {
+pub fn build_context_guidance_summary(
+    items: &[ContextGuidanceStageItem],
+    target_summaries: &[PersistedGuidanceTargetSummary],
+) -> Value {
     let mut category_counts = BTreeMap::<String, usize>::new();
     let mut kind_counts = BTreeMap::<String, usize>::new();
     let mut source_type_counts = BTreeMap::<String, usize>::new();
@@ -53,12 +57,15 @@ pub fn build_context_guidance_summary(items: &[ContextGuidanceStageItem]) -> Val
                 .entry(source.source_type.clone())
                 .or_default() += 1;
         }
-        if let Some(generated_at) = item.generated_at.as_ref()
+        if let Some(generated_at) = item
+            .generated_at
+            .as_deref()
+            .map(normalize_datetime_for_graphql)
             && latest_generated_at
                 .as_deref()
                 .is_none_or(|latest| generated_at.as_str() > latest)
         {
-            latest_generated_at = Some(generated_at.clone());
+            latest_generated_at = Some(generated_at);
         }
     }
 
@@ -69,6 +76,7 @@ pub fn build_context_guidance_summary(items: &[ContextGuidanceStageItem]) -> Val
         "sourceTypeCounts": source_type_counts,
         "confidenceCounts": confidence_counts,
         "latestGeneratedAt": latest_generated_at,
+        "targetSummaries": target_summaries.iter().map(target_summary_json).collect::<Vec<_>>(),
         "expandHint": (!items.is_empty()).then(|| {
             json!({
                 "intent": "Inspect context guidance for selected artefacts",
@@ -91,12 +99,15 @@ impl StageHandler for ContextGuidanceStageHandler {
                 bail!("context guidance store is not available");
             };
             let input = list_input_from_request(&request)?;
+            let repo_id = input.repo_id.clone();
+            let selected_targets = selected_targets_from_input(&input);
             let facts = store.list_selected_context_guidance(input)?;
             let items = facts.iter().map(stage_item_from_fact).collect::<Vec<_>>();
             let summary_items = facts.iter().map(summary_item_from_fact).collect::<Vec<_>>();
+            let target_summaries = store.list_target_summaries(&repo_id, &selected_targets)?;
             let schema = (!items.is_empty()).then(|| "context_guidance.schema".to_string());
             Ok(StageResponse::json(json!({
-                "overview": build_context_guidance_summary(&summary_items),
+                "overview": build_context_guidance_summary(&summary_items, &target_summaries),
                 "schema": schema,
                 "items": items,
             })))
@@ -144,15 +155,55 @@ fn list_input_from_request(request: &StageRequest) -> Result<ListSelectedContext
     })
 }
 
+fn selected_targets_from_input(
+    input: &ListSelectedContextGuidanceInput,
+) -> Vec<PersistedGuidanceTarget> {
+    let mut targets = Vec::new();
+    targets.extend(
+        input
+            .selected_paths
+            .iter()
+            .map(|path| PersistedGuidanceTarget {
+                target_type: "path".to_string(),
+                target_value: path.clone(),
+            }),
+    );
+    targets.extend(
+        input
+            .selected_symbol_ids
+            .iter()
+            .map(|symbol| PersistedGuidanceTarget {
+                target_type: "symbol_id".to_string(),
+                target_value: symbol.clone(),
+            }),
+    );
+    targets.extend(
+        input
+            .selected_symbol_fqns
+            .iter()
+            .map(|symbol| PersistedGuidanceTarget {
+                target_type: "symbol_fqn".to_string(),
+                target_value: symbol.clone(),
+            }),
+    );
+    targets
+}
+
 fn selected_values(input_rows: &[Value], key: &str) -> Vec<String> {
-    input_rows
+    let mut seen = BTreeSet::new();
+    let mut values = Vec::new();
+    for value in input_rows
         .iter()
         .filter_map(|row| row.get(key))
         .filter_map(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
+    {
+        if seen.insert(value.to_string()) {
+            values.push(value.to_string());
+        }
+    }
+    values
 }
 
 fn optional_string_arg(
@@ -226,9 +277,24 @@ fn source_json(source: &PersistedGuidanceSource) -> Value {
         "sessionId": source.session_id,
         "turnId": source.turn_id,
         "toolKind": source.tool_kind,
+        "knowledgeItemId": source.knowledge_item_id,
+        "knowledgeItemVersionId": source.knowledge_item_version_id,
+        "relationAssertionId": source.relation_assertion_id,
+        "provider": source.provider,
+        "sourceKind": source.source_kind,
         "title": source.title,
         "url": source.url,
         "excerpt": source.excerpt,
+    })
+}
+
+fn target_summary_json(summary: &PersistedGuidanceTargetSummary) -> Value {
+    json!({
+        "targetType": summary.target_type,
+        "targetValue": summary.target_value,
+        "summary": summary.summary_json,
+        "activeGuidanceCount": summary.active_guidance_count,
+        "generatedAt": summary.generated_at.as_deref().map(normalize_datetime_for_graphql),
     })
 }
 
@@ -245,20 +311,11 @@ fn context_guidance_label(category: GuidanceFactCategory, kind: &str) -> String 
 }
 
 fn relevance_score(fact: &PersistedGuidanceFact) -> f64 {
-    let base = match fact.confidence {
-        GuidanceFactConfidence::High => 1.0,
-        GuidanceFactConfidence::Medium => 0.75,
-        GuidanceFactConfidence::Low => 0.5,
-    };
-    if fact
+    let has_symbol_target = fact
         .targets
         .iter()
-        .any(|target| target.target_type == "symbol_id" || target.target_type == "symbol_fqn")
-    {
-        base + 0.05
-    } else {
-        base
-    }
+        .any(|target| target.target_type == "symbol_id" || target.target_type == "symbol_fqn");
+    super::quality::guidance_value_score(fact.category, fact.confidence, has_symbol_target)
 }
 
 fn category_name(category: GuidanceFactCategory) -> &'static str {
@@ -309,6 +366,7 @@ mod tests {
 
     struct FakeStore {
         rows: Vec<PersistedGuidanceFact>,
+        target_summaries: Vec<PersistedGuidanceTargetSummary>,
         last_input: Mutex<Option<ListSelectedContextGuidanceInput>>,
     }
 
@@ -324,12 +382,50 @@ mod tests {
             bail!("not used")
         }
 
+        fn persist_knowledge_guidance_distillation(
+            &self,
+            _repo_id: &str,
+            _input: &crate::capability_packs::context_guidance::distillation::KnowledgeGuidanceDistillationInput,
+            _output: &crate::capability_packs::context_guidance::types::GuidanceDistillationOutput,
+            _source_model: Option<&str>,
+            _source_profile: Option<&str>,
+        ) -> Result<PersistGuidanceOutcome> {
+            bail!("not used")
+        }
+
         fn list_selected_context_guidance(
             &self,
             input: ListSelectedContextGuidanceInput,
         ) -> Result<Vec<PersistedGuidanceFact>> {
             *self.last_input.lock().expect("lock") = Some(input);
             Ok(self.rows.clone())
+        }
+
+        fn list_active_guidance_for_target(
+            &self,
+            _repo_id: &str,
+            _target_type: &str,
+            _target_value: &str,
+            _limit: usize,
+        ) -> Result<Vec<PersistedGuidanceFact>> {
+            bail!("not used")
+        }
+
+        fn apply_target_compaction(
+            &self,
+            _repo_id: &str,
+            _input: crate::capability_packs::context_guidance::storage::ApplyTargetCompactionInput,
+        ) -> Result<crate::capability_packs::context_guidance::storage::ApplyTargetCompactionOutcome>
+        {
+            bail!("not used")
+        }
+
+        fn list_target_summaries(
+            &self,
+            _repo_id: &str,
+            _targets: &[PersistedGuidanceTarget],
+        ) -> Result<Vec<PersistedGuidanceTargetSummary>> {
+            Ok(self.target_summaries.clone())
         }
 
         fn health_check(&self, _repo_id: &str) -> Result<()> {
@@ -385,6 +481,10 @@ mod tests {
             guidance: "Avoid the rejected approach.".to_string(),
             evidence_excerpt: "Rejected in prior session.".to_string(),
             confidence: GuidanceFactConfidence::High,
+            lifecycle_status: "active".to_string(),
+            fact_fingerprint: "fingerprint-1".to_string(),
+            value_score: 0.99,
+            superseded_by_guidance_id: None,
             source_model: Some("model".to_string()),
             generated_at: Some("2026-04-29T10:00:00Z".to_string()),
             targets: vec![PersistedGuidanceTarget {
@@ -418,15 +518,18 @@ mod tests {
 
     #[test]
     fn context_guidance_summary_counts_items() {
-        let summary = build_context_guidance_summary(&[ContextGuidanceStageItem {
-            category: "DECISION".to_string(),
-            kind: "rejected_approach".to_string(),
-            confidence: "HIGH".to_string(),
-            generated_at: Some("2026-04-29T10:00:00Z".to_string()),
-            sources: vec![ContextGuidanceStageSource {
-                source_type: "history.turn".to_string(),
+        let summary = build_context_guidance_summary(
+            &[ContextGuidanceStageItem {
+                category: "DECISION".to_string(),
+                kind: "rejected_approach".to_string(),
+                confidence: "HIGH".to_string(),
+                generated_at: Some("2026-04-29T10:00:00Z".to_string()),
+                sources: vec![ContextGuidanceStageSource {
+                    source_type: "history.turn".to_string(),
+                }],
             }],
-        }]);
+            &[],
+        );
 
         assert_eq!(summary["totalCount"], json!(1));
         assert_eq!(summary["categoryCounts"]["DECISION"], json!(1));
@@ -442,10 +545,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn context_guidance_summary_normalizes_latest_generated_at_before_comparing() {
+        let summary = build_context_guidance_summary(
+            &[
+                ContextGuidanceStageItem {
+                    category: "DECISION".to_string(),
+                    kind: "older_iso".to_string(),
+                    confidence: "HIGH".to_string(),
+                    generated_at: Some("2026-04-29T10:00:00Z".to_string()),
+                    sources: Vec::new(),
+                },
+                ContextGuidanceStageItem {
+                    category: "DECISION".to_string(),
+                    kind: "newer_sqlite".to_string(),
+                    confidence: "HIGH".to_string(),
+                    generated_at: Some("2026-04-29 11:00:00".to_string()),
+                    sources: Vec::new(),
+                },
+                ContextGuidanceStageItem {
+                    category: "DECISION".to_string(),
+                    kind: "missing_time".to_string(),
+                    confidence: "LOW".to_string(),
+                    generated_at: None,
+                    sources: Vec::new(),
+                },
+            ],
+            &[],
+        );
+
+        assert_eq!(summary["latestGeneratedAt"], json!("2026-04-29T11:00:00Z"));
+    }
+
+    #[test]
+    fn selected_values_deduplicates_trimmed_values() {
+        let rows = vec![
+            json!({ "path": " src/lib.rs " }),
+            json!({ "path": "src/lib.rs" }),
+            json!({ "path": "src/other.rs" }),
+        ];
+
+        assert_eq!(
+            selected_values(&rows, "path"),
+            vec!["src/lib.rs".to_string(), "src/other.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn relevance_score_reflects_category_value() {
+        let mut decision = fact();
+        decision.category = GuidanceFactCategory::Decision;
+        decision.confidence = GuidanceFactConfidence::High;
+
+        let mut verification = fact();
+        verification.category = GuidanceFactCategory::Verification;
+        verification.confidence = GuidanceFactConfidence::High;
+
+        assert!(relevance_score(&decision) > relevance_score(&verification));
+    }
+
     #[tokio::test]
     async fn stage_returns_empty_payload_when_store_has_no_rows() {
         let store = FakeStore {
             rows: Vec::new(),
+            target_summaries: Vec::new(),
             last_input: Mutex::new(None),
         };
         let mut ctx = DummyCtx {
@@ -475,6 +638,7 @@ mod tests {
     async fn stage_rejects_empty_kind() {
         let store = FakeStore {
             rows: Vec::new(),
+            target_summaries: Vec::new(),
             last_input: Mutex::new(None),
         };
         let mut ctx = DummyCtx {
@@ -502,6 +666,7 @@ mod tests {
     async fn stage_passes_selected_targets_to_repository() {
         let store = FakeStore {
             rows: vec![fact()],
+            target_summaries: Vec::new(),
             last_input: Mutex::new(None),
         };
         let mut ctx = DummyCtx {
@@ -540,6 +705,96 @@ mod tests {
             vec!["src/lib.rs::target".to_string()]
         );
         assert_eq!(input.kind.as_deref(), Some("rejected_approach"));
+    }
+
+    #[tokio::test]
+    async fn stage_returns_knowledge_source_provenance() {
+        let mut fact = fact();
+        let source = &mut fact.sources[0];
+        source.source_type = "knowledge.item_version".to_string();
+        source.source_id = "item-1:version-1:relation-1".to_string();
+        source.knowledge_item_id = Some("item-1".to_string());
+        source.knowledge_item_version_id = Some("version-1".to_string());
+        source.relation_assertion_id = Some("relation-1".to_string());
+        source.provider = Some("github".to_string());
+        source.source_kind = Some("github_issue".to_string());
+        source.title = Some("Issue title".to_string());
+        source.url = Some("https://github.com/org/repo/issues/1".to_string());
+        let store = FakeStore {
+            rows: vec![fact],
+            target_summaries: Vec::new(),
+            last_input: Mutex::new(None),
+        };
+        let mut ctx = DummyCtx {
+            repo: repo(),
+            store: Some(&store),
+        };
+        let handler = ContextGuidanceStageHandler;
+        let response = handler
+            .execute(
+                StageRequest::new(json!({
+                    "input_rows": [{ "path": "src/lib.rs" }],
+                    "args": {},
+                    "limit": 10,
+                    "query_context": { "repo_id": "repo-1" }
+                })),
+                &mut ctx,
+            )
+            .await
+            .expect("stage");
+
+        let source = &response.payload["items"][0]["sources"][0];
+        assert_eq!(source["sourceType"], json!("knowledge.item_version"));
+        assert_eq!(source["knowledgeItemId"], json!("item-1"));
+        assert_eq!(source["knowledgeItemVersionId"], json!("version-1"));
+        assert_eq!(source["relationAssertionId"], json!("relation-1"));
+        assert_eq!(source["provider"], json!("github"));
+        assert_eq!(source["sourceKind"], json!("github_issue"));
+    }
+
+    #[tokio::test]
+    async fn stage_overview_includes_target_summaries_when_available() {
+        let store = FakeStore {
+            rows: vec![fact()],
+            target_summaries: vec![PersistedGuidanceTargetSummary {
+                target_type: "path".to_string(),
+                target_value: "src/lib.rs".to_string(),
+                summary_json: json!({ "summary": "Keep parser boundary guidance." }),
+                active_guidance_count: 4,
+                generated_at: Some("2026-04-30 10:00:00".to_string()),
+            }],
+            last_input: Mutex::new(None),
+        };
+        let mut ctx = DummyCtx {
+            repo: repo(),
+            store: Some(&store),
+        };
+        let handler = ContextGuidanceStageHandler;
+        let response = handler
+            .execute(
+                StageRequest::new(json!({
+                    "input_rows": [{ "path": "src/lib.rs" }],
+                    "args": {},
+                    "limit": 10,
+                    "query_context": { "repo_id": "repo-1" }
+                })),
+                &mut ctx,
+            )
+            .await
+            .expect("stage");
+
+        assert_eq!(
+            response.payload["overview"]["targetSummaries"][0]["targetValue"],
+            json!("src/lib.rs")
+        );
+        assert_eq!(
+            response.payload["overview"]["targetSummaries"][0]["summary"]["summary"],
+            json!("Keep parser boundary guidance.")
+        );
+        assert_eq!(
+            response.payload["overview"]["targetSummaries"][0]["generatedAt"],
+            json!("2026-04-30T10:00:00Z")
+        );
     }
 
     #[tokio::test]

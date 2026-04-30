@@ -117,6 +117,10 @@ pub trait CapabilityMigrationContext: Send {
     fn repo(&self) -> &RepoIdentity;
     fn repo_root(&self) -> &Path;
     fn apply_devql_sqlite_ddl(&self, sql: &str) -> Result<()>;
+    fn apply_devql_sqlite_migration(
+        &self,
+        operation: &mut dyn FnMut(&rusqlite::Connection) -> Result<()>,
+    ) -> Result<()>;
 }
 
 pub trait KnowledgeExecutionContext: CapabilityExecutionContext {

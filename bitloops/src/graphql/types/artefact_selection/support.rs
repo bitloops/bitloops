@@ -676,6 +676,11 @@ type ContextGuidanceSource {
   sessionId: String
   turnId: String
   toolKind: String
+  knowledgeItemId: ID
+  knowledgeItemVersionId: ID
+  relationAssertionId: ID
+  provider: String
+  sourceKind: String
   title: String
   url: String
   excerpt: String

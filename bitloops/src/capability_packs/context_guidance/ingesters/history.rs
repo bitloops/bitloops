@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde_json::json;
 
 use crate::host::capability_host::{
@@ -12,8 +12,10 @@ use super::super::descriptor::{
 };
 use super::super::distillation::GuidanceDistiller;
 use super::super::history_input::{HistoryGuidanceInputSelector, hydrate_history_guidance_input};
-use super::super::storage::guidance_input_hash;
-use super::super::workplane::{ContextGuidanceMailboxPayload, history_turn_work_item_count};
+use super::super::storage::{PersistGuidanceOutcome, guidance_input_hash};
+use super::super::workplane::{
+    ContextGuidanceMailboxPayload, enqueue_target_compaction, history_turn_work_item_count,
+};
 
 pub fn build_context_guidance_history_distillation_ingester() -> IngesterRegistration {
     IngesterRegistration::new(
@@ -39,7 +41,10 @@ impl IngesterHandler for ContextGuidanceHistoryDistillationIngester {
                 session_id,
                 turn_id,
                 input_hash,
-            } = &payload;
+            } = &payload
+            else {
+                bail!("history distillation ingester received incompatible payload");
+            };
             let input = hydrate_history_guidance_input(
                 ctx.repo_root(),
                 HistoryGuidanceInputSelector {
@@ -101,6 +106,7 @@ impl IngesterHandler for ContextGuidanceHistoryDistillationIngester {
                 source_model.as_deref(),
                 source_profile.as_deref(),
             )?;
+            enqueue_target_compactions(repo_id, &outcome, ctx.workplane())?;
             Ok(IngestResult::new(
                 json!({
                     "accepted": true,
@@ -112,5 +118,103 @@ impl IngesterHandler for ContextGuidanceHistoryDistillationIngester {
                 "completed context guidance history distillation work",
             ))
         })
+    }
+}
+
+fn enqueue_target_compactions(
+    repo_id: &str,
+    outcome: &PersistGuidanceOutcome,
+    workplane: Option<&dyn crate::host::capability_host::gateways::CapabilityWorkplaneGateway>,
+) -> Result<()> {
+    if outcome.inserted_facts == 0 {
+        return Ok(());
+    }
+    let Some(workplane) = workplane else {
+        return Ok(());
+    };
+    for target in &outcome.touched_targets {
+        enqueue_target_compaction(
+            workplane,
+            repo_id,
+            target.target_type.as_str(),
+            target.target_value.as_str(),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::capability_packs::context_guidance::storage::PersistedGuidanceTarget;
+    use crate::host::capability_host::gateways::{
+        CapabilityMailboxStatus, CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneGateway,
+        CapabilityWorkplaneJob,
+    };
+
+    struct CapturingWorkplane {
+        jobs: Mutex<Vec<CapabilityWorkplaneJob>>,
+    }
+
+    impl CapabilityWorkplaneGateway for CapturingWorkplane {
+        fn enqueue_jobs(
+            &self,
+            jobs: Vec<CapabilityWorkplaneJob>,
+        ) -> anyhow::Result<CapabilityWorkplaneEnqueueResult> {
+            let inserted_jobs = jobs.len() as u64;
+            self.jobs.lock().expect("jobs").extend(jobs);
+            Ok(CapabilityWorkplaneEnqueueResult {
+                inserted_jobs,
+                updated_jobs: 0,
+            })
+        }
+
+        fn mailbox_status(&self) -> anyhow::Result<BTreeMap<String, CapabilityMailboxStatus>> {
+            Ok(BTreeMap::new())
+        }
+    }
+
+    #[test]
+    fn inserted_history_guidance_enqueues_target_compaction() -> anyhow::Result<()> {
+        let workplane = CapturingWorkplane {
+            jobs: Mutex::new(Vec::new()),
+        };
+        let outcome = PersistGuidanceOutcome {
+            inserted_run: true,
+            inserted_facts: 1,
+            unchanged: false,
+            touched_targets: vec![PersistedGuidanceTarget {
+                target_type: "path".to_string(),
+                target_value: "src/target.rs".to_string(),
+            }],
+        };
+
+        enqueue_target_compactions("repo-1", &outcome, Some(&workplane))?;
+
+        let jobs = workplane.jobs.lock().expect("jobs");
+        assert_eq!(jobs.len(), 1);
+        let queued = &jobs[0];
+        assert_eq!(queued.mailbox_name, "context_guidance.target_compaction");
+        assert_eq!(
+            queued.target_capability_id.as_deref(),
+            Some("context_guidance")
+        );
+        assert!(queued.payload.to_string().contains("src/target.rs"));
+        assert_eq!(
+            queued.payload,
+            json!({
+                "targetCompaction": {
+                    "repoId": "repo-1",
+                    "targetType": "path",
+                    "targetValue": "src/target.rs"
+                }
+            })
+        );
+        Ok(())
     }
 }

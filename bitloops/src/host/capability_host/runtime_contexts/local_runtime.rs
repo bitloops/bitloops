@@ -232,6 +232,22 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         .context("opening local relational store for DevQL DDL")?;
         relational.execute_local_sqlite_batch_allow_create(sql)
     }
+
+    fn apply_devql_sqlite_migration(
+        &self,
+        operation: &mut dyn FnMut(&rusqlite::Connection) -> Result<()>,
+    ) -> Result<()> {
+        if self.backends.relational.has_postgres() {
+            return Ok(());
+        }
+        let relational = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root,
+            &self.backends.relational,
+        )
+        .context("opening local relational store for DevQL migration")?;
+        let sqlite = relational.local_sqlite_pool_allow_create()?;
+        sqlite.with_connection(|conn| operation(conn))
+    }
 }
 
 impl KnowledgeExecutionContext for LocalCapabilityRuntime<'_> {

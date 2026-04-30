@@ -101,7 +101,7 @@ mod tests {
     use crate::capability_packs::context_guidance::pack::ContextGuidancePack;
     use crate::capability_packs::context_guidance::storage::{
         ContextGuidanceRepository, ListSelectedContextGuidanceInput, PersistGuidanceOutcome,
-        PersistedGuidanceFact,
+        PersistedGuidanceFact, PersistedGuidanceTarget, PersistedGuidanceTargetSummary,
     };
     use crate::capability_packs::context_guidance::types::GuidanceDistillationOutput;
     use crate::capability_packs::knowledge::ParsedKnowledgeUrl;
@@ -231,11 +231,49 @@ mod tests {
             bail!("persist is not used in context guidance health tests")
         }
 
+        fn persist_knowledge_guidance_distillation(
+            &self,
+            _repo_id: &str,
+            _input: &crate::capability_packs::context_guidance::distillation::KnowledgeGuidanceDistillationInput,
+            _output: &GuidanceDistillationOutput,
+            _source_model: Option<&str>,
+            _source_profile: Option<&str>,
+        ) -> Result<PersistGuidanceOutcome> {
+            bail!("persist is not used in context guidance health tests")
+        }
+
         fn list_selected_context_guidance(
             &self,
             _input: ListSelectedContextGuidanceInput,
         ) -> Result<Vec<PersistedGuidanceFact>> {
             bail!("query is not used in context guidance health tests")
+        }
+
+        fn list_active_guidance_for_target(
+            &self,
+            _repo_id: &str,
+            _target_type: &str,
+            _target_value: &str,
+            _limit: usize,
+        ) -> Result<Vec<PersistedGuidanceFact>> {
+            bail!("query is not used in context guidance health tests")
+        }
+
+        fn apply_target_compaction(
+            &self,
+            _repo_id: &str,
+            _input: crate::capability_packs::context_guidance::storage::ApplyTargetCompactionInput,
+        ) -> Result<crate::capability_packs::context_guidance::storage::ApplyTargetCompactionOutcome>
+        {
+            bail!("compaction is not used in context guidance health tests")
+        }
+
+        fn list_target_summaries(
+            &self,
+            _repo_id: &str,
+            _targets: &[PersistedGuidanceTarget],
+        ) -> Result<Vec<PersistedGuidanceTargetSummary>> {
+            bail!("target summaries are not used in context guidance health tests")
         }
 
         fn health_check(&self, _repo_id: &str) -> Result<()> {

@@ -203,6 +203,9 @@ fn context_guidance_stage_schema_matches_contract() {
     assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("enum ContextGuidanceCategory"));
     assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("generatedAt"));
     assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("sourceModel"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("knowledgeItemId"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("knowledgeItemVersionId"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("relationAssertionId"));
 }
 
 #[test]

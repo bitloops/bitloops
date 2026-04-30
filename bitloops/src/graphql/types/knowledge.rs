@@ -61,6 +61,8 @@ pub enum KnowledgeTargetType {
     Checkpoint,
     Artefact,
     Knowledge,
+    Path,
+    SymbolFqn,
 }
 
 impl KnowledgeTargetType {
@@ -70,6 +72,8 @@ impl KnowledgeTargetType {
             "checkpoint" => Ok(Self::Checkpoint),
             "artefact" => Ok(Self::Artefact),
             "knowledge_item" => Ok(Self::Knowledge),
+            "path" => Ok(Self::Path),
+            "symbol_fqn" => Ok(Self::SymbolFqn),
             other => Err(format!("unknown knowledge target type `{other}`")),
         }
     }
@@ -289,5 +293,22 @@ pub struct KnowledgeRelation {
 impl KnowledgeRelation {
     pub fn cursor(&self) -> String {
         self.id.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KnowledgeTargetType;
+
+    #[test]
+    fn knowledge_target_type_accepts_context_guidance_targets() {
+        assert_eq!(
+            KnowledgeTargetType::from_storage_value("path"),
+            Ok(KnowledgeTargetType::Path)
+        );
+        assert_eq!(
+            KnowledgeTargetType::from_storage_value("symbol_fqn"),
+            Ok(KnowledgeTargetType::SymbolFqn)
+        );
     }
 }

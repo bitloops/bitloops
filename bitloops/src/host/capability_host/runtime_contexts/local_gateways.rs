@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
@@ -16,8 +16,8 @@ use crate::host::capability_host::gateways::{
     CapabilityWorkplaneGateway, CapabilityWorkplaneJob, ProvenanceBuilder, StoreHealthGateway,
 };
 use crate::host::runtime_store::{
-    RepoSqliteRuntimeStore, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
-    SemanticSummaryMailboxItemInsert,
+    CapabilityWorkplaneJobInsert, RepoSqliteRuntimeStore, SemanticEmbeddingMailboxItemInsert,
+    SemanticMailboxItemKind, SemanticSummaryMailboxItemInsert,
 };
 
 pub struct LocalCanonicalGraphGateway;
@@ -56,7 +56,7 @@ impl StoreHealthGateway for LocalStoreHealthGateway {
 pub struct LocalCapabilityWorkplaneGateway {
     capability_id: String,
     runtime_store: RepoSqliteRuntimeStore,
-    declared_mailboxes: BTreeSet<String>,
+    declared_mailboxes: BTreeMap<(String, String), ()>,
     init_session_id: Option<String>,
 }
 
@@ -72,17 +72,36 @@ impl LocalCapabilityWorkplaneGateway {
             runtime_store: RepoSqliteRuntimeStore::open(repo_root)?,
             declared_mailboxes: declared_mailboxes
                 .iter()
-                .map(|registration| registration.mailbox_name.to_string())
+                .map(|registration| {
+                    (
+                        (
+                            registration.capability_id.to_string(),
+                            registration.mailbox_name.to_string(),
+                        ),
+                        (),
+                    )
+                })
                 .collect(),
             init_session_id,
         })
     }
 
-    fn ensure_mailbox_declared(&self, mailbox_name: &str) -> Result<()> {
+    fn target_capability_id<'a>(&'a self, job: &'a CapabilityWorkplaneJob) -> &'a str {
+        job.target_capability_id
+            .as_deref()
+            .unwrap_or(self.capability_id.as_str())
+    }
+
+    fn ensure_mailbox_declared(
+        &self,
+        target_capability_id: &str,
+        mailbox_name: &str,
+    ) -> Result<()> {
         anyhow::ensure!(
-            self.declared_mailboxes.contains(mailbox_name),
+            self.declared_mailboxes
+                .contains_key(&(target_capability_id.to_string(), mailbox_name.to_string())),
             "mailbox `{mailbox_name}` is not declared for capability `{}`",
-            self.capability_id
+            target_capability_id
         );
         Ok(())
     }
@@ -94,14 +113,18 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
         jobs: Vec<CapabilityWorkplaneJob>,
     ) -> Result<CapabilityWorkplaneEnqueueResult> {
         for job in &jobs {
-            self.ensure_mailbox_declared(&job.mailbox_name)?;
+            self.ensure_mailbox_declared(self.target_capability_id(job), &job.mailbox_name)?;
         }
-        let mut workplane_jobs = Vec::new();
+        let mut workplane_jobs = BTreeMap::<String, Vec<CapabilityWorkplaneJobInsert>>::new();
         let mut summary_items = Vec::new();
         let mut embedding_items = Vec::new();
 
         for job in jobs {
-            if self.capability_id == SEMANTIC_CLONES_CAPABILITY_ID {
+            let target_capability_id = job
+                .target_capability_id
+                .clone()
+                .unwrap_or_else(|| self.capability_id.clone());
+            if target_capability_id == SEMANTIC_CLONES_CAPABILITY_ID {
                 match job.mailbox_name.as_str() {
                     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => {
                         summary_items.push(summary_mailbox_item_from_job(
@@ -138,21 +161,22 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
                 }
             }
 
-            workplane_jobs.push(
-                crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+            workplane_jobs
+                .entry(target_capability_id)
+                .or_default()
+                .push(CapabilityWorkplaneJobInsert::new(
                     job.mailbox_name,
                     self.init_session_id.clone(),
                     job.dedupe_key,
                     job.payload,
-                ),
-            );
+                ));
         }
 
         let mut totals = CapabilityWorkplaneEnqueueResult::default();
-        if !workplane_jobs.is_empty() {
+        for (target_capability_id, jobs) in workplane_jobs {
             let result = self
                 .runtime_store
-                .enqueue_capability_workplane_jobs(&self.capability_id, workplane_jobs)?;
+                .enqueue_capability_workplane_jobs(&target_capability_id, jobs)?;
             totals.inserted_jobs += result.inserted_jobs;
             totals.updated_jobs += result.updated_jobs;
         }
@@ -181,7 +205,11 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
         self.runtime_store
             .load_capability_workplane_mailbox_status(
                 &self.capability_id,
-                self.declared_mailboxes.iter().map(String::as_str),
+                self.declared_mailboxes
+                    .keys()
+                    .filter_map(|(capability_id, mailbox_name)| {
+                        (capability_id == &self.capability_id).then_some(mailbox_name.as_str())
+                    }),
             )
             .map(|status_by_mailbox| {
                 status_by_mailbox
