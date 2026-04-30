@@ -7,7 +7,9 @@ use crate::capability_packs::codecity::services::config::CodeCityConfig;
 use crate::capability_packs::codecity::services::source_graph::{
     CodeCitySourceArtefact, CodeCitySourceEdge, CodeCitySourceFile, CodeCitySourceGraph,
 };
-use crate::capability_packs::codecity::types::CODECITY_ROOT_BOUNDARY_ID;
+use crate::capability_packs::codecity::types::{
+    CODECITY_ROOT_BOUNDARY_ID, CodeCityBoundaryKind, CodeCityBoundarySource,
+};
 
 fn graph(files: &[&str], edges: &[(&str, &str)]) -> CodeCitySourceGraph {
     CodeCitySourceGraph {
@@ -129,6 +131,7 @@ fn implicit_boundary_ids_are_unique_when_names_repeat() {
     let mut config = CodeCityConfig::default();
     config.boundaries.min_implicit_boundary_files = 2;
     config.boundaries.community_modularity_threshold = 0.0;
+    config.boundaries.small_cluster_collapse_file_limit = 0;
 
     let result = detect_boundaries(&source, &config, temp.path());
     let unique_count = result
@@ -140,6 +143,107 @@ fn implicit_boundary_ids_are_unique_when_names_repeat() {
 
     assert!(result.boundaries.len() > 1);
     assert_eq!(result.boundaries.len(), unique_count);
+}
+
+#[test]
+fn collapses_small_implicit_communities_into_independent_boundary() {
+    let temp = tempdir().expect("tempdir");
+    let files = [
+        "src/a/one.ts",
+        "src/a/two.ts",
+        "src/a/three.ts",
+        "src/b/one.ts",
+        "src/b/two.ts",
+        "src/b/three.ts",
+    ];
+    let edges = [
+        ("src/a/one.ts", "src/a/two.ts"),
+        ("src/a/two.ts", "src/a/one.ts"),
+        ("src/a/two.ts", "src/a/three.ts"),
+        ("src/a/three.ts", "src/a/two.ts"),
+        ("src/b/one.ts", "src/b/two.ts"),
+        ("src/b/two.ts", "src/b/one.ts"),
+        ("src/b/two.ts", "src/b/three.ts"),
+        ("src/b/three.ts", "src/b/two.ts"),
+    ];
+    let source = graph(&files, &edges);
+    let mut config = CodeCityConfig::default();
+    config.boundaries.community_modularity_threshold = 0.0;
+
+    let result = detect_boundaries(&source, &config, temp.path());
+
+    assert_eq!(result.boundaries.len(), 1);
+    let boundary = &result.boundaries[0];
+    assert_eq!(boundary.id, "boundary:root:implicit:independent");
+    assert_eq!(boundary.name, "independent");
+    assert_eq!(boundary.kind, CodeCityBoundaryKind::Implicit);
+    assert_eq!(boundary.source, CodeCityBoundarySource::CommunityDetection);
+    assert_eq!(
+        boundary.parent_boundary_id.as_deref(),
+        Some(CODECITY_ROOT_BOUNDARY_ID)
+    );
+    assert_eq!(boundary.file_count, files.len());
+    assert!(!boundary.atomic);
+    for file in files {
+        assert_eq!(result.file_to_boundary[file], boundary.id.as_str());
+    }
+}
+
+#[test]
+fn keeps_large_implicit_communities_and_collapses_only_small_ones() {
+    let temp = tempdir().expect("tempdir");
+    let files = [
+        "src/a/one.ts",
+        "src/a/two.ts",
+        "src/a/three.ts",
+        "src/b/one.ts",
+        "src/b/two.ts",
+        "src/b/three.ts",
+        "src/misc/one.ts",
+        "src/misc/two.ts",
+    ];
+    let edges = [
+        ("src/a/one.ts", "src/a/two.ts"),
+        ("src/a/two.ts", "src/a/one.ts"),
+        ("src/a/two.ts", "src/a/three.ts"),
+        ("src/a/three.ts", "src/a/two.ts"),
+        ("src/b/one.ts", "src/b/two.ts"),
+        ("src/b/two.ts", "src/b/one.ts"),
+        ("src/b/two.ts", "src/b/three.ts"),
+        ("src/b/three.ts", "src/b/two.ts"),
+    ];
+    let source = graph(&files, &edges);
+    let mut config = CodeCityConfig::default();
+    config.boundaries.community_modularity_threshold = 0.0;
+    config.boundaries.small_cluster_collapse_file_limit = 2;
+
+    let result = detect_boundaries(&source, &config, temp.path());
+
+    assert_eq!(result.boundaries.len(), 3);
+    let independent = result
+        .boundaries
+        .iter()
+        .find(|boundary| boundary.name == "independent")
+        .expect("independent boundary");
+    assert_eq!(independent.file_count, 2);
+    assert!(!independent.atomic);
+    assert_eq!(
+        result.file_to_boundary["src/misc/one.ts"],
+        independent.id.as_str()
+    );
+    assert_eq!(
+        result.file_to_boundary["src/misc/two.ts"],
+        independent.id.as_str()
+    );
+
+    let retained = result
+        .boundaries
+        .iter()
+        .filter(|boundary| boundary.name != "independent")
+        .collect::<Vec<_>>();
+    assert_eq!(retained.len(), 2);
+    assert!(retained.iter().all(|boundary| boundary.file_count == 3));
+    assert!(retained.iter().all(|boundary| boundary.atomic));
 }
 
 #[test]

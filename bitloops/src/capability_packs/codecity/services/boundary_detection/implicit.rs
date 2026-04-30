@@ -1,7 +1,9 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
-use crate::capability_packs::codecity::services::community_detection::detect_communities;
+use crate::capability_packs::codecity::services::community_detection::{
+    CodeCityCommunity, detect_communities,
+};
 use crate::capability_packs::codecity::services::config::CodeCityConfig;
 use crate::capability_packs::codecity::services::graph_metrics::build_graph_from_paths;
 use crate::capability_packs::codecity::services::source_graph::CodeCitySourceGraph;
@@ -14,6 +16,7 @@ use super::model::{BoundaryBuildSpec, BoundarySplitResult, ResolvedBoundary};
 use super::naming::slugify;
 
 pub(super) const MAX_INTERACTIVE_IMPLICIT_BOUNDARY_FILES: usize = 2048;
+const INDEPENDENT_BOUNDARY_NAME: &str = "independent";
 
 pub(super) fn split_implicit_boundaries(
     source: &CodeCitySourceGraph,
@@ -72,47 +75,87 @@ pub(super) fn split_implicit_boundaries(
         };
     }
 
-    let boundaries = communities
-        .communities
-        .iter()
-        .enumerate()
-        .map(|(index, community)| {
-            let name = common_directory_prefix(&community.paths)
-                .map(|prefix| {
-                    Path::new(&prefix)
-                        .file_name()
-                        .and_then(OsStr::to_str)
-                        .unwrap_or("community")
-                        .to_string()
-                })
-                .unwrap_or_else(|| format!("community_{}", index + 1));
-            build_boundary(
-                source,
-                BoundaryBuildSpec {
-                    root_path: boundary.boundary.root_path.clone(),
-                    id: format!(
-                        "{}:implicit:{}:{}",
-                        boundary.boundary.id,
-                        slugify(&name),
-                        index + 1
-                    ),
-                    name,
-                    kind: CodeCityBoundaryKind::Implicit,
-                    ecosystem: boundary.boundary.ecosystem.clone(),
-                    parent_boundary_id: Some(boundary.boundary.id.clone()),
-                    source_kind: CodeCityBoundarySource::CommunityDetection,
-                    files: community.paths.clone(),
-                    entry_points: Vec::new(),
-                    diagnostics: Vec::new(),
-                },
-            )
-        })
+    let mut retained_communities = Vec::new();
+    let mut independent_files = Vec::new();
+    let collapse_limit = config.boundaries.small_cluster_collapse_file_limit;
+    for (index, community) in communities.communities.iter().enumerate() {
+        if collapse_limit > 0 && community.paths.len() <= collapse_limit {
+            independent_files.extend(community.paths.clone());
+        } else {
+            retained_communities.push((index, community));
+        }
+    }
+
+    independent_files.sort();
+    independent_files.dedup();
+
+    let mut boundaries = retained_communities
+        .into_iter()
+        .map(|(index, community)| build_implicit_boundary(source, boundary, community, index))
         .collect::<Vec<_>>();
+
+    if !independent_files.is_empty() {
+        let mut independent = build_boundary(
+            source,
+            BoundaryBuildSpec {
+                root_path: boundary.boundary.root_path.clone(),
+                id: format!("{}:implicit:independent", boundary.boundary.id),
+                name: INDEPENDENT_BOUNDARY_NAME.to_string(),
+                kind: CodeCityBoundaryKind::Implicit,
+                ecosystem: boundary.boundary.ecosystem.clone(),
+                parent_boundary_id: Some(boundary.boundary.id.clone()),
+                source_kind: CodeCityBoundarySource::CommunityDetection,
+                files: independent_files,
+                entry_points: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+        );
+        independent.boundary.atomic = false;
+        boundaries.push(independent);
+    }
 
     BoundarySplitResult {
         boundaries,
         diagnostics: Vec::new(),
     }
+}
+
+fn build_implicit_boundary(
+    source: &CodeCitySourceGraph,
+    parent: &ResolvedBoundary,
+    community: &CodeCityCommunity,
+    index: usize,
+) -> ResolvedBoundary {
+    let name = common_directory_prefix(&community.paths)
+        .map(|prefix| {
+            Path::new(&prefix)
+                .file_name()
+                .and_then(OsStr::to_str)
+                .unwrap_or("community")
+                .to_string()
+        })
+        .unwrap_or_else(|| format!("community_{}", index + 1));
+
+    build_boundary(
+        source,
+        BoundaryBuildSpec {
+            root_path: parent.boundary.root_path.clone(),
+            id: format!(
+                "{}:implicit:{}:{}",
+                parent.boundary.id,
+                slugify(&name),
+                index + 1
+            ),
+            name,
+            kind: CodeCityBoundaryKind::Implicit,
+            ecosystem: parent.boundary.ecosystem.clone(),
+            parent_boundary_id: Some(parent.boundary.id.clone()),
+            source_kind: CodeCityBoundarySource::CommunityDetection,
+            files: community.paths.clone(),
+            entry_points: Vec::new(),
+            diagnostics: Vec::new(),
+        },
+    )
 }
 
 fn common_directory_prefix(paths: &[String]) -> Option<String> {
