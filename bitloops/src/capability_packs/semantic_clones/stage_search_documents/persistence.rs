@@ -2,9 +2,12 @@ use anyhow::Result;
 
 use super::schema::ensure_search_documents_schema;
 use super::storage::{
-    build_current_search_document_persist_sql, build_delete_current_search_documents_fts_sql,
-    build_delete_current_search_documents_sql, build_search_document_from_semantic_rows,
-    build_search_document_persist_sql, build_sqlite_current_search_document_fts_refresh_sql,
+    build_current_search_document_persist_sql,
+    build_delete_current_search_documents_for_artefact_sql,
+    build_delete_current_search_documents_fts_for_artefact_sql,
+    build_delete_current_search_documents_fts_sql, build_delete_current_search_documents_sql,
+    build_search_document_from_semantic_rows, build_search_document_persist_sql,
+    build_sqlite_current_search_document_fts_refresh_sql,
     build_sqlite_search_document_fts_refresh_sql,
 };
 use crate::capability_packs::semantic_clones::features as semantic;
@@ -57,6 +60,26 @@ pub(crate) async fn clear_current_search_document_rows_for_path(
     let mut statements = vec![build_delete_current_search_documents_sql(repo_id, path)];
     if relational.dialect() == RelationalDialect::Sqlite {
         statements.push(build_delete_current_search_documents_fts_sql(repo_id, path));
+    }
+    relational
+        .exec_serialized_batch_transactional(&statements)
+        .await
+}
+
+pub(crate) async fn clear_current_search_document_rows_for_artefact(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    artefact_id: &str,
+) -> Result<()> {
+    ensure_search_documents_schema(relational).await?;
+    let mut statements = vec![build_delete_current_search_documents_for_artefact_sql(
+        repo_id,
+        artefact_id,
+    )];
+    if relational.dialect() == RelationalDialect::Sqlite {
+        statements.push(build_delete_current_search_documents_fts_for_artefact_sql(
+            artefact_id,
+        ));
     }
     relational
         .exec_serialized_batch_transactional(&statements)

@@ -46,6 +46,7 @@ fn semantic_clone_candidate_lookup_sql_loads_all_indexed_candidates() {
     );
 
     assert!(sql.contains("FROM symbol_embeddings_current e"));
+    assert!(sql.contains("LEFT JOIN symbol_semantics_current ss"));
     assert!(sql.contains("JOIN artefacts_current a"));
     assert!(sql.contains("e.provider AS embedding_provider"));
     assert!(sql.contains("e.model AS embedding_model"));

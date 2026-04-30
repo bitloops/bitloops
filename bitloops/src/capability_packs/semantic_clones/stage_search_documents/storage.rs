@@ -309,11 +309,31 @@ pub(crate) fn build_delete_current_search_documents_sql(repo_id: &str, path: &st
     )
 }
 
+pub(crate) fn build_delete_current_search_documents_for_artefact_sql(
+    repo_id: &str,
+    artefact_id: &str,
+) -> String {
+    format!(
+        "DELETE FROM symbol_search_documents_current WHERE repo_id = '{}' AND artefact_id = '{}'",
+        esc_pg(repo_id),
+        esc_pg(artefact_id),
+    )
+}
+
 pub(crate) fn build_delete_current_search_documents_fts_sql(repo_id: &str, path: &str) -> String {
     format!(
         "DELETE FROM symbol_search_documents_current_fts WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(repo_id),
         esc_pg(path),
+    )
+}
+
+pub(crate) fn build_delete_current_search_documents_fts_for_artefact_sql(
+    artefact_id: &str,
+) -> String {
+    format!(
+        "DELETE FROM symbol_search_documents_current_fts WHERE artefact_id = '{}'",
+        esc_pg(artefact_id),
     )
 }
 
