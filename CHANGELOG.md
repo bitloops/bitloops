@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **Providerless semantic summaries no longer persist deterministic fallback rows**: when `semantic_clones` has no configured `summary_generation` slot, Bitloops now stops writing new `symbol_semantics*` rows, summary search documents, and providerless summary-embedding follow-ups. Current repos still keep `symbol_features*`, code embeddings, and clone rebuilds working, while deterministic fallback summaries are now persisted only when deterministic summary refresh is requested explicitly or a configured summary provider degrades at runtime.
+
 ## [0.0.20] - 2026-04-28
 
 ### Changed

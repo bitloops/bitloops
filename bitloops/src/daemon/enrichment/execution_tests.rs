@@ -1,8 +1,9 @@
 use super::*;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::clear_repo_symbol_embedding_rows;
-use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
-use crate::capability_packs::semantic_clones::runtime_config::resolve_semantic_clones_config;
+use crate::capability_packs::semantic_clones::runtime_config::{
+    SummaryProviderMode, resolve_semantic_clones_config, resolve_summary_provider,
+};
 use crate::capability_packs::semantic_clones::upsert_semantic_feature_rows;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
@@ -802,8 +803,19 @@ async fn seed_current_state_and_semantics(
         !inputs.is_empty(),
         "expected current semantic inputs after sync for daemon embedding test"
     );
-    let summary_provider = Arc::new(NoopSemanticSummaryProvider);
-    upsert_semantic_feature_rows(&relational, &inputs, summary_provider)
+    let repo = resolve_repo_identity(repo_root).expect("resolve repo identity for summary seed");
+    let capability_host =
+        build_capability_host(repo_root, repo).expect("build capability host for summary seed");
+    let semantic_clones =
+        resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
+    let summary_provider = resolve_summary_provider(
+        &semantic_clones,
+        &capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID),
+        SummaryProviderMode::ConfiguredStrict,
+    )
+    .expect("resolve summary provider for semantic seed")
+    .provider;
+    upsert_semantic_feature_rows(&relational, &inputs, Arc::clone(&summary_provider))
         .await
         .expect("upsert semantic rows");
 
@@ -814,7 +826,7 @@ async fn seed_current_state_and_semantics(
                 input.artefact_id.clone(),
                 semantic_features::build_semantic_feature_input_hash(
                     input,
-                    &NoopSemanticSummaryProvider,
+                    summary_provider.as_ref(),
                 ),
             )
         })
@@ -1140,7 +1152,7 @@ async fn daemon_embedding_job_keeps_incremental_behavior_when_setup_is_unchanged
 }
 
 #[tokio::test]
-async fn daemon_summary_embedding_job_recommends_clone_rebuild_when_setup_is_unchanged() {
+async fn daemon_summary_embedding_job_skips_clone_rebuild_without_summary_provider() {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, _relational, inputs, input_hashes) = seed_current_state_and_semantics(
         repo.path(),
@@ -1206,11 +1218,10 @@ async fn daemon_summary_embedding_job_recommends_clone_rebuild_when_setup_is_unc
     .await;
 
     assert!(second_summary.error.is_none());
-    assert_eq!(second_summary.follow_ups.len(), 1);
-    assert!(matches!(
-        second_summary.follow_ups.first(),
-        Some(FollowUpJob::CloneEdgesRebuild { .. })
-    ));
+    assert!(
+        second_summary.follow_ups.is_empty(),
+        "providerless summary embeddings should not keep scheduling clone rebuild follow-ups"
+    );
 }
 
 #[tokio::test]
@@ -1825,7 +1836,7 @@ WHERE repo_id = '{}' AND path = '{}'",
 }
 
 #[tokio::test]
-async fn prepare_summary_mailbox_batch_skipped_fresh_input_repairs_current_and_enqueues_summary_embedding()
+async fn prepare_summary_mailbox_batch_skipped_fresh_input_without_docstring_summary_repairs_current_without_summary_embedding_follow_up()
  {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
@@ -1906,27 +1917,9 @@ WHERE repo_id = '{}' AND artefact_id = '{}'",
             .any(|sql| sql.contains("symbol_semantics_current")),
         "expected current semantic projection repair SQL"
     );
-    assert_eq!(prepared.commit.embedding_follow_ups.len(), 1);
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0].representation_kind,
-        "summary"
-    );
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0]
-            .artefact_id
-            .as_deref(),
-        Some(selected.artefact_id.as_str())
-    );
-    let expected_dedupe_key = format!(
-        "{}:{}",
-        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-        selected.artefact_id
-    );
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0]
-            .dedupe_key
-            .as_deref(),
-        Some(expected_dedupe_key.as_str())
+    assert!(
+        prepared.commit.embedding_follow_ups.is_empty(),
+        "summary embeddings should only enqueue when the selected input still persists a summary"
     );
 }
 

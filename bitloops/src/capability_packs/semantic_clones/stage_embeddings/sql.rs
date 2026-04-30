@@ -96,32 +96,80 @@ pub(super) fn build_current_repo_semantic_clone_coverage_sql(
     representation_kind: embeddings::EmbeddingRepresentationKind,
     setup: &embeddings::EmbeddingSetup,
 ) -> String {
-    format!(
-        "SELECT \
-            (SELECT COUNT(*) FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             WHERE a.repo_id = '{repo_id}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import') AS eligible_current_artefacts, \
-            (SELECT COUNT(DISTINCT a.artefact_id) FROM artefacts_current a \
-             JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
-             JOIN symbol_semantics_current ss ON ss.repo_id = a.repo_id AND ss.artefact_id = a.artefact_id AND ss.content_id = a.content_id \
-             JOIN symbol_features_current sf ON sf.repo_id = a.repo_id AND sf.artefact_id = a.artefact_id AND sf.content_id = a.content_id \
-             JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
-             WHERE a.repo_id = '{repo_id}' \
-               AND cfs.analysis_mode = 'code' \
-               AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
-               AND {representation_predicate} \
-               AND e.provider = '{provider}' \
-               AND e.model = '{model}' \
-               AND e.dimension = {dimension}) AS fully_indexed_current_artefacts",
-        repo_id = esc_pg(repo_id),
-        representation_predicate =
-            representation_kind_sql_predicate("e.representation_kind", representation_kind),
+    let representation_predicate =
+        representation_kind_sql_predicate("e.representation_kind", representation_kind);
+    let indexed_embeddings_filter = format!(
+        "AND {representation_predicate} \
+         AND e.provider = '{provider}' \
+         AND e.model = '{model}' \
+         AND e.dimension = {dimension}",
+        representation_predicate = representation_predicate,
         provider = esc_pg(&setup.provider),
         model = esc_pg(&setup.model),
         dimension = setup.dimension,
-    )
+    );
+
+    match representation_kind {
+        embeddings::EmbeddingRepresentationKind::Code
+        | embeddings::EmbeddingRepresentationKind::Identity => format!(
+            "SELECT \
+                (SELECT COUNT(*) \
+                 FROM artefacts_current a \
+                 JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+                 WHERE a.repo_id = '{repo_id}' \
+                   AND cfs.analysis_mode = 'code' \
+                   AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import') AS eligible_current_artefacts, \
+                (SELECT COUNT(DISTINCT a.artefact_id) \
+                 FROM artefacts_current a \
+                 JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+                 JOIN symbol_features_current sf ON sf.repo_id = a.repo_id AND sf.artefact_id = a.artefact_id AND sf.content_id = a.content_id \
+                 JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
+                 WHERE a.repo_id = '{repo_id}' \
+                   AND cfs.analysis_mode = 'code' \
+                   AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+                   {indexed_embeddings_filter}) AS fully_indexed_current_artefacts",
+            repo_id = esc_pg(repo_id),
+            indexed_embeddings_filter = indexed_embeddings_filter,
+        ),
+        embeddings::EmbeddingRepresentationKind::Summary => format!(
+            "SELECT \
+                (SELECT COUNT(DISTINCT a.artefact_id) \
+                 FROM artefacts_current a \
+                 JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+                 LEFT JOIN symbol_semantics_current sc \
+                   ON sc.repo_id = a.repo_id \
+                  AND sc.artefact_id = a.artefact_id \
+                  AND sc.content_id = a.content_id \
+                 LEFT JOIN symbol_semantics sh \
+                   ON sh.repo_id = a.repo_id \
+                  AND sh.artefact_id = a.artefact_id \
+                  AND sh.blob_sha = a.content_id \
+                 WHERE a.repo_id = '{repo_id}' \
+                   AND cfs.analysis_mode = 'code' \
+                   AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+                   AND (sc.artefact_id IS NOT NULL OR sh.artefact_id IS NOT NULL)) AS eligible_current_artefacts, \
+                (SELECT COUNT(DISTINCT a.artefact_id) \
+                 FROM artefacts_current a \
+                 JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+                 LEFT JOIN symbol_semantics_current sc \
+                   ON sc.repo_id = a.repo_id \
+                  AND sc.artefact_id = a.artefact_id \
+                  AND sc.content_id = a.content_id \
+                 LEFT JOIN symbol_semantics sh \
+                   ON sh.repo_id = a.repo_id \
+                  AND sh.artefact_id = a.artefact_id \
+                  AND sh.blob_sha = a.content_id \
+                 JOIN symbol_features_current sf ON sf.repo_id = a.repo_id AND sf.artefact_id = a.artefact_id AND sf.content_id = a.content_id \
+                 JOIN symbol_embeddings_current e ON e.repo_id = a.repo_id AND e.artefact_id = a.artefact_id AND e.content_id = a.content_id \
+                 WHERE a.repo_id = '{repo_id}' \
+                   AND cfs.analysis_mode = 'code' \
+                   AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+                   AND (sc.artefact_id IS NOT NULL OR sh.artefact_id IS NOT NULL) \
+                   {indexed_embeddings_filter}) AS fully_indexed_current_artefacts",
+            repo_id = esc_pg(repo_id),
+            indexed_embeddings_filter = indexed_embeddings_filter,
+        ),
+    }
 }
 
 pub(super) fn build_semantic_summary_lookup_sql(artefact_ids: &[String], table: &str) -> String {
