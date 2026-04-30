@@ -614,6 +614,17 @@ pub(super) fn seed_graphql_context_guidance_data(repo_root: &Path) {
                 confidence: GuidanceFactConfidence::High,
             },
             GuidanceFactDraft {
+                category: GuidanceFactCategory::Decision,
+                kind: "architectural_boundary".to_string(),
+                guidance: "Keep `target()` as the architectural boundary for target result calculation; future edits to src/target.ts should preserve caller delegation instead of moving target logic into callers.".to_string(),
+                evidence_excerpt: "Decided target result calculation stays behind target(), with caller.ts delegating through target().".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.ts".to_string()],
+                    symbols: vec!["src/target.ts::target".to_string()],
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+            GuidanceFactDraft {
                 category: GuidanceFactCategory::Verification,
                 kind: "test_success".to_string(),
                 guidance: "The context guidance path was verified with nextest.".to_string(),

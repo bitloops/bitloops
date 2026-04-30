@@ -15,6 +15,12 @@ pub static CONTEXT_GUIDANCE_QUERY_EXAMPLES: &[QueryExample] = &[
         query: "selectArtefacts(path:\"src/lib.rs\")->contextGuidance(category:\"DECISION\", kind:\"rejected_approach\")",
         description: "List rejected approaches distilled from captured history",
     },
+    QueryExample {
+        capability_id: CONTEXT_GUIDANCE_CAPABILITY_ID,
+        name: "context_guidance.architectural_decisions_for_file",
+        query: "selectArtefacts(path:\"src/lib.rs\")->contextGuidance(category:\"DECISION\", kind:\"architectural_boundary\")",
+        description: "Show durable architectural decisions that should guide future edits to a file",
+    },
 ];
 
 #[cfg(test)]

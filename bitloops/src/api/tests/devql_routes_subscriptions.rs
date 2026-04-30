@@ -1319,6 +1319,105 @@ async fn devql_post_route_resolves_context_guidance_from_history() {
 }
 
 #[tokio::test]
+async fn devql_post_route_surfaces_architectural_decision_guidance_for_selected_file() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    seed_graphql_context_guidance_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext(evidenceKind: SYMBOL_PROVENANCE) {
+              items(first: 5) {
+                checkpointId
+                turnId
+                promptPreview
+                filesModified
+              }
+            }
+            contextGuidance(evidenceKind: SYMBOL_PROVENANCE, category: DECISION, kind: "architectural_boundary") {
+              overview
+              items(first: 5) {
+                category
+                kind
+                guidance
+                evidenceExcerpt
+                confidence
+                sources {
+                  checkpointId
+                  turnId
+                }
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+
+    let historical_items = payload["data"]["selectArtefacts"]["historicalContext"]["items"]
+        .as_array()
+        .expect("historical context items");
+    assert!(
+        historical_items.iter().any(|item| {
+            item["checkpointId"] == "checkpoint-historical-primary"
+                && item["turnId"] == "turn-historical-primary"
+                && item["promptPreview"] == "Captured prompt for target change"
+                && item["filesModified"] == json!(["src/target.ts"])
+        }),
+        "expected prior target-file history in {historical_items:?}"
+    );
+
+    let guidance = &payload["data"]["selectArtefacts"]["contextGuidance"];
+    assert_eq!(guidance["overview"]["totalCount"], 1);
+    assert_eq!(guidance["overview"]["categoryCounts"]["DECISION"], 1);
+    assert_eq!(
+        guidance["overview"]["kindCounts"]["architectural_boundary"],
+        1
+    );
+
+    let items = guidance["items"].as_array().expect("guidance items");
+    assert_eq!(items.len(), 1);
+    let decision = &items[0];
+    assert_eq!(decision["category"], "DECISION");
+    assert_eq!(decision["kind"], "architectural_boundary");
+    assert_eq!(decision["confidence"], "HIGH");
+    assert!(decision["guidance"].as_str().is_some_and(|text| {
+        text.contains("Keep `target()` as the architectural boundary")
+            && text.contains("future edits to src/target.ts")
+    }));
+    assert_eq!(
+        decision["evidenceExcerpt"],
+        "Decided target result calculation stays behind target(), with caller.ts delegating through target()."
+    );
+    assert!(
+        decision["sources"]
+            .as_array()
+            .expect("decision sources")
+            .iter()
+            .any(|source| {
+                source["checkpointId"] == "checkpoint-historical-primary"
+                    && source["turnId"] == "turn-historical-primary"
+            })
+    );
+}
+
+#[tokio::test]
 async fn devql_post_route_returns_empty_historical_context_for_empty_history() {
     let repo = seed_graphql_devql_repo();
     seed_graphql_historical_context_data(repo.path());

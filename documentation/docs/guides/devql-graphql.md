@@ -148,12 +148,14 @@ Use it when you want one compact answer first, then typed detail only if needed:
 }
 ```
 
-The aggregate `summary` JSON includes the available stage categories, currently:
+The aggregate `overview` JSON includes the available stage categories, currently:
 
 - `checkpoints`
-- `clones`
+- `codeMatches`
 - `dependencies`
 - `tests`
+- `historicalContext`
+- `contextGuidance`
 
 Each category entry includes the default stage summary and, when the stage is non-empty, a stage-local `schema` SDL fragment.
 

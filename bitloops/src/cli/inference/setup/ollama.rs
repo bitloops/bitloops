@@ -17,11 +17,15 @@ thread_local! {
     static OLLAMA_PROBE_HOOK: OllamaProbeHookCell = std::cell::RefCell::new(None);
 }
 
-pub(super) fn auto_configured_summary_model_name() -> Result<Option<String>> {
+pub(super) fn auto_configured_ollama_model_name() -> Result<Option<String>> {
     match probe_ollama_availability()? {
         OllamaAvailability::Running { models } => Ok(select_preferred_ollama_model(&models)),
         OllamaAvailability::MissingCli | OllamaAvailability::NotRunning => Ok(None),
     }
+}
+
+pub(super) fn auto_configured_summary_model_name() -> Result<Option<String>> {
+    auto_configured_ollama_model_name()
 }
 
 pub(super) fn probe_ollama_availability() -> Result<OllamaAvailability> {
@@ -69,6 +73,16 @@ pub(super) fn select_ollama_model(
     input: &mut dyn BufRead,
     interactive: bool,
 ) -> Result<Option<String>> {
+    select_ollama_model_for_label(models, "semantic summaries", out, input, interactive)
+}
+
+pub(super) fn select_ollama_model_for_label(
+    models: &[String],
+    label: &str,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+    interactive: bool,
+) -> Result<Option<String>> {
     if !interactive {
         return Ok(select_preferred_ollama_model(models));
     }
@@ -79,7 +93,7 @@ pub(super) fn select_ollama_model(
     }
 
     let default_model = select_preferred_ollama_model(models);
-    writeln!(out, "Select an Ollama model for semantic summaries:")?;
+    writeln!(out, "Select an Ollama model for {label}:")?;
     for (index, model) in models.iter().enumerate() {
         let suffix = if Some(model) == default_model.as_ref() {
             " (mistral-3-3b recommended)"

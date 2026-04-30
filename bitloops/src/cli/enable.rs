@@ -18,9 +18,12 @@ use crate::cli::embeddings::{
     platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
-    SummarySetupSelection, configure_cloud_summary_generation, configure_local_summary_generation,
-    platform_summary_gateway_url_override, prompt_summary_setup_selection,
-    summary_generation_configured,
+    ContextGuidanceSetupSelection, SummarySetupSelection, TextGenerationRuntime,
+    configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
+    configure_local_context_guidance_generation, configure_local_summary_generation,
+    context_guidance_generation_configured, platform_context_guidance_gateway_url_override,
+    platform_summary_gateway_url_override, prompt_context_guidance_setup_selection,
+    prompt_summary_setup_selection, summary_generation_configured,
 };
 use crate::cli::root::DisableArgs;
 use crate::cli::telemetry_consent;
@@ -96,6 +99,22 @@ pub struct EnableArgs {
     /// Environment variable that contains the platform gateway bearer token.
     #[arg(long)]
     pub embeddings_api_key_env: Option<String>,
+
+    /// Configure context guidance text generation when capture is enabled.
+    #[arg(long, default_value_t = false)]
+    pub install_context_guidance: bool,
+
+    /// Select which text-generation runtime to configure for context guidance.
+    #[arg(long, value_enum)]
+    pub context_guidance_runtime: Option<TextGenerationRuntime>,
+
+    /// Public platform chat completions endpoint used when platform context guidance is selected.
+    #[arg(long)]
+    pub context_guidance_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token for context guidance.
+    #[arg(long)]
+    pub context_guidance_api_key_env: Option<String>,
 }
 
 const ENABLE_NO_FLAGS_ERROR: &str = "`bitloops enable` without flags requires an interactive terminal; pass explicit flags such as `--capture` or `--devql-guidance`";
@@ -349,6 +368,26 @@ fn enable_uses_embeddings_flags(args: &EnableArgs) -> bool {
         || args.embeddings_api_key_env.is_some()
 }
 
+fn enable_uses_context_guidance_flags(args: &EnableArgs) -> bool {
+    args.install_context_guidance
+        || args.context_guidance_runtime.is_some()
+        || args.context_guidance_gateway_url.is_some()
+        || args.context_guidance_api_key_env.is_some()
+}
+
+fn validate_context_guidance_enable_args(args: &EnableArgs) -> Result<()> {
+    if args.context_guidance_runtime == Some(TextGenerationRuntime::Local)
+        && (args.context_guidance_gateway_url.is_some()
+            || args.context_guidance_api_key_env.is_some())
+    {
+        bail!(
+            "`--context-guidance-gateway-url` and `--context-guidance-api-key-env` require `--context-guidance-runtime platform`"
+        );
+    }
+
+    Ok(())
+}
+
 /// Main handler for `bitloops enable`.
 pub async fn run(args: EnableArgs) -> Result<()> {
     if args.local && args.project {
@@ -366,6 +405,8 @@ pub(crate) async fn run_with_io(
     out: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<()> {
+    validate_context_guidance_enable_args(&args)?;
+
     if let Some(agent) = args.agent.as_deref() {
         bail!(
             "`bitloops enable --agent {agent}` is no longer supported. \
@@ -402,6 +443,11 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
     if enable_uses_embeddings_flags(&args) && !capture_selected {
         bail!(
             "`--install-embeddings`, `--embeddings-runtime`, `--embeddings-gateway-url`, and `--embeddings-api-key-env` require `--capture`"
+        );
+    }
+    if enable_uses_context_guidance_flags(&args) && !capture_selected {
+        bail!(
+            "`--install-context-guidance`, `--context-guidance-runtime`, `--context-guidance-gateway-url`, and `--context-guidance-api-key-env` require `--capture`"
         );
     }
 
@@ -533,30 +579,70 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
         }
     }
 
-    if !capture_selected || !capture_was_disabled {
+    if !capture_selected {
         return Ok(());
     }
 
-    match choose_summary_setup(&cwd, out, input).await? {
-        SummarySetupSelection::Cloud => {
-            crate::cli::login::ensure_logged_in().await?;
-            let gateway_url_override = platform_summary_gateway_url_override();
-            let message = configure_cloud_summary_generation(&cwd, gateway_url_override.as_deref())
+    if capture_was_disabled {
+        match choose_summary_setup(&cwd, out, input).await? {
+            SummarySetupSelection::Cloud => {
+                crate::cli::login::ensure_logged_in().await?;
+                let gateway_url_override = platform_summary_gateway_url_override();
+                let message = configure_cloud_summary_generation(
+                    &cwd,
+                    gateway_url_override.as_deref(),
+                )
                 .map_err(|err| {
                     anyhow::anyhow!(
                         "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
                     )
                 })?;
-            writeln!(out, "{message}")?;
+                writeln!(out, "{message}")?;
+            }
+            SummarySetupSelection::Local => {
+                configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+                    )
+                })?;
+            }
+            SummarySetupSelection::Skip => {}
         }
-        SummarySetupSelection::Local => {
-            configure_local_summary_generation(&cwd, out, input, true).map_err(|err| {
-                anyhow::anyhow!(
-                    "Bitloops capture was enabled, but semantic summary setup failed: {err:#}"
+    }
+
+    if capture_was_disabled || enable_uses_context_guidance_flags(&args) {
+        match choose_context_guidance_setup(&cwd, &args, capture_was_disabled, out, input).await? {
+            ContextGuidanceSetupSelection::Cloud => {
+                crate::cli::login::ensure_logged_in().await?;
+                let api_key_env = args.context_guidance_api_key_env.as_deref().unwrap_or(
+                    crate::cli::inference::DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
+                );
+                let gateway_url_override = platform_context_guidance_gateway_url_override(
+                    args.context_guidance_gateway_url.as_deref(),
+                );
+                let message = configure_cloud_context_guidance_generation(
+                    &cwd,
+                    gateway_url_override.as_deref(),
+                    Some(api_key_env),
                 )
-            })?;
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Bitloops capture was enabled, but context guidance setup failed: {err:#}"
+                    )
+                })?;
+                writeln!(out, "{message}")?;
+            }
+            ContextGuidanceSetupSelection::Local => {
+                configure_local_context_guidance_generation(&cwd, out, input, true).map_err(
+                    |err| {
+                        anyhow::anyhow!(
+                            "Bitloops capture was enabled, but context guidance setup failed: {err:#}"
+                        )
+                    },
+                )?;
+            }
+            ContextGuidanceSetupSelection::Skip => {}
         }
-        SummarySetupSelection::Skip => {}
     }
     Ok(())
 }
@@ -626,6 +712,40 @@ async fn choose_summary_setup(
         .is_some();
 
     prompt_summary_setup_selection(out, input, true, false, cloud_logged_in)
+}
+
+async fn choose_context_guidance_setup(
+    repo_root: &Path,
+    args: &EnableArgs,
+    prompt_allowed: bool,
+    out: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<ContextGuidanceSetupSelection> {
+    if enable_uses_context_guidance_flags(args) {
+        return Ok(
+            match args
+                .context_guidance_runtime
+                .unwrap_or(TextGenerationRuntime::Platform)
+            {
+                TextGenerationRuntime::Local => ContextGuidanceSetupSelection::Local,
+                TextGenerationRuntime::Platform => ContextGuidanceSetupSelection::Cloud,
+            },
+        );
+    }
+
+    if !prompt_allowed || !telemetry_consent::can_prompt_interactively() {
+        return Ok(ContextGuidanceSetupSelection::Skip);
+    }
+
+    if context_guidance_generation_configured(repo_root) {
+        return Ok(ContextGuidanceSetupSelection::Skip);
+    }
+
+    let cloud_logged_in = crate::daemon::resolve_workos_session_status()
+        .await?
+        .is_some();
+
+    prompt_context_guidance_setup_selection(out, input, true, false, cloud_logged_in)
 }
 
 pub fn initialized_agents(repo_root: &Path) -> Vec<String> {

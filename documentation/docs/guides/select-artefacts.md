@@ -130,6 +130,8 @@ type ArtefactSelection {
   dependencies(kind: EdgeKind, direction: DepsDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
   codeMatches(relationKind: String, minScore: Float): CloneStageResult!
   tests(minConfidence: Float, linkageSource: String): TestsStageResult!
+  historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
+  contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
 }
 ```
 
@@ -255,6 +257,32 @@ Representative shape:
       }
     },
     "schema": "type ArtefactSelection { ... }"
+  },
+  "historicalContext": {
+    "overview": {
+      "totalCount": 1,
+      "checkpointCount": 1,
+      "sessionCount": 1,
+      "turnCount": 1,
+      "evidenceCounts": {
+        "symbolProvenance": 1,
+        "fileRelation": 1,
+        "lineOverlap": 0
+      }
+    },
+    "schema": "type ArtefactSelection { ... }"
+  },
+  "contextGuidance": {
+    "overview": {
+      "totalCount": 1,
+      "categoryCounts": {
+        "DECISION": 1
+      },
+      "kindCounts": {
+        "architectural_boundary": 1
+      }
+    },
+    "schema": "type ArtefactSelection { ... }"
   }
 }
 ```
@@ -287,6 +315,8 @@ The other stage result types follow the same pattern:
 - `CloneStageResult`
 - `DependencyStageResult`
 - `TestsStageResult`
+- `HistoricalContextStageResult`
+- `ContextGuidanceStageResult`
 
 `CloneStageResult` and `DependencyStageResult` both expose a typed `expandHint` field:
 
@@ -386,6 +416,8 @@ Current category coverage:
 | `codeMatches` | Total count, grouped relation kinds, max score | `Clone` |
 | `tests` | Matched artefact count, total covering tests, drill-down hint | `TestHarnessTestsResult` |
 | `dependencies` | Nested counts plus a default drill-down hint for `direction` / `kind` follow-up queries | `DependencyEdge` |
+| `historicalContext` | Prior checkpoints, sessions, turns, prompts, transcript previews, tool events, and file relations tied to the selected artefacts | `HistoricalContextItem` |
+| `contextGuidance` | Distilled future-session guidance, grouped by durable categories such as decisions, constraints, risks, and verification requirements | `ContextGuidanceItem` |
 
 ## Stage Arguments
 
@@ -418,6 +450,42 @@ Defaults for selection stages:
 tests(minConfidence: Float, linkageSource: String)
 ```
 
+### `historicalContext`
+
+```graphql
+historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind)
+```
+
+### `contextGuidance`
+
+```graphql
+contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String)
+```
+
+Use `contextGuidance` when prior history or linked knowledge has been distilled into durable guidance for the selected artefact. A typical architectural-decision use case is making a past file-level decision visible before a future edit:
+
+```graphql
+{
+  selectArtefacts(by: { path: "src/target.ts" }) {
+    contextGuidance(category: DECISION, kind: "architectural_boundary") {
+      overview
+      items(first: 5) {
+        category
+        kind
+        guidance
+        evidenceExcerpt
+        sources {
+          checkpointId
+          turnId
+        }
+      }
+    }
+  }
+}
+```
+
+That lets an agent see guidance such as “keep this file as the boundary for target result calculation” before making the next code change.
+
 ## DevQL DSL Form
 
 The DevQL DSL supports `selectArtefacts(...)` with flat selector args:
@@ -427,6 +495,8 @@ selectArtefacts(symbol_fqn:"rust-app/src/main.rs::main")->checkpoints()
 selectArtefacts(search:"payLater()")->checkpoints()
 selectArtefacts(path:"rust-app/src/main.rs",lines:6..10)->deps()
 selectArtefacts(path:"rust-app/src/main.rs")->tests(min_confidence:0.8)
+selectArtefacts(path:"rust-app/src/main.rs")->historicalContext(evidence_kind:"file_relation")
+selectArtefacts(path:"rust-app/src/main.rs")->contextGuidance(category:"decision",kind:"architectural_boundary")
 ```
 
 Current DSL limitations:
