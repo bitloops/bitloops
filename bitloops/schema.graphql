@@ -1,3 +1,25 @@
+input AcceptNavigationContextViewInput {
+	viewId: String!
+	expectedCurrentSignature: String = null
+	source: String = null
+	reason: String = null
+	materialisedRef: String = null
+}
+
+type AcceptNavigationContextViewResult {
+	success: Boolean!
+	acceptanceId: String!
+	viewId: String!
+	previousAcceptedSignature: String!
+	acceptedSignature: String!
+	currentSignature: String!
+	status: NavigationContextViewStatus!
+	source: String!
+	reason: String
+	materialisedRef: String
+	acceptedAt: String!
+}
+
 input AddKnowledgeInput {
 	url: String!
 	commitRef: String
@@ -1703,6 +1725,30 @@ input LineRangeInput {
 	end: Int!
 }
 
+input MaterialiseNavigationContextViewInput {
+	viewId: String!
+	expectedCurrentSignature: String = null
+}
+
+type MaterialiseNavigationContextViewResult {
+	success: Boolean!
+	materialisationId: String!
+	materialisedRef: String!
+	viewId: String!
+	viewKind: String!
+	label: String!
+	acceptedSignature: String!
+	currentSignature: String!
+	status: NavigationContextViewStatus!
+	materialisationFormat: String!
+	materialisationVersion: String!
+	payload: JSON!
+	renderedText: String!
+	primitiveCount: Int!
+	edgeCount: Int!
+	materialisedAt: String!
+}
+
 type MigrationRecord {
 	packId: String!
 	migrationName: String!
@@ -1724,7 +1770,128 @@ type MutationRoot {
 	assertArchitectureGraphFact(input: AssertArchitectureGraphFactInput!): ArchitectureGraphAssertionResult!
 	revokeArchitectureGraphAssertion(id: String!): RevokeArchitectureGraphAssertionResult!
 	assertArchitectureSystemMembership(input: AssertArchitectureSystemMembershipInput!): ArchitectureSystemMembershipAssertionResult!
+	acceptNavigationContextView(input: AcceptNavigationContextViewInput!): AcceptNavigationContextViewResult!
+	materialiseNavigationContextView(input: MaterialiseNavigationContextViewInput!): MaterialiseNavigationContextViewResult!
 	applyMigrations: ApplyMigrationsResult!
+}
+
+input NavigationContextFilterInput {
+	viewId: String = null
+	viewStatus: NavigationContextViewStatus = null
+	primitiveKind: NavigationPrimitiveKind = null
+	edgeKind: String = null
+	path: String = null
+	sourceKind: String = null
+}
+
+type NavigationContextSnapshot {
+	views: [NavigationContextView!]!
+	primitives: [NavigationPrimitive!]!
+	edges: [NavigationEdge!]!
+	totalViews: Int!
+	totalPrimitives: Int!
+	totalEdges: Int!
+}
+
+type NavigationContextView {
+	viewId: String!
+	viewKind: String!
+	label: String!
+	viewQueryVersion: String!
+	dependencyQuery: JSON!
+	acceptedSignature: String!
+	currentSignature: String!
+	status: NavigationContextViewStatus!
+	staleReason: JSON!
+	materialisedRef: String
+	lastObservedGeneration: Int
+	updatedAt: String!
+	dependencies: [NavigationContextViewDependency!]!
+	acceptanceHistory: [NavigationContextViewAcceptance!]!
+}
+
+type NavigationContextViewAcceptance {
+	acceptanceId: String!
+	viewId: String!
+	previousAcceptedSignature: String!
+	acceptedSignature: String!
+	currentSignature: String!
+	expectedCurrentSignature: String
+	source: String!
+	reason: String
+	materialisedRef: String
+	acceptedAt: String!
+}
+
+type NavigationContextViewDependency {
+	viewId: String!
+	primitiveId: String!
+	primitiveKind: NavigationPrimitiveKind!
+	primitiveHash: String!
+	dependencyRole: String!
+	updatedAt: String!
+}
+
+enum NavigationContextViewStatus {
+	FRESH
+	STALE
+}
+
+type NavigationEdge {
+	id: String!
+	kind: String!
+	fromPrimitiveId: String!
+	toPrimitiveId: String!
+	sourceKind: String!
+	confidence: Float!
+	edgeHash: String!
+	hashVersion: String!
+	properties: JSON!
+	provenance: JSON!
+	lastObservedGeneration: Int
+	updatedAt: String!
+}
+
+type NavigationPrimitive {
+	id: String!
+	kind: NavigationPrimitiveKind!
+	identityKey: String!
+	label: String!
+	path: String
+	artefactId: String
+	symbolId: String
+	sourceKind: String!
+	confidence: Float!
+	primitiveHash: String!
+	hashVersion: String!
+	properties: JSON!
+	provenance: JSON!
+	lastObservedGeneration: Int
+	updatedAt: String!
+}
+
+enum NavigationPrimitiveKind {
+	FILE_BLOB
+	PACKAGE
+	MODULE
+	SYMBOL
+	DEPENDENCY_EDGE
+	CALL_EDGE
+	DATA_FLOW_EDGE
+	ENTRYPOINT
+	PUBLIC_CONTRACT
+	DATA_OBJECT
+	CONFIG_KEY
+	RUNTIME_FLOW
+	TEST_CASE
+	VERIFICATION_COMMAND
+	PIPELINE_JOB
+	DECISION_RECORD
+	OWNERSHIP_RULE
+	METRIC_OBSERVATION
+	INTEGRATION_CONTRACT
+	SECURITY_BOUNDARY
+	GLOSSARY_TERM
 }
 
 type PageInfo {
@@ -1743,6 +1910,7 @@ type Project {
 	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	navigationContext(filter: NavigationContextFilterInput, first: Int! = 500, after: String): NavigationContextSnapshot!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!

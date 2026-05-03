@@ -14,6 +14,7 @@ pub mod health;
 pub mod ingestion;
 pub mod interaction;
 pub mod knowledge;
+pub mod navigation_context;
 pub mod project;
 pub mod repository;
 pub mod scalars;
@@ -73,6 +74,13 @@ pub use interaction::{
 pub use knowledge::{
     KnowledgeItem, KnowledgeProvider, KnowledgeRelation, KnowledgeSourceKind, KnowledgeTargetType,
     KnowledgeVersion,
+};
+pub use navigation_context::{
+    AcceptNavigationContextViewInput, AcceptNavigationContextViewResult,
+    MaterialiseNavigationContextViewInput, MaterialiseNavigationContextViewResult,
+    NavigationContextFilterInput, NavigationContextSnapshot, NavigationContextView,
+    NavigationContextViewAcceptance, NavigationContextViewDependency, NavigationContextViewStatus,
+    NavigationEdge, NavigationPrimitive, NavigationPrimitiveKind,
 };
 pub use project::Project;
 pub use repository::{Branch, Repository};

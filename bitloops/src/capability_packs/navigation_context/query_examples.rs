@@ -7,10 +7,17 @@ pub static NAVIGATION_CONTEXT_QUERY_EXAMPLES: &[QueryExample] = &[QueryExample {
     name: "navigation_context_status",
     query: r#"
 query {
-  health {
-    status
+  project(path: ".") {
+    navigationContext(filter: { viewStatus: STALE }) {
+      views {
+        viewId
+        label
+        status
+        staleReason
+      }
+    }
   }
 }
 "#,
-    description: "Navigation context currently materialises hashed primitives and freshness state through the current-state consumer; typed query fields are a follow-up surface.",
+    description: "List stale navigation context views and their dependency-change explanations for the current repository.",
 }];

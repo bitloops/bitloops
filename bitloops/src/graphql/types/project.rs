@@ -16,8 +16,8 @@ use super::{
     CodeCityViolationConnectionResult, CodeCityViolationFilterInput, CodeCityWorldResult,
     ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
     DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
-    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    NavigationContextFilterInput, NavigationContextSnapshot, TemporalScope,
+    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -229,6 +229,21 @@ impl Project {
             page.page_info,
             page.total_count,
         ))
+    }
+
+    #[graphql(name = "navigationContext")]
+    async fn navigation_context(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<NavigationContextFilterInput>,
+        #[graphql(default = 500)] first: i32,
+        after: Option<String>,
+    ) -> Result<NavigationContextSnapshot> {
+        let first = stage_limit(first)?;
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_navigation_context(&self.scope, filter.as_ref(), Some(first), after.as_deref())
+            .await
+            .map_err(|err| backend_error(format!("failed to query navigation context: {err:#}")))
     }
 
     async fn clones(

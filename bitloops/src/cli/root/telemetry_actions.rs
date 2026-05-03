@@ -692,6 +692,66 @@ fn devql_action(
                 HashMap::new(),
             )),
         },
+        crate::cli::devql::DevqlCommand::NavigationContext(args) => match &args.command {
+            crate::cli::devql::DevqlNavigationContextCommand::Status(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.json {
+                    flags.push("json");
+                }
+                insert_flags(&mut props, flags);
+                insert_bool_property(&mut props, "has_view", args.view.is_some());
+                insert_bool_property(&mut props, "has_status", args.status.is_some());
+                insert_count_property(&mut props, "changed_limit", args.changed_limit);
+                Some(new_action(
+                    "bitloops devql navigation-context status",
+                    props,
+                ))
+            }
+            crate::cli::devql::DevqlNavigationContextCommand::Materialise(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.json {
+                    flags.push("json");
+                }
+                if args.rendered {
+                    flags.push("rendered");
+                }
+                insert_flags(&mut props, flags);
+                insert_bool_property(
+                    &mut props,
+                    "has_expected_current_signature",
+                    args.expected_current_signature.is_some(),
+                );
+                Some(new_action(
+                    "bitloops devql navigation-context materialise",
+                    props,
+                ))
+            }
+            crate::cli::devql::DevqlNavigationContextCommand::Accept(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.json {
+                    flags.push("json");
+                }
+                insert_flags(&mut props, flags);
+                insert_bool_property(
+                    &mut props,
+                    "has_expected_current_signature",
+                    args.expected_current_signature.is_some(),
+                );
+                insert_bool_property(&mut props, "has_reason", args.reason.is_some());
+                insert_bool_property(
+                    &mut props,
+                    "has_materialised_ref",
+                    args.materialised_ref.is_some(),
+                );
+                Some(new_action(
+                    "bitloops devql navigation-context accept",
+                    props,
+                ))
+            }
+        },
         crate::cli::devql::DevqlCommand::TestHarness(args) => match &args.command {
             crate::cli::devql::DevqlTestHarnessCommand::IngestTests(_) => Some(new_action(
                 "bitloops devql test-harness ingest-tests",

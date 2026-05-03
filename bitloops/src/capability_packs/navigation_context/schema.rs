@@ -102,6 +102,53 @@ CREATE TABLE IF NOT EXISTS navigation_context_view_dependencies_current (
 
 CREATE INDEX IF NOT EXISTS navigation_context_view_dependencies_primitive_idx
 ON navigation_context_view_dependencies_current (repo_id, primitive_id);
+
+CREATE TABLE IF NOT EXISTS navigation_context_materialised_views (
+    repo_id TEXT NOT NULL,
+    materialisation_id TEXT NOT NULL,
+    materialised_ref TEXT NOT NULL,
+    view_id TEXT NOT NULL,
+    view_kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    view_query_version TEXT NOT NULL,
+    accepted_signature TEXT NOT NULL,
+    current_signature TEXT NOT NULL,
+    status TEXT NOT NULL,
+    materialisation_format TEXT NOT NULL,
+    materialisation_version TEXT NOT NULL,
+    dependency_query_json TEXT NOT NULL DEFAULT '{}',
+    payload_json TEXT NOT NULL,
+    rendered_text TEXT NOT NULL,
+    primitive_count INTEGER NOT NULL,
+    edge_count INTEGER NOT NULL,
+    materialised_at TEXT NOT NULL,
+    PRIMARY KEY (repo_id, materialisation_id),
+    UNIQUE (repo_id, view_id, current_signature, materialisation_format, materialisation_version)
+);
+
+CREATE INDEX IF NOT EXISTS navigation_context_materialised_views_view_idx
+ON navigation_context_materialised_views (repo_id, view_id, materialised_at DESC);
+
+CREATE INDEX IF NOT EXISTS navigation_context_materialised_views_signature_idx
+ON navigation_context_materialised_views (repo_id, view_id, current_signature);
+
+CREATE TABLE IF NOT EXISTS navigation_context_view_acceptance_history (
+    repo_id TEXT NOT NULL,
+    acceptance_id TEXT NOT NULL,
+    view_id TEXT NOT NULL,
+    previous_accepted_signature TEXT NOT NULL,
+    accepted_signature TEXT NOT NULL,
+    current_signature TEXT NOT NULL,
+    expected_current_signature TEXT,
+    source TEXT NOT NULL,
+    reason TEXT,
+    materialised_ref TEXT,
+    accepted_at TEXT NOT NULL,
+    PRIMARY KEY (repo_id, acceptance_id)
+);
+
+CREATE INDEX IF NOT EXISTS navigation_context_view_acceptance_history_view_idx
+ON navigation_context_view_acceptance_history (repo_id, view_id, accepted_at DESC);
 "#
 }
 
@@ -117,6 +164,8 @@ mod tests {
             "navigation_context_edges_current",
             "navigation_context_views_current",
             "navigation_context_view_dependencies_current",
+            "navigation_context_materialised_views",
+            "navigation_context_view_acceptance_history",
         ] {
             assert!(sql.contains(table), "schema should include {table}");
         }

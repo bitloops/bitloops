@@ -28,17 +28,95 @@ pub use args::{
     DevqlAnalyticsArgs, DevqlAnalyticsCommand, DevqlAnalyticsSqlArgs, DevqlArgs,
     DevqlCheckpointFileSnapshotsArgs, DevqlCommand, DevqlConnectionStatusArgs, DevqlInitArgs,
     DevqlKnowledgeAddArgs, DevqlKnowledgeArgs, DevqlKnowledgeAssociateArgs, DevqlKnowledgeCommand,
-    DevqlKnowledgeRefArgs, DevqlPacksArgs, DevqlProjectionArgs, DevqlProjectionCommand,
-    DevqlQueryArgs, DevqlSchemaArgs, DevqlTaskCancelArgs, DevqlTaskEnqueueArgs, DevqlTaskKindArg,
-    DevqlTaskListArgs, DevqlTaskPauseArgs, DevqlTaskResumeArgs, DevqlTaskStatusArg,
-    DevqlTaskStatusArgs, DevqlTaskWatchArgs, DevqlTasksArgs, DevqlTasksCommand,
-    DevqlTestHarnessArgs, DevqlTestHarnessCommand, DevqlTestHarnessIngestCoverageArgs,
+    DevqlKnowledgeRefArgs, DevqlNavigationContextAcceptArgs, DevqlNavigationContextArgs,
+    DevqlNavigationContextCommand, DevqlNavigationContextMaterialiseArgs,
+    DevqlNavigationContextStatusArg, DevqlNavigationContextStatusArgs, DevqlPacksArgs,
+    DevqlProjectionArgs, DevqlProjectionCommand, DevqlQueryArgs, DevqlSchemaArgs,
+    DevqlTaskCancelArgs, DevqlTaskEnqueueArgs, DevqlTaskKindArg, DevqlTaskListArgs,
+    DevqlTaskPauseArgs, DevqlTaskResumeArgs, DevqlTaskStatusArg, DevqlTaskStatusArgs,
+    DevqlTaskWatchArgs, DevqlTasksArgs, DevqlTasksCommand, DevqlTestHarnessArgs,
+    DevqlTestHarnessCommand, DevqlTestHarnessIngestCoverageArgs,
     DevqlTestHarnessIngestCoverageBatchArgs, DevqlTestHarnessIngestResultsArgs,
     DevqlTestHarnessIngestTestsArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql analytics sql`, `bitloops devql tasks enqueue`, `bitloops devql tasks watch`, `bitloops devql tasks status`, `bitloops devql tasks list`, `bitloops devql tasks pause`, `bitloops devql tasks resume`, `bitloops devql tasks cancel`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql analytics sql`, `bitloops devql tasks enqueue`, `bitloops devql tasks watch`, `bitloops devql tasks status`, `bitloops devql tasks list`, `bitloops devql tasks pause`, `bitloops devql tasks resume`, `bitloops devql tasks cancel`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql navigation-context status`, `bitloops devql navigation-context materialise`, `bitloops devql navigation-context accept`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
 const SCHEMA_SCOPE_REQUIRED_MESSAGE: &str = "`bitloops devql schema` requires a Git repository scope. Run it from within a repository or use `bitloops devql schema --global`.";
+
+const NAVIGATION_CONTEXT_STATUS_QUERY: &str = r#"
+query NavigationContextStatus($path: String!, $filter: NavigationContextFilterInput) {
+  project(path: $path) {
+    navigationContext(filter: $filter) {
+      totalViews
+      totalPrimitives
+      totalEdges
+      views {
+        viewId
+        viewKind
+        label
+        acceptedSignature
+        currentSignature
+        status
+        staleReason
+        materialisedRef
+        updatedAt
+        acceptanceHistory {
+          acceptanceId
+          acceptedSignature
+          previousAcceptedSignature
+          currentSignature
+          expectedCurrentSignature
+          source
+          reason
+          materialisedRef
+          acceptedAt
+        }
+      }
+    }
+  }
+}
+"#;
+
+const ACCEPT_NAVIGATION_CONTEXT_VIEW_MUTATION: &str = r#"
+mutation AcceptNavigationContextView($input: AcceptNavigationContextViewInput!) {
+  acceptNavigationContextView(input: $input) {
+    success
+    acceptanceId
+    viewId
+    previousAcceptedSignature
+    acceptedSignature
+    currentSignature
+    status
+    source
+    reason
+    materialisedRef
+    acceptedAt
+  }
+}
+"#;
+
+const MATERIALISE_NAVIGATION_CONTEXT_VIEW_MUTATION: &str = r#"
+mutation MaterialiseNavigationContextView($input: MaterialiseNavigationContextViewInput!) {
+  materialiseNavigationContextView(input: $input) {
+    success
+    materialisationId
+    materialisedRef
+    viewId
+    viewKind
+    label
+    acceptedSignature
+    currentSignature
+    status
+    materialisationFormat
+    materialisationVersion
+    payload
+    renderedText
+    primitiveCount
+    edgeCount
+    materialisedAt
+  }
+}
+"#;
 
 fn format_schema_sdl_output(args: &DevqlSchemaArgs, sdl: &str) -> String {
     if args.human {
@@ -387,11 +465,331 @@ where
             args.with_health,
             args.with_extensions,
         ),
+        DevqlCommand::NavigationContext(args) => run_navigation_context_command(&scope, args).await,
         DevqlCommand::Schema(_) => unreachable!("handled before repo setup"),
         DevqlCommand::ConnectionStatus(_) => unreachable!("handled before repo setup"),
         DevqlCommand::Knowledge(_) => unreachable!("handled before cfg setup"),
         DevqlCommand::TestHarness(_) => unreachable!("handled before cfg setup"),
     }
+}
+
+async fn run_navigation_context_command(
+    scope: &SlimCliRepoScope,
+    args: DevqlNavigationContextArgs,
+) -> Result<()> {
+    match args.command {
+        DevqlNavigationContextCommand::Status(args) => {
+            run_navigation_context_status(scope, args).await
+        }
+        DevqlNavigationContextCommand::Materialise(args) => {
+            run_navigation_context_materialise(scope, args).await
+        }
+        DevqlNavigationContextCommand::Accept(args) => {
+            run_navigation_context_accept(scope, args).await
+        }
+    }
+}
+
+async fn run_navigation_context_status(
+    scope: &SlimCliRepoScope,
+    args: DevqlNavigationContextStatusArgs,
+) -> Result<()> {
+    let DevqlNavigationContextStatusArgs {
+        project,
+        view,
+        status,
+        json,
+        changed_limit,
+    } = args;
+    let response: Value = graphql::execute_devql_graphql(
+        scope,
+        NAVIGATION_CONTEXT_STATUS_QUERY,
+        json!({
+            "path": project,
+            "filter": navigation_context_filter_json(view.as_deref(), status),
+        }),
+    )
+    .await?;
+    let snapshot = response
+        .get("project")
+        .and_then(|project| project.get("navigationContext"))
+        .ok_or_else(|| anyhow!("DevQL response did not include project.navigationContext"))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(snapshot)
+                .context("serialising navigation context status to JSON")?
+        );
+    } else {
+        println!(
+            "{}",
+            format_navigation_context_status(snapshot, changed_limit)
+        );
+    }
+    Ok(())
+}
+
+async fn run_navigation_context_accept(
+    scope: &SlimCliRepoScope,
+    args: DevqlNavigationContextAcceptArgs,
+) -> Result<()> {
+    let DevqlNavigationContextAcceptArgs {
+        view_id,
+        expected_current_signature,
+        reason,
+        materialised_ref,
+        json,
+    } = args;
+    let response: Value = graphql::execute_devql_graphql(
+        scope,
+        ACCEPT_NAVIGATION_CONTEXT_VIEW_MUTATION,
+        json!({
+            "input": {
+                "viewId": view_id,
+                "expectedCurrentSignature": expected_current_signature,
+                "source": "manual_cli",
+                "reason": reason,
+                "materialisedRef": materialised_ref,
+            },
+        }),
+    )
+    .await?;
+    let result = response
+        .get("acceptNavigationContextView")
+        .ok_or_else(|| anyhow!("DevQL response did not include acceptNavigationContextView"))?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(result)
+                .context("serialising navigation context acceptance to JSON")?
+        );
+    } else {
+        println!("{}", format_navigation_context_acceptance(result));
+    }
+    Ok(())
+}
+
+async fn run_navigation_context_materialise(
+    scope: &SlimCliRepoScope,
+    args: DevqlNavigationContextMaterialiseArgs,
+) -> Result<()> {
+    let DevqlNavigationContextMaterialiseArgs {
+        view_id,
+        expected_current_signature,
+        json,
+        rendered,
+    } = args;
+    let response: Value = graphql::execute_devql_graphql(
+        scope,
+        MATERIALISE_NAVIGATION_CONTEXT_VIEW_MUTATION,
+        json!({
+            "input": {
+                "viewId": view_id,
+                "expectedCurrentSignature": expected_current_signature,
+            },
+        }),
+    )
+    .await?;
+    let result = response
+        .get("materialiseNavigationContextView")
+        .ok_or_else(|| {
+            anyhow!("DevQL response did not include materialiseNavigationContextView")
+        })?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(result)
+                .context("serialising navigation context materialisation to JSON")?
+        );
+    } else if rendered {
+        println!("{}", value_str(result, "renderedText").unwrap_or_default());
+    } else {
+        println!("{}", format_navigation_context_materialisation(result));
+    }
+    Ok(())
+}
+
+fn navigation_context_filter_json(
+    view_id: Option<&str>,
+    status: Option<DevqlNavigationContextStatusArg>,
+) -> Value {
+    let mut filter = serde_json::Map::new();
+    if let Some(view_id) = view_id {
+        filter.insert("viewId".to_string(), json!(view_id));
+    }
+    if let Some(status) = status {
+        filter.insert(
+            "viewStatus".to_string(),
+            json!(navigation_context_status_arg_name(status)),
+        );
+    }
+    if filter.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(filter)
+    }
+}
+
+fn navigation_context_status_arg_name(status: DevqlNavigationContextStatusArg) -> &'static str {
+    match status {
+        DevqlNavigationContextStatusArg::Fresh => "FRESH",
+        DevqlNavigationContextStatusArg::Stale => "STALE",
+    }
+}
+
+fn format_navigation_context_status(snapshot: &Value, changed_limit: usize) -> String {
+    let views = snapshot
+        .get("views")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let stale_count = views
+        .iter()
+        .filter(|view| {
+            view.get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| status == "STALE")
+        })
+        .count();
+    let total_views = snapshot
+        .get("totalViews")
+        .and_then(Value::as_i64)
+        .unwrap_or(views.len() as i64);
+    let total_primitives = snapshot
+        .get("totalPrimitives")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let total_edges = snapshot
+        .get("totalEdges")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let mut lines = vec![format!(
+        "navigation context: {total_views} views, {stale_count} stale, {total_primitives} primitives, {total_edges} edges"
+    )];
+    if views.is_empty() {
+        lines.push("no navigation context views found".to_string());
+        return lines.join("\n");
+    }
+
+    for view in views {
+        lines.push(format_navigation_context_view(view, changed_limit));
+    }
+    lines.join("\n")
+}
+
+fn format_navigation_context_view(view: &Value, changed_limit: usize) -> String {
+    let view_id = value_str(view, "viewId").unwrap_or("<unknown>");
+    let label = value_str(view, "label").unwrap_or(view_id);
+    let status = value_str(view, "status")
+        .unwrap_or("UNKNOWN")
+        .to_ascii_lowercase();
+    let current = short_signature(value_str(view, "currentSignature"));
+    let accepted = short_signature(value_str(view, "acceptedSignature"));
+    let materialised_ref = value_str(view, "materialisedRef");
+    let mut lines = vec![format!(
+        "- {view_id} [{status}] {label} current={current} accepted={accepted}"
+    )];
+    if let Some(materialised_ref) = materialised_ref {
+        lines.push(format!("  materialised: {materialised_ref}"));
+    }
+    if let Some(latest_acceptance) = view
+        .get("acceptanceHistory")
+        .and_then(Value::as_array)
+        .and_then(|history| history.first())
+    {
+        lines.push(format!(
+            "  last accepted: {} by {}",
+            value_str(latest_acceptance, "acceptedAt").unwrap_or("<unknown>"),
+            value_str(latest_acceptance, "source").unwrap_or("<unknown>")
+        ));
+    }
+
+    let changes = view
+        .get("staleReason")
+        .and_then(|reason| reason.get("changedPrimitives"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if changes.is_empty() {
+        return lines.join("\n");
+    }
+
+    for change in changes.iter().take(changed_limit) {
+        lines.push(format!("  {}", format_navigation_context_change(change)));
+    }
+    if changes.len() > changed_limit {
+        lines.push(format!(
+            "  ... {} more changed primitives",
+            changes.len() - changed_limit
+        ));
+    }
+    lines.join("\n")
+}
+
+fn format_navigation_context_change(change: &Value) -> String {
+    let kind = value_str(change, "primitiveKind").unwrap_or("UNKNOWN");
+    let label = value_str(change, "label").unwrap_or("<unlabelled>");
+    let path = value_str(change, "path");
+    let change_kind = value_str(change, "changeKind").unwrap_or("changed");
+    let previous = short_signature(value_str(change, "previousHash"));
+    let current = short_signature(value_str(change, "currentHash"));
+    match path {
+        Some(path) => {
+            format!("{change_kind}: {kind} {label} ({path}) {previous}->{current}")
+        }
+        None => format!("{change_kind}: {kind} {label} {previous}->{current}"),
+    }
+}
+
+fn format_navigation_context_acceptance(result: &Value) -> String {
+    let view_id = value_str(result, "viewId").unwrap_or("<unknown>");
+    let status = value_str(result, "status")
+        .unwrap_or("UNKNOWN")
+        .to_ascii_lowercase();
+    let previous = short_signature(value_str(result, "previousAcceptedSignature"));
+    let accepted = short_signature(value_str(result, "acceptedSignature"));
+    let mut line = format!(
+        "navigation context view accepted: {view_id} status={status} previous={previous} accepted={accepted}"
+    );
+    if let Some(materialised_ref) = value_str(result, "materialisedRef") {
+        line.push_str(&format!(" materialised={materialised_ref}"));
+    }
+    if let Some(accepted_at) = value_str(result, "acceptedAt") {
+        line.push_str(&format!(" accepted_at={accepted_at}"));
+    }
+    line
+}
+
+fn format_navigation_context_materialisation(result: &Value) -> String {
+    let view_id = value_str(result, "viewId").unwrap_or("<unknown>");
+    let status = value_str(result, "status")
+        .unwrap_or("UNKNOWN")
+        .to_ascii_lowercase();
+    let current = short_signature(value_str(result, "currentSignature"));
+    let materialised_ref = value_str(result, "materialisedRef").unwrap_or("<none>");
+    let primitive_count = result
+        .get("primitiveCount")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let edge_count = result
+        .get("edgeCount")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let materialised_at = value_str(result, "materialisedAt").unwrap_or("<unknown>");
+    format!(
+        "navigation context view materialised: {view_id} status={status} current={current} primitives={primitive_count} edges={edge_count} ref={materialised_ref} materialised_at={materialised_at}"
+    )
+}
+
+fn value_str<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(Value::as_str)
+}
+
+fn short_signature(value: Option<&str>) -> String {
+    let Some(value) = value else {
+        return "<none>".to_string();
+    };
+    value.chars().take(12).collect()
 }
 
 async fn run_tasks_command(scope: &SlimCliRepoScope, args: DevqlTasksArgs) -> Result<()> {

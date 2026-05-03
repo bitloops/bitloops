@@ -3,6 +3,7 @@ mod code_city;
 mod errors;
 mod inputs;
 mod knowledge;
+mod navigation_context;
 mod results;
 mod schema;
 mod task_queue;
@@ -12,8 +13,10 @@ mod validation;
 use async_graphql::{Context, Object, Result};
 
 use super::types::{
+    AcceptNavigationContextViewInput, AcceptNavigationContextViewResult,
     ArchitectureGraphAssertionResult, ArchitectureSystemMembershipAssertionResult,
     AssertArchitectureGraphFactInput, AssertArchitectureSystemMembershipInput,
+    MaterialiseNavigationContextViewInput, MaterialiseNavigationContextViewResult,
     RevokeArchitectureGraphAssertionResult, TaskObject, TaskQueueControlResultObject,
 };
 
@@ -138,6 +141,24 @@ impl MutationRoot {
         input: AssertArchitectureSystemMembershipInput,
     ) -> Result<ArchitectureSystemMembershipAssertionResult> {
         architecture_graph::assert_architecture_system_membership(ctx, input).await
+    }
+
+    #[graphql(name = "acceptNavigationContextView")]
+    async fn accept_navigation_context_view(
+        &self,
+        ctx: &Context<'_>,
+        input: AcceptNavigationContextViewInput,
+    ) -> Result<AcceptNavigationContextViewResult> {
+        navigation_context::accept_navigation_context_view_signature(ctx, input).await
+    }
+
+    #[graphql(name = "materialiseNavigationContextView")]
+    async fn materialise_navigation_context_view(
+        &self,
+        ctx: &Context<'_>,
+        input: MaterialiseNavigationContextViewInput,
+    ) -> Result<MaterialiseNavigationContextViewResult> {
+        navigation_context::materialise_navigation_context_view_snapshot(ctx, input).await
     }
 
     async fn apply_migrations(&self, ctx: &Context<'_>) -> Result<ApplyMigrationsMutationResult> {

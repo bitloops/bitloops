@@ -6,6 +6,7 @@ mod events;
 mod git_history;
 mod interactions;
 mod knowledge;
+mod navigation_context;
 mod repository_graph;
 mod temporal_scope;
 
