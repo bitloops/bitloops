@@ -1,6 +1,7 @@
 mod builder;
 mod detection;
 mod entry_points;
+mod hierarchy;
 mod implicit;
 mod manifest;
 mod model;

@@ -1,3 +1,4 @@
+pub mod architecture_graph;
 pub mod artefact;
 pub mod artefact_selection;
 pub mod chat;
@@ -21,6 +22,15 @@ pub mod telemetry;
 pub mod temporal_scope;
 pub mod test_harness;
 
+pub use architecture_graph::{
+    ArchitectureContainer, ArchitectureGraph, ArchitectureGraphAssertionAction,
+    ArchitectureGraphAssertionResult, ArchitectureGraphAssertionSummary, ArchitectureGraphEdge,
+    ArchitectureGraphEdgeKind, ArchitectureGraphFilterInput, ArchitectureGraphFlow,
+    ArchitectureGraphFlowStep, ArchitectureGraphNode, ArchitectureGraphNodeKind,
+    ArchitectureGraphRepositoryRef, ArchitectureGraphTargetKind, ArchitectureSystem,
+    ArchitectureSystemMembershipAssertionResult, AssertArchitectureGraphFactInput,
+    AssertArchitectureSystemMembershipInput, RevokeArchitectureGraphAssertionResult,
+};
 pub use artefact::LineRangeInput;
 pub use artefact::{
     Artefact, ArtefactCopyLineage, ArtefactFilterInput, ArtefactSearchScore, CanonicalKind,

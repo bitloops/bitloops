@@ -17,6 +17,199 @@ type ApplyMigrationsResult {
 	migrationsApplied: [MigrationRecord!]!
 }
 
+type ArchitectureContainer {
+	id: String!
+	key: String
+	kind: String
+	label: String!
+	repository: ArchitectureGraphRepositoryRef!
+	node: ArchitectureGraphNode!
+	components: [ArchitectureGraphNode!]!
+	deploymentUnits: [ArchitectureGraphNode!]!
+	entryPoints: [ArchitectureGraphNode!]!
+}
+
+type ArchitectureGraph {
+	nodes: [ArchitectureGraphNode!]!
+	edges: [ArchitectureGraphEdge!]!
+	totalNodes: Int!
+	totalEdges: Int!
+}
+
+enum ArchitectureGraphAssertionAction {
+	ASSERT
+	SUPPRESS
+	ANNOTATE
+}
+
+type ArchitectureGraphAssertionResult {
+	success: Boolean!
+	assertionId: String!
+}
+
+type ArchitectureGraphAssertionSummary {
+	id: String!
+	action: ArchitectureGraphAssertionAction!
+	targetKind: ArchitectureGraphTargetKind!
+	reason: String!
+	source: String!
+	provenance: JSON!
+	evidence: JSON!
+	properties: JSON!
+}
+
+type ArchitectureGraphEdge {
+	id: String!
+	kind: ArchitectureGraphEdgeKind!
+	fromNodeId: String!
+	toNodeId: String!
+	sourceKind: String!
+	confidence: Float!
+	computed: Boolean!
+	asserted: Boolean!
+	suppressed: Boolean!
+	effective: Boolean!
+	provenance: JSON!
+	computedProvenance: JSON!
+	assertedProvenance: JSON!
+	evidence: JSON!
+	properties: JSON!
+	annotations: [ArchitectureGraphAssertionSummary!]!
+}
+
+input ArchitectureGraphEdgeAssertionInput {
+	id: String = null
+	kind: ArchitectureGraphEdgeKind!
+	fromNodeId: String!
+	toNodeId: String!
+}
+
+enum ArchitectureGraphEdgeKind {
+	CONTAINS
+	OWNS
+	EXPOSES
+	PRODUCES
+	REALISES
+	TRIGGERS
+	TRAVERSES
+	READS
+	WRITES
+	EMITS
+	CALLS
+	IMPLEMENTS
+	DEPENDS_ON
+	VERIFIED_BY
+	STORES
+	MODIFIES
+	IMPACTS
+	SCORES
+}
+
+input ArchitectureGraphFilterInput {
+	nodeKind: ArchitectureGraphNodeKind = null
+	edgeKind: ArchitectureGraphEdgeKind = null
+	path: String = null
+	sourceKind: String = null
+	effectiveOnly: Boolean! = true
+}
+
+type ArchitectureGraphFlow {
+	entryPoint: ArchitectureGraphNode!
+	flow: ArchitectureGraphNode!
+	traversedNodes: [ArchitectureGraphNode!]!
+	steps: [ArchitectureGraphFlowStep!]!
+}
+
+type ArchitectureGraphFlowStep {
+	ordinal: Int!
+	moduleKey: String!
+	depth: Int!
+	nodes: [ArchitectureGraphNode!]!
+	predecessorModuleKeys: [String!]!
+	edgeKinds: [ArchitectureGraphEdgeKind!]!
+	cyclic: Boolean!
+}
+
+type ArchitectureGraphNode {
+	id: String!
+	kind: ArchitectureGraphNodeKind!
+	label: String!
+	artefactId: String
+	symbolId: String
+	path: String
+	entryKind: String
+	sourceKind: String!
+	confidence: Float!
+	computed: Boolean!
+	asserted: Boolean!
+	suppressed: Boolean!
+	effective: Boolean!
+	provenance: JSON!
+	computedProvenance: JSON!
+	assertedProvenance: JSON!
+	evidence: JSON!
+	properties: JSON!
+	annotations: [ArchitectureGraphAssertionSummary!]!
+}
+
+input ArchitectureGraphNodeAssertionInput {
+	id: String = null
+	kind: ArchitectureGraphNodeKind!
+	label: String = null
+	artefactId: String = null
+	symbolId: String = null
+	path: String = null
+	entryKind: String = null
+}
+
+enum ArchitectureGraphNodeKind {
+	SYSTEM
+	DEPLOYMENT_UNIT
+	CONTAINER
+	COMPONENT
+	DOMAIN
+	ENTITY
+	CAPABILITY
+	ENTRY_POINT
+	FLOW
+	NODE
+	PERSISTENCE_OBJECT
+	EVENT
+	EXTERNAL_SYSTEM
+	CONTRACT
+	TEST
+	CHANGE_UNIT
+	RISK_SIGNAL
+}
+
+type ArchitectureGraphRepositoryRef {
+	repoId: String!
+	name: String!
+	provider: String!
+	organization: String!
+}
+
+enum ArchitectureGraphTargetKind {
+	NODE
+	EDGE
+}
+
+type ArchitectureSystem {
+	id: String!
+	key: String!
+	label: String!
+	repositories: [ArchitectureGraphRepositoryRef!]!
+	containers: [ArchitectureContainer!]!
+	node: ArchitectureGraphNode!
+}
+
+type ArchitectureSystemMembershipAssertionResult {
+	success: Boolean!
+	systemId: String!
+	containerId: String!
+	assertionIds: [String!]!
+}
+
 type Artefact {
 	id: ID!
 	symbolId: String!
@@ -49,6 +242,7 @@ type Artefact {
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	architectureNode: ArchitectureGraphNode
 	copyLineage: [ArtefactCopyLineage!]!
 }
 
@@ -103,6 +297,34 @@ input AsOfInput {
 	commit: String
 	save: SaveSelector
 	saveRevision: String
+}
+
+input AssertArchitectureGraphFactInput {
+	action: ArchitectureGraphAssertionAction!
+	targetKind: ArchitectureGraphTargetKind!
+	node: ArchitectureGraphNodeAssertionInput = null
+	edge: ArchitectureGraphEdgeAssertionInput = null
+	reason: String!
+	source: String = null
+	confidence: Float = null
+	provenance: JSON = null
+	evidence: JSON = null
+	properties: JSON = null
+}
+
+input AssertArchitectureSystemMembershipInput {
+	systemKey: String!
+	systemLabel: String = null
+	repository: String = null
+	containerId: String = null
+	containerKey: String = null
+	containerLabel: String = null
+	containerKind: String = null
+	deploymentUnitId: String = null
+	reason: String!
+	source: String = null
+	confidence: Float = null
+	properties: JSON = null
 }
 
 input AssociateKnowledgeInput {
@@ -430,6 +652,7 @@ enum CodeCityBoundaryKindResult {
 	EXPLICIT
 	RUNTIME
 	IMPLICIT
+	GROUP
 	ROOT_FALLBACK
 }
 
@@ -473,6 +696,7 @@ enum CodeCityBoundarySourceResult {
 	WORKSPACE_MANIFEST
 	ENTRY_POINT
 	COMMUNITY_DETECTION
+	HIERARCHY
 	FALLBACK
 }
 
@@ -1497,6 +1721,9 @@ type MutationRoot {
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
+	assertArchitectureGraphFact(input: AssertArchitectureGraphFactInput!): ArchitectureGraphAssertionResult!
+	revokeArchitectureGraphAssertion(id: String!): RevokeArchitectureGraphAssertionResult!
+	assertArchitectureSystemMembership(input: AssertArchitectureSystemMembershipInput!): ArchitectureSystemMembershipAssertionResult!
 	applyMigrations: ApplyMigrationsResult!
 }
 
@@ -1521,6 +1748,10 @@ type Project {
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
+	architectureGraph(filter: ArchitectureGraphFilterInput, first: Int, after: String): ArchitectureGraph!
+	architectureEntryPoints(kind: String, first: Int): [ArchitectureGraphNode!]!
+	architectureFlows(entryPointId: String, first: Int): [ArchitectureGraphFlow!]!
+	architectureContainers(systemKey: String, first: Int): [ArchitectureContainer!]!
 	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean, includeBoundaries: Boolean, includeArchitecture: Boolean, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean, includeHealth: Boolean, analysisWindowMonths: Int): CodeCityWorldResult!
 	codeCitySnapshotStatus(projectPath: String): CodeCitySnapshotStatusResult!
 	codeCityArchitecture(first: Int! = 500, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean): CodeCityArchitectureResult!
@@ -1532,6 +1763,8 @@ type Project {
 type QueryRoot {
 	health: HealthStatus!
 	repo(name: String!): Repository!
+	architectureSystems(systemKey: String, first: Int): [ArchitectureSystem!]!
+	architectureSystem(key: String!): ArchitectureSystem
 	task(id: String!): Task
 	tasks(repoId: String, kind: TaskKind, status: TaskStatus, limit: Int): [Task!]!
 	taskQueue(repoId: String): TaskQueueStatus!
@@ -1574,6 +1807,12 @@ type Repository {
 	interactionEvents(filter: InteractionFilterInput, first: Int, after: String, last: Int, before: String): InteractionEventConnection!
 	searchInteractionSessions(input: InteractionSearchInputObject!): [InteractionSessionSearchHitObject!]!
 	searchInteractionTurns(input: InteractionSearchInputObject!): [InteractionTurnSearchHitObject!]!
+}
+
+type RevokeArchitectureGraphAssertionResult {
+	success: Boolean!
+	id: String!
+	revoked: Boolean!
 }
 
 enum SaveSelector {

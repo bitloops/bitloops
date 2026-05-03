@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -11,11 +11,11 @@ use super::height::{build_floors_for_file, building_loc, total_height};
 use super::layout::{apply_architecture_layout, apply_grid_treemap_layout};
 use super::source_graph::CodeCitySourceGraph;
 use crate::capability_packs::codecity::types::{
-    CODECITY_CAPABILITY_ID, CODECITY_ROOT_BOUNDARY_ID, CODECITY_WORLD_STAGE_ID,
-    CodeCityBoundaryLayoutSummary, CodeCityBuilding, CodeCityBuildingHealthSummary,
-    CodeCityDiagnostic, CodeCityGeometry, CodeCityHealthOverview, CodeCityHealthWeights,
-    CodeCityImportance, CodeCityLayoutStrategy, CodeCityLayoutSummary, CodeCityLegends,
-    CodeCitySize, CodeCitySnapshotStatus, CodeCitySummary, CodeCityWorldPayload,
+    CODECITY_CAPABILITY_ID, CODECITY_ROOT_BOUNDARY_ID, CODECITY_WORLD_STAGE_ID, CodeCityBoundary,
+    CodeCityBoundaryLayoutPreview, CodeCityBoundaryLayoutSummary, CodeCityBuilding,
+    CodeCityBuildingHealthSummary, CodeCityDiagnostic, CodeCityGeometry, CodeCityHealthOverview,
+    CodeCityHealthWeights, CodeCityImportance, CodeCityLayoutStrategy, CodeCityLayoutSummary,
+    CodeCityLegends, CodeCitySize, CodeCitySnapshotStatus, CodeCitySummary, CodeCityWorldPayload,
 };
 
 pub fn build_codecity_world(
@@ -258,14 +258,31 @@ pub fn build_codecity_world_from_analysis(
         (layout, boundary_layouts, boundaries)
     } else {
         let mut boundaries = analysis.boundaries.clone();
+        let parent_ids = boundary_parent_ids(&boundaries);
+        let mut layout_boundaries = boundaries
+            .iter()
+            .filter(|boundary| !parent_ids.contains(&boundary.id))
+            .cloned()
+            .collect::<Vec<_>>();
         let (layout, boundary_layouts) = apply_architecture_layout(
             &mut buildings,
-            &mut boundaries,
+            &mut layout_boundaries,
             &analysis.boundary_reports,
             &analysis.macro_graph,
             &analysis.zone_assignments,
             &config.layout,
         );
+        let layout_by_boundary = layout_boundaries
+            .into_iter()
+            .map(|boundary| (boundary.id.clone(), boundary.layout))
+            .collect::<BTreeMap<_, _>>();
+        for boundary in &mut boundaries {
+            if let Some(layout) = layout_by_boundary.get(&boundary.id) {
+                boundary.layout = layout.clone();
+            }
+        }
+        let mut boundary_layouts = boundary_layouts;
+        apply_parent_boundary_layouts(&mut boundaries, &mut boundary_layouts);
         (layout, boundary_layouts, boundaries)
     };
 
@@ -352,6 +369,92 @@ pub fn build_codecity_world_from_analysis(
         dependency_arcs,
         diagnostics,
     })
+}
+
+fn boundary_parent_ids(boundaries: &[CodeCityBoundary]) -> BTreeSet<String> {
+    boundaries
+        .iter()
+        .filter_map(|boundary| boundary.parent_boundary_id.clone())
+        .collect()
+}
+
+fn apply_parent_boundary_layouts(
+    boundaries: &mut [CodeCityBoundary],
+    boundary_layouts: &mut Vec<CodeCityBoundaryLayoutSummary>,
+) {
+    let mut children_by_parent = BTreeMap::<String, Vec<String>>::new();
+    for boundary in boundaries.iter() {
+        if let Some(parent_id) = &boundary.parent_boundary_id {
+            children_by_parent
+                .entry(parent_id.clone())
+                .or_default()
+                .push(boundary.id.clone());
+        }
+    }
+
+    let mut layout_by_boundary = boundary_layouts
+        .iter()
+        .cloned()
+        .map(|layout| (layout.boundary_id.clone(), layout))
+        .collect::<BTreeMap<_, _>>();
+
+    loop {
+        let mut changed = false;
+        for boundary in boundaries.iter_mut() {
+            if layout_by_boundary.contains_key(&boundary.id) {
+                continue;
+            }
+            let Some(child_ids) = children_by_parent.get(&boundary.id) else {
+                continue;
+            };
+            let child_layouts = child_ids
+                .iter()
+                .filter_map(|child_id| layout_by_boundary.get(child_id))
+                .collect::<Vec<_>>();
+            if child_layouts.len() != child_ids.len() || child_layouts.is_empty() {
+                continue;
+            }
+
+            let min_x = child_layouts
+                .iter()
+                .map(|layout| layout.x)
+                .fold(f64::INFINITY, f64::min);
+            let min_z = child_layouts
+                .iter()
+                .map(|layout| layout.z)
+                .fold(f64::INFINITY, f64::min);
+            let max_x = child_layouts
+                .iter()
+                .map(|layout| layout.x + layout.width)
+                .fold(0.0_f64, f64::max);
+            let max_z = child_layouts
+                .iter()
+                .map(|layout| layout.z + layout.depth)
+                .fold(0.0_f64, f64::max);
+
+            let zone_count = child_layouts.len();
+            let summary = CodeCityBoundaryLayoutSummary {
+                boundary_id: boundary.id.clone(),
+                strategy: CodeCityLayoutStrategy::GridTreemap,
+                zone_count,
+                width: max_x - min_x,
+                depth: max_z - min_z,
+                x: min_x,
+                z: min_z,
+            };
+            boundary.layout = Some(CodeCityBoundaryLayoutPreview {
+                strategy: CodeCityLayoutStrategy::GridTreemap,
+                zone_count,
+            });
+            layout_by_boundary.insert(boundary.id.clone(), summary.clone());
+            boundary_layouts.push(summary);
+            changed = true;
+        }
+
+        if !changed {
+            break;
+        }
+    }
 }
 
 fn is_file_artefact(

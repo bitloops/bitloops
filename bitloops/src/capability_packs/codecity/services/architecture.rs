@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::architecture_classifiers::classify_boundary_architecture;
 use super::boundary_detection::{CodeCityBoundaryDetectionResult, detect_boundaries};
@@ -42,11 +42,21 @@ pub fn analyse_codecity_architecture_from_boundary_result(
 ) -> CodeCityArchitectureAnalysis {
     let mut boundaries = boundary_result.boundaries.clone();
     let file_to_boundary = boundary_result.file_to_boundary.clone();
-    let macro_graph = build_macro_graph(source, &boundaries, &file_to_boundary);
-    apply_shared_library_flags(&mut boundaries, &macro_graph, config);
+    let mut analysis_boundaries = leaf_boundaries(&boundaries);
+    let macro_graph = build_macro_graph(source, &analysis_boundaries, &file_to_boundary);
+    apply_shared_library_flags(&mut analysis_boundaries, &macro_graph, config);
+    let shared_library_by_boundary = analysis_boundaries
+        .iter()
+        .map(|boundary| (boundary.id.clone(), boundary.shared_library))
+        .collect::<BTreeMap<_, _>>();
+    for boundary in &mut boundaries {
+        if let Some(shared_library) = shared_library_by_boundary.get(&boundary.id) {
+            boundary.shared_library = *shared_library;
+        }
+    }
 
     let mut boundary_reports = Vec::new();
-    for boundary in &boundaries {
+    for boundary in &analysis_boundaries {
         let files = file_to_boundary
             .iter()
             .filter_map(|(path, boundary_id)| (boundary_id == &boundary.id).then_some(path.clone()))
@@ -162,6 +172,18 @@ pub fn analyse_codecity_architecture_from_boundary_result(
         summary_report,
         diagnostics,
     }
+}
+
+fn leaf_boundaries(boundaries: &[CodeCityBoundary]) -> Vec<CodeCityBoundary> {
+    let parent_ids = boundaries
+        .iter()
+        .filter_map(|boundary| boundary.parent_boundary_id.clone())
+        .collect::<BTreeSet<_>>();
+    boundaries
+        .iter()
+        .filter(|boundary| !parent_ids.contains(&boundary.id))
+        .cloned()
+        .collect()
 }
 
 fn large_boundary_report(

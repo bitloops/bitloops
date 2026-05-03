@@ -8,17 +8,18 @@ use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_u
 
 use super::types::artefact_selection::ArtefactSelectorMode;
 use super::types::{
-    Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, ArtefactSelection,
-    ArtefactSelectorInput, AsOfInput, Branch, CheckpointConnection, CheckpointEdge,
-    CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
-    ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, FileContext, HealthStatus, InteractionEventConnection, InteractionEventEdge,
-    InteractionFilterInput, InteractionSearchInputObject, InteractionSessionConnection,
-    InteractionSessionEdge, InteractionSessionSearchHitObject, InteractionTurnConnection,
-    InteractionTurnEdge, InteractionTurnSearchHitObject, KnowledgeItemConnection,
-    KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
-    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    ArchitectureSystem, Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput,
+    ArtefactSelection, ArtefactSelectorInput, AsOfInput, Branch, CheckpointConnection,
+    CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection,
+    CommitEdge, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus,
+    InteractionEventConnection, InteractionEventEdge, InteractionFilterInput,
+    InteractionSearchInputObject, InteractionSessionConnection, InteractionSessionEdge,
+    InteractionSessionSearchHitObject, InteractionTurnConnection, InteractionTurnEdge,
+    InteractionTurnSearchHitObject, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
+    Project, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus, TelemetryEventConnection,
+    TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
 
 #[derive(Default)]
@@ -67,6 +68,55 @@ impl SlimQueryRoot {
         Ok(context
             .default_branch_name_for_scope(&context.slim_root_scope())
             .await)
+    }
+
+    async fn project(&self, ctx: &Context<'_>, path: String) -> Result<Project> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        let project_path = context
+            .validate_project_path(&scope, &path)
+            .map_err(bad_user_input_error)?;
+        Ok(Project::new(
+            project_path.clone(),
+            scope.with_project_path(project_path),
+        ))
+    }
+
+    #[graphql(name = "architectureSystems")]
+    async fn architecture_systems(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "systemKey")] system_key: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<ArchitectureSystem>> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let first = optional_positive_limit("first", first)?;
+        context
+            .list_architecture_systems(system_key.as_deref(), first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query architecture systems: {err:#}")))
+    }
+
+    #[graphql(name = "architectureSystem")]
+    async fn architecture_system(
+        &self,
+        ctx: &Context<'_>,
+        key: String,
+    ) -> Result<Option<ArchitectureSystem>> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        context
+            .architecture_system(&key)
+            .await
+            .map_err(|err| backend_error(format!("failed to query architecture system: {err:#}")))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -860,6 +910,18 @@ fn stage_limit(first: i32) -> Result<usize> {
         return Err(bad_user_input_error("`first` must be greater than 0"));
     }
     Ok(first as usize)
+}
+
+fn optional_positive_limit(name: &str, value: Option<i32>) -> Result<Option<usize>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value <= 0 {
+        return Err(bad_user_input_error(format!(
+            "`{name}` must be greater than 0"
+        )));
+    }
+    Ok(Some(value as usize))
 }
 
 fn build_tests_stage_args(

@@ -8,6 +8,7 @@ use crate::capability_packs::codecity::types::{
 };
 
 use super::builder::build_boundary;
+use super::hierarchy::{materialise_directory_parent_boundaries, parent_boundary_ids};
 use super::implicit::split_implicit_boundaries;
 use super::manifest::{
     ManifestDescriptor, assign_files_to_explicit_roots, discover_manifest_roots,
@@ -113,20 +114,29 @@ pub fn detect_boundaries(
 
         let runtime_split = split_runtime_boundaries(source, &base_boundary, config);
         diagnostics.extend(runtime_split.diagnostics);
-        let runtime_boundaries = if runtime_split.boundaries.is_empty() {
-            vec![base_boundary]
-        } else {
-            runtime_split.boundaries
-        };
+        if runtime_split.boundaries.is_empty() {
+            push_boundary_or_implicit_children(
+                source,
+                base_boundary,
+                config,
+                &mut diagnostics,
+                &mut resolved,
+            );
+            continue;
+        }
 
-        for candidate in runtime_boundaries {
-            let implicit_split = split_implicit_boundaries(source, &candidate, config);
-            diagnostics.extend(implicit_split.diagnostics);
-            if implicit_split.boundaries.is_empty() {
-                resolved.push(candidate);
-            } else {
-                resolved.extend(implicit_split.boundaries);
-            }
+        let mut parent = base_boundary;
+        parent.boundary.atomic = false;
+        resolved.push(parent);
+
+        for candidate in runtime_split.boundaries {
+            push_boundary_or_implicit_children(
+                source,
+                candidate,
+                config,
+                &mut diagnostics,
+                &mut resolved,
+            );
         }
     }
 
@@ -148,11 +158,15 @@ pub fn detect_boundaries(
         ));
     }
 
+    let resolved = materialise_directory_parent_boundaries(source, resolved);
+    let parent_ids = parent_boundary_ids(&resolved);
     let mut file_to_boundary = BTreeMap::new();
     let mut boundaries = Vec::new();
     for boundary in resolved {
-        for path in &boundary.files {
-            file_to_boundary.insert(path.clone(), boundary.boundary.id.clone());
+        if !parent_ids.contains(&boundary.boundary.id) {
+            for path in &boundary.files {
+                file_to_boundary.insert(path.clone(), boundary.boundary.id.clone());
+            }
         }
         boundaries.push(boundary.boundary);
     }
@@ -174,4 +188,24 @@ pub fn detect_boundaries(
         file_to_boundary,
         diagnostics,
     }
+}
+
+fn push_boundary_or_implicit_children(
+    source: &CodeCitySourceGraph,
+    candidate: ResolvedBoundary,
+    config: &CodeCityConfig,
+    diagnostics: &mut Vec<CodeCityDiagnostic>,
+    resolved: &mut Vec<ResolvedBoundary>,
+) {
+    let implicit_split = split_implicit_boundaries(source, &candidate, config);
+    diagnostics.extend(implicit_split.diagnostics);
+    if implicit_split.boundaries.is_empty() {
+        resolved.push(candidate);
+        return;
+    }
+
+    let mut parent = candidate;
+    parent.boundary.atomic = false;
+    resolved.push(parent);
+    resolved.extend(implicit_split.boundaries);
 }

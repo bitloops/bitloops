@@ -13,7 +13,10 @@ use std::sync::Arc;
 pub use crate::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
-use crate::host::language_adapter::LanguageTestSupport;
+use crate::host::language_adapter::{
+    LanguageEntryPointArtefact, LanguageEntryPointCandidate, LanguageEntryPointFile,
+    LanguageTestSupport,
+};
 pub use blob_payloads::{BlobPayloadGateway, BlobPayloadRef};
 pub use documents::DocumentStoreGateway;
 pub use relational::RelationalGateway;
@@ -42,6 +45,15 @@ pub trait LanguageServicesGateway: Send + Sync {
     ) -> Option<Arc<dyn LanguageTestSupport>> {
         let _ = relative_path;
         None
+    }
+
+    fn entry_point_candidates_for_file(
+        &self,
+        file: &LanguageEntryPointFile,
+        artefacts: &[LanguageEntryPointArtefact],
+    ) -> Vec<LanguageEntryPointCandidate> {
+        let _ = (file, artefacts);
+        Vec::new()
     }
 }
 

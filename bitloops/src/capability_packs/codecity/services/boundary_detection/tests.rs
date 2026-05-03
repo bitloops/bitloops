@@ -172,8 +172,20 @@ fn collapses_small_implicit_communities_into_independent_boundary() {
 
     let result = detect_boundaries(&source, &config, temp.path());
 
-    assert_eq!(result.boundaries.len(), 1);
-    let boundary = &result.boundaries[0];
+    assert_eq!(result.boundaries.len(), 2);
+    let root = result
+        .boundaries
+        .iter()
+        .find(|boundary| boundary.id == CODECITY_ROOT_BOUNDARY_ID)
+        .expect("root parent boundary");
+    assert_eq!(root.kind, CodeCityBoundaryKind::RootFallback);
+    assert!(!root.atomic);
+
+    let boundary = result
+        .boundaries
+        .iter()
+        .find(|boundary| boundary.name == "independent")
+        .expect("independent boundary");
     assert_eq!(boundary.id, "boundary:root:implicit:independent");
     assert_eq!(boundary.name, "independent");
     assert_eq!(boundary.kind, CodeCityBoundaryKind::Implicit);
@@ -219,7 +231,27 @@ fn keeps_large_implicit_communities_and_collapses_only_small_ones() {
 
     let result = detect_boundaries(&source, &config, temp.path());
 
-    assert_eq!(result.boundaries.len(), 3);
+    assert_eq!(result.boundaries.len(), 5);
+    let root = result
+        .boundaries
+        .iter()
+        .find(|boundary| boundary.id == CODECITY_ROOT_BOUNDARY_ID)
+        .expect("root parent boundary");
+    assert!(!root.atomic);
+
+    let source_group = result
+        .boundaries
+        .iter()
+        .find(|boundary| boundary.id == "boundary:src")
+        .expect("source parent boundary");
+    assert_eq!(source_group.kind, CodeCityBoundaryKind::Group);
+    assert_eq!(source_group.source, CodeCityBoundarySource::Hierarchy);
+    assert_eq!(
+        source_group.parent_boundary_id.as_deref(),
+        Some(CODECITY_ROOT_BOUNDARY_ID)
+    );
+    assert!(!source_group.atomic);
+
     let independent = result
         .boundaries
         .iter()
@@ -239,11 +271,19 @@ fn keeps_large_implicit_communities_and_collapses_only_small_ones() {
     let retained = result
         .boundaries
         .iter()
-        .filter(|boundary| boundary.name != "independent")
+        .filter(|boundary| {
+            boundary.name != "independent"
+                && boundary.kind == CodeCityBoundaryKind::Implicit
+                && boundary.atomic
+        })
         .collect::<Vec<_>>();
     assert_eq!(retained.len(), 2);
     assert!(retained.iter().all(|boundary| boundary.file_count == 3));
-    assert!(retained.iter().all(|boundary| boundary.atomic));
+    assert!(
+        retained
+            .iter()
+            .all(|boundary| { boundary.parent_boundary_id.as_deref() == Some("boundary:src") })
+    );
 }
 
 #[test]
@@ -267,9 +307,28 @@ fn detects_manifest_boundaries_from_indexed_files_without_checkout() {
         .map(|boundary| boundary.root_path.as_str())
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(result.boundaries.len(), 2);
+    assert_eq!(result.boundaries.len(), 3);
+    let packages = result
+        .boundaries
+        .iter()
+        .find(|boundary| boundary.id == "boundary:packages")
+        .expect("packages parent boundary");
+    assert_eq!(packages.kind, CodeCityBoundaryKind::Group);
+    assert_eq!(packages.source, CodeCityBoundarySource::Hierarchy);
+    assert!(!packages.atomic);
     assert!(boundary_roots.contains("packages/api"));
     assert!(boundary_roots.contains("packages/web"));
+    assert!(boundary_roots.contains("packages"));
+    for boundary in result
+        .boundaries
+        .iter()
+        .filter(|boundary| matches!(boundary.root_path.as_str(), "packages/api" | "packages/web"))
+    {
+        assert_eq!(
+            boundary.parent_boundary_id.as_deref(),
+            Some("boundary:packages")
+        );
+    }
     assert_eq!(
         result.file_to_boundary["packages/api/src/main.ts"],
         "boundary:packages/api"

@@ -95,10 +95,12 @@ pub(super) fn split_implicit_boundaries(
         .collect::<Vec<_>>();
 
     if !independent_files.is_empty() {
+        let root_path = common_directory_prefix(&independent_files)
+            .unwrap_or_else(|| boundary.boundary.root_path.clone());
         let mut independent = build_boundary(
             source,
             BoundaryBuildSpec {
-                root_path: boundary.boundary.root_path.clone(),
+                root_path,
                 id: format!("{}:implicit:independent", boundary.boundary.id),
                 name: INDEPENDENT_BOUNDARY_NAME.to_string(),
                 kind: CodeCityBoundaryKind::Implicit,
@@ -126,20 +128,22 @@ fn build_implicit_boundary(
     community: &CodeCityCommunity,
     index: usize,
 ) -> ResolvedBoundary {
-    let name = common_directory_prefix(&community.paths)
-        .map(|prefix| {
-            Path::new(&prefix)
-                .file_name()
-                .and_then(OsStr::to_str)
-                .unwrap_or("community")
-                .to_string()
-        })
-        .unwrap_or_else(|| format!("community_{}", index + 1));
+    let root_path = common_directory_prefix(&community.paths)
+        .unwrap_or_else(|| parent.boundary.root_path.clone());
+    let name = if root_path == parent.boundary.root_path {
+        format!("community_{}", index + 1)
+    } else {
+        Path::new(&root_path)
+            .file_name()
+            .and_then(OsStr::to_str)
+            .unwrap_or("community")
+            .to_string()
+    };
 
     build_boundary(
         source,
         BoundaryBuildSpec {
-            root_path: parent.boundary.root_path.clone(),
+            root_path,
             id: format!(
                 "{}:implicit:{}:{}",
                 parent.boundary.id,

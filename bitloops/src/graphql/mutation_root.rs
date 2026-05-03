@@ -1,3 +1,4 @@
+mod architecture_graph;
 mod code_city;
 mod errors;
 mod inputs;
@@ -10,7 +11,11 @@ mod validation;
 
 use async_graphql::{Context, Object, Result};
 
-use super::types::{TaskObject, TaskQueueControlResultObject};
+use super::types::{
+    ArchitectureGraphAssertionResult, ArchitectureSystemMembershipAssertionResult,
+    AssertArchitectureGraphFactInput, AssertArchitectureSystemMembershipInput,
+    RevokeArchitectureGraphAssertionResult, TaskObject, TaskQueueControlResultObject,
+};
 
 #[allow(unused_imports)]
 pub use inputs::{
@@ -106,6 +111,33 @@ impl MutationRoot {
         input: RefreshKnowledgeInput,
     ) -> Result<RefreshKnowledgeMutationResult> {
         knowledge::refresh_knowledge(ctx, input).await
+    }
+
+    #[graphql(name = "assertArchitectureGraphFact")]
+    async fn assert_architecture_graph_fact(
+        &self,
+        ctx: &Context<'_>,
+        input: AssertArchitectureGraphFactInput,
+    ) -> Result<ArchitectureGraphAssertionResult> {
+        architecture_graph::assert_architecture_graph_fact(ctx, input).await
+    }
+
+    #[graphql(name = "revokeArchitectureGraphAssertion")]
+    async fn revoke_architecture_graph_assertion(
+        &self,
+        ctx: &Context<'_>,
+        id: String,
+    ) -> Result<RevokeArchitectureGraphAssertionResult> {
+        architecture_graph::revoke_architecture_graph_assertion(ctx, id).await
+    }
+
+    #[graphql(name = "assertArchitectureSystemMembership")]
+    async fn assert_architecture_system_membership(
+        &self,
+        ctx: &Context<'_>,
+        input: AssertArchitectureSystemMembershipInput,
+    ) -> Result<ArchitectureSystemMembershipAssertionResult> {
+        architecture_graph::assert_architecture_system_membership(ctx, input).await
     }
 
     async fn apply_migrations(&self, ctx: &Context<'_>) -> Result<ApplyMigrationsMutationResult> {

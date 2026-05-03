@@ -8,14 +8,16 @@ use crate::graphql::{
 };
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput, CheckpointConnection,
-    CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput,
-    CodeCityArcConnectionResult, CodeCityArcFilterInput, CodeCityArchitectureResult,
-    CodeCityFileDetailResult, CodeCitySnapshotStatusResult, CodeCityViolationConnectionResult,
-    CodeCityViolationFilterInput, CodeCityWorldResult, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsFilterInput, FileContext,
-    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, TemporalScope,
-    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    ArchitectureContainer, ArchitectureGraph, ArchitectureGraphFilterInput, ArchitectureGraphFlow,
+    ArchitectureGraphNode, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, AsOfInput,
+    CheckpointConnection, CheckpointEdge, CloneConnection, CloneEdge, CloneSummary,
+    ClonesFilterInput, CodeCityArcConnectionResult, CodeCityArcFilterInput,
+    CodeCityArchitectureResult, CodeCityFileDetailResult, CodeCitySnapshotStatusResult,
+    CodeCityViolationConnectionResult, CodeCityViolationFilterInput, CodeCityWorldResult,
+    ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
+    DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
+    TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult,
+    paginate_items,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -399,6 +401,71 @@ impl Project {
         decode_stage_single("test_harness_tests_summary", rows)
     }
 
+    #[graphql(name = "architectureGraph")]
+    async fn architecture_graph(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<ArchitectureGraphFilterInput>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<ArchitectureGraph> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let first = optional_positive_limit("first", first)?;
+        let filter = normalise_architecture_graph_filter(context, &self.scope, filter)?;
+        context
+            .list_architecture_graph(&self.scope, filter.as_ref(), first, after.as_deref())
+            .await
+            .map_err(|err| backend_error(format!("failed to query architecture graph: {err:#}")))
+    }
+
+    #[graphql(name = "architectureEntryPoints")]
+    async fn architecture_entry_points(
+        &self,
+        ctx: &Context<'_>,
+        kind: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<ArchitectureGraphNode>> {
+        let first = optional_positive_limit("first", first)?;
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_architecture_entry_points(&self.scope, kind.as_deref(), first)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to query architecture entry points: {err:#}"
+                ))
+            })
+    }
+
+    #[graphql(name = "architectureFlows")]
+    async fn architecture_flows(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "entryPointId")] entry_point_id: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<ArchitectureGraphFlow>> {
+        let first = optional_positive_limit("first", first)?;
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_architecture_flows(&self.scope, entry_point_id.as_deref(), first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query architecture flows: {err:#}")))
+    }
+
+    #[graphql(name = "architectureContainers")]
+    async fn architecture_containers(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "systemKey")] system_key: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<ArchitectureContainer>> {
+        let first = optional_positive_limit("first", first)?;
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .list_architecture_containers(&self.scope, system_key.as_deref(), first)
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to query architecture containers: {err:#}"))
+            })
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[graphql(name = "codeCityWorld")]
     async fn code_city_world(
@@ -681,6 +748,24 @@ fn optional_positive_limit(name: &str, value: Option<i32>) -> Result<Option<usiz
         )));
     }
     Ok(Some(value as usize))
+}
+
+fn normalise_architecture_graph_filter(
+    context: &DevqlGraphqlContext,
+    scope: &ResolverScope,
+    filter: Option<ArchitectureGraphFilterInput>,
+) -> Result<Option<ArchitectureGraphFilterInput>> {
+    let Some(mut filter) = filter else {
+        return Ok(None);
+    };
+    if let Some(path) = filter.path.as_ref() {
+        filter.path = Some(
+            context
+                .resolve_scope_path(scope, path, false)
+                .map_err(bad_user_input_error)?,
+        );
+    }
+    Ok(Some(filter))
 }
 
 fn build_tests_stage_args(

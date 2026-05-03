@@ -43,11 +43,7 @@ impl ManifestDescriptor {
     }
 
     pub(super) fn boundary_id(&self, root_path: &str) -> String {
-        if root_path == "." {
-            CODECITY_ROOT_BOUNDARY_ID.to_string()
-        } else {
-            format!("boundary:{root_path}")
-        }
+        boundary_id_for_root(root_path)
     }
 
     pub(super) fn boundary_name(&self, root_path: &str) -> String {
@@ -60,6 +56,14 @@ impl ManifestDescriptor {
                 .unwrap_or(root_path)
                 .to_string()
         }
+    }
+}
+
+pub(super) fn boundary_id_for_root(root_path: &str) -> String {
+    if root_path == "." {
+        CODECITY_ROOT_BOUNDARY_ID.to_string()
+    } else {
+        format!("boundary:{root_path}")
     }
 }
 

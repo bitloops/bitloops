@@ -700,6 +700,7 @@ pub enum CodeCityBoundaryKindResult {
     Explicit,
     Runtime,
     Implicit,
+    Group,
     RootFallback,
 }
 
@@ -710,6 +711,7 @@ pub enum CodeCityBoundarySourceResult {
     WorkspaceManifest,
     EntryPoint,
     CommunityDetection,
+    Hierarchy,
     Fallback,
 }
 

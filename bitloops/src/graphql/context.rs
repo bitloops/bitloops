@@ -1,3 +1,4 @@
+mod architecture_graph;
 mod bootstrap;
 mod commit_checkpoints;
 mod enrichment;

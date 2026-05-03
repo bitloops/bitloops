@@ -62,6 +62,14 @@ impl LanguageServicesGateway for RuntimeLanguageServicesGateway {
     ) -> Option<Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
         self.inner.resolve_test_support_for_path(relative_path)
     }
+
+    fn entry_point_candidates_for_file(
+        &self,
+        file: &crate::host::language_adapter::LanguageEntryPointFile,
+        artefacts: &[crate::host::language_adapter::LanguageEntryPointArtefact],
+    ) -> Vec<crate::host::language_adapter::LanguageEntryPointCandidate> {
+        self.inner.entry_point_candidates_for_file(file, artefacts)
+    }
 }
 
 pub struct DevqlCapabilityHost {

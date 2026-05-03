@@ -600,6 +600,19 @@ pub(super) fn given_create_rust_project_with_tests(
     })
 }
 
+pub(super) fn given_create_bitloops_inference_cli_fixture(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a bitloops-inference CLI fixture",
+            helpers::create_bitloops_inference_cli_fixture(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_testlens_ingest_tests(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_registry_report_lists_four_first_party_packs() {
+    fn builtin_registry_report_lists_first_party_packs() {
         let tmp = tempdir().expect("tempdir");
         let host = DevqlCapabilityHost::builtin(tmp.path(), sample_repo()).expect("builtin host");
         let report = host.registry_report();
@@ -469,7 +469,14 @@ mod tests {
         ids.sort();
         assert_eq!(
             ids,
-            ["codecity", "knowledge", "semantic_clones", "test_harness"]
+            [
+                "architecture_graph",
+                "codecity",
+                "knowledge",
+                "navigation_context",
+                "semantic_clones",
+                "test_harness"
+            ]
         );
         assert!(
             !report.migration_plan.is_empty(),
@@ -483,8 +490,10 @@ mod tests {
         let host = DevqlCapabilityHost::builtin(tmp.path(), sample_repo()).expect("builtin host");
         let report = host.registry_report();
         let text = format_registry_report_human(&report);
+        assert!(text.contains("architecture_graph"));
         assert!(text.contains("codecity"));
         assert!(text.contains("knowledge"));
+        assert!(text.contains("navigation_context"));
         assert!(text.contains("semantic_clones"));
         assert!(text.contains("test_harness"));
         assert!(text.contains("migration_plan"));
