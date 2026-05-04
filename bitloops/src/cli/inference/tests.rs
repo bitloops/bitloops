@@ -5,9 +5,12 @@ use tempfile::TempDir;
 use toml_edit::{DocumentMut, Item};
 
 use crate::cli::inference::{
-    OllamaAvailability, SummarySetupOutcome, SummarySetupPhase, SummarySetupSelection,
-    configure_cloud_summary_generation, configure_local_summary_generation,
-    execute_prepared_summary_setup_with_progress, prepare_cloud_summary_generation_plan,
+    ContextGuidanceSetupOutcome, ContextGuidanceSetupSelection, OllamaAvailability,
+    SummarySetupOutcome, SummarySetupPhase, SummarySetupSelection,
+    configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
+    configure_local_context_guidance_generation, configure_local_summary_generation,
+    context_guidance_generation_configured, execute_prepared_summary_setup_with_progress,
+    prepare_cloud_summary_generation_plan, prompt_context_guidance_setup_selection,
     prompt_summary_setup_selection, summary_generation_configured,
     with_managed_inference_install_hook, with_ollama_probe_hook,
 };
@@ -96,6 +99,62 @@ fn summary_setup_prefers_ministral_3_3b_when_available() {
 }
 
 #[test]
+fn context_guidance_setup_prefers_ministral_3_3b_when_available() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    let outcome = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            with_ollama_probe_hook(
+                || {
+                    Ok(OllamaAvailability::Running {
+                        models: vec!["ministral-3:8b".to_string(), "ministral-3:3b".to_string()],
+                    })
+                },
+                || {
+                    configure_local_context_guidance_generation(
+                        &configure_root,
+                        &mut out,
+                        &mut input,
+                        false,
+                    )
+                },
+            )
+        },
+    )
+    .expect("context guidance setup outcome");
+
+    assert_eq!(
+        outcome,
+        ContextGuidanceSetupOutcome::Configured {
+            model_name: "ministral-3:3b".to_string()
+        }
+    );
+    assert!(context_guidance_generation_configured(&repo_root));
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("guidance_generation = \"guidance_local\""));
+    assert!(rendered.contains("max_output_tokens = 4096"));
+}
+
+#[test]
 fn prompt_summary_setup_selection_defaults_to_skip() {
     let mut out = Vec::new();
     let mut input = Cursor::new(Vec::<u8>::new());
@@ -112,6 +171,30 @@ fn prompt_summary_setup_selection_defaults_to_skip() {
     assert!(rendered.contains("Configure semantic summaries"));
     assert!(rendered.contains("Summaries help agents understand your code structure"));
     assert!(rendered.contains("(e.g. file purposes, module responsibilities)."));
+    assert!(rendered.contains("Skip for now (recommended)"));
+    assert!(rendered.contains("Bitloops Cloud (limited availability)"));
+    assert!(rendered.contains("Fast setup. No local compute required."));
+    assert!(rendered.contains("Local (Ollama)"));
+    assert!(rendered.contains("Runs locally (32GB+ RAM, GPU strongly recommended)."));
+}
+
+#[test]
+fn prompt_context_guidance_setup_selection_defaults_to_skip() {
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+
+    let selection = with_single_select_hook(
+        |_options, default_index| Ok(default_index),
+        || prompt_context_guidance_setup_selection(&mut out, &mut input, true, false, false),
+    )
+    .expect("selection");
+
+    assert_eq!(selection, ContextGuidanceSetupSelection::Skip);
+    let rendered = String::from_utf8(out).expect("utf8 output");
+    assert!(rendered.starts_with('\n'));
+    assert!(rendered.contains("Configure context guidance"));
+    assert!(rendered.contains("Context guidance distills captured sessions and linked knowledge"));
+    assert!(rendered.contains("into repo-specific guidance facts."));
     assert!(rendered.contains("Skip for now (recommended)"));
     assert!(rendered.contains("Bitloops Cloud (limited availability)"));
     assert!(rendered.contains("Fast setup. No local compute required."));
@@ -164,6 +247,83 @@ fn summary_setup_can_write_platform_profile() {
     assert!(rendered.contains("model = \"ministral-3-3b-instruct\""));
     assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
     assert!(!rendered.contains("base_url = "));
+}
+
+#[test]
+fn context_guidance_setup_can_write_platform_profile() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    let message = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || configure_cloud_context_guidance_generation(&configure_root, None, None),
+    )
+    .expect("configure cloud context guidance");
+
+    assert_eq!(
+        message,
+        "Configured context guidance to use Bitloops cloud context guidance."
+    );
+    assert!(context_guidance_generation_configured(&repo_root));
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("guidance_generation = \"guidance_llm\""));
+    assert!(rendered.contains("[inference.runtimes.bitloops_inference]"));
+    assert!(rendered.contains("driver = \"bitloops_platform_chat\""));
+    assert!(rendered.contains("model = \"ministral-3-3b-instruct\""));
+    assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
+    assert!(rendered.contains("max_output_tokens = 4096"));
+    assert!(!rendered.contains("base_url = "));
+}
+
+#[test]
+fn context_guidance_setup_can_write_platform_profile_with_overrides() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            configure_cloud_context_guidance_generation(
+                &configure_root,
+                Some("https://platform.example.com/v1/chat/completions"),
+                Some("CUSTOM_CONTEXT_GUIDANCE_TOKEN"),
+            )
+        },
+    )
+    .expect("configure cloud context guidance");
+
+    let rendered = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(rendered.contains("api_key = \"${CUSTOM_CONTEXT_GUIDANCE_TOKEN}\""));
+    assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
 }
 
 #[test]
@@ -464,6 +624,36 @@ max_output_tokens = 200
     assert!(
         !summary_generation_configured(&repo_root),
         "summary generation should require a defined runtime entry"
+    );
+}
+
+#[test]
+fn context_guidance_generation_configured_rejects_missing_runtime_definition() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(
+        &config_path,
+        r#"
+[context_guidance.inference]
+guidance_generation = "guidance_llm"
+
+[inference.profiles.guidance_llm]
+task = "text_generation"
+driver = "bitloops_platform_chat"
+runtime = "bitloops_inference"
+model = "ministral-3-3b-instruct"
+temperature = "0.1"
+max_output_tokens = 4096
+"#,
+    )
+    .expect("write config");
+
+    assert!(
+        !context_guidance_generation_configured(&repo_root),
+        "context guidance generation should require a defined runtime entry"
     );
 }
 

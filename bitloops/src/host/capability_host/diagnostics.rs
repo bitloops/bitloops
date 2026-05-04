@@ -474,6 +474,8 @@ mod tests {
                 "codecity",
                 "knowledge",
                 "navigation_context",
+                "context_guidance",
+                "knowledge",
                 "semantic_clones",
                 "test_harness"
             ]

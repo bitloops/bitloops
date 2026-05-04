@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use crate::capability_packs::context_guidance::storage::ContextGuidanceRepository;
 use crate::capability_packs::knowledge::storage::{
     KnowledgeDocumentRepository, KnowledgeRelationalRepository,
 };
@@ -33,6 +34,7 @@ pub struct LocalCapabilityRuntime<'a> {
     config_root: &'a Value,
     backends: &'a StoreBackendConfig,
     relational: &'a dyn RelationalGateway,
+    context_guidance: &'a dyn ContextGuidanceRepository,
     knowledge_relational: &'a dyn KnowledgeRelationalRepository,
     knowledge_documents: &'a dyn KnowledgeDocumentRepository,
     blob_payloads: &'a dyn BlobPayloadGateway,
@@ -58,6 +60,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
         config_root: &'a Value,
         backends: &'a StoreBackendConfig,
         relational: &'a dyn RelationalGateway,
+        context_guidance: &'a dyn ContextGuidanceRepository,
         knowledge_relational: &'a dyn KnowledgeRelationalRepository,
         knowledge_documents: &'a dyn KnowledgeDocumentRepository,
         blob_payloads: &'a dyn BlobPayloadGateway,
@@ -80,6 +83,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
             config_root,
             backends,
             relational,
+            context_guidance,
             knowledge_relational,
             knowledge_documents,
             blob_payloads,
@@ -131,6 +135,10 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
     fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {
         self.test_harness
     }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        Some(self.context_guidance)
+    }
 }
 
 impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
@@ -181,6 +189,10 @@ impl CapabilityIngestContext for LocalCapabilityRuntime<'_> {
         self.test_harness
     }
 
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        Some(self.context_guidance)
+    }
+
     fn clone_edges_rebuild_relational(&self) -> Result<&RelationalStorage> {
         let Some(relational) = self.devql_relational else {
             anyhow::bail!("clone-edge rebuild relational store is not attached to this ingest");
@@ -226,6 +238,22 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         )
         .context("opening local relational store for DevQL DDL")?;
         relational.execute_local_sqlite_batch_allow_create(sql)
+    }
+
+    fn apply_devql_sqlite_migration(
+        &self,
+        operation: &mut dyn FnMut(&rusqlite::Connection) -> Result<()>,
+    ) -> Result<()> {
+        if self.backends.relational.has_postgres() {
+            return Ok(());
+        }
+        let relational = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root,
+            &self.backends.relational,
+        )
+        .context("opening local relational store for DevQL migration")?;
+        let sqlite = relational.local_sqlite_pool_allow_create()?;
+        sqlite.with_connection(|conn| operation(conn))
     }
 }
 
@@ -285,5 +313,9 @@ impl CapabilityHealthContext for LocalCapabilityRuntime<'_> {
 
     fn inference(&self) -> &dyn InferenceGateway {
         &self.inference
+    }
+
+    fn context_guidance_store(&self) -> Option<&dyn ContextGuidanceRepository> {
+        Some(self.context_guidance)
     }
 }

@@ -218,7 +218,7 @@ embedding_provider, embedding_model, embedding_dimension, embedding \
 FROM ( \
 SELECT a.repo_id, a.symbol_id, a.artefact_id, a.path, \
 LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) AS canonical_kind, \
-COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, ss.summary, \
+COALESCE(a.symbol_fqn, a.path) AS symbol_fqn, COALESCE(ss.summary, '') AS summary, \
 sf.normalized_name, sf.normalized_signature, sf.identifier_tokens, sf.normalized_body_tokens, sf.parent_kind, sf.context_tokens, \
 e.provider AS embedding_provider, e.model AS embedding_model, e.dimension AS embedding_dimension, e.embedding, \
 ROW_NUMBER() OVER ( \
@@ -231,7 +231,7 @@ ROW_NUMBER() OVER ( \
     END \
 ) AS representation_rank \
 FROM {embeddings_table} e \
-JOIN {semantics_table} ss ON ss.repo_id = e.repo_id AND ss.artefact_id = e.artefact_id AND ss.{snapshot_column} = e.{snapshot_column} \
+LEFT JOIN {semantics_table} ss ON ss.repo_id = e.repo_id AND ss.artefact_id = e.artefact_id AND ss.{snapshot_column} = e.{snapshot_column} \
 JOIN {features_table} sf ON sf.repo_id = e.repo_id AND sf.artefact_id = e.artefact_id AND sf.{snapshot_column} = e.{snapshot_column} \
 JOIN {artefacts_table} a ON a.repo_id = e.repo_id AND a.artefact_id = e.artefact_id AND a.{snapshot_column} = e.{snapshot_column} \
 WHERE e.repo_id = '{}' AND e.setup_fingerprint = '{}' AND {} \

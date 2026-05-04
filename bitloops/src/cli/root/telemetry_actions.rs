@@ -380,6 +380,21 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     if args.skip_baseline {
         flags.push("skip_baseline");
     }
+    if args.no_summaries {
+        flags.push("no_summaries");
+    }
+    if args.context_guidance_runtime.is_some() {
+        flags.push("context_guidance_runtime");
+    }
+    if args.no_context_guidance {
+        flags.push("no_context_guidance");
+    }
+    if args.context_guidance_gateway_url.is_some() {
+        flags.push("context_guidance_gateway_url");
+    }
+    if args.context_guidance_api_key_env.is_some() {
+        flags.push("context_guidance_api_key_env");
+    }
     if !args.exclude.is_empty() {
         flags.push("exclude");
     }
@@ -439,6 +454,18 @@ fn enable_action(
     }
     if args.install_embeddings {
         flags.push("install_embeddings");
+    }
+    if args.install_context_guidance {
+        flags.push("install_context_guidance");
+    }
+    if args.context_guidance_runtime.is_some() {
+        flags.push("context_guidance_runtime");
+    }
+    if args.context_guidance_gateway_url.is_some() {
+        flags.push("context_guidance_gateway_url");
+    }
+    if args.context_guidance_api_key_env.is_some() {
+        flags.push("context_guidance_api_key_env");
     }
     insert_flags(&mut props, flags);
     insert_bool_property(&mut props, "has_agent", args.agent.is_some());

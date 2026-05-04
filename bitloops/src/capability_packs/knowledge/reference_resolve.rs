@@ -92,6 +92,12 @@ pub fn resolve_source_ref(
         KnowledgeRef::Artefact { .. } => {
             bail!("`artefact:<id>` cannot be used as a knowledge association source")
         }
+        KnowledgeRef::Path { .. } => {
+            bail!("`path:<path>` cannot be used as a knowledge association source")
+        }
+        KnowledgeRef::SymbolFqn { .. } => {
+            bail!("`symbol_fqn:<symbol>` cannot be used as a knowledge association source")
+        }
     }
 }
 
@@ -176,6 +182,24 @@ pub fn resolve_target_ref(
 
             Ok(ResolvedKnowledgeTargetRef::Artefact {
                 artefact_id: trimmed.to_string(),
+            })
+        }
+        KnowledgeRef::Path { path } => {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                bail!("path target must not be empty");
+            }
+            Ok(ResolvedKnowledgeTargetRef::Path {
+                path: trimmed.to_string(),
+            })
+        }
+        KnowledgeRef::SymbolFqn { symbol_fqn } => {
+            let trimmed = symbol_fqn.trim();
+            if trimmed.is_empty() {
+                bail!("symbol_fqn target must not be empty");
+            }
+            Ok(ResolvedKnowledgeTargetRef::SymbolFqn {
+                symbol_fqn: trimmed.to_string(),
             })
         }
         KnowledgeRef::KnowledgeVersion { .. } => {

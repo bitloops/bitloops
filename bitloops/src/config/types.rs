@@ -135,6 +135,18 @@ impl Default for SemanticClonesConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextGuidanceInferenceBindings {
+    #[serde(default)]
+    pub guidance_generation: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ContextGuidanceConfig {
+    #[serde(default)]
+    pub inference: ContextGuidanceInferenceBindings,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceTask {
@@ -195,6 +207,7 @@ pub struct InferenceConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InferenceCapabilityConfig {
     pub semantic_clones: SemanticClonesConfig,
+    pub context_guidance: ContextGuidanceConfig,
     pub inference: InferenceConfig,
 }
 

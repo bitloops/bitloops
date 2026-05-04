@@ -602,6 +602,59 @@ pub(super) fn then_devql_artefacts_stable(
     })
 }
 
+pub(super) fn then_daemon_enrichments_eventually_drain(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "daemon enrichments eventually drain",
+            helpers::wait_for_semantic_clone_enrichments_to_drain(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_devql_context_guidance_returns_at_least(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let min_count = ctx.matches[2]
+            .1
+            .parse::<usize>()
+            .expect("context guidance min_count should parse as usize");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "DevQL context guidance query returns at least",
+            helpers::assert_devql_context_guidance_returns_at_least(
+                world, &repo_name, &path, min_count,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_devql_context_guidance_includes_kind(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let expected_kind = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "DevQL context guidance query includes kind",
+            helpers::assert_devql_context_guidance_includes_kind(
+                world,
+                &repo_name,
+                &path,
+                &expected_kind,
+            ),
+        );
+    })
+}
+
 pub(super) fn then_testlens_query_returns_results(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

@@ -7,12 +7,15 @@ mod tests;
 
 pub(crate) use self::persistence_sql::{
     build_conditional_current_semantic_persist_existing_rows_sql,
-    build_conditional_current_semantic_persist_rows_sql, build_current_semantic_persist_rows_sql,
+    build_conditional_current_semantic_persist_rows_sql,
+    build_conditional_current_symbol_feature_persist_rows_sql,
+    build_current_semantic_persist_rows_sql, build_current_symbol_feature_persist_rows_sql,
     build_delete_current_symbol_features_for_paths_sql, build_delete_current_symbol_features_sql,
+    build_delete_current_symbol_semantics_for_artefact_sql,
     build_delete_current_symbol_semantics_for_paths_sql, build_delete_current_symbol_semantics_sql,
     build_repair_current_semantic_projection_from_historical_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
-    parse_semantic_index_state_rows,
+    build_symbol_feature_persist_rows_sql, parse_semantic_index_state_rows,
 };
 pub(crate) use self::queries::{
     build_current_repo_artefacts_by_ids_sql, build_current_repo_artefacts_sql,

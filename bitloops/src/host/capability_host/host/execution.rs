@@ -37,12 +37,12 @@ impl DevqlCapabilityHost {
         };
 
         let request = IngestRequest::new(payload);
-        let declared_mailboxes = self.declared_mailboxes_for_capability(capability_id);
+        let declared_mailboxes = self.workplane_mailboxes();
         let mut runtime = self.runtime.runtime_with_relational(
             devql_relational,
             Some(capability_id),
             Some(ingester_name),
-            declared_mailboxes.as_slice(),
+            declared_mailboxes,
         );
         let limit = self.invocation_policy.ingester_timeout;
         match handler {

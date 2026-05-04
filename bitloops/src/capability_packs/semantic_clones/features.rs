@@ -4,6 +4,7 @@ mod core;
 pub use core::SymbolSemanticsRow;
 pub(crate) use core::synthesize_deterministic_summary;
 pub use core::{
+    DeterministicFallbackSummaryProvider, DocstringOnlySummaryProvider,
     NoopSemanticSummaryProvider, PreStageArtefactRow, PreStageDependencyRow,
     SemanticFeatureIndexState, SemanticFeatureIngestionStats, SemanticFeatureInput,
     SemanticFeatureRows, SemanticSummaryCandidate, SemanticSummaryProvider,

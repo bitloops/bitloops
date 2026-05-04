@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 mod agent_hooks;
 mod agent_selection;
 mod args;
+mod context_guidance_setup;
 mod daemon_bootstrap;
 mod embeddings_setup;
 mod final_setup;
@@ -24,6 +25,7 @@ pub use args::{InitArgs, InitCommand, InitStatusArgs};
 pub(super) use args::{
     DEFAULT_INIT_INGEST_BACKFILL, normalize_cli_exclusions, normalize_exclude_from_paths,
 };
+pub(super) use context_guidance_setup::choose_context_guidance_setup_during_init;
 pub(super) use daemon_bootstrap::{
     maybe_enable_default_daemon_service, maybe_install_default_daemon,
 };

@@ -209,7 +209,8 @@ pub(crate) use self::git::collect_checkpoint_file_provenance_rows;
 pub(crate) use self::query::{
     CheckpointArtefactMatch, CheckpointFileActivityFilter, CheckpointFileDebugRow,
     CheckpointFileExistsSql, CheckpointFileGateway, CheckpointFileProvenanceDetailRow,
-    CheckpointFileScope, CheckpointFileSnapshotMatch, build_checkpoint_file_debug_sql,
+    CheckpointFileScope, CheckpointFileSnapshotMatch, CheckpointSelectionEvidenceKind,
+    CheckpointSelectionMatch, CheckpointSelectionMatchStrength, build_checkpoint_file_debug_sql,
     build_checkpoint_file_exists_clause, build_checkpoint_file_lookup_sql, checkpoint_display_path,
 };
 pub(crate) use self::sql::{
@@ -258,6 +259,23 @@ mod tests {
             source_artefact_id TEXT NOT NULL,
             dest_symbol_id TEXT NOT NULL,
             dest_artefact_id TEXT NOT NULL
+        );
+
+        CREATE TABLE checkpoint_artefacts (
+            relation_id TEXT PRIMARY KEY,
+            repo_id TEXT NOT NULL,
+            checkpoint_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            event_time TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            branch TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            commit_sha TEXT NOT NULL,
+            change_kind TEXT NOT NULL,
+            before_symbol_id TEXT,
+            after_symbol_id TEXT,
+            before_artefact_id TEXT,
+            after_artefact_id TEXT
         );
     ";
 
@@ -317,6 +335,102 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].checkpoint_id, "checkpoint-2");
         assert_eq!(rows[1].checkpoint_id, "checkpoint-1");
+    }
+
+    #[tokio::test]
+    async fn list_selection_checkpoint_ids_includes_file_relation_matches() {
+        let relational = sqlite_relational_with_provenance(
+            "
+            INSERT INTO checkpoint_files VALUES
+                ('file-row-1', 'repo-1', 'checkpoint-file', 'session-1', '2026-03-20T10:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-old', 'blob-new', NULL, NULL);
+            ",
+        )
+        .await;
+        let gateway = CheckpointFileGateway::new(&relational);
+
+        let rows = gateway
+            .list_checkpoint_ids_for_selection(
+                "repo-1",
+                &["missing-symbol".to_string()],
+                &["./src/lib.rs".to_string()],
+                CheckpointFileActivityFilter::default(),
+            )
+            .await
+            .expect("lookup selection checkpoints");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].checkpoint_id, "checkpoint-file");
+    }
+
+    #[tokio::test]
+    async fn list_selection_matches_reports_strongest_evidence_per_checkpoint() {
+        let relational = sqlite_relational_with_provenance(
+            "
+            INSERT INTO checkpoint_files VALUES
+                ('file-row-1', 'repo-1', 'checkpoint-1', 'session-1', '2026-03-20T10:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', 'src/lib.rs', 'src/lib.rs', 'blob-old', 'blob-new', NULL, NULL);
+            INSERT INTO checkpoint_artefacts VALUES
+                ('artefact-row-1', 'repo-1', 'checkpoint-1', 'session-1', '2026-03-20T10:00:00Z', 'codex', 'main', 'manual', 'commit-1', 'modify', NULL, 'symbol-1', NULL, 'artefact-1');
+            ",
+        )
+        .await;
+        let gateway = CheckpointFileGateway::new(&relational);
+
+        let rows = gateway
+            .list_checkpoint_selection_matches(
+                "repo-1",
+                &["symbol-1".to_string()],
+                &["./src/lib.rs".to_string()],
+                CheckpointFileActivityFilter::default(),
+            )
+            .await
+            .expect("lookup selection matches");
+
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.checkpoint_id, "checkpoint-1");
+        assert_eq!(
+            row.evidence_kind,
+            CheckpointSelectionEvidenceKind::SymbolProvenance
+        );
+        assert_eq!(
+            row.evidence_kinds,
+            vec![
+                CheckpointSelectionEvidenceKind::SymbolProvenance,
+                CheckpointSelectionEvidenceKind::FileRelation,
+            ]
+        );
+        assert_eq!(row.match_strength, CheckpointSelectionMatchStrength::High);
+    }
+
+    #[test]
+    fn checkpoint_selection_evidence_orders_line_overlap_before_symbol_and_file() {
+        let mut evidence = vec![
+            CheckpointSelectionEvidenceKind::FileRelation,
+            CheckpointSelectionEvidenceKind::LineOverlap,
+            CheckpointSelectionEvidenceKind::SymbolProvenance,
+        ];
+        evidence.sort_by_key(|kind| std::cmp::Reverse(kind.as_rank()));
+
+        assert_eq!(
+            evidence,
+            vec![
+                CheckpointSelectionEvidenceKind::LineOverlap,
+                CheckpointSelectionEvidenceKind::SymbolProvenance,
+                CheckpointSelectionEvidenceKind::FileRelation,
+            ]
+        );
+        assert_eq!(
+            CheckpointSelectionMatchStrength::from_evidence_kind(
+                CheckpointSelectionEvidenceKind::LineOverlap,
+            ),
+            CheckpointSelectionMatchStrength::High,
+        );
+        assert_eq!(
+            CheckpointSelectionMatchStrength::from_evidence_kind(
+                CheckpointSelectionEvidenceKind::FileRelation,
+            ),
+            CheckpointSelectionMatchStrength::Medium,
+        );
     }
 
     #[test]

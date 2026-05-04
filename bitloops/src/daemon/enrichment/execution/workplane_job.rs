@@ -25,6 +25,10 @@ use crate::capability_packs::semantic_clones::{
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host};
+use crate::host::capability_host::CapabilityMailboxHandler;
+use crate::host::devql::{
+    DevqlConfig, RelationalStorage, build_capability_host, resolve_repo_identity,
+};
 use crate::host::runtime_store::WorkplaneJobRecord;
 
 use super::super::JobExecutionOutcome;
@@ -188,10 +192,34 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => {
             execute_clone_edges_rebuild_workplane_job(&capability_host, &relational, job).await
         }
-        mailbox_name => JobExecutionOutcome::failed(anyhow::anyhow!(
-            "unsupported workplane mailbox `{mailbox_name}` for capability `{}`",
-            job.capability_id
-        )),
+        mailbox_name => {
+            let Some(registration) =
+                capability_host.mailbox_registration(&job.capability_id, mailbox_name)
+            else {
+                return JobExecutionOutcome::failed(anyhow::anyhow!(
+                    "unsupported workplane mailbox `{mailbox_name}` for capability `{}`",
+                    job.capability_id
+                ));
+            };
+            let CapabilityMailboxHandler::Ingester(ingester_id) = registration.handler else {
+                return JobExecutionOutcome::failed(anyhow::anyhow!(
+                    "unsupported workplane mailbox `{mailbox_name}` for capability `{}`",
+                    job.capability_id
+                ));
+            };
+            match capability_host
+                .invoke_ingester_with_relational(
+                    job.capability_id.as_str(),
+                    ingester_id,
+                    job.payload.clone(),
+                    Some(&relational),
+                )
+                .await
+            {
+                Ok(_) => JobExecutionOutcome::ok(),
+                Err(err) => JobExecutionOutcome::failed(err),
+            }
+        }
     }
 }
 

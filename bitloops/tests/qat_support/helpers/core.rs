@@ -3485,6 +3485,11 @@ struct ArchitectureContainerObservation {
     component_keys: Vec<String>,
 }
 
+struct ContextGuidanceObservation {
+    total_count: usize,
+    kinds: Vec<String>,
+}
+
 fn build_architecture_entry_points_query(kind: &str) -> String {
     format!(
         r#"query {{
@@ -3513,6 +3518,7 @@ fn extract_architecture_entry_points(
         .and_then(|project| project.get("architectureEntryPoints"))
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow!("expected project.architectureEntryPoints array"))?;
+
     nodes
         .iter()
         .map(|node| {
@@ -3585,6 +3591,7 @@ fn build_architecture_containers_query(system_key: Option<&str>) -> String {
     let system_key_arg = system_key
         .map(|system_key| format!(r#"systemKey: "{}","#, escape_devql_string(system_key)))
         .unwrap_or_default();
+
     format!(
         r#"query {{
   project(path: ".") {{
@@ -3617,6 +3624,7 @@ fn extract_architecture_containers(
         .and_then(|project| project.get("architectureContainers"))
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow!("expected project.architectureContainers array"))?;
+
     containers
         .iter()
         .map(|container| {
@@ -3633,6 +3641,7 @@ fn extract_architecture_containers(
                         .map(ToString::to_string)
                 })
                 .collect::<Vec<_>>();
+
             let entry_points = container
                 .get("entryPoints")
                 .and_then(serde_json::Value::as_array)
@@ -3651,6 +3660,7 @@ fn extract_architecture_containers(
                     ))
                 })
                 .collect::<Vec<_>>();
+
             let component_keys = container
                 .get("components")
                 .and_then(serde_json::Value::as_array)
@@ -3664,6 +3674,7 @@ fn extract_architecture_containers(
                         .map(ToString::to_string)
                 })
                 .collect::<Vec<_>>();
+
             Ok(ArchitectureContainerObservation {
                 id: container
                     .get("id")
@@ -3715,6 +3726,64 @@ fn find_architecture_container_for_entry_point(
         }))
 }
 
+fn build_context_guidance_query(path: &str, kind: Option<&str>) -> String {
+    let kind_arg = kind
+        .map(|kind| format!(r#", kind: "{}""#, escape_devql_string(kind)))
+        .unwrap_or_default();
+
+    format!(
+        r#"query {{
+  selectArtefacts(by: {{ path: "{}" }}) {{
+    contextGuidance(category: DECISION{kind_arg}) {{
+      overview
+      items(first: 10) {{
+        category
+        kind
+        guidance
+        evidenceExcerpt
+      }}
+    }}
+  }}
+}}"#,
+        escape_devql_string(path),
+        kind_arg = kind_arg
+    )
+}
+
+fn observe_context_guidance(
+    world: &mut QatWorld,
+    path: &str,
+    kind: Option<&str>,
+) -> Result<ContextGuidanceObservation> {
+    let query = build_context_guidance_query(path, kind);
+    let value = run_devql_graphql_query(world, &query)?;
+
+    let guidance = value
+        .get("selectArtefacts")
+        .and_then(|value| value.get("contextGuidance"))
+        .ok_or_else(|| {
+            anyhow!("expected selectArtefacts.contextGuidance payload in GraphQL response")
+        })?;
+
+    let total_count = guidance
+        .get("overview")
+        .and_then(|overview| overview.get("totalCount"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+
+    let kinds = match guidance.get("items").and_then(serde_json::Value::as_array) {
+        Some(items) => items
+            .iter()
+            .filter_map(|item| item.get("kind").and_then(serde_json::Value::as_str))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+
+    Ok(ContextGuidanceObservation { total_count, kinds })
+}
+
 pub fn assert_architecture_entry_point_effective(
     world: &mut QatWorld,
     repo_name: &str,
@@ -3722,6 +3791,7 @@ pub fn assert_architecture_entry_point_effective(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+
     let observation = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
@@ -3743,10 +3813,12 @@ pub fn assert_architecture_entry_point_effective(
                 .unwrap_or_else(|| "not found".to_string())
         },
     )?;
+
     ensure!(
         observation.is_some(),
         "expected architecture entry point `{kind}` at `{path}` to be effective"
     );
+
     Ok(())
 }
 
@@ -3758,6 +3830,7 @@ pub fn assert_architecture_container_exposes_entry_point(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+
     let container = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
@@ -3787,10 +3860,14 @@ pub fn assert_architecture_container_exposes_entry_point(
                 .unwrap_or_else(|| "not found".to_string())
         },
     )?;
+
     ensure!(
-        container.as_ref().is_some_and(|container| container.kind.as_deref() == Some(container_kind)),
+        container
+            .as_ref()
+            .is_some_and(|container| container.kind.as_deref() == Some(container_kind)),
         "expected architecture container `{container_kind}` exposing `{entry_kind}` at `{path}`"
     );
+
     Ok(())
 }
 
@@ -3802,8 +3879,10 @@ pub fn assert_architecture_system_membership_for_entry_point(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+
     let container = find_architecture_container_for_entry_point(world, entry_kind, path)?
         .ok_or_else(|| anyhow!("container for `{entry_kind}` at `{path}` was not available"))?;
+
     let mutation = format!(
         r#"mutation {{
   assertArchitectureSystemMembership(input: {{
@@ -3823,7 +3902,9 @@ pub fn assert_architecture_system_membership_for_entry_point(
         escape_devql_string(system_key),
         escape_devql_string(&container.id)
     );
+
     let value = run_devql_graphql_query(world, &mutation)?;
+
     ensure!(
         value
             .get("assertArchitectureSystemMembership")
@@ -3847,6 +3928,7 @@ pub fn assert_architecture_system_membership_for_entry_point(
 }}"#,
         escape_devql_string(system_key)
     );
+
     let observed = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
@@ -3881,6 +3963,7 @@ pub fn assert_architecture_system_membership_for_entry_point(
         },
         |value| value.to_string(),
     )?;
+
     ensure!(
         observed
             .get("project")
@@ -3888,6 +3971,7 @@ pub fn assert_architecture_system_membership_for_entry_point(
             .is_some(),
         "expected architecture system `{system_key}` membership to be queryable"
     );
+
     Ok(())
 }
 
@@ -3898,6 +3982,7 @@ pub fn assert_architecture_suppression_revoke_roundtrip(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+
     let entry_point = wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
@@ -3928,7 +4013,9 @@ pub fn assert_architecture_suppression_revoke_roundtrip(
 }}"#,
         escape_devql_string(&entry_point.id)
     );
+
     let suppress_value = run_devql_graphql_query(world, &suppress_query)?;
+
     let assertion_id = suppress_value
         .get("assertArchitectureGraphFact")
         .and_then(|result| result.get("assertionId"))
@@ -3949,6 +4036,7 @@ pub fn assert_architecture_suppression_revoke_roundtrip(
                 .unwrap_or_else(|| "hidden".to_string())
         },
     )?;
+
     ensure!(
         hidden.is_none(),
         "expected architecture entry point `{kind}` at `{path}` to be hidden after suppression"
@@ -3964,12 +4052,15 @@ pub fn assert_architecture_suppression_revoke_roundtrip(
 }}"#,
         escape_devql_string(&assertion_id)
     );
+
     let revoke_value = run_devql_graphql_query(world, &revoke_query)?;
+
     let revoked = revoke_value
         .get("revokeArchitectureGraphAssertion")
         .and_then(|result| result.get("revoked"))
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+
     ensure!(
         revoked,
         "expected revokeArchitectureGraphAssertion to revoke `{assertion_id}`"
@@ -3985,6 +4076,7 @@ pub fn assert_architecture_manual_entry_point(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+
     let assert_query = format!(
         r#"mutation {{
   assertArchitectureGraphFact(input: {{
@@ -4007,7 +4099,9 @@ pub fn assert_architecture_manual_entry_point(
         escape_devql_string(path),
         escape_devql_string(kind)
     );
+
     let value = run_devql_graphql_query(world, &assert_query)?;
+
     ensure!(
         value
             .get("assertArchitectureGraphFact")
@@ -4042,12 +4136,80 @@ pub fn assert_architecture_manual_entry_point(
                 .unwrap_or_else(|| "not found".to_string())
         },
     )?;
+
     ensure!(
         entry_point
             .as_ref()
             .is_some_and(|entry_point| entry_point.asserted && !entry_point.computed),
         "expected manual architecture entry point `{kind}` at `{path}` to be asserted-only"
     );
+
+    Ok(())
+}
+
+pub fn assert_devql_context_guidance_returns_at_least(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to return at least {min_count} items"),
+        || observe_context_guidance(world, path, None),
+        |observation| observation.total_count >= min_count,
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+
+    ensure!(
+        observation.total_count >= min_count,
+        "expected DevQL context guidance for `{path}` to return at least {min_count} items, got {} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+
+    Ok(())
+}
+
+pub fn assert_devql_context_guidance_includes_kind(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    expected_kind: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to include kind `{expected_kind}`"),
+        || observe_context_guidance(world, path, Some(expected_kind)),
+        |observation| observation.kinds.iter().any(|kind| kind == expected_kind),
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+
+    ensure!(
+        observation.kinds.iter().any(|kind| kind == expected_kind),
+        "expected DevQL context guidance for `{path}` to include kind `{expected_kind}`, got total_count={} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+
     Ok(())
 }
 

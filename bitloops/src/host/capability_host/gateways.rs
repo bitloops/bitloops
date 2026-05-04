@@ -135,6 +135,7 @@ pub trait HostServicesGateway: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityWorkplaneJob {
+    pub target_capability_id: Option<String>,
     pub mailbox_name: String,
     pub dedupe_key: Option<String>,
     pub payload: Value,
@@ -147,6 +148,21 @@ impl CapabilityWorkplaneJob {
         payload: Value,
     ) -> Self {
         Self {
+            target_capability_id: None,
+            mailbox_name: mailbox_name.into(),
+            dedupe_key,
+            payload,
+        }
+    }
+
+    pub fn new_for_capability(
+        target_capability_id: impl Into<String>,
+        mailbox_name: impl Into<String>,
+        dedupe_key: Option<String>,
+        payload: Value,
+    ) -> Self {
+        Self {
+            target_capability_id: Some(target_capability_id.into()),
             mailbox_name: mailbox_name.into(),
             dedupe_key,
             payload,

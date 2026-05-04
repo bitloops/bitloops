@@ -11,13 +11,18 @@ use crate::capability_packs::semantic_clones::embeddings::{
     build_symbol_embedding_input_hash, build_symbol_embedding_inputs, build_symbol_embedding_rows,
     resolve_embedding_setup, symbol_embeddings_require_reindex,
 };
+use crate::capability_packs::semantic_clones::features::{
+    NoopSemanticSummaryProvider, build_semantic_feature_rows,
+};
 use crate::capability_packs::semantic_clones::runtime_config::{
     EmbeddingProviderMode, resolve_embedding_provider, resolve_semantic_clones_config,
 };
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX;
 use crate::capability_packs::semantic_clones::{
-    build_active_embedding_setup_persist_sql, build_current_symbol_embedding_persist_sql,
-    build_embedding_setup_persist_sql, build_sqlite_symbol_embedding_persist_sql,
+    build_active_embedding_setup_persist_sql,
+    build_conditional_current_symbol_feature_persist_rows_sql,
+    build_current_symbol_embedding_persist_sql, build_embedding_setup_persist_sql,
+    build_sqlite_symbol_embedding_persist_sql, build_symbol_feature_persist_rows_sql,
     determine_repo_embedding_sync_action, load_current_semantic_summary_map,
     load_symbol_embedding_index_states,
 };
@@ -221,6 +226,27 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let summary_ms = elapsed_ms(summary_started);
 
     let mut embedding_statements = Vec::new();
+    let mut repaired_feature_projection = false;
+    if batch.representation_kind == EmbeddingRepresentationKind::Code {
+        for input in &expanded_inputs {
+            let input_for_rows = input.clone();
+            let rows = tokio::task::spawn_blocking(move || {
+                build_semantic_feature_rows(&input_for_rows, &NoopSemanticSummaryProvider)
+            })
+            .await
+            .context("building code embedding feature rows on blocking worker")?;
+            embedding_statements.push(build_symbol_feature_persist_rows_sql(
+                &rows,
+                relational.dialect(),
+            )?);
+            embedding_statements.push(build_conditional_current_symbol_feature_persist_rows_sql(
+                &rows,
+                input,
+                relational.dialect(),
+            )?);
+            repaired_feature_projection = true;
+        }
+    }
     let mut upserted_any = false;
     if !embedding_inputs.is_empty() {
         embedding_statements.push(build_embedding_setup_persist_sql(&setup));
@@ -296,7 +322,7 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     }
     let setup_ms = elapsed_ms(setup_started);
 
-    let clone_rebuild_signal = if upserted_any
+    let clone_rebuild_signal = if (upserted_any || repaired_feature_projection)
         && matches!(
             batch.representation_kind,
             EmbeddingRepresentationKind::Code | EmbeddingRepresentationKind::Summary

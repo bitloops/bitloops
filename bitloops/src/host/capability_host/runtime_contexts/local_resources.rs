@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::adapters::connectors::BuiltinConnectorRegistry;
+use crate::capability_packs::context_guidance::storage::SqliteContextGuidanceRepository;
 use crate::capability_packs::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalRepository,
 };
@@ -37,6 +38,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub provider_config: ProviderConfig,
     pub inference_config: InferenceCapabilityConfig,
     pub relational: SqliteRelationalGateway,
+    pub context_guidance: SqliteContextGuidanceRepository,
     pub knowledge_relational: SqliteKnowledgeRelationalRepository,
     pub knowledge_documents: DuckdbKnowledgeDocumentStore,
     pub blob_payloads: BlobKnowledgePayloadStore,
@@ -59,6 +61,7 @@ impl LocalCapabilityRuntimeResources {
         let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
         let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
         let relational = SqliteRelationalGateway::new(sqlite_pool.clone());
+        let context_guidance = SqliteContextGuidanceRepository::new(sqlite_pool.clone());
         let knowledge_relational = SqliteKnowledgeRelationalRepository::new(sqlite_pool);
         let knowledge_documents =
             DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
@@ -69,6 +72,7 @@ impl LocalCapabilityRuntimeResources {
             &backends,
             &provider_config,
             &inference_config.semantic_clones,
+            &inference_config.context_guidance,
             &inference_config.inference,
         );
         let stores = LocalStoreHealthGateway;
@@ -89,6 +93,7 @@ impl LocalCapabilityRuntimeResources {
             provider_config,
             inference_config,
             relational,
+            context_guidance,
             knowledge_relational,
             knowledge_documents,
             blob_payloads,
@@ -128,6 +133,7 @@ impl LocalCapabilityRuntimeResources {
             &self.config_root,
             &self.backends,
             &self.relational,
+            &self.context_guidance,
             &self.knowledge_relational,
             &self.knowledge_documents,
             &self.blob_payloads,
@@ -186,5 +192,45 @@ fn build_slot_bindings(
         semantic_clones.insert("summary_embeddings".to_string(), profile.clone());
     }
     bindings.insert("semantic_clones".to_string(), semantic_clones);
+    let mut context_guidance = std::collections::BTreeMap::new();
+    if let Some(profile) = config
+        .context_guidance
+        .inference
+        .guidance_generation
+        .as_ref()
+    {
+        context_guidance.insert("guidance_generation".to_string(), profile.clone());
+    }
+    bindings.insert("context_guidance".to_string(), context_guidance);
     bindings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_slot_bindings;
+    use crate::config::{
+        ContextGuidanceConfig, ContextGuidanceInferenceBindings, InferenceCapabilityConfig,
+    };
+
+    #[test]
+    fn build_slot_bindings_includes_context_guidance_generation_slot() {
+        let config = InferenceCapabilityConfig {
+            context_guidance: ContextGuidanceConfig {
+                inference: ContextGuidanceInferenceBindings {
+                    guidance_generation: Some("guidance_local".to_string()),
+                },
+            },
+            ..Default::default()
+        };
+
+        let bindings = build_slot_bindings(&config);
+
+        assert_eq!(
+            bindings
+                .get("context_guidance")
+                .and_then(|slots| slots.get("guidance_generation"))
+                .map(String::as_str),
+            Some("guidance_local")
+        );
+    }
 }

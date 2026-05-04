@@ -738,6 +738,19 @@ pub(super) fn given_configure_semantic_clones_fake_runtime(
     })
 }
 
+pub(super) fn given_configure_context_guidance_fake_runtime(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I configure context guidance with fake text-generation runtime",
+            helpers::configure_context_guidance_with_fake_runtime(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_daemon_enrichments_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

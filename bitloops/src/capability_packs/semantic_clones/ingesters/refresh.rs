@@ -25,10 +25,11 @@ use super::super::types::{
     SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
 };
 use crate::capability_packs::semantic_clones::{
-    RepoEmbeddingSyncAction, clear_current_symbol_embedding_rows_for_path,
-    clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
-    clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
-    determine_repo_embedding_sync_action, load_semantic_summary_snapshot,
+    RepoEmbeddingSyncAction, build_semantic_get_index_state_sql,
+    clear_current_symbol_embedding_rows_for_path, clear_repo_active_embedding_setup,
+    clear_repo_active_embedding_setup_for_representation, clear_repo_symbol_embedding_rows,
+    clear_repo_symbol_embedding_rows_for_representation, determine_repo_embedding_sync_action,
+    load_semantic_summary_snapshot, parse_semantic_index_state_rows,
     persist_active_embedding_setup, refresh_current_repo_symbol_embeddings_and_clone_edges,
     upsert_current_semantic_feature_rows, upsert_current_symbol_embedding_rows,
     upsert_semantic_feature_rows, upsert_symbol_embedding_rows,
@@ -508,11 +509,14 @@ async fn filter_current_inputs(
         let Some(expected_hash) = expected_input_hashes.get(&input.artefact_id) else {
             continue;
         };
-        let Some(snapshot) = load_semantic_summary_snapshot(relational, &input.artefact_id).await?
-        else {
-            continue;
-        };
-        if snapshot.semantic_features_input_hash == *expected_hash {
+        let state = parse_semantic_index_state_rows(
+            &relational
+                .query_rows(&build_semantic_get_index_state_sql(&input.artefact_id))
+                .await?,
+        );
+        if state.features_hash.as_deref() == Some(expected_hash.as_str())
+            || state.semantics_hash.as_deref() == Some(expected_hash.as_str())
+        {
             filtered.push(input.clone());
         }
     }
