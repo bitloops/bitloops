@@ -24,11 +24,11 @@ fn config_file(path: &Path) -> PathBuf {
 }
 
 fn skill_file(path: &Path) -> PathBuf {
-    path.join(".agents")
-        .join("skills")
-        .join("bitloops")
-        .join("using-devql")
-        .join("SKILL.md")
+    path.join(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
+}
+
+fn legacy_skill_file(path: &Path) -> PathBuf {
+    path.join(crate::adapters::agents::codex::skills::LEGACY_CODEX_SKILL_RELATIVE_PATH)
 }
 
 fn read_hooks(path: &Path) -> String {
@@ -187,7 +187,7 @@ fn install_hooks_fresh_and_idempotent() {
 }
 
 #[test]
-fn install_hooks_writes_the_canonical_repo_skill() {
+fn install_hooks_writes_the_minimal_repo_skill() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let home = tempfile::tempdir().expect("home tempdir");
     init_repo(repo.path());
@@ -197,8 +197,9 @@ fn install_hooks_writes_the_canonical_repo_skill() {
         let skill = fs::read_to_string(skill_file(repo.path())).expect("read repo skill");
         assert_eq!(
             skill,
-            crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL
+            crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL
         );
+        assert!(!legacy_skill_file(repo.path()).exists());
         assert!(
             !skill_file(home.path()).exists(),
             "must not write Codex skill into HOME"
