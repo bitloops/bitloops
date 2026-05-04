@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rusqlite::params;
@@ -15,11 +16,14 @@ use crate::host::runtime_store::{
     DaemonSqliteRuntimeStore, WorkplaneJobRecord, WorkplaneJobStatus,
 };
 
-use super::super::EnrichmentControlState;
 use super::super::worker_count::EnrichmentWorkerPool;
+use super::super::{EnrichmentControlState, WorkplaneMailboxReadiness};
 use super::jobs::map_workplane_job_row;
 use super::mailbox_claim::WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT;
-use super::readiness::{mailbox_claim_readiness, workplane_mailbox_registration_for_job};
+use super::readiness::{
+    mailbox_claim_readiness, mailbox_claim_readiness_for_registration,
+    workplane_mailbox_registration_for_job,
+};
 use super::sql::sql_i64;
 
 pub(crate) fn claim_next_workplane_job(
@@ -33,8 +37,14 @@ pub(crate) fn claim_next_workplane_job(
             .context("starting capability workplane job claim transaction")?;
         let result = (|| {
             let now = unix_timestamp_now();
-            let jobs = load_workplane_claim_candidates(conn, runtime_store, pool, now)?;
             let mut readiness_cache = BTreeMap::new();
+            let jobs = load_workplane_claim_candidates(
+                conn,
+                runtime_store,
+                pool,
+                now,
+                &mut readiness_cache,
+            )?;
             for mut job in jobs {
                 if job_is_paused_for_mailbox(control_state, &job.mailbox_name) {
                     continue;
@@ -94,6 +104,7 @@ fn load_workplane_claim_candidates(
     runtime_store: &DaemonSqliteRuntimeStore,
     pool: EnrichmentWorkerPool,
     now: u64,
+    readiness_cache: &mut BTreeMap<(PathBuf, String, String), WorkplaneMailboxReadiness>,
 ) -> Result<Vec<WorkplaneJobRecord>> {
     let limit = i64::try_from(WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT)
         .context("converting workplane claim candidate limit")?;
@@ -127,7 +138,7 @@ fn load_workplane_claim_candidates(
             for row in rows {
                 let job = row?;
                 if job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
-                    || is_generic_text_generation_job(runtime_store, &job)?
+                    || is_generic_text_generation_job(runtime_store, readiness_cache, &job)?
                 {
                     values.push(job);
                 }
@@ -208,6 +219,7 @@ fn load_workplane_claim_candidates(
 
 fn is_generic_text_generation_job(
     runtime_store: &DaemonSqliteRuntimeStore,
+    readiness_cache: &mut BTreeMap<(PathBuf, String, String), WorkplaneMailboxReadiness>,
     job: &WorkplaneJobRecord,
 ) -> Result<bool> {
     if job.capability_id == crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID
@@ -231,8 +243,13 @@ fn is_generic_text_generation_job(
     ) {
         return Ok(false);
     }
-    let mut readiness_cache = BTreeMap::new();
-    Ok(!mailbox_claim_readiness(runtime_store, &mut readiness_cache, job)?.blocked)
+    Ok(!mailbox_claim_readiness_for_registration(
+        runtime_store,
+        readiness_cache,
+        job,
+        &registration,
+    )?
+    .blocked)
 }
 
 fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str) -> bool {

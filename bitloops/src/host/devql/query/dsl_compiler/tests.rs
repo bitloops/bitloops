@@ -671,6 +671,28 @@ fn compile_slim_select_artefacts_historical_context_maps_args_and_explicit_selec
 }
 
 #[test]
+fn compile_slim_select_artefacts_historical_context_accepts_graphql_evidence_kind_alias() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(evidenceKind:"file_relation")->select(overview)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext(evidenceKind: FILE_RELATION) {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_context_guidance_defaults_to_overview() {
     let parsed = parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->contextGuidance()"#)
         .expect("query parses");
@@ -772,6 +794,24 @@ fn compile_slim_select_artefacts_context_guidance_rejects_invalid_evidence_kind(
     assert!(
         err.to_string().contains(
             "contextGuidance(evidenceKind:...) must be one of: symbol_provenance, file_relation, line_overlap"
+        ),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_rejects_invalid_evidence_kind() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(evidenceKind:"rumor")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid evidence kind should fail");
+
+    assert!(
+        err.to_string().contains(
+            "historicalContext(evidenceKind:...) must be one of: symbol_provenance, file_relation, line_overlap"
         ),
         "unexpected error: {err:#}"
     );

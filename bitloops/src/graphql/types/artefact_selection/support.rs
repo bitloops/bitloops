@@ -241,7 +241,7 @@ pub(super) fn build_historical_context_expand_hint(item_count: usize) -> Option<
     (item_count > 0).then(|| {
         json!({
             "intent": "Inspect captured historical context for selected artefacts",
-            "template": "bitloops devql query '{ selectArtefacts(by: { path: \"src/lib.rs\" }) { historicalContext { overview items(first: 20) { checkpointId sessionId turnId promptPreview transcriptPreview toolEvents { toolKind inputSummary outputSummary command } } } } }'",
+            "template": "bitloops devql query '{ selectArtefacts(...) { historicalContext { overview items(first: 20) { checkpointId sessionId turnId promptPreview transcriptPreview toolEvents { toolKind inputSummary outputSummary command } } } } }'",
         })
     })
 }

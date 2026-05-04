@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
@@ -56,7 +56,7 @@ impl StoreHealthGateway for LocalStoreHealthGateway {
 pub struct LocalCapabilityWorkplaneGateway {
     capability_id: String,
     runtime_store: RepoSqliteRuntimeStore,
-    declared_mailboxes: BTreeMap<(String, String), ()>,
+    declared_mailboxes: BTreeMap<String, BTreeSet<String>>,
     init_session_id: Option<String>,
 }
 
@@ -67,21 +67,18 @@ impl LocalCapabilityWorkplaneGateway {
         declared_mailboxes: &[CapabilityMailboxRegistration],
         init_session_id: Option<String>,
     ) -> Result<Self> {
+        let mut declared_mailboxes_by_capability = BTreeMap::<String, BTreeSet<String>>::new();
+        for registration in declared_mailboxes {
+            declared_mailboxes_by_capability
+                .entry(registration.capability_id.to_string())
+                .or_default()
+                .insert(registration.mailbox_name.to_string());
+        }
+
         Ok(Self {
             capability_id: capability_id.to_string(),
             runtime_store: RepoSqliteRuntimeStore::open(repo_root)?,
-            declared_mailboxes: declared_mailboxes
-                .iter()
-                .map(|registration| {
-                    (
-                        (
-                            registration.capability_id.to_string(),
-                            registration.mailbox_name.to_string(),
-                        ),
-                        (),
-                    )
-                })
-                .collect(),
+            declared_mailboxes: declared_mailboxes_by_capability,
             init_session_id,
         })
     }
@@ -99,7 +96,8 @@ impl LocalCapabilityWorkplaneGateway {
     ) -> Result<()> {
         anyhow::ensure!(
             self.declared_mailboxes
-                .contains_key(&(target_capability_id.to_string(), mailbox_name.to_string())),
+                .get(target_capability_id)
+                .is_some_and(|mailboxes| mailboxes.contains(mailbox_name)),
             "mailbox `{mailbox_name}` is not declared for capability `{}`",
             target_capability_id
         );
@@ -206,10 +204,9 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
             .load_capability_workplane_mailbox_status(
                 &self.capability_id,
                 self.declared_mailboxes
-                    .keys()
-                    .filter_map(|(capability_id, mailbox_name)| {
-                        (capability_id == &self.capability_id).then_some(mailbox_name.as_str())
-                    }),
+                    .get(self.capability_id.as_str())
+                    .into_iter()
+                    .flat_map(|mailboxes| mailboxes.iter().map(String::as_str)),
             )
             .map(|status_by_mailbox| {
                 status_by_mailbox

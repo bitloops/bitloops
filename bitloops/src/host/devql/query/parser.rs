@@ -331,7 +331,10 @@ pub(crate) fn parse_devql_query(query: &str) -> Result<ParsedDevqlQuery> {
             parsed.has_historical_context_stage = true;
             parsed.historical_context.agent = args.get("agent").cloned();
             parsed.historical_context.since = args.get("since").cloned();
-            parsed.historical_context.evidence_kind = args.get("evidence_kind").cloned();
+            parsed.historical_context.evidence_kind = args
+                .get("evidence_kind")
+                .or_else(|| args.get("evidenceKind"))
+                .cloned();
             continue;
         }
 

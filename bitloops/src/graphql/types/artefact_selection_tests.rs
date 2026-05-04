@@ -116,7 +116,7 @@ fn historical_context_summary_counts_distinct_evidence() {
             },
             "expandHint": {
                 "intent": "Inspect captured historical context for selected artefacts",
-                "template": "bitloops devql query '{ selectArtefacts(by: { path: \"src/lib.rs\" }) { historicalContext { overview items(first: 20) { checkpointId sessionId turnId promptPreview transcriptPreview toolEvents { toolKind inputSummary outputSummary command } } } } }'"
+                "template": "bitloops devql query '{ selectArtefacts(...) { historicalContext { overview items(first: 20) { checkpointId sessionId turnId promptPreview transcriptPreview toolEvents { toolKind inputSummary outputSummary command } } } } }'"
             }
         })
     );

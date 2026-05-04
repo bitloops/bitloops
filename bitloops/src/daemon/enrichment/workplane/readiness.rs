@@ -215,6 +215,23 @@ pub(crate) fn mailbox_claim_readiness(
         return Ok(readiness);
     };
 
+    mailbox_claim_readiness_for_registration(runtime_store, cache, job, &registration)
+}
+
+pub(crate) fn mailbox_claim_readiness_for_registration(
+    runtime_store: &DaemonSqliteRuntimeStore,
+    cache: &mut BTreeMap<(PathBuf, String, String), WorkplaneMailboxReadiness>,
+    job: &WorkplaneJobRecord,
+    registration: &CapabilityMailboxRegistration,
+) -> Result<WorkplaneMailboxReadiness> {
+    let key = (
+        job.repo_root.clone(),
+        job.capability_id.clone(),
+        job.mailbox_name.clone(),
+    );
+    if let Some(readiness) = cache.get(&key) {
+        return Ok(readiness.clone());
+    }
     let readiness = match registration.readiness_policy {
         CapabilityMailboxReadinessPolicy::None => WorkplaneMailboxReadiness::default(),
         CapabilityMailboxReadinessPolicy::TextGenerationSlot(slot_name) => {

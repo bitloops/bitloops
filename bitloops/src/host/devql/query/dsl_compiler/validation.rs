@@ -6,8 +6,8 @@ use super::field_mapping::{
 };
 use super::types::DepsSummaryStageSpec;
 use super::{
-    ContextGuidanceFilter, GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageCall,
-    RegisteredStageKind, SelectArtefactsFilter,
+    ContextGuidanceFilter, GraphqlCompileMode, HistoricalContextFilter, ParsedDevqlQuery,
+    RegisteredStageCall, RegisteredStageKind, SelectArtefactsFilter,
 };
 
 const CONTEXT_GUIDANCE_CATEGORIES: &[&str] = &[
@@ -175,6 +175,7 @@ pub(super) fn validate_graphql_compiler_support(
             bail!("selectArtefacts(...) supports exactly one terminal stage in v1");
         }
 
+        validate_historical_context_filter(&parsed.historical_context)?;
         validate_context_guidance_filter(&parsed.context_guidance)?;
 
         if matches!(
@@ -422,6 +423,18 @@ fn validate_context_guidance_filter(filter: &ContextGuidanceFilter) -> Result<()
         .is_some_and(|kind| kind.trim().is_empty())
     {
         bail!("contextGuidance(kind:...) must be non-empty");
+    }
+
+    Ok(())
+}
+
+fn validate_historical_context_filter(filter: &HistoricalContextFilter) -> Result<()> {
+    if let Some(evidence_kind) = filter.evidence_kind.as_deref() {
+        validate_choice(
+            "historicalContext(evidenceKind:...)",
+            evidence_kind,
+            CONTEXT_GUIDANCE_EVIDENCE_KINDS,
+        )?;
     }
 
     Ok(())
