@@ -20,8 +20,8 @@ pub(crate) use handlers::{
 pub(crate) use metadata::{ROOT_LONG_ABOUT, ROOT_NAME, ROOT_SHORT_ABOUT};
 pub(crate) use post_run::run_persistent_post_run;
 pub(crate) use telemetry_actions::{
-    should_attempt_watcher_autostart, telemetry_action_for_command,
-    telemetry_action_for_connection_status, telemetry_action_for_version,
+    telemetry_action_for_command, telemetry_action_for_connection_status,
+    telemetry_action_for_version,
 };
 
 #[cfg(test)]
