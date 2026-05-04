@@ -120,6 +120,12 @@ pub enum KnowledgeAssociationTarget {
     Artefact {
         artefact_id: String,
     },
+    Path {
+        path: String,
+    },
+    SymbolFqn {
+        symbol_fqn: String,
+    },
 }
 
 impl KnowledgeAssociationTarget {
@@ -129,6 +135,8 @@ impl KnowledgeAssociationTarget {
             Self::KnowledgeItem { .. } => "knowledge_item",
             Self::Checkpoint { .. } => "checkpoint",
             Self::Artefact { .. } => "artefact",
+            Self::Path { .. } => "path",
+            Self::SymbolFqn { .. } => "symbol_fqn",
         }
     }
 
@@ -140,6 +148,8 @@ impl KnowledgeAssociationTarget {
             } => knowledge_item_id.as_str(),
             Self::Checkpoint { checkpoint_id } => checkpoint_id.as_str(),
             Self::Artefact { artefact_id } => artefact_id.as_str(),
+            Self::Path { path } => path.as_str(),
+            Self::SymbolFqn { symbol_fqn } => symbol_fqn.as_str(),
         }
     }
 
@@ -149,7 +159,11 @@ impl KnowledgeAssociationTarget {
                 target_knowledge_item_version_id,
                 ..
             } => target_knowledge_item_version_id.as_deref(),
-            Self::Commit { .. } | Self::Checkpoint { .. } | Self::Artefact { .. } => None,
+            Self::Commit { .. }
+            | Self::Checkpoint { .. }
+            | Self::Artefact { .. }
+            | Self::Path { .. }
+            | Self::SymbolFqn { .. } => None,
         }
     }
 }
@@ -382,6 +396,20 @@ mod tests {
         };
         assert_eq!(artefact.target_type(), "artefact");
         assert_eq!(artefact.target_id(), "artefact-42");
+
+        let path = KnowledgeAssociationTarget::Path {
+            path: "src/lib.rs".to_string(),
+        };
+        assert_eq!(path.target_type(), "path");
+        assert_eq!(path.target_id(), "src/lib.rs");
+        assert_eq!(path.target_knowledge_item_version_id(), None);
+
+        let symbol = KnowledgeAssociationTarget::SymbolFqn {
+            symbol_fqn: "crate::lib::run".to_string(),
+        };
+        assert_eq!(symbol.target_type(), "symbol_fqn");
+        assert_eq!(symbol.target_id(), "crate::lib::run");
+        assert_eq!(symbol.target_knowledge_item_version_id(), None);
     }
 
     #[test]

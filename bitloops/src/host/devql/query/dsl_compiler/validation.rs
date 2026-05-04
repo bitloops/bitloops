@@ -6,9 +6,20 @@ use super::field_mapping::{
 };
 use super::types::DepsSummaryStageSpec;
 use super::{
-    GraphqlCompileMode, ParsedDevqlQuery, RegisteredStageCall, RegisteredStageKind,
-    SelectArtefactsFilter,
+    ContextGuidanceFilter, GraphqlCompileMode, HistoricalContextFilter, ParsedDevqlQuery,
+    RegisteredStageCall, RegisteredStageKind, SelectArtefactsFilter,
 };
+
+const CONTEXT_GUIDANCE_CATEGORIES: &[&str] = &[
+    "decision",
+    "constraint",
+    "pattern",
+    "risk",
+    "verification",
+    "context",
+];
+const CONTEXT_GUIDANCE_EVIDENCE_KINDS: &[&str] =
+    &["symbol_provenance", "file_relation", "line_overlap"];
 
 pub(super) fn resolve_registered_stage(
     parsed: &ParsedDevqlQuery,
@@ -147,6 +158,8 @@ pub(super) fn validate_graphql_compiler_support(
         }
 
         let terminal_stage_count = usize::from(parsed.has_checkpoints_stage)
+            + usize::from(parsed.has_historical_context_stage)
+            + usize::from(parsed.has_context_guidance_stage)
             + usize::from(parsed.has_clones_stage)
             + usize::from(parsed.has_deps_stage)
             + usize::from(matches!(
@@ -155,12 +168,15 @@ pub(super) fn validate_graphql_compiler_support(
             ));
         if terminal_stage_count == 0 {
             bail!(
-                "selectArtefacts(...) requires checkpoints(), clones(), dependencies(), or tests()"
+                "selectArtefacts(...) requires checkpoints(), historicalContext(), contextGuidance(), clones(), dependencies(), or tests()"
             );
         }
         if terminal_stage_count > 1 {
             bail!("selectArtefacts(...) supports exactly one terminal stage in v1");
         }
+
+        validate_historical_context_filter(&parsed.historical_context)?;
+        validate_context_guidance_filter(&parsed.context_guidance)?;
 
         if matches!(
             registered_stage,
@@ -192,6 +208,14 @@ pub(super) fn validate_graphql_compiler_support(
 
     if parsed.has_chat_history_stage && !parsed.has_artefacts_stage {
         bail!("chatHistory() requires an artefacts() stage in the query");
+    }
+
+    if parsed.has_historical_context_stage {
+        bail!("historicalContext() is only supported after selectArtefacts(...) in v1");
+    }
+
+    if parsed.has_context_guidance_stage {
+        bail!("contextGuidance() is only supported after selectArtefacts(...)");
     }
 
     if parsed.has_clones_stage && !parsed.has_artefacts_stage {
@@ -374,6 +398,55 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     bail!("the GraphQL compiler could not determine a queryable leaf stage")
+}
+
+fn validate_context_guidance_filter(filter: &ContextGuidanceFilter) -> Result<()> {
+    if let Some(evidence_kind) = filter.evidence_kind.as_deref() {
+        validate_choice(
+            "contextGuidance(evidenceKind:...)",
+            evidence_kind,
+            CONTEXT_GUIDANCE_EVIDENCE_KINDS,
+        )?;
+    }
+
+    if let Some(category) = filter.category.as_deref() {
+        validate_choice(
+            "contextGuidance(category:...)",
+            category,
+            CONTEXT_GUIDANCE_CATEGORIES,
+        )?;
+    }
+
+    if filter
+        .kind
+        .as_deref()
+        .is_some_and(|kind| kind.trim().is_empty())
+    {
+        bail!("contextGuidance(kind:...) must be non-empty");
+    }
+
+    Ok(())
+}
+
+fn validate_historical_context_filter(filter: &HistoricalContextFilter) -> Result<()> {
+    if let Some(evidence_kind) = filter.evidence_kind.as_deref() {
+        validate_choice(
+            "historicalContext(evidenceKind:...)",
+            evidence_kind,
+            CONTEXT_GUIDANCE_EVIDENCE_KINDS,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn validate_choice(label: &str, value: &str, supported: &[&str]) -> Result<()> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if supported.contains(&normalized.as_str()) {
+        return Ok(());
+    }
+
+    bail!("{label} must be one of: {}", supported.join(", "))
 }
 
 pub(super) fn should_compile_project_stage(

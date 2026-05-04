@@ -3462,6 +3462,125 @@ pub fn assert_devql_select_artefacts_search_returns_symbol(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ContextGuidanceObservation {
+    total_count: usize,
+    kinds: Vec<String>,
+}
+
+fn build_context_guidance_query(path: &str, kind: Option<&str>) -> String {
+    let kind_arg = kind
+        .map(|kind| format!(r#", kind: "{}""#, escape_devql_string(kind)))
+        .unwrap_or_default();
+    format!(
+        r#"query {{
+  selectArtefacts(by: {{ path: "{}" }}) {{
+    contextGuidance(category: DECISION{kind_arg}) {{
+      overview
+      items(first: 10) {{
+        category
+        kind
+        guidance
+        evidenceExcerpt
+      }}
+    }}
+  }}
+}}"#,
+        escape_devql_string(path),
+        kind_arg = kind_arg
+    )
+}
+
+fn observe_context_guidance(
+    world: &mut QatWorld,
+    path: &str,
+    kind: Option<&str>,
+) -> Result<ContextGuidanceObservation> {
+    let query = build_context_guidance_query(path, kind);
+    let value = run_devql_graphql_query(world, &query)?;
+    let guidance = value
+        .get("selectArtefacts")
+        .and_then(|value| value.get("contextGuidance"))
+        .ok_or_else(|| {
+            anyhow!("expected selectArtefacts.contextGuidance payload in GraphQL response")
+        })?;
+    let total_count = guidance
+        .get("overview")
+        .and_then(|overview| overview.get("totalCount"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+    let kinds = match guidance.get("items").and_then(serde_json::Value::as_array) {
+        Some(items) => items
+            .iter()
+            .filter_map(|item| item.get("kind").and_then(serde_json::Value::as_str))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+    Ok(ContextGuidanceObservation { total_count, kinds })
+}
+
+pub fn assert_devql_context_guidance_returns_at_least(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to return at least {min_count} items"),
+        || observe_context_guidance(world, path, None),
+        |observation| observation.total_count >= min_count,
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+    ensure!(
+        observation.total_count >= min_count,
+        "expected DevQL context guidance for `{path}` to return at least {min_count} items, got {} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+    Ok(())
+}
+
+pub fn assert_devql_context_guidance_includes_kind(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    expected_kind: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to include kind `{expected_kind}`"),
+        || observe_context_guidance(world, path, Some(expected_kind)),
+        |observation| observation.kinds.iter().any(|kind| kind == expected_kind),
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+    ensure!(
+        observation.kinds.iter().any(|kind| kind == expected_kind),
+        "expected DevQL context guidance for `{path}` to include kind `{expected_kind}`, got total_count={} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+    Ok(())
+}
+
 fn checkpoint_agent_candidates(agent: &str) -> Vec<String> {
     let mut candidates = vec![agent.to_string()];
     if agent == "claude" {

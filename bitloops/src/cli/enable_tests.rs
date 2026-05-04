@@ -9,7 +9,9 @@ use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_
 use crate::cli::embeddings::{
     ManagedEmbeddingsBinaryInstallOutcome, with_managed_embeddings_install_hook,
 };
-use crate::cli::inference::with_summary_generation_configured_hook;
+use crate::cli::inference::{
+    with_context_guidance_generation_configured_hook, with_summary_generation_configured_hook,
+};
 use crate::cli::telemetry_consent::{
     NON_INTERACTIVE_TELEMETRY_ERROR, with_global_graphql_executor_hook,
 };
@@ -75,6 +77,10 @@ fn default_enable_args() -> EnableArgs {
         embeddings_runtime: None,
         embeddings_gateway_url: None,
         embeddings_api_key_env: None,
+        install_context_guidance: false,
+        context_guidance_runtime: None,
+        context_guidance_gateway_url: None,
+        context_guidance_api_key_env: None,
     }
 }
 
@@ -113,7 +119,10 @@ fn with_isolated_daemon_config_process_state<T>(
     ));
     env.extend_from_slice(extra_env);
     with_process_state(cwd, &env, || {
-        with_summary_generation_configured_hook(|_| true, f)
+        with_summary_generation_configured_hook(
+            |_| true,
+            || with_context_guidance_generation_configured_hook(|_| true, f),
+        )
     })
 }
 
@@ -1351,6 +1360,40 @@ fn enable_args_support_install_embeddings_flag() {
 }
 
 #[test]
+fn enable_args_support_install_context_guidance_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "enable",
+        "--capture",
+        "--install-context-guidance",
+        "--context-guidance-runtime",
+        "platform",
+        "--context-guidance-gateway-url",
+        "https://gateway.example/v1/chat/completions",
+        "--context-guidance-api-key-env",
+        "CUSTOM_CONTEXT_GUIDANCE_TOKEN",
+    ])
+    .expect("enable context guidance flags should parse");
+    let Some(Commands::Enable(args)) = parsed.command else {
+        panic!("expected enable command");
+    };
+
+    assert!(args.install_context_guidance);
+    assert_eq!(
+        args.context_guidance_runtime,
+        Some(crate::cli::inference::TextGenerationRuntime::Platform)
+    );
+    assert_eq!(
+        args.context_guidance_gateway_url.as_deref(),
+        Some("https://gateway.example/v1/chat/completions")
+    );
+    assert_eq!(
+        args.context_guidance_api_key_env.as_deref(),
+        Some("CUSTOM_CONTEXT_GUIDANCE_TOKEN")
+    );
+}
+
+#[test]
 fn enable_args_support_target_flags() {
     let parsed = Cli::try_parse_from(["bitloops", "enable", "--capture", "--devql-guidance"])
         .expect("enable target flags should parse");
@@ -1457,6 +1500,10 @@ supported = ["claude-code"]
                                             embeddings_api_key_env: Some(
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                             ),
+                                            install_context_guidance: false,
+                                            context_guidance_runtime: None,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
                                         },
                                         &mut out,
                                         &mut input,
@@ -1540,6 +1587,10 @@ supported = ["claude-code"]
                                     embeddings_api_key_env: Some(
                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                     ),
+                                    install_context_guidance: false,
+                                    context_guidance_runtime: None,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
                                 },
                                 &mut out,
                                 &mut input,
@@ -1631,6 +1682,10 @@ model = "text-embedding-3-large"
                                 embeddings_api_key_env: Some(
                                     "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                 ),
+                                install_context_guidance: false,
+                                context_guidance_runtime: None,
+                                context_guidance_gateway_url: None,
+                                context_guidance_api_key_env: None,
                             },
                             &mut out,
                             &mut input,
@@ -1663,6 +1718,10 @@ fn run_enable_without_agent_installs_default_agent_and_git_hooks() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_context_guidance: false,
+            context_guidance_runtime: None,
+            context_guidance_gateway_url: None,
+            context_guidance_api_key_env: None,
         })
         .unwrap_err();
 
@@ -1699,6 +1758,10 @@ enabled = false
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_context_guidance: false,
+            context_guidance_runtime: None,
+            context_guidance_gateway_url: None,
+            context_guidance_api_key_env: None,
         })
         .unwrap_err();
 
@@ -1742,6 +1805,10 @@ supported = ["cursor", "gemini"]
                     embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+                    install_context_guidance: false,
+                    context_guidance_runtime: None,
+                    context_guidance_gateway_url: None,
+                    context_guidance_api_key_env: None,
                 },
                 &mut out,
                 &mut input,
@@ -2213,6 +2280,10 @@ fn run_enable_with_legacy_agent_flag_returns_guidance_error() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_context_guidance: false,
+            context_guidance_runtime: None,
+            context_guidance_gateway_url: None,
+            context_guidance_api_key_env: None,
         })
         .unwrap_err();
 
@@ -2326,6 +2397,10 @@ fn enable_does_not_create_shared_repo_policy_file() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_context_guidance: false,
+            context_guidance_runtime: None,
+            context_guidance_gateway_url: None,
+            context_guidance_api_key_env: None,
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -2353,6 +2428,10 @@ fn enable_with_local_flag_does_not_create_local_repo_policy_file() {
             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
             embeddings_gateway_url: None,
             embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+            install_context_guidance: false,
+            context_guidance_runtime: None,
+            context_guidance_gateway_url: None,
+            context_guidance_api_key_env: None,
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("bitloops init"));
@@ -2398,6 +2477,10 @@ supported = ["claude-code"]
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+                install_context_guidance: false,
+                context_guidance_runtime: None,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
             })
             .unwrap_err();
 
@@ -2454,6 +2537,10 @@ supported = ["claude-code"]
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string()),
+                        install_context_guidance: false,
+                        context_guidance_runtime: None,
+                        context_guidance_gateway_url: None,
+                        context_guidance_api_key_env: None,
                     })
                     .expect("enable should succeed");
 

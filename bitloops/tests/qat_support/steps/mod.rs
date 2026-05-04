@@ -301,6 +301,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I configure context guidance with fake text-generation runtime in (\S+)$"),
+            step_fn(given_configure_context_guidance_fake_runtime),
+        )
+        .given(
+            None,
             regex(r"^DevQL pack health for semantic clones is ready in (\S+)$"),
             step_fn(given_devql_semantic_clones_pack_health_ready),
         )
@@ -710,6 +715,21 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL artefacts query result count is stable across ingests in (\S+)$"),
             step_fn(then_devql_artefacts_stable),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL context guidance query for \"([^\"]+)\" returns at least (\d+) items? in (\S+)$"#),
+            step_fn(then_devql_context_guidance_returns_at_least),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL context guidance query for \"([^\"]+)\" includes kind \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_context_guidance_includes_kind),
+        )
+        .then(
+            None,
+            regex(r"^daemon enrichments eventually drain in (\S+)$"),
+            step_fn(then_daemon_enrichments_eventually_drain),
         )
         .then(
             None,

@@ -31,7 +31,7 @@ fn check_semantic_clones_semantic_summaries(
     }
 
     let Some(slot_name) = resolve_selected_summary_slot(&config) else {
-        return CapabilityHealthResult::ok("semantic summaries use deterministic fallback only");
+        return CapabilityHealthResult::ok("semantic summaries not configured");
     };
     let profile_name = ctx
         .inference()

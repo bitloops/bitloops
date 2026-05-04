@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **Selected artefacts now expose historical context**: DevQL GraphQL and the DevQL DSL now support `historicalContext` on `selectArtefacts(...)`, returning prior checkpoints, sessions, turns, prompt/transcript previews, tool events, and checkpoint file relations that match the selected paths or symbols. Historical matches now include evidence metadata for symbol provenance, file relations, and line overlap, with `agent`, `since`, and `evidenceKind` filters available for narrowing results.
+- **Context Guidance capability pack**: added the first-party `context_guidance` capability, which distills captured agent history and linked knowledge into durable, artefact-scoped guidance facts such as decisions, constraints, patterns, risks, verification requirements, and durable context. The new capability includes SQLite storage and migrations, health checks, query examples, GraphQL/DSL `contextGuidance` selection support, background workplane ingesters for history and knowledge distillation plus target compaction, and CLI setup for local Ollama or Bitloops Cloud text-generation profiles.
+
+### Fixed
+
+- **Providerless semantic summaries no longer persist deterministic fallback rows**: when `semantic_clones` has no configured `summary_generation` slot, Bitloops now stops writing new `symbol_semantics*` rows, summary search documents, and providerless summary-embedding follow-ups. Current repos still keep `symbol_features*`, code embeddings, and clone rebuilds working, while deterministic fallback summaries are now persisted only when deterministic summary refresh is requested explicitly or a configured summary provider degrades at runtime.
+
 ## [0.0.20] - 2026-04-28
 
 ### Changed

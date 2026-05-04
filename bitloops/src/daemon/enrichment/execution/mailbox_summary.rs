@@ -15,9 +15,12 @@ use crate::capability_packs::semantic_clones::runtime_config::{
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX;
 use crate::capability_packs::semantic_clones::{
     build_conditional_current_semantic_persist_rows_sql,
+    build_conditional_current_symbol_feature_persist_rows_sql,
+    build_delete_current_symbol_semantics_for_artefact_sql,
     build_repair_current_semantic_projection_from_historical_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
-    ensure_required_llm_summary_output, parse_semantic_index_state_rows,
+    build_symbol_feature_persist_rows_sql, ensure_required_llm_summary_output,
+    parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
@@ -141,6 +144,7 @@ where
     let mut semantic_statements = Vec::new();
     let mut embedding_follow_ups = Vec::new();
     for input in &expanded_inputs {
+        let persist_summaries = summary_provider.provider.persists_summaries_for(input);
         let next_input_hash =
             build_semantic_feature_input_hash(input, summary_provider.provider.as_ref());
         let state = parse_semantic_index_state_rows(
@@ -152,6 +156,7 @@ where
             &state,
             &next_input_hash,
             summary_provider.provider.requires_model_output(),
+            persist_summaries,
         ) {
             semantic_statements.push(
                 build_repair_current_semantic_projection_from_historical_sql(
@@ -160,7 +165,13 @@ where
                     relational.dialect(),
                 ),
             );
-            if summary_embeddings_enabled {
+            if !persist_summaries {
+                semantic_statements.push(build_delete_current_symbol_semantics_for_artefact_sql(
+                    &input.repo_id,
+                    &input.artefact_id,
+                ));
+            }
+            if summary_embeddings_enabled && persist_summaries {
                 embedding_follow_ups.push(summary_embedding_follow_up_for(input));
             }
             continue;
@@ -177,17 +188,33 @@ where
         .await
         .context("building semantic summary rows on blocking worker")?;
         ensure_required_llm_summary_output(&rows, summary_provider.provider.as_ref())?;
-        semantic_statements.push(build_semantic_persist_rows_sql(
-            &rows,
-            relational.dialect(),
-        )?);
-        semantic_statements.push(build_conditional_current_semantic_persist_rows_sql(
-            &rows,
-            input,
-            relational.dialect(),
-        )?);
-        if summary_embeddings_enabled {
-            embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+        if persist_summaries {
+            semantic_statements.push(build_semantic_persist_rows_sql(
+                &rows,
+                relational.dialect(),
+            )?);
+            semantic_statements.push(build_conditional_current_semantic_persist_rows_sql(
+                &rows,
+                input,
+                relational.dialect(),
+            )?);
+            if summary_embeddings_enabled {
+                embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+            }
+        } else {
+            semantic_statements.push(build_symbol_feature_persist_rows_sql(
+                &rows,
+                relational.dialect(),
+            )?);
+            semantic_statements.push(build_conditional_current_symbol_feature_persist_rows_sql(
+                &rows,
+                input,
+                relational.dialect(),
+            )?);
+            semantic_statements.push(build_delete_current_symbol_semantics_for_artefact_sql(
+                &input.repo_id,
+                &input.artefact_id,
+            ));
         }
         if let Some(init_session_ids) = artefact_session_ids.get(&input.artefact_id) {
             on_item_prepared(&input.artefact_id, init_session_ids);

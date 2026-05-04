@@ -31,6 +31,7 @@ Bitloops stores daemon configuration at:
 - `bitloops start`, `bitloops init`, and `bitloops enable` all accept `--telemetry`, `--telemetry=false`, and `--no-telemetry` to resolve telemetry consent explicitly.
 - `bitloops enable --install-embeddings` and `bitloops daemon enable --install-embeddings` can also update the effective daemon config when they add the default local embeddings profile. When that profile uses the default local Bitloops-managed runtime, Bitloops also installs or updates the managed `bitloops-local-embeddings` binary.
 - `bitloops init --embeddings-runtime platform` and `bitloops enable --install-embeddings --embeddings-runtime platform` follow the hosted platform path instead. Add `--embeddings-gateway-url https://gateway.example/v1/embeddings` or set `BITLOOPS_PLATFORM_GATEWAY_URL` only when you want to override the platform default. The bearer token environment variable defaults to `BITLOOPS_PLATFORM_GATEWAY_TOKEN` and can be overridden with `--embeddings-api-key-env`.
+- `bitloops init --context-guidance-runtime platform` and `bitloops enable --capture --install-context-guidance --context-guidance-runtime platform` configure hosted context guidance text generation. Add `--context-guidance-gateway-url https://gateway.example/v1/chat/completions` only when you want an explicit chat completions endpoint override. The bearer token environment variable defaults to `BITLOOPS_PLATFORM_GATEWAY_TOKEN` and can be overridden with `--context-guidance-api-key-env`.
 
 The daemon config owns:
 
@@ -81,6 +82,9 @@ summary_generation = "summary_llm"
 code_embeddings = "local_code"
 summary_embeddings = "local_code"
 
+[context_guidance.inference]
+guidance_generation = "guidance_llm"
+
 [inference.runtimes.bitloops_inference]
 command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
 args = []
@@ -109,6 +113,15 @@ base_url = "https://api.openai.com/v1/chat/completions"
 temperature = "0.1"
 max_output_tokens = 200
 
+[inference.profiles.guidance_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
+temperature = "0.1"
+max_output_tokens = 4096
+
 [dashboard]
 bundle_dir = "/Users/alex/Library/Caches/bitloops/dashboard/bundle"
 
@@ -126,6 +139,7 @@ The current daemon parser accepts these top-level surfaces:
 - `stores`
 - `knowledge`
 - `semantic_clones`
+- `context_guidance`
 - `inference`
 - `dashboard`
 
@@ -149,6 +163,7 @@ Notes:
 - Bitloops always routes text generation through the configured runtime, typically `bitloops_inference`.
 - `driver` on a text-generation profile is interpreted by `bitloops-inference`, not by Bitloops itself.
 - Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it, and writes `base_url = "http://127.0.0.1:11434/api/chat"`.
+- Local context guidance setup uses the same Ollama chat profile shape and writes `max_output_tokens = 4096`.
 
 ### Telemetry Consent
 
@@ -254,6 +269,54 @@ Notes:
 - The managed platform runtime never downloads a local model bundle.
 - Hosted gateway credentials stay in runtime args and the referenced environment variable, not in the profile itself.
 
+### Context Guidance Generation
+
+When you configure hosted context guidance, Bitloops writes a text-generation binding and profile:
+
+```toml
+[context_guidance.inference]
+guidance_generation = "guidance_llm"
+
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.guidance_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
+temperature = "0.1"
+max_output_tokens = 4096
+```
+
+Local context guidance uses Ollama through the same `bitloops_inference` runtime:
+
+```toml
+[context_guidance.inference]
+guidance_generation = "guidance_local"
+
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.profiles.guidance_local]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "ollama_chat"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 4096
+```
+
+You can also override the active guidance generation profile with `BITLOOPS_CONTEXT_GUIDANCE_GUIDANCE_GENERATION`.
+
 ## RuntimeStore And RelationalStore
 
 Bitloops now uses two internal storage boundaries:
@@ -286,6 +349,8 @@ Configured relational, events, and blob stores still come from the daemon config
 Interactive `bitloops init` can also ask whether you want to install the default local embeddings setup when embeddings are still unconfigured, whether you want to queue an initial DevQL current-state sync after hook setup, and whether you want to run initial commit-history ingest. Use `--sync=true|false` and `--ingest=true|false` when you want to make those choices explicit; non-interactive runs require those flags.
 
 When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Non-interactive init requires the choice to be explicit with `--embeddings-runtime local`, `--embeddings-runtime platform`, or `--no-embeddings`. If you choose the local runtime, any managed `bitloops-local-embeddings` download still happens afterwards when init also runs sync or ingest.
+
+When context guidance generation is not configured, interactive init also asks whether to skip, use Bitloops Cloud, or use local Ollama text generation. Use `--context-guidance-runtime local`, `--context-guidance-runtime platform`, or `--no-context-guidance` when you want to make that choice explicit.
 
 `bitloops init` also accepts repeatable repo-policy exclusion flags:
 

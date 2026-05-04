@@ -765,6 +765,8 @@ enum KnowledgeTargetType {
 	CHECKPOINT
 	ARTEFACT
 	KNOWLEDGE
+	PATH
+	SYMBOL_FQN
 }
 
 type KnowledgeVersion {

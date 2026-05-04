@@ -144,6 +144,14 @@ impl KnowledgeRelationalRepository for FakeRelationalGateway {
         Ok(())
     }
 
+    fn list_relation_assertions_for_knowledge_version(
+        &self,
+        _repo_id: &str,
+        _knowledge_item_version_id: &str,
+    ) -> Result<Vec<KnowledgeRelationAssertionRow>> {
+        Ok(Vec::new())
+    }
+
     fn find_item(&self, _repo_id: &str, _source_id: &str) -> Result<Option<KnowledgeItemRow>> {
         Ok(self.item.clone())
     }
@@ -435,6 +443,26 @@ fn parse_knowledge_ref_handles_supported_kinds() -> Result<()> {
 }
 
 #[test]
+fn parses_path_and_symbol_targets_for_knowledge_association() -> Result<()> {
+    let path = parse_knowledge_ref("path:axum-macros/src/from_request.rs")?;
+    let symbol = parse_knowledge_ref("symbol_fqn:crate::from_request::extract_fields")?;
+
+    assert_eq!(
+        path,
+        KnowledgeRef::Path {
+            path: "axum-macros/src/from_request.rs".to_string()
+        }
+    );
+    assert_eq!(
+        symbol,
+        KnowledgeRef::SymbolFqn {
+            symbol_fqn: "crate::from_request::extract_fields".to_string()
+        }
+    );
+    Ok(())
+}
+
+#[test]
 fn parse_knowledge_ref_rejects_invalid_syntax() {
     assert!(parse_knowledge_ref("knowledge").is_err());
     assert!(parse_knowledge_ref("knowledge:").is_err());
@@ -468,6 +496,8 @@ fn resolve_source_ref_supports_item_and_deprecated_version_refs() -> Result<()> 
     assert!(resolve_source_ref(&ctx, "commit:abc123").is_err());
     assert!(resolve_source_ref(&ctx, "checkpoint:deadbeef").is_err());
     assert!(resolve_source_ref(&ctx, "artefact:artefact-1").is_err());
+    assert!(resolve_source_ref(&ctx, "path:src/lib.rs").is_err());
+    assert!(resolve_source_ref(&ctx, "symbol_fqn:crate::lib::run").is_err());
 
     Ok(())
 }
@@ -525,7 +555,8 @@ fn resolve_source_ref_rejects_deprecated_version_when_repo_item_is_missing() -> 
 }
 
 #[test]
-fn resolve_target_ref_supports_commit_knowledge_checkpoint_and_artefact() -> Result<()> {
+fn resolve_target_ref_supports_commit_knowledge_checkpoint_artefact_path_and_symbol() -> Result<()>
+{
     let temp = TempDir::new()?;
     let (ctx, head_sha) = build_context(&temp)?;
 
@@ -566,11 +597,29 @@ fn resolve_target_ref_supports_commit_knowledge_checkpoint_and_artefact() -> Res
         }
     );
 
+    let path = resolve_target_ref(&ctx, "path:axum-macros/src/from_request.rs")?;
+    assert_eq!(
+        path,
+        ResolvedKnowledgeTargetRef::Path {
+            path: "axum-macros/src/from_request.rs".to_string(),
+        }
+    );
+
+    let symbol = resolve_target_ref(&ctx, "symbol_fqn:crate::from_request::extract_fields")?;
+    assert_eq!(
+        symbol,
+        ResolvedKnowledgeTargetRef::SymbolFqn {
+            symbol_fqn: "crate::from_request::extract_fields".to_string(),
+        }
+    );
+
     assert!(resolve_target_ref(&ctx, "knowledge:item-1:missing-version").is_err());
     assert!(resolve_target_ref(&ctx, "knowledge:item-1:version-2").is_err());
     assert!(resolve_target_ref(&ctx, "knowledge_version:version-1").is_err());
     assert!(resolve_target_ref(&ctx, "artefact:missing").is_err());
     assert!(resolve_target_ref(&ctx, "commit:   ").is_err());
+    assert!(resolve_target_ref(&ctx, "path:   ").is_err());
+    assert!(resolve_target_ref(&ctx, "symbol_fqn:   ").is_err());
 
     Ok(())
 }

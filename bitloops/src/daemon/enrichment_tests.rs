@@ -873,6 +873,51 @@ max_output_tokens = 200
     fs::write(&config_path, config).expect("write test daemon config with summary profile");
 }
 
+fn configure_context_guidance_for_repo(target: &EnrichmentJobTarget) {
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+
+    #[cfg(unix)]
+    let (command, args) = fake_text_generation_runtime_command_and_args(&target.repo_root);
+    #[cfg(windows)]
+    let (command, args) = fake_text_generation_runtime_command_and_args(&target.repo_root);
+    let runtime_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut config = fs::read_to_string(&config_path).expect("read test daemon config");
+    config.push_str(&format!(
+        r#"
+[context_guidance.inference]
+guidance_generation = "guidance_local"
+
+[inference.runtimes.bitloops_inference]
+command = {command:?}
+args = [{runtime_args}]
+startup_timeout_secs = 1
+request_timeout_secs = 1
+
+[inference.profiles.guidance_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+base_url = "http://127.0.0.1:11434/api/chat"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    ));
+    fs::write(&config_path, config).expect("write test daemon config with guidance profile");
+}
+
 fn configure_embeddings_for_repo(target: &EnrichmentJobTarget, profile_name: &str) -> PathBuf {
     let config_path =
         crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
@@ -1952,25 +1997,12 @@ async fn periodic_maintenance_requeues_expired_semantic_leases_on_the_sixty_seco
 }
 
 #[test]
-fn summary_refresh_pool_only_claims_summary_jobs() {
+fn summary_refresh_pool_claims_generic_context_guidance_text_generation_jobs() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
-    configure_summary_refresh_for_repo(&target);
+    configure_context_guidance_for_repo(&target);
 
-    insert_workplane_job(
-        &coordinator,
-        &target,
-        WorkplaneJobFixture {
-            repo_id: &repo_id,
-            mailbox_name: SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-            status: WorkplaneJobStatus::Pending,
-            artefact_id: Some("summary-a"),
-            job_id: "summary-a",
-            updated_at_unix: 1,
-            attempts: 0,
-            last_error: None,
-        },
-    );
+    insert_context_guidance_workplane_job(&coordinator, &target, &repo_id, "context-guidance-a", 1);
     insert_workplane_job(
         &coordinator,
         &target,
@@ -2006,13 +2038,96 @@ fn summary_refresh_pool_only_claims_summary_jobs() {
         &default_state(),
         super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
     )
-    .expect("claim summary refresh job")
-    .expect("summary refresh job should be claimable");
+    .expect("claim context guidance job")
+    .expect("context guidance job should be claimable");
 
     assert_eq!(
         claimed.mailbox_name,
-        SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX
     );
+}
+
+#[test]
+fn summary_refresh_pool_claims_context_guidance_job_when_generation_unconfigured() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    insert_context_guidance_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "context-guidance-skipped",
+        1,
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+    )
+    .expect("attempt context guidance claim")
+    .expect(
+        "unconfigured context guidance generation should be claimable so the ingester can skip it",
+    );
+
+    assert_eq!(claimed.job_id, "context-guidance-skipped");
+    assert_eq!(
+        claimed.mailbox_name,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX
+    );
+}
+
+#[test]
+fn summary_refresh_pool_leaves_context_guidance_pending_when_configured_generation_is_broken() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_context_guidance_for_repo(&target);
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+    std::fs::write(
+        &config_path,
+        r#"
+[context_guidance.inference]
+guidance_generation = "guidance_broken"
+
+[inference.profiles.guidance_broken]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "missing_runtime"
+model = "qat-guidance-model"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    )
+    .expect("write broken context guidance config");
+
+    insert_context_guidance_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "context-guidance-broken",
+        1,
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+    )
+    .expect("attempt context guidance claim");
+
+    assert!(claimed.is_none());
+    let pending = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].job_id, "context-guidance-broken");
 }
 
 #[test]
@@ -2553,6 +2668,53 @@ fn insert_workplane_job(
             .map_err(anyhow::Error::from)
         })
         .expect("insert workplane job");
+}
+
+fn insert_context_guidance_workplane_job(
+    coordinator: &EnrichmentCoordinator,
+    target: &EnrichmentJobTarget,
+    repo_id: &str,
+    job_id: &str,
+    updated_at_unix: u64,
+) {
+    coordinator
+        .workplane_store
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO capability_workplane_jobs (
+                     job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                     dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                     started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                     lease_expires_at_unix, last_error
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, NULL, ?12, NULL, NULL, NULL, NULL)",
+                rusqlite::params![
+                    job_id,
+                    repo_id,
+                    target.repo_root.to_string_lossy().to_string(),
+                    target.config_root.to_string_lossy().to_string(),
+                    crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_CAPABILITY_ID,
+                    crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX,
+                    format!("{job_id}:dedupe"),
+                    json!({
+                        "historyTurn": {
+                            "repoId": repo_id,
+                            "checkpointId": "checkpoint-historical-primary",
+                            "sessionId": "session-historical-primary",
+                            "turnId": "turn-historical-primary",
+                            "inputHash": "input-hash"
+                        }
+                    })
+                    .to_string(),
+                    WorkplaneJobStatus::Pending.as_str(),
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                    sql_i64(updated_at_unix)?,
+                ],
+            )
+            .map(|_| ())
+            .map_err(anyhow::Error::from)
+        })
+        .expect("insert context guidance workplane job");
 }
 
 fn insert_pending_artefact_jobs_bulk(

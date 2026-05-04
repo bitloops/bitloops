@@ -9,7 +9,7 @@ Feature: Semantic and embeddings resilience BDD scenarios
     When semantic clone health checks run
     Then semantic clone health includes:
       | check                               | healthy | message_fragment                                          |
-      | semantic_clones.semantic_summaries | true    | deterministic fallback only                               |
+      | semantic_clones.semantic_summaries | true    | semantic summaries not configured                         |
       | semantic_clones.profile_resolution | true    | embeddings disabled                                       |
       | semantic_clones.runtime_command    | true    | runtime command not required                              |
       | semantic_clones.runtime_handshake  | true    | runtime handshake skipped                                 |

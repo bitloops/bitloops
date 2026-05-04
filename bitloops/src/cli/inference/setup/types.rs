@@ -1,3 +1,12 @@
+use clap::ValueEnum;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum TextGenerationRuntime {
+    #[default]
+    Local,
+    Platform,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SummarySetupSelection {
     Cloud,
@@ -6,7 +15,20 @@ pub(crate) enum SummarySetupSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ContextGuidanceSetupSelection {
+    Cloud,
+    Local,
+    Skip,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SummarySetupOutcome {
+    InstalledRuntimeOnly,
+    Configured { model_name: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ContextGuidanceSetupOutcome {
     InstalledRuntimeOnly,
     Configured { model_name: String },
 }
