@@ -3,6 +3,7 @@ mod commit_checkpoints;
 mod enrichment;
 mod events;
 mod git_history;
+mod historical_context;
 mod interactions;
 mod knowledge;
 mod repository_graph;
@@ -23,6 +24,9 @@ use std::sync::Arc;
 use super::loaders::LoaderMetrics;
 use super::scope::SelectedRepository;
 use super::subscriptions::SubscriptionHub;
+
+#[allow(unused_imports)]
+pub(crate) use historical_context::HistoricalContextSelectionInput;
 
 const BLOB_HEALTHCHECK_KEY: &str = "__bitloops/graphql/healthcheck";
 const GIT_FIELD_SEPARATOR: char = '\u{1f}';

@@ -2833,11 +2833,12 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     );
     assert_eq!(
         json["selectArtefacts"]["overview"]["checkpoints"]["overview"]["totalCount"],
-        0
+        1
     );
     assert!(
-        json["selectArtefacts"]["overview"]["checkpoints"]["schema"].is_null(),
-        "expected empty checkpoint schema in aggregate overview: {json:#}"
+        json["selectArtefacts"]["overview"]["checkpoints"]["schema"]
+            .as_str()
+            .is_some_and(|schema| schema.contains("type CheckpointStageResult"))
     );
     assert_eq!(
         json["selectArtefacts"]["overview"]["codeMatches"]["overview"]["counts"]["total"],
@@ -2926,6 +2927,14 @@ async fn slim_select_artefacts_summary_aggregates_categories_and_deps_expose_ite
     assert_eq!(
         json["selectArtefacts"]["overview"]["tests"]["overview"]["matchedArtefactCount"],
         2
+    );
+    assert_eq!(
+        json["selectArtefacts"]["overview"]["contextGuidance"]["overview"]["totalCount"],
+        0
+    );
+    assert!(
+        json["selectArtefacts"]["overview"]["contextGuidance"]["schema"].is_null(),
+        "expected empty context guidance schema in aggregate overview: {json:#}"
     );
     let aggregate_tests_overview = &json["selectArtefacts"]["overview"]["tests"]["overview"];
     assert_compact_tests_stage_summary(aggregate_tests_overview);

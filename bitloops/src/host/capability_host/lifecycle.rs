@@ -294,6 +294,13 @@ mod tests {
         fn apply_devql_sqlite_ddl(&self, _sql: &str) -> Result<()> {
             Ok(())
         }
+
+        fn apply_devql_sqlite_migration(
+            &self,
+            _operation: &mut dyn FnMut(&rusqlite::Connection) -> Result<()>,
+        ) -> Result<()> {
+            Ok(())
+        }
     }
 
     impl KnowledgeMigrationContext for MigrationContext {

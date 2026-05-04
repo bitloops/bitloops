@@ -2022,6 +2022,109 @@ fn devql_run_knowledge_associate_executes_graphql_mutation() {
 }
 
 #[test]
+fn devql_run_knowledge_associate_accepts_path_target_response() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    with_graphql_executor_hook(
+        {
+            let captured = Rc::clone(&captured);
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
+                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                Ok(json!({
+                    "associateKnowledge": {
+                        "success": true,
+                        "relation": {
+                            "id": "relation-path-1",
+                            "targetType": "PATH",
+                            "targetId": "axum-macros/src/from_request.rs",
+                            "relationType": "associated_with",
+                            "associationMethod": "manual_attachment"
+                        }
+                    }
+                }))
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run(DevqlArgs {
+                    command: Some(DevqlCommand::Knowledge(DevqlKnowledgeArgs {
+                        command: DevqlKnowledgeCommand::Associate(DevqlKnowledgeAssociateArgs {
+                            source_ref: "knowledge:item-1".to_string(),
+                            target_ref: "path:axum-macros/src/from_request.rs".to_string(),
+                        }),
+                    })),
+                }))
+                .expect("devql knowledge associate should accept path target response");
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("associateKnowledge"));
+    assert_eq!(variables["input"]["sourceRef"], json!("knowledge:item-1"));
+    assert_eq!(
+        variables["input"]["targetRef"],
+        json!("path:axum-macros/src/from_request.rs")
+    );
+}
+
+#[test]
+fn devql_run_knowledge_associate_accepts_symbol_target_response() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    with_graphql_executor_hook(
+        {
+            let captured = Rc::clone(&captured);
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
+                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                Ok(json!({
+                    "associateKnowledge": {
+                        "success": true,
+                        "relation": {
+                            "id": "relation-symbol-1",
+                            "targetType": "SYMBOL_FQN",
+                            "targetId": "axum-macros/src/from_request.rs::expand",
+                            "relationType": "associated_with",
+                            "associationMethod": "manual_attachment"
+                        }
+                    }
+                }))
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run(DevqlArgs {
+                    command: Some(DevqlCommand::Knowledge(DevqlKnowledgeArgs {
+                        command: DevqlKnowledgeCommand::Associate(DevqlKnowledgeAssociateArgs {
+                            source_ref: "knowledge:item-1".to_string(),
+                            target_ref: "symbol_fqn:axum-macros/src/from_request.rs::expand"
+                                .to_string(),
+                        }),
+                    })),
+                }))
+                .expect("devql knowledge associate should accept symbol target response");
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("associateKnowledge"));
+    assert_eq!(variables["input"]["sourceRef"], json!("knowledge:item-1"));
+    assert_eq!(
+        variables["input"]["targetRef"],
+        json!("symbol_fqn:axum-macros/src/from_request.rs::expand")
+    );
+}
+
+#[test]
 fn devql_run_knowledge_refresh_executes_graphql_mutation() {
     let repo = seed_devql_cli_repo();
     let _guard = enter_process_state(Some(repo.path()), &[]);

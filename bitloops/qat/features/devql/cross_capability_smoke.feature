@@ -13,6 +13,7 @@ Feature: Cross-capability deterministic smoke
     And I run InitCommit for bitloops
     And I init bitloops in bitloops
     And I configure semantic clones with fake embeddings runtime in bitloops
+    And I configure context guidance with fake text-generation runtime in bitloops
     And I run DevQL init in bitloops
     And DevQL pack health for semantic clones is ready in bitloops
     And I make a first change using Claude Code to bitloops
@@ -30,6 +31,8 @@ Feature: Cross-capability deterministic smoke
     And DevQL deps query for "UserService.createUser" with direction "in" and asOf latest commit returns at least 1 result in bitloops
     And TestHarness query for "UserService.createUser" at current workspace state with view "summary" returns results in bitloops
     And DevQL clones query for "renderInvoice" returns at least 1 result in bitloops
+    And DevQL context guidance query for "src/services/user-service.ts" returns at least 1 item in bitloops
+    And DevQL context guidance query for "src/services/user-service.ts" includes kind "qat_mocked_guidance_generation" in bitloops
 
   @devql @integration @develop_gate @devql_search
   Scenario: Unified selectArtefacts search remains queryable across fuzzy and semantic lanes

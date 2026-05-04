@@ -1,5 +1,6 @@
 use async_graphql::{InputValueError, InputValueResult, ScalarType, Value};
 use chrono::{DateTime, FixedOffset};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[allow(dead_code)]
 pub type JsonScalar = async_graphql::types::Json<serde_json::Value>;
@@ -20,6 +21,25 @@ impl DateTimeScalar {
 
     pub fn parse_rfc3339(value: &str) -> Result<DateTime<FixedOffset>, chrono::ParseError> {
         DateTime::parse_from_rfc3339(value)
+    }
+}
+
+impl Serialize for DateTimeScalar {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for DateTimeScalar {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        DateTimeScalar::from_rfc3339(value).map_err(serde::de::Error::custom)
     }
 }
 

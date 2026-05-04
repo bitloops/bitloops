@@ -628,6 +628,229 @@ fn compile_slim_select_artefacts_search_selector() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_historical_context_defaults_to_overview() {
+    let parsed = parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->historicalContext()"#)
+        .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_maps_args_and_explicit_selection() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(agent:"codex",since:"2026-04-01",evidence_kind:"file_relation")->select(overview,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext(agent: "codex", since: "2026-04-01T00:00:00Z", evidenceKind: FILE_RELATION) {
+      overview
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_accepts_graphql_evidence_kind_alias() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(evidenceKind:"file_relation")->select(overview)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext(evidenceKind: FILE_RELATION) {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_defaults_to_overview() {
+    let parsed = parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->contextGuidance()"#)
+        .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    contextGuidance {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_maps_args_and_explicit_selection() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(agent:"codex",since:"2026-04-01",evidenceKind:"file_relation",category:"decision",kind:"rejected_approach")->select(overview,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    contextGuidance(agent: "codex", since: "2026-04-01T00:00:00Z", evidenceKind: FILE_RELATION, category: DECISION, kind: "rejected_approach") {
+      overview
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_rejects_historical_context_outside_select_artefacts() {
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->artefacts()->historicalContext()"#)
+        .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("historical context should fail");
+
+    assert!(
+        err.to_string()
+            .contains("historicalContext() is only supported after selectArtefacts(...)"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_rejects_context_guidance_outside_select_artefacts() {
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->artefacts()->contextGuidance()"#)
+        .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("context guidance should fail");
+
+    assert!(
+        err.to_string()
+            .contains("contextGuidance() is only supported after selectArtefacts(...)"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_rejects_invalid_category() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(category:"surprise")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid category should fail");
+
+    assert!(
+        err.to_string().contains(
+            "contextGuidance(category:...) must be one of: decision, constraint, pattern, risk, verification, context"
+        ),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_rejects_invalid_evidence_kind() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(evidenceKind:"rumor")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid evidence kind should fail");
+
+    assert!(
+        err.to_string().contains(
+            "contextGuidance(evidenceKind:...) must be one of: symbol_provenance, file_relation, line_overlap"
+        ),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_rejects_invalid_evidence_kind() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(evidenceKind:"rumor")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid evidence kind should fail");
+
+    assert!(
+        err.to_string().contains(
+            "historicalContext(evidenceKind:...) must be one of: symbol_provenance, file_relation, line_overlap"
+        ),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_rejects_empty_kind() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(kind:"")"#)
+            .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("empty kind should fail");
+
+    assert!(
+        err.to_string()
+            .contains("contextGuidance(kind:...) must be non-empty"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_rejects_context_guidance_with_another_terminal_stage() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance()->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("multiple terminal stages should fail");
+
+    assert!(
+        err.to_string()
+            .contains("selectArtefacts(...) supports exactly one terminal stage in v1"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_search_selector_with_search_mode() {
     let parsed = parse_devql_query(
         r#"selectArtefacts(search:"Method::HEAD",search_mode:"lexical")->checkpoints()"#,

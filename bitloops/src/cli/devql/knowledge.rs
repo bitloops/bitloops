@@ -274,6 +274,8 @@ fn graphql_target_type_to_storage(raw: &str) -> Result<&'static str> {
         "COMMIT" => Ok("commit"),
         "CHECKPOINT" => Ok("checkpoint"),
         "ARTEFACT" => Ok("artefact"),
+        "PATH" => Ok("path"),
+        "SYMBOL_FQN" => Ok("symbol_fqn"),
         "KNOWLEDGE" => Ok("knowledge_item"),
         other => bail!("unsupported GraphQL knowledge target type `{other}`"),
     }

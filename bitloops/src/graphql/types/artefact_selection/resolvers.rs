@@ -1,6 +1,7 @@
 use async_graphql::{ComplexObject, Context, Result};
 use std::collections::HashMap;
 
+use crate::graphql::context::HistoricalContextSelectionInput;
 use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_user_input_error};
 
@@ -8,17 +9,23 @@ use super::super::{
     ClonesFilterInput, DateTimeScalar, DepsDirection, DepsFilterInput, EdgeKind,
     TestHarnessTestsResult,
 };
-use super::stages::{CheckpointStageData, CloneStageData, DependencyStageData, TestsStageData};
+use super::stages::{
+    CheckpointStageData, CloneStageData, ContextGuidanceCategory, ContextGuidanceItem,
+    ContextGuidanceStageData, ContextGuidanceStageResult, DependencyStageData,
+    HistoricalContextStageData, TestsStageData,
+};
 use super::support::{
-    CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA, DEPENDENCY_STAGE_SCHEMA, TESTS_STAGE_SCHEMA,
+    CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA, CONTEXT_GUIDANCE_STAGE_SCHEMA,
+    DEPENDENCY_STAGE_SCHEMA, HISTORICAL_CONTEXT_STAGE_SCHEMA, TESTS_STAGE_SCHEMA,
     build_checkpoint_summary, build_clone_expand_hint, build_clone_summary,
-    build_dependency_expand_hint, build_dependency_summary, build_selection_summary,
-    build_tests_stage_args, build_tests_summary, decode_stage_rows, dedup_dependency_edges,
-    selection_stage_row_from_artefact,
+    build_dependency_expand_hint, build_dependency_summary, build_historical_context_summary,
+    build_selection_summary, build_tests_stage_args, build_tests_summary, decode_stage_rows,
+    dedup_dependency_edges, selection_stage_row_from_artefact,
 };
 use super::{
     ArtefactSelection, ArtefactSelectionMode, CheckpointStageResult, CloneStageResult,
-    DependencyStageResult, SearchBreakdown, TestsStageResult,
+    DependencyStageResult, HistoricalContextStageResult, HistoricalEvidenceKind, SearchBreakdown,
+    TestsStageResult,
 };
 
 #[ComplexObject]
@@ -32,6 +39,12 @@ impl ArtefactSelection {
             .resolve_dependency_stage_data(ctx, None, DepsDirection::Both, true)
             .await?;
         let tests = self.resolve_tests_stage_data(ctx, None, None).await?;
+        let historical_context = self
+            .resolve_historical_context_stage_data(ctx, None, None, None)
+            .await?;
+        let context_guidance = self
+            .resolve_context_guidance_stage_data(ctx, None, None, None, None, None)
+            .await?;
 
         Ok(async_graphql::types::Json(build_selection_summary(
             self.artefacts.len(),
@@ -39,6 +52,8 @@ impl ArtefactSelection {
             &clones,
             &deps,
             &tests,
+            &historical_context,
+            &context_guidance,
         )))
     }
 
@@ -135,6 +150,55 @@ impl ArtefactSelection {
             .await?
             .into())
     }
+
+    #[graphql(name = "historicalContext")]
+    async fn historical_context(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<String>,
+        since: Option<DateTimeScalar>,
+        #[graphql(name = "evidenceKind")] evidence_kind: Option<HistoricalEvidenceKind>,
+    ) -> Result<HistoricalContextStageResult> {
+        self.ensure_artefact_selection("historicalContext")?;
+        Ok(self
+            .resolve_historical_context_stage_data(
+                ctx,
+                agent.as_deref(),
+                since.as_ref(),
+                evidence_kind,
+            )
+            .await?
+            .into())
+    }
+
+    #[graphql(name = "contextGuidance")]
+    async fn context_guidance(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<String>,
+        since: Option<DateTimeScalar>,
+        #[graphql(name = "evidenceKind")] evidence_kind: Option<HistoricalEvidenceKind>,
+        category: Option<ContextGuidanceCategory>,
+        kind: Option<String>,
+    ) -> Result<ContextGuidanceStageResult> {
+        self.ensure_artefact_selection("contextGuidance")?;
+        let trimmed_kind = match kind.as_deref().map(str::trim) {
+            Some("") => return Err(bad_user_input_error("`kind` must be non-empty")),
+            Some(value) => Some(value),
+            None => None,
+        };
+        Ok(self
+            .resolve_context_guidance_stage_data(
+                ctx,
+                agent.as_deref(),
+                since.as_ref(),
+                evidence_kind,
+                category,
+                trimmed_kind,
+            )
+            .await?
+            .into())
+    }
 }
 
 impl ArtefactSelection {
@@ -164,7 +228,7 @@ impl ArtefactSelection {
     ) -> Result<CheckpointStageData> {
         let checkpoints = ctx
             .data_unchecked::<DevqlGraphqlContext>()
-            .list_selected_symbol_checkpoints(&self.scope, &self.symbol_ids(), agent, since)
+            .list_selected_checkpoints(&self.scope, &self.symbol_ids(), &self.paths(), agent, since)
             .await
             .map_err(|err| {
                 backend_error(format!("failed to resolve selected checkpoints: {err:#}"))
@@ -322,5 +386,193 @@ impl ArtefactSelection {
             schema: (!rows.is_empty()).then(|| TESTS_STAGE_SCHEMA.to_string()),
             items: rows,
         })
+    }
+
+    async fn resolve_historical_context_stage_data(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<&str>,
+        since: Option<&DateTimeScalar>,
+        evidence_kind: Option<HistoricalEvidenceKind>,
+    ) -> Result<HistoricalContextStageData> {
+        let items = ctx
+            .data_unchecked::<DevqlGraphqlContext>()
+            .list_selected_historical_context(
+                &self.scope,
+                HistoricalContextSelectionInput {
+                    symbol_ids: self.symbol_ids(),
+                    paths: self.paths(),
+                    agent: agent.map(str::to_string),
+                    since: since.map(|value| value.as_str().to_string()),
+                    evidence_kind,
+                },
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected historical context: {err:#}"
+                ))
+            })?;
+        Ok(HistoricalContextStageData {
+            summary: build_historical_context_summary(&items),
+            schema: (!items.is_empty()).then(|| HISTORICAL_CONTEXT_STAGE_SCHEMA.to_string()),
+            items,
+        })
+    }
+
+    async fn resolve_context_guidance_stage_data(
+        &self,
+        ctx: &Context<'_>,
+        agent: Option<&str>,
+        since: Option<&DateTimeScalar>,
+        evidence_kind: Option<HistoricalEvidenceKind>,
+        category: Option<ContextGuidanceCategory>,
+        kind: Option<&str>,
+    ) -> Result<ContextGuidanceStageData> {
+        let rows = StageResolverAdapter::new(
+            ctx.data_unchecked::<DevqlGraphqlContext>().clone(),
+            "context_guidance",
+        )
+        .resolve(
+            &self.scope,
+            self.artefacts
+                .iter()
+                .map(selection_stage_row_from_artefact)
+                .collect(),
+            Some(build_context_guidance_stage_args(
+                agent,
+                since,
+                evidence_kind,
+                category,
+                kind,
+            )),
+            100,
+        )
+        .await
+        .map_err(|err| {
+            backend_error(format!(
+                "failed to resolve selected context guidance: {err:#}"
+            ))
+        })?;
+        let payload = rows
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| serde_json::json!({ "overview": { "totalCount": 0 }, "items": [] }));
+        let summary = payload
+            .get("overview")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "totalCount": 0 }));
+        let item_values = payload
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let items: Vec<ContextGuidanceItem> = decode_stage_rows("context_guidance", item_values)?;
+        Ok(ContextGuidanceStageData {
+            summary,
+            schema: (!items.is_empty()).then(|| CONTEXT_GUIDANCE_STAGE_SCHEMA.to_string()),
+            items,
+        })
+    }
+}
+
+fn build_context_guidance_stage_args(
+    agent: Option<&str>,
+    since: Option<&DateTimeScalar>,
+    evidence_kind: Option<HistoricalEvidenceKind>,
+    category: Option<ContextGuidanceCategory>,
+    kind: Option<&str>,
+) -> serde_json::Value {
+    let mut args = serde_json::Map::new();
+    if let Some(agent) = agent.map(str::trim).filter(|value| !value.is_empty()) {
+        args.insert("agent".to_string(), serde_json::json!(agent));
+    }
+    if let Some(since) = since {
+        args.insert("since".to_string(), serde_json::json!(since.as_str()));
+    }
+    if let Some(evidence_kind) = evidence_kind {
+        args.insert(
+            "evidenceKind".to_string(),
+            serde_json::json!(historical_evidence_kind_arg(evidence_kind)),
+        );
+    }
+    if let Some(category) = category {
+        args.insert(
+            "category".to_string(),
+            serde_json::json!(context_guidance_category_arg(category)),
+        );
+    }
+    if let Some(kind) = kind {
+        args.insert("kind".to_string(), serde_json::json!(kind));
+    }
+    serde_json::Value::Object(args)
+}
+
+fn historical_evidence_kind_arg(kind: HistoricalEvidenceKind) -> &'static str {
+    match kind {
+        HistoricalEvidenceKind::SymbolProvenance => "SYMBOL_PROVENANCE",
+        HistoricalEvidenceKind::FileRelation => "FILE_RELATION",
+        HistoricalEvidenceKind::LineOverlap => "LINE_OVERLAP",
+    }
+}
+
+fn context_guidance_category_arg(category: ContextGuidanceCategory) -> &'static str {
+    match category {
+        ContextGuidanceCategory::Decision => "DECISION",
+        ContextGuidanceCategory::Constraint => "CONSTRAINT",
+        ContextGuidanceCategory::Pattern => "PATTERN",
+        ContextGuidanceCategory::Risk => "RISK",
+        ContextGuidanceCategory::Verification => "VERIFICATION",
+        ContextGuidanceCategory::Context => "CONTEXT",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graphql::ResolverScope;
+
+    #[test]
+    fn directory_selection_rejects_historical_context() {
+        let selection = ArtefactSelection::from_directory_entries(
+            vec![crate::graphql::types::artefact_selection::DirectoryEntry {
+                path: "src".to_string(),
+                name: "src".to_string(),
+                entry_kind:
+                    crate::graphql::types::artefact_selection::DirectoryEntryKind::Directory,
+            }],
+            ResolverScope::default(),
+        );
+
+        let err = selection
+            .ensure_artefact_selection("historicalContext")
+            .expect_err("directory selection should reject historicalContext");
+
+        assert!(
+            err.message
+                .contains("directory paths only support `entries`; `historicalContext`")
+        );
+    }
+
+    #[test]
+    fn directory_selection_rejects_context_guidance() {
+        let selection = ArtefactSelection::from_directory_entries(
+            vec![crate::graphql::types::artefact_selection::DirectoryEntry {
+                path: "src".to_string(),
+                name: "src".to_string(),
+                entry_kind:
+                    crate::graphql::types::artefact_selection::DirectoryEntryKind::Directory,
+            }],
+            ResolverScope::default(),
+        );
+
+        let err = selection
+            .ensure_artefact_selection("contextGuidance")
+            .expect_err("directory selection should reject contextGuidance");
+
+        assert!(
+            err.message
+                .contains("directory paths only support `entries`; `contextGuidance`")
+        );
     }
 }
