@@ -10,13 +10,16 @@ use bitloops::config::{
     resolve_store_backend_config_for_repo,
 };
 use bitloops::daemon::resolve_daemon_config;
+use bitloops::daemon::{DevqlTaskKind, DevqlTaskSource, DevqlTaskStatus};
 use bitloops::host::checkpoints::session::create_session_backend_or_local;
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed,
 };
 use bitloops::host::interactions::store::InteractionSpool;
 use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
-use bitloops::host::runtime_store::RepoSqliteRuntimeStore;
+use bitloops::host::runtime_store::{
+    DaemonSqliteRuntimeStore as QatDaemonSqliteRuntimeStore, RepoSqliteRuntimeStore,
+};
 use serde::Serialize;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};

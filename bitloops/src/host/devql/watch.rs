@@ -26,7 +26,7 @@ const WATCHER_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const WATCHER_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(2);
 const WATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_WATCHER_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const WATCHER_IDLE_TIMEOUT_ENV: &str = "BITLOOPS_WATCHER_IDLE_TIMEOUT_SECS";
+pub const WATCHER_IDLE_TIMEOUT_ENV: &str = "BITLOOPS_WATCHER_IDLE_TIMEOUT_SECS";
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {

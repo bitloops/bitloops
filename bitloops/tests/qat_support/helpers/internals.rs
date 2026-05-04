@@ -31,7 +31,11 @@ fn recursive_symbol_file_paths(world: &QatWorld, stem: &str) -> Vec<String> {
                 .contains(&file_name.to_string())
                 .then_some(path.to_path_buf())
         })
-        .filter_map(|path| path.strip_prefix(world.repo_dir()).ok().map(Path::to_path_buf))
+        .filter_map(|path| {
+            path.strip_prefix(world.repo_dir())
+                .ok()
+                .map(Path::to_path_buf)
+        })
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .collect::<Vec<_>>();
     matches.sort();
@@ -1413,6 +1417,14 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
         );
     } else {
         command.env_remove(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV);
+    }
+    if let Some(timeout_secs) = world.watcher_idle_timeout_secs {
+        command.env(
+            bitloops::host::devql::watch::WATCHER_IDLE_TIMEOUT_ENV,
+            timeout_secs.to_string(),
+        );
+    } else {
+        command.env_remove(bitloops::host::devql::watch::WATCHER_IDLE_TIMEOUT_ENV);
     }
     Ok(command)
 }

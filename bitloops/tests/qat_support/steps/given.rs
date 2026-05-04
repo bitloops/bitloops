@@ -171,6 +171,26 @@ pub(super) fn given_init_bitloops_with_agent_sync_true(
     })
 }
 
+pub(super) fn given_init_bitloops_producer_contract(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let sync = ctx.matches[2].1.parse::<bool>().expect("parse sync bool");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I run bitloops producer-contract init",
+            helpers::run_init_bitloops_producer_contract_for_repo(
+                world,
+                &repo_name,
+                &agent_name,
+                sync,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_init_bitloops_with_agent_sync_false_ingest_true_backfill(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -407,6 +427,24 @@ pub(super) fn given_enable_watcher_autostart(
             "I enable watcher autostart",
             helpers::ensure_bitloops_repo_name(&repo_name)
                 .and_then(|_| helpers::enable_watcher_autostart_for_scenario(world)),
+        );
+    })
+}
+
+pub(super) fn given_set_watcher_idle_timeout(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let seconds = ctx.matches[1]
+            .1
+            .parse::<u64>()
+            .expect("watcher idle timeout should parse as u64");
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "DevQL watcher idle timeout is set",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::set_watcher_idle_timeout_for_scenario(world, seconds)),
         );
     })
 }
@@ -1050,6 +1088,37 @@ pub(super) fn given_wait_for_devql_task_queue_idle(
     })
 }
 
+pub(super) fn given_wait_for_registered_devql_watcher_to_exit(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I wait for the registered DevQL watcher to exit",
+            helpers::wait_for_registered_watcher_to_exit_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_snapshot_completed_sync_task_source(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_source = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I snapshot completed DevQL sync task source",
+            helpers::snapshot_completed_sync_task_source_for_repo(
+                world,
+                &repo_name,
+                &expected_source,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_run_devql_tasks_list(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -1263,6 +1332,93 @@ pub(super) fn given_commit_without_hooks(
             "I commit changes without hooks",
             helpers::ensure_bitloops_repo_name(&repo_name)
                 .and_then(|_| helpers::commit_without_hooks(world)),
+        );
+    })
+}
+
+pub(super) fn given_commit_with_hooks(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I commit changes with hooks",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::commit_with_hooks(world)),
+        );
+    })
+}
+
+pub(super) fn given_create_branch_with_source_file_and_return(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let branch_name = ctx.matches[1].1.clone();
+        let path = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I create a branch with a source file and return",
+            helpers::create_branch_with_source_file_and_return_for_repo(
+                world,
+                &repo_name,
+                &branch_name,
+                &path,
+            ),
+        );
+    })
+}
+
+pub(super) fn given_checkout_previous_branch(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I checkout the previous branch",
+            helpers::checkout_previous_branch_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_checkout_branch(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let branch_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I checkout branch",
+            helpers::checkout_branch_for_repo(world, &repo_name, &branch_name),
+        );
+    })
+}
+
+pub(super) fn given_git_reset_hard_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run git reset --hard HEAD",
+            helpers::git_reset_hard_head_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_git_clean_fd(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run git clean -fd",
+            helpers::git_clean_fd_for_repo(world, &repo_name),
         );
     })
 }

@@ -68,6 +68,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops producer-contract init --agent (\S+) --sync=(true|false) in (\S+)$"),
+            step_fn(given_init_bitloops_producer_contract),
+        )
+        .given(
+            None,
+            regex(r"^DevQL watcher idle timeout is (\d+) seconds in (\S+)$"),
+            step_fn(given_set_watcher_idle_timeout),
+        )
+        .given(
+            None,
             regex(
                 r"^I run bitloops init --agent (\S+) --sync=false --ingest=true --backfill=(\d+) in (\S+)$",
             ),
@@ -416,6 +426,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I wait for the registered DevQL watcher to exit in (\S+)$"),
+            step_fn(given_wait_for_registered_devql_watcher_to_exit),
+        )
+        .given(
+            None,
+            regex(r#"^I snapshot completed DevQL sync task source \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_completed_sync_task_source),
+        )
+        .given(
+            None,
             regex(r"^I run DevQL tasks list in (\S+)$"),
             step_fn(given_run_devql_tasks_list),
         )
@@ -449,7 +469,17 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I add a new source file in (\S+)$"),
             step_fn(given_add_new_source_file),
         )
+        .when(
+            None,
+            regex(r"^I add a new source file in (\S+)$"),
+            step_fn(given_add_new_source_file),
+        )
         .given(
+            None,
+            regex(r#"^I add a source file \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_add_source_file_at_path),
+        )
+        .when(
             None,
             regex(r#"^I add a source file \"([^\"]+)\" in (\S+)$"#),
             step_fn(given_add_source_file_at_path),
@@ -459,7 +489,17 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I modify an existing source file in (\S+)$"),
             step_fn(given_modify_existing_source_file),
         )
+        .when(
+            None,
+            regex(r"^I modify an existing source file in (\S+)$"),
+            step_fn(given_modify_existing_source_file),
+        )
         .given(
+            None,
+            regex(r#"^I modify a source file \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_modify_source_file_at_path),
+        )
+        .when(
             None,
             regex(r#"^I modify a source file \"([^\"]+)\" in (\S+)$"#),
             step_fn(given_modify_source_file_at_path),
@@ -470,6 +510,11 @@ pub fn collection() -> Collection<QatWorld> {
             step_fn(given_snapshot_current_file_state_content_ids),
         )
         .given(
+            None,
+            regex(r"^I delete a source file in (\S+)$"),
+            step_fn(given_delete_a_source_file),
+        )
+        .when(
             None,
             regex(r"^I delete a source file in (\S+)$"),
             step_fn(given_delete_a_source_file),
@@ -486,6 +531,46 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I commit changes with hooks in (\S+)$"),
+            step_fn(given_commit_with_hooks),
+        )
+        .when(
+            None,
+            regex(r"^I commit changes with hooks in (\S+)$"),
+            step_fn(given_commit_with_hooks),
+        )
+        .given(
+            None,
+            regex(r#"^I create a branch \"([^\"]+)\" with source file \"([^\"]+)\" and return in (\S+)$"#),
+            step_fn(given_create_branch_with_source_file_and_return),
+        )
+        .given(
+            None,
+            regex(r"^I checkout the previous branch in (\S+)$"),
+            step_fn(given_checkout_previous_branch),
+        )
+        .when(
+            None,
+            regex(r#"^I checkout branch \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_checkout_branch),
+        )
+        .when(
+            None,
+            regex(r"^I checkout the previous branch in (\S+)$"),
+            step_fn(given_checkout_previous_branch),
+        )
+        .when(
+            None,
+            regex(r"^I run git reset --hard HEAD in (\S+)$"),
+            step_fn(given_git_reset_hard_head),
+        )
+        .when(
+            None,
+            regex(r"^I run git clean -fd in (\S+)$"),
+            step_fn(given_git_clean_fd),
+        )
+        .given(
+            None,
             regex(r"^I stage the changes without committing in (\S+)$"),
             step_fn(given_stage_without_committing),
         )
@@ -495,6 +580,11 @@ pub fn collection() -> Collection<QatWorld> {
             step_fn(given_stop_daemon),
         )
         .given(
+            None,
+            regex(r"^I simulate a git pull with new changes in (\S+)$"),
+            step_fn(given_simulate_git_pull),
+        )
+        .when(
             None,
             regex(r"^I simulate a git pull with new changes in (\S+)$"),
             step_fn(given_simulate_git_pull),
@@ -1006,8 +1096,38 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^DevQL watcher is registered and running in (\S+)$"),
+            step_fn(then_devql_watcher_registered_and_running),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current eventually contains path \"([^\"]+)\" without nudge in (\S+)$"#),
+            step_fn(then_artefacts_current_contains_path_eventually_without_nudge),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current eventually does not contain path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_lacks_path_eventually),
+        )
+        .then(
+            None,
             regex(r#"^current-state content id for \"([^\"]+)\" changed since snapshot in (\S+)$"#),
             step_fn(then_current_file_state_content_id_changed_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^current-state content id for \"([^\"]+)\" eventually changed since snapshot in (\S+)$"#),
+            step_fn(then_current_file_state_content_id_changed_eventually),
+        )
+        .then(
+            None,
+            regex(r#"^a completed DevQL sync task with source \"([^\"]+)\" exists in (\S+)$"#),
+            step_fn(then_completed_sync_task_source_exists),
+        )
+        .then(
+            None,
+            regex(r#"^the latest completed DevQL sync task source is \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_latest_completed_sync_task_source_matches),
         )
         .then(
             None,
