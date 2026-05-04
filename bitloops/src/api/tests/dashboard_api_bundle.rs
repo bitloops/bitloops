@@ -5,6 +5,27 @@ fn dashboard_app(repo_root: &Path, mode: ServeMode, bundle_dir: PathBuf) -> axum
     build_dashboard_router(test_state(repo_root.to_path_buf(), mode, bundle_dir))
 }
 
+fn lightweight_dashboard_root() -> TempDir {
+    let repo = TempDir::new().expect("dashboard root");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    repo
+}
+
+fn dashboard_bundle_version_app(
+    repo_root: &Path,
+    bundle_dir: &Path,
+    overrides: crate::api::DashboardBundleSourceOverrides,
+) -> axum::Router {
+    build_dashboard_router(
+        test_state(
+            repo_root.to_path_buf(),
+            ServeMode::HelloWorld,
+            bundle_dir.to_path_buf(),
+        )
+        .with_bundle_source_overrides(overrides),
+    )
+}
+
 fn dashboard_health_query() -> &'static str {
     r#"
     {
@@ -1524,19 +1545,16 @@ async fn missing_bundle_asset_returns_not_found_instead_of_html() {
 
 #[tokio::test]
 async fn dashboard_check_bundle_version_returns_expected_fields() {
-    let repo = seed_dashboard_repo();
+    let repo = lightweight_dashboard_root();
     let bundle_dir = TempDir::new().expect("bundle dir");
     let archive = build_bundle_archive("1.2.3");
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
-    let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir.path().to_path_buf(),
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    let app = dashboard_bundle_version_app(
+        repo.path(),
+        bundle_dir.path(),
+        dashboard_bundle_source_overrides_for_cdn(&base_url),
     );
 
     let (status, payload) = request_dashboard_graphql(
@@ -1604,17 +1622,12 @@ async fn dashboard_fetch_bundle_installs_bundle_and_root_serves_it() {
 
 #[tokio::test]
 async fn dashboard_check_bundle_version_returns_manifest_fetch_failed() {
-    let repo = seed_dashboard_repo();
+    let repo = lightweight_dashboard_root();
     let bundle_dir = TempDir::new().expect("bundle dir");
-    let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir.path().to_path_buf(),
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_manifest(
-            "http://127.0.0.1:9/bundle_versions.json",
-        )),
+    let app = dashboard_bundle_version_app(
+        repo.path(),
+        bundle_dir.path(),
+        dashboard_bundle_source_overrides_for_manifest("http://127.0.0.1:9/bundle_versions.json"),
     );
 
     let (status, payload) =
@@ -1628,19 +1641,16 @@ async fn dashboard_check_bundle_version_returns_manifest_fetch_failed() {
 
 #[tokio::test]
 async fn dashboard_check_bundle_version_returns_internal_on_manifest_parse_failure() {
-    let repo = seed_dashboard_repo();
+    let repo = lightweight_dashboard_root();
     let bundle_dir = TempDir::new().expect("bundle dir");
     let cdn = TempDir::new().expect("cdn temp");
     fs::write(cdn.path().join("bundle_versions.json"), "{not-valid-json")
         .expect("write invalid manifest");
     let base_url = format!("file://{}/", cdn.path().display());
-    let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir.path().to_path_buf(),
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    let app = dashboard_bundle_version_app(
+        repo.path(),
+        bundle_dir.path(),
+        dashboard_bundle_source_overrides_for_cdn(&base_url),
     );
 
     let (status, payload) =
@@ -1651,7 +1661,7 @@ async fn dashboard_check_bundle_version_returns_internal_on_manifest_parse_failu
 
 #[tokio::test]
 async fn dashboard_check_bundle_version_returns_up_to_date() {
-    let repo = seed_dashboard_repo();
+    let repo = lightweight_dashboard_root();
     let bundle_parent = TempDir::new().expect("bundle parent");
     let bundle_dir = bundle_parent.path().join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
@@ -1665,9 +1675,10 @@ async fn dashboard_check_bundle_version_returns_up_to_date() {
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
-    let app = build_dashboard_router(
-        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
-            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    let app = dashboard_bundle_version_app(
+        repo.path(),
+        &bundle_dir,
+        dashboard_bundle_source_overrides_for_cdn(&base_url),
     );
 
     let (_status, payload) =
@@ -1685,7 +1696,7 @@ async fn dashboard_check_bundle_version_returns_up_to_date() {
 
 #[tokio::test]
 async fn dashboard_check_bundle_version_returns_update_available() {
-    let repo = seed_dashboard_repo();
+    let repo = lightweight_dashboard_root();
     let bundle_parent = TempDir::new().expect("bundle parent");
     let bundle_dir = bundle_parent.path().join("bundle");
     fs::create_dir_all(&bundle_dir).expect("create bundle dir");
@@ -1699,9 +1710,10 @@ async fn dashboard_check_bundle_version_returns_update_available() {
     let checksum = checksum_hex(&archive);
     let cdn = setup_local_bundle_cdn(&archive, &checksum, "1.2.3");
     let base_url = format!("file://{}/", cdn.path().display());
-    let app = build_dashboard_router(
-        test_state(repo.path().to_path_buf(), ServeMode::HelloWorld, bundle_dir)
-            .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    let app = dashboard_bundle_version_app(
+        repo.path(),
+        &bundle_dir,
+        dashboard_bundle_source_overrides_for_cdn(&base_url),
     );
 
     let (_status, payload) = request_dashboard_graphql(
@@ -1718,20 +1730,17 @@ async fn dashboard_check_bundle_version_returns_update_available() {
 
 #[tokio::test]
 async fn dashboard_check_bundle_version_fetches_manifest_on_every_call() {
-    let repo = seed_dashboard_repo();
+    let repo = lightweight_dashboard_root();
     let bundle_dir = TempDir::new().expect("bundle dir");
     let archive = build_bundle_archive("1.0.0");
     let checksum = checksum_hex(&archive);
     let manifest_v1 = r#"{"versions":[{"version":"1.0.0","min_required_cli_version":"0.0.1","max_required_cli_version":"latest","download_url":"bundle.tar.zst","checksum_url":"bundle.tar.zst.sha256"}]}"#;
     let cdn = setup_local_bundle_cdn_with_manifest(manifest_v1, Some(&archive), Some(&checksum));
     let base_url = format!("file://{}/", cdn.path().display());
-    let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir.path().to_path_buf(),
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    let app = dashboard_bundle_version_app(
+        repo.path(),
+        bundle_dir.path(),
+        dashboard_bundle_source_overrides_for_cdn(&base_url),
     );
 
     let (_status, first) = request_dashboard_graphql(
@@ -1758,18 +1767,15 @@ async fn dashboard_check_bundle_version_fetches_manifest_on_every_call() {
 
 #[tokio::test]
 async fn dashboard_check_bundle_version_returns_no_compatible_version_reason() {
-    let repo = seed_dashboard_repo();
+    let repo = lightweight_dashboard_root();
     let bundle_dir = TempDir::new().expect("bundle dir");
     let manifest = r#"{"versions":[{"version":"9.9.9","min_required_cli_version":"99.0.0","max_required_cli_version":"latest","download_url":"bundle.tar.zst","checksum_url":"bundle.tar.zst.sha256"}]}"#;
     let cdn = setup_local_bundle_cdn_with_manifest(manifest, None, None);
     let base_url = format!("file://{}/", cdn.path().display());
-    let app = build_dashboard_router(
-        test_state(
-            repo.path().to_path_buf(),
-            ServeMode::HelloWorld,
-            bundle_dir.path().to_path_buf(),
-        )
-        .with_bundle_source_overrides(dashboard_bundle_source_overrides_for_cdn(&base_url)),
+    let app = dashboard_bundle_version_app(
+        repo.path(),
+        bundle_dir.path(),
+        dashboard_bundle_source_overrides_for_cdn(&base_url),
     );
 
     let (_status, payload) = request_dashboard_graphql(
