@@ -55,8 +55,8 @@ Feature: DevQL sync workspace reconciliation
     And artefacts_current does not contain path "src/lib.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I add a new source file in bitloops
-    Then artefacts_current eventually contains path "src/lib.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/lib.rs" without nudge in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -72,8 +72,8 @@ Feature: DevQL sync workspace reconciliation
     Given I snapshot current-state content ids for "src/main.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I modify an existing source file in bitloops
-    Then current-state content id for "src/main.rs" eventually changed since snapshot in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows changed greater than 0 since snapshot in bitloops
+    And current-state content id for "src/main.rs" eventually changed since snapshot in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -90,8 +90,8 @@ Feature: DevQL sync workspace reconciliation
     And artefacts_current contains path "src/lib.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I delete a source file in bitloops
-    Then artefacts_current eventually does not contain path "src/lib.rs" in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows removed greater than 0 since snapshot in bitloops
+    And artefacts_current eventually does not contain path "src/lib.rs" in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -124,12 +124,12 @@ Feature: DevQL sync workspace reconciliation
     Then artefacts_current eventually does not contain path "src/branch_only.rs" in bitloops
     Given I snapshot completed DevQL sync task source "post_checkout" in bitloops
     When I checkout branch "qat-producer-feature" in bitloops
-    Then artefacts_current eventually contains path "src/branch_only.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "post_checkout" exists in bitloops
+    Then a completed DevQL sync task with source "post_checkout" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/branch_only.rs" without nudge in bitloops
     Given I snapshot completed DevQL sync task source "post_checkout" in bitloops
     When I checkout the previous branch in bitloops
-    Then artefacts_current eventually does not contain path "src/branch_only.rs" in bitloops
-    And a completed DevQL sync task with source "post_checkout" exists in bitloops
+    Then a completed DevQL sync task with source "post_checkout" shows removed greater than 0 since snapshot in bitloops
+    And artefacts_current eventually does not contain path "src/branch_only.rs" in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -150,9 +150,10 @@ Feature: DevQL sync workspace reconciliation
     And I add a source file "src/downtime_added.rs" in bitloops
     Given I start the daemon in bitloops
     Then DevQL watcher is registered and running in bitloops
+    And a completed DevQL sync task with source "watcher" shows changed greater than 0 since snapshot in bitloops
+    And a completed DevQL sync task with source "watcher" shows added greater than 0 since snapshot in bitloops
     And current-state content id for "src/main.rs" eventually changed since snapshot in bitloops
     And artefacts_current eventually contains path "src/downtime_added.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -167,8 +168,8 @@ Feature: DevQL sync workspace reconciliation
     Then DevQL watcher is registered and running in bitloops
     Given I snapshot completed DevQL sync task source "post_merge" in bitloops
     When I simulate a git pull with new changes in bitloops
-    Then artefacts_current eventually contains path "src/utils.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "post_merge" exists in bitloops
+    Then a completed DevQL sync task with source "post_merge" shows work greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/utils.rs" without nudge in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -389,8 +390,8 @@ Feature: DevQL sync workspace reconciliation
     And artefacts_current does not contain path "src/math.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I add a source file "src/math.rs" in bitloops
-    Then artefacts_current eventually contains path "src/math.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/math.rs" without nudge in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -407,8 +408,8 @@ Feature: DevQL sync workspace reconciliation
     Given I snapshot completed DevQL sync task source "post_commit" in bitloops
     When I add a source file "src/post_commit_added.rs" in bitloops
     And I commit changes with hooks in bitloops
-    Then artefacts_current eventually contains path "src/post_commit_added.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "post_commit" exists in bitloops
+    Then a completed DevQL sync task with source "post_commit" shows work greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/post_commit_added.rs" without nudge in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -426,12 +427,12 @@ Feature: DevQL sync workspace reconciliation
     Then artefacts_current eventually does not contain path "src/branch_only.rs" in bitloops
     Given I snapshot completed DevQL sync task source "post_checkout" in bitloops
     When I checkout branch "qat-producer-feature" in bitloops
-    Then artefacts_current eventually contains path "src/branch_only.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "post_checkout" exists in bitloops
+    Then a completed DevQL sync task with source "post_checkout" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/branch_only.rs" without nudge in bitloops
     Given I snapshot completed DevQL sync task source "post_checkout" in bitloops
     When I checkout the previous branch in bitloops
-    Then artefacts_current eventually does not contain path "src/branch_only.rs" in bitloops
-    And a completed DevQL sync task with source "post_checkout" exists in bitloops
+    Then a completed DevQL sync task with source "post_checkout" shows removed greater than 0 since snapshot in bitloops
+    And artefacts_current eventually does not contain path "src/branch_only.rs" in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -465,8 +466,8 @@ Feature: DevQL sync workspace reconciliation
     And artefacts_current does not contain path "src/after_restart.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I add a source file "src/after_restart.rs" in bitloops
-    Then artefacts_current eventually contains path "src/after_restart.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/after_restart.rs" without nudge in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -485,8 +486,8 @@ Feature: DevQL sync workspace reconciliation
     And artefacts_current does not contain path "src/after_idle.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I add a source file "src/after_idle.rs" in bitloops
-    Then artefacts_current eventually contains path "src/after_idle.rs" without nudge in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/after_idle.rs" without nudge in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -502,12 +503,13 @@ Feature: DevQL sync workspace reconciliation
     And artefacts_current does not contain path "src/dirty_reset.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I add a source file "src/dirty_reset.rs" in bitloops
-    Then artefacts_current eventually contains path "src/dirty_reset.rs" without nudge in bitloops
+    Then a completed DevQL sync task with source "watcher" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/dirty_reset.rs" without nudge in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     And I stage the changes without committing in bitloops
     When I run git reset --hard HEAD in bitloops
-    Then artefacts_current eventually does not contain path "src/dirty_reset.rs" in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows work greater than 0 since snapshot in bitloops
+    And artefacts_current eventually does not contain path "src/dirty_reset.rs" in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
@@ -523,11 +525,12 @@ Feature: DevQL sync workspace reconciliation
     And artefacts_current does not contain path "src/untracked_clean.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I add a source file "src/untracked_clean.rs" in bitloops
-    Then artefacts_current eventually contains path "src/untracked_clean.rs" without nudge in bitloops
+    Then a completed DevQL sync task with source "watcher" shows added greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/untracked_clean.rs" without nudge in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I run git clean -fd in bitloops
-    Then artefacts_current eventually does not contain path "src/untracked_clean.rs" in bitloops
-    And a completed DevQL sync task with source "watcher" exists in bitloops
+    Then a completed DevQL sync task with source "watcher" shows removed greater than 0 since snapshot in bitloops
+    And artefacts_current eventually does not contain path "src/untracked_clean.rs" in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops

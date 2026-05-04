@@ -1116,6 +1116,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r#"^a completed DevQL sync task with source \"([^\"]+)\" shows (work|added|changed|removed|unchanged|cache hits|cache misses|parse errors) greater than (\d+) since snapshot in (\S+)$"#),
+            step_fn(then_completed_sync_task_source_summary_field_greater_than_since_snapshot),
+        )
+        .then(
+            None,
             regex(r#"^the latest completed DevQL sync task source is \"([^\"]+)\" in (\S+)$"#),
             step_fn(then_latest_completed_sync_task_source_matches),
         )

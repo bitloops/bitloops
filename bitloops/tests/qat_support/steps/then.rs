@@ -1460,6 +1460,31 @@ pub(super) fn then_completed_sync_task_source_exists(
     })
 }
 
+pub(super) fn then_completed_sync_task_source_summary_field_greater_than_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_source = ctx.matches[1].1.clone();
+        let field = ctx.matches[2].1.clone();
+        let min: usize = ctx.matches[3]
+            .1
+            .parse()
+            .expect("parse min count for sync task summary");
+        let repo_name = ctx.matches[4].1.clone();
+        run_step(
+            "completed DevQL sync task source summary field exceeds snapshot",
+            helpers::wait_for_completed_sync_task_source_summary_field_greater_than_since_snapshot_for_repo(
+                world,
+                &repo_name,
+                &expected_source,
+                &field,
+                min,
+            ),
+        );
+    })
+}
+
 pub(super) fn then_latest_completed_sync_task_source_matches(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

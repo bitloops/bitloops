@@ -261,6 +261,197 @@ fn completed_sync_task_with_source_exists(
     Ok(completed_sync_task_source_count(world, expected_source)? > 0)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncTaskSummaryField {
+    Work,
+    Added,
+    Changed,
+    Removed,
+    Unchanged,
+    CacheHits,
+    CacheMisses,
+    ParseErrors,
+}
+
+impl SyncTaskSummaryField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Added => "added",
+            Self::Changed => "changed",
+            Self::Removed => "removed",
+            Self::Unchanged => "unchanged",
+            Self::CacheHits => "cache hits",
+            Self::CacheMisses => "cache misses",
+            Self::ParseErrors => "parse errors",
+        }
+    }
+}
+
+fn parse_sync_task_summary_field(raw: &str) -> Result<SyncTaskSummaryField> {
+    let normalised = raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-'], " ");
+    match normalised.as_str() {
+        "work" => Ok(SyncTaskSummaryField::Work),
+        "added" => Ok(SyncTaskSummaryField::Added),
+        "changed" => Ok(SyncTaskSummaryField::Changed),
+        "removed" => Ok(SyncTaskSummaryField::Removed),
+        "unchanged" => Ok(SyncTaskSummaryField::Unchanged),
+        "cache hits" => Ok(SyncTaskSummaryField::CacheHits),
+        "cache misses" => Ok(SyncTaskSummaryField::CacheMisses),
+        "parse errors" => Ok(SyncTaskSummaryField::ParseErrors),
+        other => bail!("unsupported DevQL sync task summary field `{other}`"),
+    }
+}
+
+fn sync_task_summary_field_value(
+    summary: &bitloops::host::devql::SyncSummary,
+    field: SyncTaskSummaryField,
+) -> usize {
+    match field {
+        SyncTaskSummaryField::Work => {
+            summary.paths_added
+                + summary.paths_changed
+                + summary.paths_removed
+                + summary.paths_unchanged
+        }
+        SyncTaskSummaryField::Added => summary.paths_added,
+        SyncTaskSummaryField::Changed => summary.paths_changed,
+        SyncTaskSummaryField::Removed => summary.paths_removed,
+        SyncTaskSummaryField::Unchanged => summary.paths_unchanged,
+        SyncTaskSummaryField::CacheHits => summary.cache_hits,
+        SyncTaskSummaryField::CacheMisses => summary.cache_misses,
+        SyncTaskSummaryField::ParseErrors => summary.parse_errors,
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CompletedSyncTaskSummaryBrief {
+    task_id: String,
+    source: String,
+    mode: String,
+    paths_added: usize,
+    paths_changed: usize,
+    paths_removed: usize,
+    paths_unchanged: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+    parse_errors: usize,
+}
+
+fn completed_sync_task_summary_brief(
+    task: &bitloops::daemon::DevqlTaskRecord,
+) -> CompletedSyncTaskSummaryBrief {
+    let Some(summary) = task.sync_result() else {
+        return CompletedSyncTaskSummaryBrief {
+            task_id: task.task_id.clone(),
+            source: task.source.to_string(),
+            mode: "<missing sync result>".to_string(),
+            ..Default::default()
+        };
+    };
+
+    CompletedSyncTaskSummaryBrief {
+        task_id: task.task_id.clone(),
+        source: task.source.to_string(),
+        mode: summary.mode.clone(),
+        paths_added: summary.paths_added,
+        paths_changed: summary.paths_changed,
+        paths_removed: summary.paths_removed,
+        paths_unchanged: summary.paths_unchanged,
+        cache_hits: summary.cache_hits,
+        cache_misses: summary.cache_misses,
+        parse_errors: summary.parse_errors,
+    }
+}
+
+fn completed_sync_task_summary_brief_field_value(
+    brief: &CompletedSyncTaskSummaryBrief,
+    field: SyncTaskSummaryField,
+) -> usize {
+    match field {
+        SyncTaskSummaryField::Work => {
+            brief.paths_added + brief.paths_changed + brief.paths_removed + brief.paths_unchanged
+        }
+        SyncTaskSummaryField::Added => brief.paths_added,
+        SyncTaskSummaryField::Changed => brief.paths_changed,
+        SyncTaskSummaryField::Removed => brief.paths_removed,
+        SyncTaskSummaryField::Unchanged => brief.paths_unchanged,
+        SyncTaskSummaryField::CacheHits => brief.cache_hits,
+        SyncTaskSummaryField::CacheMisses => brief.cache_misses,
+        SyncTaskSummaryField::ParseErrors => brief.parse_errors,
+    }
+}
+
+fn completed_sync_task_summary_field_exceeds_min(
+    tasks: &[CompletedSyncTaskSummaryBrief],
+    field: SyncTaskSummaryField,
+    min: usize,
+) -> bool {
+    tasks
+        .iter()
+        .any(|task| completed_sync_task_summary_brief_field_value(task, field) > min)
+}
+
+fn format_completed_sync_task_summary_diagnostics(
+    tasks: &[CompletedSyncTaskSummaryBrief],
+) -> String {
+    if tasks.is_empty() {
+        return "no post-snapshot completed sync tasks".to_string();
+    }
+
+    tasks
+        .iter()
+        .map(|task| {
+            format!(
+                "task_id={} source={} mode={} added={} changed={} removed={} unchanged={} cache_hits={} cache_misses={} parse_errors={}",
+                task.task_id,
+                task.source,
+                task.mode,
+                task.paths_added,
+                task.paths_changed,
+                task.paths_removed,
+                task.paths_unchanged,
+                task.cache_hits,
+                task.cache_misses,
+                task.parse_errors
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn completed_sync_task_summary_briefs_after_source_snapshot(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+    snapshot_count: usize,
+) -> Result<Vec<CompletedSyncTaskSummaryBrief>> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for completed sync task summary assertion")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Sync
+                && task.status == DevqlTaskStatus::Completed
+                && task.source == expected_source
+        })
+        .skip(snapshot_count)
+        .map(completed_sync_task_summary_brief)
+        .collect())
+}
+
 fn parse_devql_task_source(raw: &str) -> Result<DevqlTaskSource> {
     match raw.trim() {
         "init" => Ok(DevqlTaskSource::Init),
@@ -1934,6 +2125,47 @@ pub fn wait_for_completed_sync_task_source_for_repo(
             |exists| format!("exists={exists}"),
         )?;
     }
+    Ok(())
+}
+
+pub fn wait_for_completed_sync_task_source_summary_field_greater_than_since_snapshot_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+    field: &str,
+    min: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let source_key = expected_source.to_string();
+    let snapshot_count = world
+        .completed_sync_task_source_snapshots
+        .get(&source_key)
+        .copied()
+        .ok_or_else(|| {
+            anyhow!(
+                "no completed DevQL sync task source snapshot captured for `{expected_source}`"
+            )
+        })?;
+    let field = parse_sync_task_summary_field(field)?;
+
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!(
+            "completed DevQL sync task with source `{expected_source}` to show {} > {min} after snapshot count {snapshot_count}",
+            field.label()
+        ),
+        || {
+            completed_sync_task_summary_briefs_after_source_snapshot(
+                world,
+                expected_source,
+                snapshot_count,
+            )
+        },
+        |tasks| completed_sync_task_summary_field_exceeds_min(tasks, field, min),
+        |tasks| format_completed_sync_task_summary_diagnostics(tasks),
+    )?;
     Ok(())
 }
 
