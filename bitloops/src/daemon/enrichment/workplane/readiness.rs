@@ -220,6 +220,9 @@ pub(crate) fn mailbox_claim_readiness(
         CapabilityMailboxReadinessPolicy::TextGenerationSlot(slot_name) => {
             resolve_mailbox_provider_readiness(runtime_store, job, slot_name, true)?
         }
+        CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(slot_name) => {
+            resolve_optional_text_generation_readiness(runtime_store, job, slot_name)?
+        }
         CapabilityMailboxReadinessPolicy::EmbeddingsSlot(slot_name) => {
             resolve_mailbox_provider_readiness(runtime_store, job, slot_name, false)?
         }
@@ -286,6 +289,29 @@ fn resolve_mailbox_provider_readiness(
         inference.embeddings(slot_name).map(|_| ())
     };
     match resolution {
+        Ok(()) => Ok(WorkplaneMailboxReadiness::default()),
+        Err(err) => Ok(WorkplaneMailboxReadiness {
+            blocked: true,
+            reason: Some(format!("{err:#}")),
+        }),
+    }
+}
+
+fn resolve_optional_text_generation_readiness(
+    _runtime_store: &DaemonSqliteRuntimeStore,
+    job: &WorkplaneJobRecord,
+    slot_name: &str,
+) -> Result<WorkplaneMailboxReadiness> {
+    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
+        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
+    let inference = capability_host.inference_for_capability(&job.capability_id);
+
+    if inference.describe(slot_name).is_none() {
+        return Ok(WorkplaneMailboxReadiness::default());
+    }
+
+    match inference.text_generation(slot_name).map(|_| ()) {
         Ok(()) => Ok(WorkplaneMailboxReadiness::default()),
         Err(err) => Ok(WorkplaneMailboxReadiness {
             blocked: true,

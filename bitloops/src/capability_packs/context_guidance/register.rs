@@ -34,9 +34,11 @@ pub fn register_context_guidance_pack(registrar: &mut dyn CapabilityRegistrar) -
             CapabilityMailboxPolicy::Job,
             CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_HISTORY_DISTILLATION_INGESTER_ID),
         )
-        .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
-            CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
-        )),
+        .readiness_policy(
+            CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(
+                CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
+            ),
+        ),
     )?;
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
@@ -45,21 +47,18 @@ pub fn register_context_guidance_pack(registrar: &mut dyn CapabilityRegistrar) -
             CapabilityMailboxPolicy::Job,
             CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_KNOWLEDGE_DISTILLATION_INGESTER_ID),
         )
-        .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
-            CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
-        )),
+        .readiness_policy(
+            CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(
+                CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
+            ),
+        ),
     )?;
-    registrar.register_mailbox(
-        CapabilityMailboxRegistration::new(
-            CONTEXT_GUIDANCE_CAPABILITY_ID,
-            CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
-            CapabilityMailboxPolicy::Job,
-            CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_TARGET_COMPACTION_INGESTER_ID),
-        )
-        .readiness_policy(CapabilityMailboxReadinessPolicy::TextGenerationSlot(
-            CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT,
-        )),
-    )?;
+    registrar.register_mailbox(CapabilityMailboxRegistration::new(
+        CONTEXT_GUIDANCE_CAPABILITY_ID,
+        CONTEXT_GUIDANCE_TARGET_COMPACTION_MAILBOX,
+        CapabilityMailboxPolicy::Job,
+        CapabilityMailboxHandler::Ingester(CONTEXT_GUIDANCE_TARGET_COMPACTION_INGESTER_ID),
+    ))?;
     registrar.register_schema_module(CONTEXT_GUIDANCE_SCHEMA_MODULE)?;
     registrar.register_query_examples(CONTEXT_GUIDANCE_QUERY_EXAMPLES)?;
     Ok(())
@@ -163,7 +162,7 @@ mod tests {
         );
         assert_eq!(
             mailbox.readiness_policy,
-            CapabilityMailboxReadinessPolicy::TextGenerationSlot(
+            CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(
                 CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT
             )
         );
@@ -181,7 +180,7 @@ mod tests {
         );
         assert_eq!(
             mailbox.readiness_policy,
-            CapabilityMailboxReadinessPolicy::TextGenerationSlot(
+            CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(
                 CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT
             )
         );
@@ -198,9 +197,7 @@ mod tests {
         );
         assert_eq!(
             mailbox.readiness_policy,
-            CapabilityMailboxReadinessPolicy::TextGenerationSlot(
-                CONTEXT_GUIDANCE_TEXT_GENERATION_SLOT
-            )
+            CapabilityMailboxReadinessPolicy::None
         );
         assert_eq!(registrar.schema_modules.len(), 1);
         assert_eq!(

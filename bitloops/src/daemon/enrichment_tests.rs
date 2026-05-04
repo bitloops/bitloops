@@ -2048,14 +2048,71 @@ fn summary_refresh_pool_claims_generic_context_guidance_text_generation_jobs() {
 }
 
 #[test]
-fn summary_refresh_pool_leaves_context_guidance_job_pending_when_generation_unconfigured() {
+fn summary_refresh_pool_claims_context_guidance_job_when_generation_unconfigured() {
     let temp = TempDir::new().expect("temp dir");
     let (coordinator, target, repo_id) = new_test_coordinator(&temp);
     insert_context_guidance_workplane_job(
         &coordinator,
         &target,
         &repo_id,
-        "context-guidance-blocked",
+        "context-guidance-skipped",
+        1,
+    );
+
+    let claimed = claim_next_workplane_job(
+        &coordinator.workplane_store,
+        &coordinator.runtime_store,
+        &default_state(),
+        super::worker_count::EnrichmentWorkerPool::SummaryRefresh,
+    )
+    .expect("attempt context guidance claim")
+    .expect(
+        "unconfigured context guidance generation should be claimable so the ingester can skip it",
+    );
+
+    assert_eq!(claimed.job_id, "context-guidance-skipped");
+    assert_eq!(
+        claimed.mailbox_name,
+        crate::capability_packs::context_guidance::CONTEXT_GUIDANCE_HISTORY_DISTILLATION_MAILBOX
+    );
+}
+
+#[test]
+fn summary_refresh_pool_leaves_context_guidance_pending_when_configured_generation_is_broken() {
+    let temp = TempDir::new().expect("temp dir");
+    let (coordinator, target, repo_id) = new_test_coordinator(&temp);
+    configure_context_guidance_for_repo(&target);
+    let config_path =
+        crate::test_support::git_fixtures::write_test_daemon_config(&target.config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &target
+            .repo_root
+            .join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("bind repo root to daemon config");
+    std::fs::write(
+        &config_path,
+        r#"
+[context_guidance.inference]
+guidance_generation = "guidance_broken"
+
+[inference.profiles.guidance_broken]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "missing_runtime"
+model = "qat-guidance-model"
+temperature = "0.1"
+max_output_tokens = 200
+"#,
+    )
+    .expect("write broken context guidance config");
+
+    insert_context_guidance_workplane_job(
+        &coordinator,
+        &target,
+        &repo_id,
+        "context-guidance-broken",
         1,
     );
 
@@ -2070,7 +2127,7 @@ fn summary_refresh_pool_leaves_context_guidance_job_pending_when_generation_unco
     assert!(claimed.is_none());
     let pending = load_workplane_jobs(&coordinator, WorkplaneJobStatus::Pending);
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].job_id, "context-guidance-blocked");
+    assert_eq!(pending[0].job_id, "context-guidance-broken");
 }
 
 #[test]

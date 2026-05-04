@@ -227,6 +227,7 @@ fn is_generic_text_generation_job(
     if !matches!(
         registration.readiness_policy,
         CapabilityMailboxReadinessPolicy::TextGenerationSlot(_)
+            | CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(_)
     ) {
         return Ok(false);
     }

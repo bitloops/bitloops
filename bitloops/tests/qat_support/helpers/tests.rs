@@ -606,18 +606,27 @@ fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_an
         ..Default::default()
     };
 
-    let config =
-        render_guide_aligned_semantic_clones_config(&world, "sh", &["fake-runtime.sh".to_string()]);
+    let config = render_guide_aligned_semantic_clones_config(
+        &world,
+        "sh",
+        &["fake-embeddings-runtime.sh".to_string()],
+        "sh",
+        &["fake-summary-runtime.sh".to_string()],
+    );
 
     assert!(config.contains("summary_mode = \"auto\""));
     assert!(config.contains("embedding_mode = \"deterministic\""));
     assert!(config.contains("enrichment_workers = 2"));
     assert!(config.contains("[semantic_clones.inference]"));
+    assert!(config.contains("summary_generation = \"summary_fake\""));
     assert!(config.contains("code_embeddings = \"fake\""));
     assert!(config.contains("summary_embeddings = \"fake\""));
+    assert!(config.contains("[inference.runtimes.bitloops_local_semantic_summary]"));
     assert!(config.contains("[inference.profiles.fake]"));
+    assert!(config.contains("[inference.profiles.summary_fake]"));
     assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
     assert!(config.contains("model = \"qat-test-model\""));
+    assert!(config.contains("model = \"qat-summary-model\""));
 }
 
 #[test]
