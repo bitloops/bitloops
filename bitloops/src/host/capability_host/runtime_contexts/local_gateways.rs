@@ -165,13 +165,14 @@ pub struct LocalCapabilityWorkplaneGateway {
 impl LocalCapabilityWorkplaneGateway {
     pub fn new(
         repo_root: &Path,
+        repo_id: &str,
         capability_id: &str,
         declared_mailboxes: &[CapabilityMailboxRegistration],
         init_session_id: Option<String>,
     ) -> Result<Self> {
         Ok(Self {
             capability_id: capability_id.to_string(),
-            runtime_store: RepoSqliteRuntimeStore::open(repo_root)?,
+            runtime_store: RepoSqliteRuntimeStore::open_with_repo_id(repo_root, repo_id)?,
             declared_mailboxes: declared_mailboxes
                 .iter()
                 .map(|registration| registration.mailbox_name.to_string())

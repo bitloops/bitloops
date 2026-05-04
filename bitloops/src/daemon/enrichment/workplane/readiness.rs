@@ -29,7 +29,7 @@ use super::jobs::load_workplane_jobs_by_status;
 use super::mailbox_persistence::{
     load_embedding_mailbox_items_by_status, load_summary_mailbox_items_by_status,
 };
-use super::sql::fallback_repo_identity;
+use super::sql::repo_identity_from_runtime_metadata;
 
 pub(crate) fn current_workplane_mailbox_blocked_statuses(
     workplane_store: &DaemonSqliteRuntimeStore,
@@ -251,8 +251,7 @@ fn resolve_mailbox_provider_readiness(
         }
     }
 
-    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
     if text_generation
         && job.capability_id == SEMANTIC_CLONES_CAPABILITY_ID

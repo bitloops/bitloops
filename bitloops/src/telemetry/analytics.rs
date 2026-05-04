@@ -3,21 +3,29 @@ use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
+use std::thread;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use anyhow::{Context, Result, anyhow, bail};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+mod spool;
+
 /// PostHog API key for the Bitloops project.
 /// This is a public key - it can only send events, not read data.
 pub const POSTHOG_API_KEY: &str = "phc_MSoOVb9El27W2DAgq2bTCC8JWbZQMxyRNQ7L0jOjKbZ";
 
-/// PostHog base URL; the REST capture endpoint is derived as `{POSTHOG_ENDPOINT}/capture/`.
+/// PostHog base URL; the REST batch endpoint is derived as `{POSTHOG_ENDPOINT}/batch/`.
 pub const POSTHOG_ENDPOINT: &str = "https://eu.i.posthog.com";
 const SESSION_STARTED_EVENT: &str = "$session_start";
 const SESSION_ENDED_EVENT: &str = "$session_end";
+const TELEMETRY_WORKER_INTERVAL: Duration = Duration::from_secs(1);
+const TELEMETRY_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// If this env var is set to any non-empty value, telemetry is disabled (user opt-out).
 pub const TELEMETRY_OPTOUT_ENV: &str = "BITLOOPS_TELEMETRY_OPTOUT";
@@ -162,7 +170,7 @@ pub fn track_action_detached(
         let strategy = dispatch_context.strategy.as_deref()?;
         process_session_activity(repo_root, strategy, descriptor.surface).map(|activity| {
             for payload in activity.lifecycle_events {
-                spawn_detached_event_payload(&payload);
+                enqueue_event_payload(&payload);
             }
             activity.session_id
         })
@@ -179,7 +187,7 @@ pub fn track_action_detached(
         return;
     };
 
-    spawn_detached_event_payload(&payload);
+    enqueue_event_payload(&payload);
 }
 
 pub fn track_session_activity_detached(repo_root: &Path, strategy: &str, source: &str) {
@@ -189,7 +197,7 @@ pub fn track_session_activity_detached(repo_root: &Path, strategy: &str, source:
 
     if let Some(activity) = process_session_activity(repo_root, strategy, source) {
         for payload in activity.lifecycle_events {
-            spawn_detached_event_payload(&payload);
+            enqueue_event_payload(&payload);
         }
     }
 }
@@ -200,7 +208,7 @@ pub fn track_session_end_detached(ended: &crate::telemetry::sessions::EndedSessi
     }
 
     if let Some(payload) = build_session_end_payload(ended, source) {
-        spawn_detached_event_payload(&payload);
+        enqueue_event_payload(&payload);
     }
 }
 
@@ -325,9 +333,25 @@ pub fn send_session_end(ended: &crate::telemetry::sessions::EndedSession) {
     track_session_end_detached(ended, "daemon");
 }
 
-fn spawn_detached_event_payload(payload: &EventPayload) {
-    if let Ok(payload_json) = serde_json::to_string(payload) {
-        spawn_detached_analytics(&payload_json);
+fn enqueue_event_payload(payload: &EventPayload) {
+    match spool::enqueue_payload(payload, unix_timestamp_secs()) {
+        Ok(spool::EnqueueOutcome::Queued) => {
+            #[cfg(not(test))]
+            start_analytics_spool_worker_once();
+        }
+        Ok(spool::EnqueueOutcome::Full) => {
+            if debug_enabled() {
+                eprintln!(
+                    "[bitloops telemetry] spool is full; dropping event '{}'",
+                    payload.event
+                );
+            }
+        }
+        Err(err) => {
+            if debug_enabled() {
+                eprintln!("[bitloops telemetry] failed to enqueue event: {err:#}");
+            }
+        }
     }
 }
 
@@ -351,98 +375,189 @@ pub fn send_event(payload_json: &str) {
         return;
     }
 
+    let outbound = OutboundEvent {
+        id: uuid::Uuid::new_v4().to_string(),
+        payload,
+    };
+    if let Err(err) = send_outbound_events(&[outbound])
+        && debug
+    {
+        eprintln!("[bitloops telemetry] failed to send event: {err:#}");
+    }
+}
+
+pub fn start_analytics_spool_worker_once() {
+    static ANALYTICS_SPOOL_WORKER: OnceLock<()> = OnceLock::new();
+
+    let _ = ANALYTICS_SPOOL_WORKER.get_or_init(|| {
+        let Ok(path) = spool::default_spool_path() else {
+            if debug_enabled() {
+                eprintln!("[bitloops telemetry] failed to resolve spool path");
+            }
+            return;
+        };
+
+        if let Err(err) = thread::Builder::new()
+            .name("bitloops-analytics-spool".to_string())
+            .spawn(move || telemetry_spool_worker_loop(path))
+            && debug_enabled()
+        {
+            eprintln!("[bitloops telemetry] failed to start spool worker: {err}");
+        }
+    });
+}
+
+fn telemetry_spool_worker_loop(path: std::path::PathBuf) {
+    loop {
+        if let Err(err) = drain_due_spool_batch(&path, unix_timestamp_secs())
+            && debug_enabled()
+        {
+            eprintln!("[bitloops telemetry] spool drain failed: {err:#}");
+        }
+        thread::sleep(TELEMETRY_WORKER_INTERVAL);
+    }
+}
+
+fn drain_due_spool_batch(path: &Path, now: i64) -> Result<()> {
+    let rows = spool::load_due_batch(path, now, spool::DEFAULT_BATCH_SIZE)
+        .context("loading telemetry spool batch")?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut malformed_ids = Vec::new();
+    let mut outbound = Vec::new();
+    for row in rows {
+        match serde_json::from_str::<EventPayload>(&row.payload_json) {
+            Ok(payload) if !payload.event.is_empty() && !payload.distinct_id.is_empty() => {
+                outbound.push(OutboundEvent {
+                    id: row.id,
+                    payload,
+                });
+            }
+            _ => malformed_ids.push(row.id),
+        }
+    }
+
+    if !malformed_ids.is_empty() {
+        spool::delete_events(path, &malformed_ids).context("deleting malformed telemetry rows")?;
+    }
+    if outbound.is_empty() {
+        return Ok(());
+    }
+
+    let ids = outbound
+        .iter()
+        .map(|event| event.id.clone())
+        .collect::<Vec<_>>();
+    match send_outbound_events(&outbound) {
+        Ok(()) => spool::delete_events(path, &ids).context("deleting sent telemetry rows"),
+        Err(err) => {
+            let message = format!("{err:#}");
+            spool::mark_send_failure(path, &ids, now, &message)
+                .context("marking telemetry rows as failed")?;
+            if debug_enabled() {
+                eprintln!("[bitloops telemetry] batch send failed: {message}");
+            }
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
+struct OutboundEvent {
+    id: String,
+    payload: EventPayload,
+}
+
+fn send_outbound_events(events: &[OutboundEvent]) -> Result<()> {
+    if events.is_empty() {
+        return Ok(());
+    }
+
     let api_key = posthog_api_key();
     if api_key.is_empty() {
-        if debug {
-            eprintln!("[bitloops telemetry] skipped: no API key configured");
-        }
-        return;
+        bail!("no API key configured");
     }
 
     let endpoint = posthog_endpoint();
     if endpoint.is_empty() {
-        if debug {
-            eprintln!("[bitloops telemetry] skipped: no endpoint configured");
-        }
-        return;
+        bail!("no endpoint configured");
     }
 
-    let mut properties = payload.properties.clone();
-    properties
-        .entry("$geoip_disable".to_string())
-        .or_insert(Value::Bool(true));
+    let body = build_batch_request(&api_key, events)?;
+    let batch_url = format!("{}/batch/", endpoint.trim_end_matches('/'));
 
-    let capture = json!({
-        "api_key": api_key,
-        "event": payload.event,
-        "distinct_id": payload.distinct_id,
-        "properties": properties,
-        "timestamp": payload.timestamp,
-    });
-
-    let Ok(body) = serde_json::to_string(&capture) else {
-        if debug {
-            eprintln!("[bitloops telemetry] failed to serialize capture request");
-        }
-        return;
-    };
-
-    let capture_url = format!("{}/capture/", endpoint.trim_end_matches('/'));
-
-    if debug {
+    if debug_enabled() {
         eprintln!(
-            "[bitloops telemetry] sending event '{}' to {}",
-            payload.event, capture_url
+            "[bitloops telemetry] sending {} event(s) to {}",
+            events.len(),
+            batch_url
         );
         eprintln!("[bitloops telemetry] payload: {}", body);
     }
 
-    // Best effort and silent.
-    match Command::new("curl")
-        .arg("--silent")
-        .arg("--show-error")
-        .arg("--max-time")
-        .arg("5")
-        .arg("--header")
-        .arg("Content-Type: application/json")
-        .arg("--request")
-        .arg("POST")
-        .arg("--data-raw")
-        .arg(&body)
-        .arg(&capture_url)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-    {
-        Ok(output) => {
-            let status = output.status;
-            if debug {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-
-                if status.success() {
-                    eprintln!("[bitloops telemetry] HTTP success: {}", status);
-                    if !stdout.trim().is_empty() {
-                        eprintln!("[bitloops telemetry] response: {}", stdout);
-                    }
-                } else {
-                    eprintln!("[bitloops telemetry] HTTP failure: {}", status);
-                    if !stdout.trim().is_empty() {
-                        eprintln!("[bitloops telemetry] response body: {}", stdout);
-                    }
-                    if !stderr.trim().is_empty() {
-                        eprintln!("[bitloops telemetry] curl error: {}", stderr);
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            if debug {
-                eprintln!("[bitloops telemetry] failed to spawn curl: {}", e);
-            }
-        }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(TELEMETRY_SEND_TIMEOUT)
+        .build()
+        .context("building telemetry HTTP client")?;
+    let response = client
+        .post(&batch_url)
+        .json(&body)
+        .send()
+        .with_context(|| format!("posting telemetry batch to {batch_url}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(anyhow!(
+            "telemetry batch request failed with status {status}: {body}"
+        ));
     }
+
+    Ok(())
+}
+
+fn build_batch_request(api_key: &str, events: &[OutboundEvent]) -> Result<Value> {
+    let mut batch = Vec::with_capacity(events.len());
+    for event in events {
+        if event.payload.event.is_empty() || event.payload.distinct_id.is_empty() {
+            continue;
+        }
+
+        let mut properties = event.payload.properties.clone();
+        properties
+            .entry("$geoip_disable".to_string())
+            .or_insert(Value::Bool(true));
+        properties
+            .entry("$insert_id".to_string())
+            .or_insert_with(|| Value::String(event.id.clone()));
+        properties
+            .entry("distinct_id".to_string())
+            .or_insert_with(|| Value::String(event.payload.distinct_id.clone()));
+
+        batch.push(json!({
+            "event": event.payload.event,
+            "properties": properties,
+            "timestamp": event.payload.timestamp,
+        }));
+    }
+
+    if batch.is_empty() {
+        bail!("no valid telemetry events to send");
+    }
+
+    Ok(json!({
+        "api_key": api_key,
+        "historical_migration": false,
+        "batch": batch,
+    }))
+}
+
+fn unix_timestamp_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 pub fn collect_flag_names_from_argv(args: &[String]) -> Vec<String> {
@@ -634,67 +749,6 @@ fn hex_encode(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
-}
-
-#[cfg(unix)]
-fn spawn_detached_analytics(payload_json: &str) {
-    use std::os::unix::process::CommandExt;
-
-    let Ok(executable) = env::current_exe() else {
-        return;
-    };
-
-    let debug = debug_enabled();
-    let mut cmd = Command::new(executable);
-    cmd.arg("__send_analytics")
-        .arg(payload_json)
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null());
-
-    if debug {
-        // Preserve stderr so debug logs are visible
-        cmd.stderr(Stdio::inherit());
-    } else {
-        cmd.stderr(Stdio::null());
-    }
-
-    cmd.process_group(0);
-
-    let _ = cmd.spawn();
-}
-
-#[cfg(windows)]
-fn spawn_detached_analytics(payload_json: &str) {
-    use std::os::windows::process::CommandExt;
-
-    let Ok(executable) = env::current_exe() else {
-        return;
-    };
-
-    // CREATE_NO_WINDOW (0x08000000) - run without creating a console window
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    let debug = debug_enabled();
-    let mut cmd = Command::new(executable);
-    cmd.arg("__send_analytics")
-        .arg(payload_json)
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null());
-
-    if debug {
-        cmd.stderr(Stdio::inherit());
-    } else {
-        cmd.stderr(Stdio::null());
-    }
-
-    let _ = cmd.spawn();
-}
-
-#[cfg(all(not(unix), not(windows)))]
-fn spawn_detached_analytics(_payload_json: &str) {
-    // No detached analytics transport is implemented for this target yet.
 }
 
 fn now_rfc3339() -> String {

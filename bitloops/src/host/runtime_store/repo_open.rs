@@ -19,9 +19,23 @@ impl RepoSqliteRuntimeStore {
         Self::open_for_roots(&daemon_config_root, repo_root)
     }
 
+    pub fn open_with_repo_id(repo_root: &Path, repo_id: &str) -> Result<Self> {
+        let daemon_config_root = resolve_bound_daemon_config_root_for_repo(repo_root)
+            .context("resolving daemon config root for runtime store")?;
+        Self::open_for_roots_with_repo_id(&daemon_config_root, repo_root, repo_id)
+    }
+
     pub fn open_for_roots(daemon_config_root: &Path, repo_root: &Path) -> Result<Self> {
         let repo = crate::host::devql::resolve_repo_identity(repo_root)
             .context("resolving repo identity for runtime store")?;
+        Self::open_for_roots_with_repo_id(daemon_config_root, repo_root, &repo.repo_id)
+    }
+
+    pub fn open_for_roots_with_repo_id(
+        daemon_config_root: &Path,
+        repo_root: &Path,
+        repo_id: &str,
+    ) -> Result<Self> {
         let db_path = resolve_repo_runtime_db_path_for_config_root(daemon_config_root);
         let sqlite = SqliteConnectionPool::connect(db_path.clone())
             .with_context(|| format!("opening repo runtime database {}", db_path.display()))?;
@@ -29,7 +43,7 @@ impl RepoSqliteRuntimeStore {
         Ok(Self {
             config_root: daemon_config_root.to_path_buf(),
             repo_root: repo_root.to_path_buf(),
-            repo_id: repo.repo_id,
+            repo_id: repo_id.to_string(),
             db_path,
         })
     }

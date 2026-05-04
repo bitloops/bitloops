@@ -57,6 +57,7 @@ pub(super) async fn run_server(
         crate::cli::telemetry_consent::CURRENT_CLI_VERSION,
         options.telemetry,
     )?;
+    crate::telemetry::analytics::start_analytics_spool_worker_once();
     let repo = crate::host::devql::resolve_repo_identity(daemon_config.config_root.as_path())
         .context("resolving repository identity for daemon startup")?;
     let devql_cfg =

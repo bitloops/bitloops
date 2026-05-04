@@ -1,5 +1,4 @@
-use async_graphql::{Enum, InputObject, SimpleObject, types::Json};
-use serde_json::Value;
+use async_graphql::{Enum, InputObject, SimpleObject};
 
 use super::JsonScalar;
 
@@ -236,45 +235,6 @@ pub struct ArchitectureGraphNode {
     pub annotations: Vec<ArchitectureGraphAssertionSummary>,
 }
 
-impl ArchitectureGraphNode {
-    pub(crate) fn assertion(
-        id: String,
-        kind: ArchitectureGraphNodeKind,
-        label: String,
-        artefact_id: Option<String>,
-        symbol_id: Option<String>,
-        path: Option<String>,
-        entry_kind: Option<String>,
-        source_kind: String,
-        confidence: f64,
-        provenance: Value,
-        evidence: Value,
-        properties: Value,
-    ) -> Self {
-        Self {
-            id,
-            kind,
-            label,
-            artefact_id,
-            symbol_id,
-            path,
-            entry_kind,
-            source_kind,
-            confidence,
-            computed: false,
-            asserted: true,
-            suppressed: false,
-            effective: true,
-            provenance: Json(provenance.clone()),
-            computed_provenance: Json(Value::Null),
-            asserted_provenance: Json(provenance),
-            evidence: Json(evidence),
-            properties: Json(properties),
-            annotations: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, SimpleObject)]
 pub struct ArchitectureGraphEdge {
     pub id: String,
@@ -293,39 +253,6 @@ pub struct ArchitectureGraphEdge {
     pub evidence: JsonScalar,
     pub properties: JsonScalar,
     pub annotations: Vec<ArchitectureGraphAssertionSummary>,
-}
-
-impl ArchitectureGraphEdge {
-    pub(crate) fn assertion(
-        id: String,
-        kind: ArchitectureGraphEdgeKind,
-        from_node_id: String,
-        to_node_id: String,
-        source_kind: String,
-        confidence: f64,
-        provenance: Value,
-        evidence: Value,
-        properties: Value,
-    ) -> Self {
-        Self {
-            id,
-            kind,
-            from_node_id,
-            to_node_id,
-            source_kind,
-            confidence,
-            computed: false,
-            asserted: true,
-            suppressed: false,
-            effective: true,
-            provenance: Json(provenance.clone()),
-            computed_provenance: Json(Value::Null),
-            asserted_provenance: Json(provenance),
-            evidence: Json(evidence),
-            properties: Json(properties),
-            annotations: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, SimpleObject)]

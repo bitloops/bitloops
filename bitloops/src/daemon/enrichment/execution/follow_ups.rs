@@ -16,6 +16,7 @@ pub(crate) fn symbol_embeddings_follow_up(
 ) -> FollowUpJob {
     FollowUpJob::SymbolEmbeddings {
         target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_repo_id(job.repo_id.clone())
             .with_init_session_id(None),
         artefact_ids: artefact_ids.to_vec(),
         input_hashes: input_hashes.clone(),
@@ -27,6 +28,7 @@ pub(crate) fn symbol_embeddings_follow_up(
 pub(crate) fn clone_edges_rebuild_follow_up(job: &EnrichmentJob) -> FollowUpJob {
     FollowUpJob::CloneEdgesRebuild {
         target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_repo_id(job.repo_id.clone())
             .with_init_session_id(None),
     }
 }
@@ -36,6 +38,7 @@ pub(crate) fn clone_edges_rebuild_follow_up_from_workplane(
 ) -> FollowUpJob {
     FollowUpJob::CloneEdgesRebuild {
         target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_repo_id(job.repo_id.clone())
             .with_init_session_id(job.init_session_id.clone()),
     }
 }
@@ -47,6 +50,7 @@ pub(crate) fn symbol_embeddings_follow_up_from_artefact_ids(
 ) -> FollowUpJob {
     FollowUpJob::SymbolEmbeddings {
         target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+            .with_repo_id(job.repo_id.clone())
             .with_init_session_id(job.init_session_id.clone()),
         artefact_ids: artefact_ids.to_vec(),
         input_hashes: BTreeMap::new(),

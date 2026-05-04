@@ -170,27 +170,27 @@ pub(super) async fn assert_architecture_system_membership(
             "container_kind": input.container_kind,
         }),
     );
-    let system_assertion = node_assertion(
-        &repo_id,
-        &system_id,
-        ArchitectureGraphNodeKind::System,
-        input
+    let system_assertion = node_assertion(NodeAssertionSpec {
+        repo_id: repo_id.as_str(),
+        node_id: system_id.as_str(),
+        node_kind: ArchitectureGraphNodeKind::System,
+        label: input
             .system_label
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(&system_key)
             .to_string(),
-        reason.clone(),
-        source.clone(),
+        reason: reason.clone(),
+        source: source.clone(),
         confidence,
-        system_properties,
-    );
-    let container_assertion = node_assertion(
-        &repo_id,
-        &container_id,
-        ArchitectureGraphNodeKind::Container,
-        input
+        properties: system_properties,
+    });
+    let container_assertion = node_assertion(NodeAssertionSpec {
+        repo_id: repo_id.as_str(),
+        node_id: container_id.as_str(),
+        node_kind: ArchitectureGraphNodeKind::Container,
+        label: input
             .container_label
             .as_deref()
             .map(str::trim)
@@ -198,21 +198,21 @@ pub(super) async fn assert_architecture_system_membership(
             .or(container_key.as_deref())
             .unwrap_or(&container_id)
             .to_string(),
-        reason.clone(),
-        source.clone(),
+        reason: reason.clone(),
+        source: source.clone(),
         confidence,
-        container_properties,
-    );
-    let contains_assertion = edge_assertion(
-        &repo_id,
-        ArchitectureGraphEdgeKind::Contains,
-        &system_id,
-        &container_id,
-        reason.clone(),
-        source.clone(),
+        properties: container_properties,
+    });
+    let contains_assertion = edge_assertion(EdgeAssertionSpec {
+        repo_id: repo_id.as_str(),
+        edge_kind: ArchitectureGraphEdgeKind::Contains,
+        from_node_id: system_id.as_str(),
+        to_node_id: container_id.as_str(),
+        reason: reason.clone(),
+        source: source.clone(),
         confidence,
-        json!({ "system_key": system_key }),
-    );
+        properties: json!({ "system_key": system_key }),
+    });
     let mut assertions = vec![system_assertion, container_assertion, contains_assertion];
     if let Some(deployment_unit_id) = input
         .deployment_unit_id
@@ -220,16 +220,16 @@ pub(super) async fn assert_architecture_system_membership(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        assertions.push(edge_assertion(
-            &repo_id,
-            ArchitectureGraphEdgeKind::Realises,
-            deployment_unit_id,
-            &container_id,
+        assertions.push(edge_assertion(EdgeAssertionSpec {
+            repo_id: repo_id.as_str(),
+            edge_kind: ArchitectureGraphEdgeKind::Realises,
+            from_node_id: deployment_unit_id,
+            to_node_id: container_id.as_str(),
             reason,
             source,
             confidence,
-            json!({ "system_key": system_key }),
-        ));
+            properties: json!({ "system_key": system_key }),
+        }));
     }
 
     let relational = context
@@ -400,16 +400,29 @@ async fn unique_repo_for_architecture_targets(
     })
 }
 
-fn node_assertion(
-    repo_id: &str,
-    node_id: &str,
+struct NodeAssertionSpec<'a> {
+    repo_id: &'a str,
+    node_id: &'a str,
     node_kind: ArchitectureGraphNodeKind,
     label: String,
     reason: String,
     source: String,
     confidence: f64,
     properties: Value,
-) -> ArchitectureGraphAssertion {
+}
+
+fn node_assertion(spec: NodeAssertionSpec<'_>) -> ArchitectureGraphAssertion {
+    let NodeAssertionSpec {
+        repo_id,
+        node_id,
+        node_kind,
+        label,
+        reason,
+        source,
+        confidence,
+        properties,
+    } = spec;
+
     ArchitectureGraphAssertion {
         assertion_id: assertion_id(
             repo_id,
@@ -440,16 +453,29 @@ fn node_assertion(
     }
 }
 
-fn edge_assertion(
-    repo_id: &str,
+struct EdgeAssertionSpec<'a> {
+    repo_id: &'a str,
     edge_kind: ArchitectureGraphEdgeKind,
-    from_node_id: &str,
-    to_node_id: &str,
+    from_node_id: &'a str,
+    to_node_id: &'a str,
     reason: String,
     source: String,
     confidence: f64,
     properties: Value,
-) -> ArchitectureGraphAssertion {
+}
+
+fn edge_assertion(spec: EdgeAssertionSpec<'_>) -> ArchitectureGraphAssertion {
+    let EdgeAssertionSpec {
+        repo_id,
+        edge_kind,
+        from_node_id,
+        to_node_id,
+        reason,
+        source,
+        confidence,
+        properties,
+    } = spec;
+
     let edge_id = edge_id_for_kind(repo_id, edge_kind.as_db(), from_node_id, to_node_id);
     ArchitectureGraphAssertion {
         assertion_id: assertion_id(

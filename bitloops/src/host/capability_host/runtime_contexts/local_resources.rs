@@ -145,6 +145,7 @@ impl LocalCapabilityRuntimeResources {
             invoking_capability_id.and_then(|capability_id| {
                 LocalCapabilityWorkplaneGateway::new(
                     &self.repo_root,
+                    &self.repo.repo_id,
                     capability_id,
                     declared_mailboxes,
                     None,
@@ -162,6 +163,7 @@ impl LocalCapabilityRuntimeResources {
     ) -> Result<LocalCapabilityWorkplaneGateway> {
         LocalCapabilityWorkplaneGateway::new(
             &self.repo_root,
+            &self.repo.repo_id,
             capability_id,
             declared_mailboxes,
             init_session_id,
