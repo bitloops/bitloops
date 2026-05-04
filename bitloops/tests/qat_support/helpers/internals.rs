@@ -1418,14 +1418,6 @@ fn build_bitloops_command(world: &QatWorld, args: &[&str]) -> Result<Command> {
     } else {
         command.env_remove(bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV);
     }
-    if let Some(timeout_secs) = world.watcher_idle_timeout_secs {
-        command.env(
-            bitloops::host::devql::watch::WATCHER_IDLE_TIMEOUT_ENV,
-            timeout_secs.to_string(),
-        );
-    } else {
-        command.env_remove(bitloops::host::devql::watch::WATCHER_IDLE_TIMEOUT_ENV);
-    }
     Ok(command)
 }
 

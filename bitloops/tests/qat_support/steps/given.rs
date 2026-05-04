@@ -431,24 +431,6 @@ pub(super) fn given_enable_watcher_autostart(
     })
 }
 
-pub(super) fn given_set_watcher_idle_timeout(
-    world: &mut QatWorld,
-    ctx: cucumber::step::Context,
-) -> LocalBoxFuture<'_, ()> {
-    Box::pin(async move {
-        let seconds = ctx.matches[1]
-            .1
-            .parse::<u64>()
-            .expect("watcher idle timeout should parse as u64");
-        let repo_name = ctx.matches[2].1.clone();
-        run_step(
-            "DevQL watcher idle timeout is set",
-            helpers::ensure_bitloops_repo_name(&repo_name)
-                .and_then(|_| helpers::set_watcher_idle_timeout_for_scenario(world, seconds)),
-        );
-    })
-}
-
 pub(super) fn given_enqueue_devql_ingest_task_with_status(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -1084,19 +1066,6 @@ pub(super) fn given_wait_for_devql_task_queue_idle(
         run_step(
             "I wait for the DevQL task queue to become idle",
             helpers::wait_for_devql_task_queue_idle_for_repo(world, &repo_name),
-        );
-    })
-}
-
-pub(super) fn given_wait_for_registered_devql_watcher_to_exit(
-    world: &mut QatWorld,
-    ctx: cucumber::step::Context,
-) -> LocalBoxFuture<'_, ()> {
-    Box::pin(async move {
-        let repo_name = ctx.matches[1].1.clone();
-        run_step(
-            "I wait for the registered DevQL watcher to exit",
-            helpers::wait_for_registered_watcher_to_exit_for_repo(world, &repo_name),
         );
     })
 }

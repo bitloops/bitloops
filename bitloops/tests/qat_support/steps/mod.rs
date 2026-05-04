@@ -73,11 +73,6 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
-            regex(r"^DevQL watcher idle timeout is (\d+) seconds in (\S+)$"),
-            step_fn(given_set_watcher_idle_timeout),
-        )
-        .given(
-            None,
             regex(
                 r"^I run bitloops init --agent (\S+) --sync=false --ingest=true --backfill=(\d+) in (\S+)$",
             ),
@@ -423,11 +418,6 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I wait for the DevQL task queue to become idle in (\S+)$"),
             step_fn(given_wait_for_devql_task_queue_idle),
-        )
-        .given(
-            None,
-            regex(r"^I wait for the registered DevQL watcher to exit in (\S+)$"),
-            step_fn(given_wait_for_registered_devql_watcher_to_exit),
         )
         .given(
             None,

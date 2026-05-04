@@ -120,7 +120,6 @@ pub struct QatWorld {
     pub last_task_id: Option<String>,
     pub agent_name: Option<String>,
     pub watcher_autostart_enabled: bool,
-    pub watcher_idle_timeout_secs: Option<u64>,
 }
 
 pub struct ScenarioDaemonProcess {
@@ -179,7 +178,6 @@ impl QatWorld {
         self.last_task_id = None;
         self.agent_name = None;
         self.watcher_autostart_enabled = false;
-        self.watcher_idle_timeout_secs = None;
     }
 
     pub fn prepare(

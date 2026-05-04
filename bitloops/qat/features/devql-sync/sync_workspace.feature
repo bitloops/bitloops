@@ -472,17 +472,16 @@ Feature: DevQL sync workspace reconciliation
     Then DevQL sync validation reports clean in bitloops
 
   @devql @sync @sync_producer @sync_producer_lifecycle @sync_producer_watcher_idle
-  Scenario: Producer contract survives watcher idle exit
+  Scenario: Producer contract keeps initialized watcher running while idle
     Given I run CleanStart for flow "SyncProducerWatcherIdle"
     And I start the daemon in bitloops
     And I create a simple Rust project in bitloops
     And I run InitCommit for bitloops
-    And DevQL watcher idle timeout is 1 seconds in bitloops
     And I run bitloops producer-contract init --agent claude --sync=true in bitloops
     Then DevQL watcher is registered and running in bitloops
     And a completed DevQL sync task with source "init" exists in bitloops
     Given I wait for the DevQL task queue to become idle in bitloops
-    And I wait for the registered DevQL watcher to exit in bitloops
+    Then DevQL watcher is registered and running in bitloops
     And artefacts_current does not contain path "src/after_idle.rs" in bitloops
     Given I snapshot completed DevQL sync task source "watcher" in bitloops
     When I add a source file "src/after_idle.rs" in bitloops

@@ -458,22 +458,14 @@ fn watcher_lifecycle_exits_when_registration_is_cleared() {
     .expect("build watcher config");
 
     assert_eq!(
-        evaluate_watcher_exit_reason(
-            &cfg,
-            &store,
-            42,
-            "missing-token",
-            Instant::now(),
-            Duration::from_secs(60),
-            false,
-        )
-        .expect("evaluate watcher lifecycle"),
+        evaluate_watcher_exit_reason(&cfg, &store, 42, "missing-token")
+            .expect("evaluate watcher lifecycle"),
         Some(WatcherExitReason::RegistrationLost)
     );
 }
 
 #[test]
-fn watcher_lifecycle_exits_after_idle_timeout_without_pending_batch() {
+fn watcher_lifecycle_does_not_exit_solely_because_it_is_idle() {
     let (_dir, repo_root, store) = seed_runtime_store();
     let pid = 42;
     let token = "idle-token";
@@ -493,42 +485,8 @@ fn watcher_lifecycle_exits_after_idle_timeout_without_pending_batch() {
     .expect("build watcher config");
 
     assert_eq!(
-        evaluate_watcher_exit_reason(
-            &cfg,
-            &store,
-            pid,
-            token,
-            Instant::now() - Duration::from_secs(5),
-            Duration::from_secs(1),
-            false,
-        )
-        .expect("evaluate watcher lifecycle"),
-        Some(WatcherExitReason::Idle)
-    );
-    assert_eq!(
-        evaluate_watcher_exit_reason(
-            &cfg,
-            &store,
-            pid,
-            token,
-            Instant::now() - Duration::from_secs(5),
-            Duration::from_secs(1),
-            true,
-        )
-        .expect("evaluate watcher lifecycle with pending batch"),
+        evaluate_watcher_exit_reason(&cfg, &store, pid, token).expect("evaluate watcher lifecycle"),
         None
-    );
-}
-
-#[test]
-fn watcher_idle_timeout_uses_env_override_when_present() {
-    assert_eq!(
-        watcher_idle_timeout_from_env(Some("7")),
-        Duration::from_secs(7)
-    );
-    assert_eq!(
-        watcher_idle_timeout_from_env(Some("not-a-number")),
-        DEFAULT_WATCHER_IDLE_TIMEOUT
     );
 }
 

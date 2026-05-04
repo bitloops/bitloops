@@ -25,8 +25,6 @@ const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WATCHER_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const WATCHER_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(2);
 const WATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_WATCHER_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-pub const WATCHER_IDLE_TIMEOUT_ENV: &str = "BITLOOPS_WATCHER_IDLE_TIMEOUT_SECS";
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -299,8 +297,6 @@ fn run_notify_loop(
     let mut last_rescan = Instant::now();
     let mut batch: BTreeSet<PathBuf> = BTreeSet::new();
     let mut window_start: Option<Instant> = None;
-    let idle_timeout = watcher_idle_timeout();
-    let mut last_external_activity = Instant::now();
 
     while !shutdown.load(Ordering::SeqCst) {
         match evaluate_watcher_exit_reason(
@@ -308,9 +304,6 @@ fn run_notify_loop(
             &registration_guard.runtime_store,
             registration_guard.pid,
             &registration_guard.restart_token,
-            last_external_activity,
-            idle_timeout,
-            !batch.is_empty() || window_start.is_some(),
         ) {
             Ok(Some(reason)) => {
                 log::info!(
@@ -332,7 +325,6 @@ fn run_notify_loop(
 
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
-                let mut saw_relevant_path = false;
                 for path in event.paths {
                     if should_ignore_path(&cfg.repo_root, &path)
                         || is_gitignored(&cfg.repo_root, &path)
@@ -340,10 +332,6 @@ fn run_notify_loop(
                         continue;
                     }
                     batch.insert(path);
-                    saw_relevant_path = true;
-                }
-                if saw_relevant_path {
-                    last_external_activity = Instant::now();
                 }
                 if !batch.is_empty() && window_start.is_none() {
                     window_start = Some(Instant::now());
@@ -549,22 +537,11 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
     }
 }
 
-fn watcher_idle_timeout() -> Duration {
-    watcher_idle_timeout_from_env(env::var(WATCHER_IDLE_TIMEOUT_ENV).ok().as_deref())
-}
-
-fn watcher_idle_timeout_from_env(raw: Option<&str>) -> Duration {
-    raw.and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_WATCHER_IDLE_TIMEOUT)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WatcherExitReason {
     RepoMissing,
     CaptureDisabled,
     RegistrationLost,
-    Idle,
 }
 
 impl WatcherExitReason {
@@ -573,7 +550,6 @@ impl WatcherExitReason {
             Self::RepoMissing => "repo_missing",
             Self::CaptureDisabled => "capture_disabled",
             Self::RegistrationLost => "registration_lost",
-            Self::Idle => "idle_timeout",
         }
     }
 }
@@ -583,9 +559,6 @@ fn evaluate_watcher_exit_reason(
     runtime_store: &RepoSqliteRuntimeStore,
     pid: u32,
     restart_token: &str,
-    last_external_activity: Instant,
-    idle_timeout: Duration,
-    has_pending_batch: bool,
 ) -> Result<Option<WatcherExitReason>> {
     if watcher_repo_root_missing(&cfg.repo_root) {
         return Ok(Some(WatcherExitReason::RepoMissing));
@@ -595,9 +568,6 @@ fn evaluate_watcher_exit_reason(
     }
     if !watcher_registration_matches(runtime_store, pid, restart_token)? {
         return Ok(Some(WatcherExitReason::RegistrationLost));
-    }
-    if !has_pending_batch && last_external_activity.elapsed() >= idle_timeout {
-        return Ok(Some(WatcherExitReason::Idle));
     }
     Ok(None)
 }

@@ -39,15 +39,6 @@ pub fn enable_watcher_autostart_for_scenario(world: &mut QatWorld) -> Result<()>
     Ok(())
 }
 
-pub fn set_watcher_idle_timeout_for_scenario(world: &mut QatWorld, seconds: u64) -> Result<()> {
-    ensure!(
-        seconds > 0,
-        "DevQL watcher idle timeout must be greater than 0 seconds"
-    );
-    world.watcher_idle_timeout_secs = Some(seconds);
-    Ok(())
-}
-
 const QAT_EVENTUAL_TIMEOUT_ENV: &str = "BITLOOPS_QAT_EVENTUAL_TIMEOUT_SECS";
 // Watcher-driven sync materialisation is asynchronous end-to-end: the CLI
 // restarts the watcher, the watcher debounces filesystem events, and the daemon
@@ -471,45 +462,6 @@ pub fn assert_devql_watcher_registered_and_running_for_repo(
         watcher_process_is_running(pid)?,
         "expected DevQL watcher pid {pid} to be running"
     );
-    Ok(())
-}
-
-pub fn wait_for_registered_watcher_to_exit_for_repo(
-    world: &QatWorld,
-    repo_name: &str,
-) -> Result<()> {
-    ensure_bitloops_repo_name(repo_name)?;
-    let repo_root = world.repo_dir().to_string_lossy().to_string();
-    let sqlite = open_scenario_runtime_sqlite(world)?;
-    let Some(pid) = sqlite
-        .with_connection(|conn| {
-            use rusqlite::OptionalExtension as _;
-
-            conn.query_row(
-                "SELECT pid
-                 FROM repo_watcher_registrations
-                 WHERE repo_root = ?1
-                 LIMIT 1",
-                rusqlite::params![repo_root.as_str()],
-                |row| row.get::<_, u32>(0),
-            )
-            .optional()
-            .map_err(anyhow::Error::from)
-        })
-        .context("loading DevQL watcher registration")?
-    else {
-        bail!("expected DevQL watcher registration for repo `{repo_name}`");
-    };
-
-    wait_for_qat_condition(
-        qat_eventual_timeout(),
-        qat_eventual_poll_interval(),
-        &format!("registered DevQL watcher pid {pid} to exit"),
-        || watcher_process_is_running(pid),
-        |running| !*running,
-        |running| format!("running={running}"),
-    )
-    .with_context(|| format!("waiting for registered DevQL watcher pid {pid} to exit"))?;
     Ok(())
 }
 
