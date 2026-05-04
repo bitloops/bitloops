@@ -96,20 +96,30 @@ pub(super) fn merge_existing_task(
                         {
                             true
                         }
+                        (SyncTaskMode::Paths { .. }, incoming_mode)
+                            if task.status == DevqlTaskStatus::Queued
+                                && is_stronger_than_paths(incoming_mode) =>
+                        {
+                            true
+                        }
                         _ => false,
                     }
                 })
         })
     {
-        if source == DevqlTaskSource::RepoPolicyChange {
-            existing.source = DevqlTaskSource::RepoPolicyChange;
-        }
+        let mut use_incoming_source = source == DevqlTaskSource::RepoPolicyChange;
         if let Some(existing_spec) = sync_spec_from_task_spec_mut(&mut existing.spec) {
+            use_incoming_source |= existing.source != DevqlTaskSource::RepoPolicyChange
+                && matches!(existing_spec.mode, SyncTaskMode::Paths { .. })
+                && is_stronger_than_paths(mode);
             existing_spec.mode = merge_sync_modes(&existing_spec.mode, mode);
             merge_sync_snapshot_metadata(
                 existing_spec,
                 sync_spec_from_task_spec(spec).expect("sync spec"),
             );
+        }
+        if use_incoming_source {
+            existing.source = source;
         }
         existing.updated_at_unix = unix_timestamp_now();
         existing.error = None;
@@ -612,6 +622,13 @@ fn is_weaker_than_repair(mode: &SyncTaskMode) -> bool {
     )
 }
 
+fn is_stronger_than_paths(mode: &SyncTaskMode) -> bool {
+    matches!(
+        mode,
+        SyncTaskMode::Auto | SyncTaskMode::Full | SyncTaskMode::Repair
+    )
+}
+
 fn merge_sync_modes(existing: &SyncTaskMode, incoming: &SyncTaskMode) -> SyncTaskMode {
     match (existing, incoming) {
         (SyncTaskMode::Repair, _) | (_, SyncTaskMode::Repair) => SyncTaskMode::Repair,
@@ -667,11 +684,381 @@ mod tests {
     use std::collections::HashSet;
     use std::path::PathBuf;
 
+    use crate::host::devql::{DevqlConfig, RepoIdentity};
+
     use super::super::super::types::{
-        DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus,
-        SyncTaskMode, SyncTaskSpec,
+        DevqlTaskKind, DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec,
+        DevqlTaskStatus, PostCommitSnapshotSpec, SyncTaskMode, SyncTaskSpec,
     };
-    use super::prune_terminal_tasks;
+    use super::super::state::PersistedDevqlTaskQueueState;
+    use super::{merge_existing_task, prune_terminal_tasks};
+
+    fn test_cfg() -> DevqlConfig {
+        DevqlConfig {
+            daemon_config_root: PathBuf::from("/tmp/config-1"),
+            repo_root: PathBuf::from("/tmp/repo-1"),
+            repo: RepoIdentity {
+                provider: "local".to_string(),
+                organization: "local".to_string(),
+                name: "repo".to_string(),
+                identity: "repo".to_string(),
+                repo_id: "repo-1".to_string(),
+            },
+            pg_dsn: None,
+            clickhouse_url: "http://localhost:8123".to_string(),
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: "default".to_string(),
+        }
+    }
+
+    fn sync_spec(mode: SyncTaskMode) -> DevqlTaskSpec {
+        DevqlTaskSpec::Sync(SyncTaskSpec {
+            mode,
+            post_commit_snapshot: None,
+        })
+    }
+
+    fn sync_spec_with_snapshot(
+        mode: SyncTaskMode,
+        commit_sha: &str,
+        changed_paths: &[&str],
+    ) -> DevqlTaskSpec {
+        DevqlTaskSpec::Sync(SyncTaskSpec {
+            mode,
+            post_commit_snapshot: Some(PostCommitSnapshotSpec {
+                commit_sha: commit_sha.to_string(),
+                changed_paths: changed_paths.iter().map(|path| path.to_string()).collect(),
+            }),
+        })
+    }
+
+    fn sync_task(
+        task_id: &str,
+        source: DevqlTaskSource,
+        mode: SyncTaskMode,
+        status: DevqlTaskStatus,
+    ) -> DevqlTaskRecord {
+        sync_task_with_spec(task_id, source, sync_spec(mode), status)
+    }
+
+    fn sync_task_with_spec(
+        task_id: &str,
+        source: DevqlTaskSource,
+        spec: DevqlTaskSpec,
+        status: DevqlTaskStatus,
+    ) -> DevqlTaskRecord {
+        DevqlTaskRecord {
+            task_id: task_id.to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_name: "repo".to_string(),
+            repo_provider: "local".to_string(),
+            repo_organisation: "local".to_string(),
+            repo_identity: "repo".to_string(),
+            daemon_config_root: PathBuf::from("/tmp/config-1"),
+            repo_root: PathBuf::from("/tmp/repo-1"),
+            init_session_id: Some("init-session-1".to_string()),
+            kind: DevqlTaskKind::Sync,
+            source,
+            spec,
+            status,
+            submitted_at_unix: 1,
+            started_at_unix: (status == DevqlTaskStatus::Running).then_some(2),
+            updated_at_unix: 1,
+            completed_at_unix: None,
+            queue_position: None,
+            tasks_ahead: None,
+            progress: DevqlTaskProgress::Sync(Default::default()),
+            error: None,
+            result: None,
+        }
+    }
+
+    #[test]
+    fn queued_watcher_paths_are_upgraded_by_incoming_post_checkout_full() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Watcher,
+                SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::PostCheckout,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Full),
+            Some("init-session-1"),
+        )
+        .expect("incoming full sync should merge into queued path sync");
+
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(merged.task_id, "sync-task-1");
+        assert_eq!(state.tasks[0].source, DevqlTaskSource::PostCheckout);
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Full
+        );
+    }
+
+    #[test]
+    fn queued_repo_policy_paths_keep_source_when_upgraded_by_non_policy_full() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::RepoPolicyChange,
+                SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::PostCheckout,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Full),
+            Some("init-session-1"),
+        )
+        .expect("incoming full sync should upgrade queued policy path sync");
+
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(merged.task_id, "sync-task-1");
+        assert_eq!(state.tasks[0].source, DevqlTaskSource::RepoPolicyChange);
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Full
+        );
+    }
+
+    #[test]
+    fn queued_post_checkout_full_absorbs_incoming_watcher_paths() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::PostCheckout,
+                SyncTaskMode::Full,
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::Watcher,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Paths {
+                paths: vec!["src/lib.rs".to_string()],
+            }),
+            Some("init-session-1"),
+        )
+        .expect("incoming paths should merge into queued full sync");
+
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(merged.task_id, "sync-task-1");
+        assert_eq!(state.tasks[0].source, DevqlTaskSource::PostCheckout);
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Full
+        );
+    }
+
+    #[test]
+    fn queued_paths_are_not_upgraded_across_init_sessions() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Watcher,
+                SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::PostCheckout,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Full),
+            Some("different-init-session"),
+        );
+
+        assert!(merged.is_none(), "different init sessions must not merge");
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Paths {
+                paths: vec!["src/lib.rs".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn queued_paths_upgrade_with_matching_snapshot_and_merge_changed_paths() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task_with_spec(
+                "sync-task-1",
+                DevqlTaskSource::Watcher,
+                sync_spec_with_snapshot(
+                    SyncTaskMode::Paths {
+                        paths: vec!["src/lib.rs".to_string()],
+                    },
+                    "abc123",
+                    &["src/lib.rs"],
+                ),
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::PostCheckout,
+            DevqlTaskKind::Sync,
+            &sync_spec_with_snapshot(SyncTaskMode::Full, "abc123", &["src/main.rs"]),
+            Some("init-session-1"),
+        )
+        .expect("matching snapshots should allow upgrade");
+
+        assert_eq!(merged.task_id, "sync-task-1");
+        let sync_spec = state.tasks[0].sync_spec().expect("sync spec");
+        assert_eq!(sync_spec.mode, SyncTaskMode::Full);
+        let snapshot = sync_spec
+            .post_commit_snapshot
+            .as_ref()
+            .expect("merged snapshot");
+        assert_eq!(snapshot.commit_sha, "abc123");
+        assert_eq!(
+            snapshot.changed_paths,
+            vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn queued_paths_do_not_upgrade_with_mismatched_snapshot() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task_with_spec(
+                "sync-task-1",
+                DevqlTaskSource::Watcher,
+                sync_spec_with_snapshot(
+                    SyncTaskMode::Paths {
+                        paths: vec!["src/lib.rs".to_string()],
+                    },
+                    "abc123",
+                    &["src/lib.rs"],
+                ),
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::PostCheckout,
+            DevqlTaskKind::Sync,
+            &sync_spec_with_snapshot(SyncTaskMode::Full, "def456", &["src/main.rs"]),
+            Some("init-session-1"),
+        );
+
+        assert!(merged.is_none(), "mismatched snapshots must not merge");
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Paths {
+                paths: vec!["src/lib.rs".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn queued_paths_do_not_merge_with_incoming_validate() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Watcher,
+                SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::ManualCli,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Validate),
+            Some("init-session-1"),
+        );
+
+        assert!(merged.is_none(), "validate tasks must not merge");
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Paths {
+                paths: vec!["src/lib.rs".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn running_watcher_paths_are_not_upgraded_by_incoming_full() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Watcher,
+                SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                DevqlTaskStatus::Running,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::PostCheckout,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Full),
+            Some("init-session-1"),
+        );
+
+        assert!(
+            merged.is_none(),
+            "running path sync should not absorb an incoming full sync"
+        );
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.tasks[0].source, DevqlTaskSource::Watcher);
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Paths {
+                paths: vec!["src/lib.rs".to_string()],
+            }
+        );
+    }
 
     fn completed_sync_task(task_id: &str, updated_at_unix: u64) -> DevqlTaskRecord {
         DevqlTaskRecord {
@@ -684,7 +1071,7 @@ mod tests {
             daemon_config_root: PathBuf::from("/tmp/config-1"),
             repo_root: PathBuf::from("/tmp/repo-1"),
             init_session_id: Some("init-session-1".to_string()),
-            kind: super::super::super::types::DevqlTaskKind::Sync,
+            kind: DevqlTaskKind::Sync,
             source: DevqlTaskSource::Init,
             spec: DevqlTaskSpec::Sync(SyncTaskSpec {
                 mode: SyncTaskMode::Full,
