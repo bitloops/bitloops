@@ -26,7 +26,7 @@ use super::capability_config::build_capability_config_root;
 use super::language_services::{BuiltinLanguageServicesGateway, builtin_language_services};
 use super::local_gateways::{
     DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalCapabilityWorkplaneGateway,
-    LocalStoreHealthGateway,
+    LocalGitHistoryGateway, LocalStoreHealthGateway,
 };
 use super::local_runtime::LocalCapabilityRuntime;
 
@@ -46,6 +46,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub provenance: DefaultProvenanceBuilder,
     pub graph: LocalCanonicalGraphGateway,
     pub stores: LocalStoreHealthGateway,
+    pub git_history: LocalGitHistoryGateway,
     pub inference: LocalInferenceGateway,
     pub test_harness: Option<std::sync::Mutex<BitloopsTestHarnessRepository>>,
     pub languages: &'static BuiltinLanguageServicesGateway,
@@ -100,6 +101,7 @@ impl LocalCapabilityRuntimeResources {
             provenance: DefaultProvenanceBuilder,
             graph: LocalCanonicalGraphGateway,
             stores,
+            git_history: LocalGitHistoryGateway,
             inference,
             test_harness,
             languages: builtin_language_services()?,
@@ -139,6 +141,7 @@ impl LocalCapabilityRuntimeResources {
             &self.provenance,
             &self.graph,
             &self.stores,
+            &self.git_history,
             &self.inference,
             self.test_harness.as_ref(),
             self.languages,
@@ -148,6 +151,7 @@ impl LocalCapabilityRuntimeResources {
             invoking_capability_id.and_then(|capability_id| {
                 LocalCapabilityWorkplaneGateway::new(
                     &self.repo_root,
+                    &self.repo.repo_id,
                     capability_id,
                     declared_mailboxes,
                     None,
@@ -165,6 +169,7 @@ impl LocalCapabilityRuntimeResources {
     ) -> Result<LocalCapabilityWorkplaneGateway> {
         LocalCapabilityWorkplaneGateway::new(
             &self.repo_root,
+            &self.repo.repo_id,
             capability_id,
             declared_mailboxes,
             init_session_id,

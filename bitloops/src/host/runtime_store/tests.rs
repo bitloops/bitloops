@@ -73,6 +73,21 @@ fn repo_runtime_store_uses_config_root_runtime_sqlite_path() {
 }
 
 #[test]
+fn repo_runtime_store_can_open_with_known_repo_id_without_git_identity_lookup() {
+    let dir = TempDir::new().expect("tempdir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+
+    let store =
+        RepoSqliteRuntimeStore::open_for_roots_with_repo_id(&config_root, &repo_root, "repo-known")
+            .expect("open runtime store with known repo id");
+
+    assert_eq!(store.repo_id(), "repo-known");
+}
+
+#[test]
 fn repo_runtime_store_fails_without_daemon_config() {
     let dir = TempDir::new().expect("tempdir");
     init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");

@@ -28,10 +28,16 @@ impl DevqlGraphqlContext {
         scope: &ResolverScope,
         path: &str,
     ) -> std::result::Result<String, String> {
-        let normalized = normalise_repo_relative_path(path, false)?;
         let repo_root = self
             .repo_root_for_scope(scope)
             .map_err(|err| err.to_string())?;
+
+        let trimmed = path.trim().replace('\\', "/");
+        if trimmed == "." || trimmed == "./" {
+            return Ok(".".to_string());
+        }
+
+        let normalized = normalise_repo_relative_path(path, false)?;
         let candidate = repo_root.join(&normalized);
         if !candidate.exists() {
             return Err(format!("unknown project path `{normalized}`"));

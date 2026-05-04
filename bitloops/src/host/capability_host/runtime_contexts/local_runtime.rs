@@ -17,8 +17,8 @@ use crate::host::capability_host::contexts::{
 };
 use crate::host::capability_host::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, CapabilityWorkplaneGateway, ConnectorContext,
-    ConnectorRegistry, LanguageServicesGateway, ProvenanceBuilder, RelationalGateway,
-    StoreHealthGateway,
+    ConnectorRegistry, GitHistoryGateway, LanguageServicesGateway, ProvenanceBuilder,
+    RelationalGateway, StoreHealthGateway,
 };
 use crate::host::devql::RelationalStorage;
 use crate::host::devql::RepoIdentity;
@@ -42,6 +42,7 @@ pub struct LocalCapabilityRuntime<'a> {
     provenance: &'a dyn ProvenanceBuilder,
     graph: &'a dyn CanonicalGraphGateway,
     stores: &'a dyn StoreHealthGateway,
+    git_history: &'a dyn GitHistoryGateway,
     inference: ScopedInferenceGateway<'a>,
     test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
     languages: &'a BuiltinLanguageServicesGateway,
@@ -67,6 +68,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
         provenance: &'a dyn ProvenanceBuilder,
         graph: &'a dyn CanonicalGraphGateway,
         stores: &'a dyn StoreHealthGateway,
+        git_history: &'a dyn GitHistoryGateway,
         inference: &'a LocalInferenceGateway,
         test_harness: Option<&'a std::sync::Mutex<BitloopsTestHarnessRepository>>,
         languages: &'a BuiltinLanguageServicesGateway,
@@ -89,6 +91,7 @@ impl<'a> LocalCapabilityRuntime<'a> {
             provenance,
             graph,
             stores,
+            git_history,
             inference: inference.scoped(invoking_capability_id),
             test_harness,
             languages,
@@ -123,6 +126,10 @@ impl CapabilityExecutionContext for LocalCapabilityRuntime<'_> {
 
     fn languages(&self) -> &dyn LanguageServicesGateway {
         self.languages
+    }
+
+    fn git_history(&self) -> &dyn GitHistoryGateway {
+        self.git_history
     }
 
     fn test_harness_store(&self) -> Option<&std::sync::Mutex<BitloopsTestHarnessRepository>> {

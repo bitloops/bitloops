@@ -925,6 +925,208 @@ fn devql_cli_parses_packs_flags() {
 }
 
 #[test]
+fn devql_cli_parses_navigation_context_status_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "navigation-context",
+        "status",
+        "--project",
+        "crates/api",
+        "--view",
+        "architecture_map",
+        "--status",
+        "stale",
+        "--changed-limit",
+        "3",
+        "--json",
+    ])
+    .expect("devql navigation-context status should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::NavigationContext(navigation_context)) = args.command else {
+        panic!("expected devql navigation-context command");
+    };
+    let DevqlNavigationContextCommand::Status(status) = navigation_context.command else {
+        panic!("expected devql navigation-context status command");
+    };
+
+    assert_eq!(status.project, "crates/api");
+    assert_eq!(status.view.as_deref(), Some("architecture_map"));
+    assert_eq!(status.status, Some(DevqlNavigationContextStatusArg::Stale));
+    assert_eq!(status.changed_limit, 3);
+    assert!(status.json);
+}
+
+#[test]
+fn devql_cli_parses_navigation_context_accept_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "navigation-context",
+        "accept",
+        "architecture_map",
+        "--expected-current-signature",
+        "signature-1",
+        "--reason",
+        "reviewed",
+        "--materialised-ref",
+        "docs/navigation/architecture.md",
+        "--json",
+    ])
+    .expect("devql navigation-context accept should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::NavigationContext(navigation_context)) = args.command else {
+        panic!("expected devql navigation-context command");
+    };
+    let DevqlNavigationContextCommand::Accept(accept) = navigation_context.command else {
+        panic!("expected devql navigation-context accept command");
+    };
+
+    assert_eq!(accept.view_id, "architecture_map");
+    assert_eq!(
+        accept.expected_current_signature.as_deref(),
+        Some("signature-1")
+    );
+    assert_eq!(accept.reason.as_deref(), Some("reviewed"));
+    assert_eq!(
+        accept.materialised_ref.as_deref(),
+        Some("docs/navigation/architecture.md")
+    );
+    assert!(accept.json);
+}
+
+#[test]
+fn devql_cli_parses_navigation_context_materialise_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "navigation-context",
+        "materialise",
+        "architecture_map",
+        "--expected-current-signature",
+        "signature-1",
+        "--rendered",
+        "--json",
+    ])
+    .expect("devql navigation-context materialise should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::NavigationContext(navigation_context)) = args.command else {
+        panic!("expected devql navigation-context command");
+    };
+    let DevqlNavigationContextCommand::Materialise(materialise) = navigation_context.command else {
+        panic!("expected devql navigation-context materialise command");
+    };
+
+    assert_eq!(materialise.view_id, "architecture_map");
+    assert_eq!(
+        materialise.expected_current_signature.as_deref(),
+        Some("signature-1")
+    );
+    assert!(materialise.rendered);
+    assert!(materialise.json);
+}
+
+#[test]
+fn format_navigation_context_status_shows_changed_primitive_details() {
+    let snapshot = json!({
+        "totalViews": 1,
+        "totalPrimitives": 42,
+        "totalEdges": 7,
+        "views": [{
+            "viewId": "architecture_map",
+            "label": "Architecture map",
+            "acceptedSignature": "accepted-signature",
+            "currentSignature": "current-signature",
+            "status": "STALE",
+            "materialisedRef": "docs/navigation/architecture.md",
+            "acceptanceHistory": [{
+                "acceptanceId": "acceptance-1",
+                "acceptedSignature": "accepted-signature",
+                "previousAcceptedSignature": "previous-accepted-signature",
+                "currentSignature": "accepted-signature",
+                "expectedCurrentSignature": "accepted-signature",
+                "source": "manual_cli",
+                "reason": "reviewed",
+                "materialisedRef": "docs/navigation/architecture.md",
+                "acceptedAt": "2026-05-03T00:00:00Z"
+            }],
+            "staleReason": {
+                "changedPrimitives": [{
+                    "primitiveId": "symbol-1",
+                    "primitiveKind": "SYMBOL",
+                    "label": "render",
+                    "path": "src/render.rs",
+                    "sourceKind": "TEST",
+                    "changeKind": "hash_changed",
+                    "previousHash": "previous-signature",
+                    "currentHash": "current-signature"
+                }]
+            }
+        }]
+    });
+
+    let rendered = format_navigation_context_status(&snapshot, 10);
+
+    assert!(
+        rendered.contains("navigation context: 1 views, 1 stale, 42 primitives, 7 edges"),
+        "expected summary line, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("- architecture_map [stale] Architecture map"),
+        "expected view line, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("materialised: docs/navigation/architecture.md"),
+        "expected materialised ref, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("last accepted: 2026-05-03T00:00:00Z by manual_cli"),
+        "expected acceptance history, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("hash_changed: SYMBOL render (src/render.rs) previous-sig->current-sign"),
+        "expected changed primitive details, got: {rendered}"
+    );
+}
+
+#[test]
+fn format_navigation_context_materialisation_shows_snapshot_ref_and_counts() {
+    let result = json!({
+        "viewId": "architecture_map",
+        "currentSignature": "current-signature",
+        "status": "STALE",
+        "materialisedRef": "navigation-context://materialisations/123",
+        "primitiveCount": 42,
+        "edgeCount": 7,
+        "materialisedAt": "2026-05-03T00:00:00Z"
+    });
+
+    let rendered = format_navigation_context_materialisation(&result);
+
+    assert!(
+        rendered.contains("navigation context view materialised: architecture_map status=stale"),
+        "expected materialisation summary, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("primitives=42 edges=7"),
+        "expected materialisation counts, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("ref=navigation-context://materialisations/123"),
+        "expected materialised ref, got: {rendered}"
+    );
+}
+
+#[test]
 fn devql_cli_parses_schema_defaults() {
     let parsed =
         Cli::try_parse_from(["bitloops", "devql", "schema"]).expect("devql schema should parse");

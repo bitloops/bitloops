@@ -254,6 +254,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create a bitloops-inference CLI fixture in (\S+)$"),
+            step_fn(given_create_bitloops_inference_cli_fixture),
+        )
+        .given(
+            None,
             regex(r"^I run (?:TestHarness|TestLens) ingest-tests for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_tests),
         )
@@ -680,6 +685,31 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r#"^DevQL selectArtefacts search for \"([^\"]+)\" returns symbol \"([^\"]+)\" in (\S+)$"#),
             step_fn(then_devql_select_artefacts_search_returns_symbol),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph entry point kind \"([^\"]+)\" for path \"([^\"]+)\" is effective in (\S+)$"#),
+            step_fn(then_architecture_entry_point_effective),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph container kind \"([^\"]+)\" exposes entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_container_exposes_entry_point),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph system membership \"([^\"]+)\" includes entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_system_membership_for_entry_point),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph suppression hides entry point kind \"([^\"]+)\" for path \"([^\"]+)\" then revoke restores it in (\S+)$"#),
+            step_fn(then_architecture_suppression_revoke_roundtrip),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph assertion adds entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_manual_entry_point),
         )
         .then(
             None,

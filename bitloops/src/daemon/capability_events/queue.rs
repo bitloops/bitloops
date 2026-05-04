@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
@@ -325,6 +325,107 @@ pub(super) fn ensure_consumer_run(
         record,
         repo_root: repo_root.to_path_buf(),
     }))
+}
+
+pub(super) fn force_consumer_run(
+    conn: &rusqlite::Connection,
+    request: ConsumerRunRequest<'_>,
+) -> Result<StoredRunRecord> {
+    let ConsumerRunRequest {
+        repo_id,
+        repo_root,
+        capability_id,
+        mailbox_name,
+        handler_id,
+        init_session_id,
+        now,
+    } = request;
+    let latest_generation = latest_generation_seq(conn, repo_id)?
+        .ok_or_else(|| anyhow!("run DevQL sync first before refreshing CodeCity"))?;
+    let from_generation = latest_generation.saturating_sub(1);
+
+    upsert_consumer_row(conn, repo_id, capability_id, mailbox_name, now)?;
+    if let Some(run) = load_active_run_for_lane(conn, repo_id, capability_id, mailbox_name)? {
+        if run.record.status == CapabilityEventRunStatus::Queued {
+            let run_id = run.record.run_id.clone();
+            conn.execute(
+                "UPDATE capability_workplane_cursor_runs
+                 SET from_generation_seq = ?1, to_generation_seq = ?2,
+                     reconcile_mode = ?3, init_session_id = COALESCE(init_session_id, ?4),
+                     updated_at_unix = ?5
+                 WHERE run_id = ?6",
+                params![
+                    sql_i64(from_generation)?,
+                    sql_i64(latest_generation)?,
+                    "full_reconcile",
+                    init_session_id,
+                    sql_i64(now)?,
+                    &run_id,
+                ],
+            )
+            .with_context(|| format!("forcing queued current-state consumer run `{run_id}`"))?;
+            let mut refreshed = run.record;
+            refreshed.from_generation_seq = from_generation;
+            refreshed.to_generation_seq = latest_generation;
+            refreshed.reconcile_mode = "full_reconcile".to_string();
+            refreshed.updated_at_unix = now;
+            if refreshed.init_session_id.is_none() {
+                refreshed.init_session_id = init_session_id.map(str::to_string);
+            }
+            return Ok(StoredRunRecord {
+                record: refreshed,
+                repo_root: run.repo_root,
+            });
+        }
+        return Ok(run);
+    }
+
+    let run_id = format!("current-state-consumer-run-{}", Uuid::new_v4());
+    let record = CapabilityEventRunRecord {
+        run_id: run_id.clone(),
+        repo_id: repo_id.to_string(),
+        capability_id: capability_id.to_string(),
+        init_session_id: init_session_id.map(str::to_string),
+        consumer_id: mailbox_name.to_string(),
+        handler_id: handler_id.to_string(),
+        from_generation_seq: from_generation,
+        to_generation_seq: latest_generation,
+        reconcile_mode: "full_reconcile".to_string(),
+        event_kind: "current_state_consumer".to_string(),
+        lane_key: build_lane_key(repo_id, mailbox_name),
+        event_payload_json: String::new(),
+        status: CapabilityEventRunStatus::Queued,
+        attempts: 0,
+        submitted_at_unix: now,
+        started_at_unix: None,
+        updated_at_unix: now,
+        completed_at_unix: None,
+        error: None,
+    };
+    conn.execute(
+        "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, capability_id, mailbox_name, init_session_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13, NULL, NULL)",
+        params![
+            &record.run_id,
+            &record.repo_id,
+            repo_root.to_string_lossy().to_string(),
+            &record.capability_id,
+            &record.consumer_id,
+            record.init_session_id.as_deref(),
+            sql_i64(record.from_generation_seq)?,
+            sql_i64(record.to_generation_seq)?,
+            &record.reconcile_mode,
+            record.status.to_string(),
+            record.attempts,
+            sql_i64(record.submitted_at_unix)?,
+            sql_i64(record.updated_at_unix)?,
+        ],
+    )
+    .with_context(|| format!("creating forced current-state consumer run `{run_id}`"))?;
+
+    Ok(StoredRunRecord {
+        record,
+        repo_root: repo_root.to_path_buf(),
+    })
 }
 
 pub(super) fn latest_generation_seq(

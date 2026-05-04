@@ -355,6 +355,120 @@ fn TestSendEventHandlesInvalidJSON() {
 
 #[test]
 #[allow(non_snake_case)]
+fn TestTelemetrySpoolCapsAtConfiguredLimit() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let path = tmp.path().join("telemetry.sqlite3");
+    let payload = serde_json::to_string(&EventPayload {
+        event: "bitloops test".to_string(),
+        distinct_id: "machine-1".to_string(),
+        properties: HashMap::new(),
+        timestamp: "2026-01-28T12:00:00Z".to_string(),
+    })
+    .expect("payload json");
+
+    assert_eq!(
+        spool::enqueue_payload_json_at_path(&path, "event-1", &payload, 100, 2)
+            .expect("enqueue first event"),
+        spool::EnqueueOutcome::Queued
+    );
+    assert_eq!(
+        spool::enqueue_payload_json_at_path(&path, "event-2", &payload, 101, 2)
+            .expect("enqueue second event"),
+        spool::EnqueueOutcome::Queued
+    );
+    assert_eq!(
+        spool::enqueue_payload_json_at_path(&path, "event-3", &payload, 102, 2)
+            .expect("enqueue full event"),
+        spool::EnqueueOutcome::Full
+    );
+
+    assert_eq!(
+        spool::count_events(&path).expect("count spool events"),
+        2,
+        "full spools should preserve already queued events"
+    );
+    let rows = spool::load_due_batch(&path, 200, 10).expect("load due rows");
+    assert_eq!(
+        rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+        vec!["event-1", "event-2"]
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestTelemetrySpoolFailureBackoffIsBoundedAndRetained() {
+    let tmp = tempfile::tempdir().expect("temp dir");
+    let path = tmp.path().join("telemetry.sqlite3");
+    let payload = serde_json::to_string(&EventPayload {
+        event: "bitloops test".to_string(),
+        distinct_id: "machine-1".to_string(),
+        properties: HashMap::new(),
+        timestamp: "2026-01-28T12:00:00Z".to_string(),
+    })
+    .expect("payload json");
+    spool::enqueue_payload_json_at_path(&path, "event-1", &payload, 100, 10)
+        .expect("enqueue event");
+
+    spool::mark_send_failure(&path, &["event-1".to_string()], 200, "network down")
+        .expect("mark first failure");
+    assert_eq!(
+        spool::next_attempt_at(&path, "event-1").expect("load first retry"),
+        Some(205)
+    );
+
+    spool::mark_send_failure(&path, &["event-1".to_string()], 205, "still down")
+        .expect("mark second failure");
+    assert_eq!(
+        spool::next_attempt_at(&path, "event-1").expect("load second retry"),
+        Some(215)
+    );
+    assert_eq!(
+        spool::count_events(&path).expect("count retained event"),
+        1,
+        "failed events should remain queued for retry"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestBuildBatchRequestUsesStableInsertIdAndDistinctId() {
+    let request = build_batch_request(
+        "test-api-key",
+        &[OutboundEvent {
+            id: "stable-row-id".to_string(),
+            payload: EventPayload {
+                event: "bitloops test".to_string(),
+                distinct_id: "machine-1".to_string(),
+                properties: HashMap::from([(
+                    "surface".to_string(),
+                    Value::String("test".to_string()),
+                )]),
+                timestamp: "2026-01-28T12:00:00Z".to_string(),
+            },
+        }],
+    )
+    .expect("batch request");
+
+    assert_eq!(
+        request["api_key"],
+        Value::String("test-api-key".to_string())
+    );
+    assert_eq!(request["historical_migration"], Value::Bool(false));
+    let first = &request["batch"][0];
+    assert_eq!(first["event"], Value::String("bitloops test".to_string()));
+    assert_eq!(
+        first["properties"]["$insert_id"],
+        Value::String("stable-row-id".to_string())
+    );
+    assert_eq!(
+        first["properties"]["distinct_id"],
+        Value::String("machine-1".to_string())
+    );
+    assert_eq!(first["properties"]["$geoip_disable"], Value::Bool(true));
+}
+
+#[test]
+#[allow(non_snake_case)]
 fn TestLoadDispatchContextRequiresExplicitEnablement() {
     let temp_none = tempfile::tempdir().expect("temp dir");
     setup_git_repo(temp_none.path());

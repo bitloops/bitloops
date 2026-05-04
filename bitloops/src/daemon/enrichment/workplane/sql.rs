@@ -20,17 +20,19 @@ pub(crate) fn sql_string_list(values: &[String]) -> String {
         .join(", ")
 }
 
-pub(crate) fn fallback_repo_identity(repo_root: &Path, repo_id: &str) -> RepoIdentity {
+// Enrichment work items already carry the authoritative repo_id; workers must not
+// rediscover identity from Git while processing hot-path batches.
+pub(crate) fn repo_identity_from_runtime_metadata(repo_root: &Path, repo_id: &str) -> RepoIdentity {
     let name = repo_root
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("repository")
         .to_string();
     RepoIdentity {
-        provider: "git".to_string(),
-        organization: "local".to_string(),
+        provider: "runtime".to_string(),
+        organization: "bound".to_string(),
         name: name.clone(),
-        identity: format!("git/local/{name}"),
+        identity: format!("runtime://bound/{repo_id}/{name}"),
         repo_id: repo_id.to_string(),
     }
 }

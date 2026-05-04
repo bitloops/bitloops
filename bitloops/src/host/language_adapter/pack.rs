@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use super::{
     CanonicalMapping, DependencyEdge, LanguageAdapterHealthCheck,
-    LanguageAdapterMigrationDescriptor, LanguageArtefact, LanguageKind, LanguageTestSupport,
+    LanguageAdapterMigrationDescriptor, LanguageArtefact, LanguageEntryPointSupport, LanguageKind,
+    LanguageTestSupport,
 };
 use crate::host::extension_host::LanguagePackDescriptor;
 
@@ -24,6 +25,10 @@ pub(crate) trait LanguageAdapterPack: Send + Sync {
     }
 
     fn test_support(&self) -> Option<Arc<dyn LanguageTestSupport>> {
+        None
+    }
+
+    fn entry_point_support(&self) -> Option<Arc<dyn LanguageEntryPointSupport>> {
         None
     }
 

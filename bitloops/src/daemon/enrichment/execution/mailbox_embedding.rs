@@ -27,16 +27,15 @@ use crate::capability_packs::semantic_clones::{
     load_symbol_embedding_index_states,
 };
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{
-    DevqlConfig, RelationalStorage, build_capability_host, esc_pg, resolve_repo_identity,
-};
+use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host, esc_pg};
 use crate::host::runtime_store::{
     CapabilityWorkplaneJobInsert, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
 };
 
 use super::super::semantic_writer::{CommitEmbeddingBatchRequest, SemanticBatchRepoContext};
 use super::super::workplane::{
-    ClaimedEmbeddingMailboxBatch, SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE, fallback_repo_identity,
+    ClaimedEmbeddingMailboxBatch, SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
+    repo_identity_from_runtime_metadata,
 };
 use super::helpers::{
     dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
@@ -67,8 +66,7 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
 ) -> Result<PreparedEmbeddingMailboxBatch> {
     let total_started = Instant::now();
     let config_started = Instant::now();
-    let repo = resolve_repo_identity(&batch.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&batch.repo_root, &batch.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&batch.repo_root, &batch.repo_id);
     let cfg = DevqlConfig::from_roots(batch.config_root.clone(), batch.repo_root.clone(), repo)?;
     let backends = resolve_store_backend_config_for_repo(&batch.config_root)?;
     let relational =

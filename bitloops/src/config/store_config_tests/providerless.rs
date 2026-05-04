@@ -10,7 +10,7 @@ use super::*;
 #[test]
 fn providerless_relational_has_postgres_true_when_dsn_present() {
     let cfg = RelationalBackendConfig {
-        sqlite_path: Some(".bitloops/stores/relational/relational.db".to_string()),
+        sqlite_path: Some("stores/relational/relational.db".to_string()),
         postgres_dsn: Some("postgres://u:p@localhost:5432/bitloops".to_string()),
     };
     assert!(
@@ -22,7 +22,7 @@ fn providerless_relational_has_postgres_true_when_dsn_present() {
 #[test]
 fn providerless_relational_has_postgres_false_when_dsn_absent() {
     let cfg = RelationalBackendConfig {
-        sqlite_path: Some(".bitloops/stores/relational/relational.db".to_string()),
+        sqlite_path: Some("stores/relational/relational.db".to_string()),
         postgres_dsn: None,
     };
     assert!(

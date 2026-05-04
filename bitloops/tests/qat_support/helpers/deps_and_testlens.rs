@@ -95,6 +95,51 @@ pub fn create_rust_project_with_tests(world: &mut QatWorld, repo_name: &str) -> 
     Ok(())
 }
 
+pub fn create_bitloops_inference_cli_fixture(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let repo_dir = world.repo_dir();
+    let crate_dir = repo_dir.join("crates/bitloops-inference");
+    fs::create_dir_all(crate_dir.join("src/provider"))
+        .with_context(|| format!("creating {}", crate_dir.join("src/provider").display()))?;
+
+    fs::write(
+        repo_dir.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/bitloops-inference\"]\nresolver = \"2\"\n\n[workspace.package]\nversion = \"0.1.3\"\nedition = \"2024\"\nlicense = \"Apache-2.0\"\n",
+    )
+    .context("writing workspace Cargo.toml")?;
+    fs::write(
+        crate_dir.join("Cargo.toml"),
+        "[package]\nname = \"bitloops-inference\"\nversion.workspace = true\nedition.workspace = true\nlicense.workspace = true\n\n[dependencies]\nserde_json = \"1\"\n",
+    )
+    .context("writing bitloops-inference Cargo.toml")?;
+    fs::write(
+        crate_dir.join("src/main.rs"),
+        "use std::process::ExitCode;\n\nfn main() -> ExitCode {\n    match bitloops_inference::run_from_args(std::env::args_os()) {\n        Ok(()) => ExitCode::SUCCESS,\n        Err(error) => {\n            eprintln!(\"{error}\");\n            ExitCode::FAILURE\n        }\n    }\n}\n",
+    )
+    .context("writing src/main.rs")?;
+    fs::write(
+        crate_dir.join("src/lib.rs"),
+        "mod cli;\nmod provider;\nmod runtime;\n\nuse std::ffi::OsString;\n\nuse cli::Command;\n\npub fn run_from_args<I, T>(args: I) -> Result<(), String>\nwhere\n    I: IntoIterator<Item = T>,\n    T: Into<OsString>,\n{\n    match cli::parse_from(args)? {\n        Command::Help => Ok(()),\n        Command::Run { config, profile } => runtime::run_stdio(&config, &profile),\n        Command::ValidateConfig { config } => runtime::validate_config(&config),\n        Command::DescribeProfile { config, profile } => runtime::describe_profile(&config, &profile),\n    }\n}\n",
+    )
+    .context("writing src/lib.rs")?;
+    fs::write(
+        crate_dir.join("src/cli.rs"),
+        "use std::ffi::OsString;\nuse std::path::PathBuf;\n\npub enum Command {\n    Help,\n    Run { config: PathBuf, profile: String },\n    ValidateConfig { config: PathBuf },\n    DescribeProfile { config: PathBuf, profile: String },\n}\n\npub fn parse_from<I, T>(args: I) -> Result<Command, String>\nwhere\n    I: IntoIterator<Item = T>,\n    T: Into<OsString>,\n{\n    let values = args.into_iter().map(Into::into).collect::<Vec<OsString>>();\n    if values.len() <= 1 {\n        return Ok(Command::Help);\n    }\n    match values[1].to_string_lossy().as_ref() {\n        \"run\" => Ok(Command::Run { config: \"config.toml\".into(), profile: \"local\".to_owned() }),\n        \"validate-config\" => Ok(Command::ValidateConfig { config: \"config.toml\".into() }),\n        \"describe-profile\" => Ok(Command::DescribeProfile { config: \"config.toml\".into(), profile: \"local\".to_owned() }),\n        _ => Ok(Command::Help),\n    }\n}\n",
+    )
+    .context("writing src/cli.rs")?;
+    fs::write(
+        crate_dir.join("src/runtime.rs"),
+        "use std::path::Path;\n\nuse crate::provider::ProviderRegistry;\n\npub fn run_stdio(config: &Path, profile: &str) -> Result<(), String> {\n    let registry = ProviderRegistry::default();\n    let _provider = registry.create(profile)?;\n    validate_config(config)\n}\n\npub fn validate_config(config: &Path) -> Result<(), String> {\n    if config.as_os_str().is_empty() {\n        return Err(\"missing config\".to_owned());\n    }\n    Ok(())\n}\n\npub fn describe_profile(config: &Path, profile: &str) -> Result<(), String> {\n    validate_config(config)?;\n    if profile.is_empty() {\n        return Err(\"missing profile\".to_owned());\n    }\n    Ok(())\n}\n",
+    )
+    .context("writing src/runtime.rs")?;
+    fs::write(
+        crate_dir.join("src/provider/mod.rs"),
+        "#[derive(Default)]\npub struct ProviderRegistry;\n\nimpl ProviderRegistry {\n    pub fn create(&self, profile: &str) -> Result<String, String> {\n        if profile.is_empty() {\n            return Err(\"missing profile\".to_owned());\n        }\n        Ok(profile.to_owned())\n    }\n}\n",
+    )
+    .context("writing src/provider/mod.rs")?;
+    Ok(())
+}
+
 pub fn add_new_caller_of_symbol(world: &mut QatWorld, symbol_alias: &str) -> Result<()> {
     let file_path = world.repo_dir().join("src").join("new-caller.ts");
     let content = if let Some((service_name, method_name)) = symbol_alias.split_once('.') {

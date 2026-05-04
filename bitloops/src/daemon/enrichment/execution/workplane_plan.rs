@@ -84,6 +84,7 @@ fn build_repo_backfill_summary_refresh_workplane_plan(
     if !remaining_artefact_ids.is_empty() {
         follow_ups.push(FollowUpJob::SemanticSummaries {
             target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+                .with_repo_id(job.repo_id.clone())
                 .with_init_session_id(job.init_session_id.clone()),
             artefact_ids: remaining_artefact_ids,
         });
@@ -129,6 +130,7 @@ pub(crate) fn build_embedding_refresh_workplane_plan(
     if !remaining_artefact_ids.is_empty() {
         follow_ups.push(FollowUpJob::RepoBackfillEmbeddings {
             target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
+                .with_repo_id(job.repo_id.clone())
                 .with_init_session_id(job.init_session_id.clone()),
             artefact_ids: remaining_artefact_ids,
             representation_kind,

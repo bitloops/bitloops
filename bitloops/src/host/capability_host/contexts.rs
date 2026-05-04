@@ -13,8 +13,8 @@ use crate::host::inference::{EmptyInferenceGateway, InferenceGateway};
 use super::config_view::CapabilityConfigView;
 use super::gateways::{
     BlobPayloadGateway, CanonicalGraphGateway, CapabilityWorkplaneGateway, ConnectorRegistry,
-    EmptyLanguageServicesGateway, LanguageServicesGateway, ProvenanceBuilder, RelationalGateway,
-    StoreHealthGateway,
+    EmptyGitHistoryGateway, EmptyLanguageServicesGateway, GitHistoryGateway,
+    LanguageServicesGateway, ProvenanceBuilder, RelationalGateway, StoreHealthGateway,
 };
 
 pub trait CapabilityExecutionContext: Send {
@@ -29,6 +29,11 @@ pub trait CapabilityExecutionContext: Send {
 
     fn languages(&self) -> &dyn LanguageServicesGateway {
         static EMPTY: EmptyLanguageServicesGateway = EmptyLanguageServicesGateway;
+        &EMPTY
+    }
+
+    fn git_history(&self) -> &dyn GitHistoryGateway {
+        static EMPTY: EmptyGitHistoryGateway = EmptyGitHistoryGateway;
         &EMPTY
     }
 

@@ -184,6 +184,7 @@ async fn merged_delta_materializes_enumerated_scenarios_only_for_changed_paths()
     });
     let context = fixture.context(support, vec![production_artefact()])?;
     let request = CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: "repo-1".to_string(),
         repo_root: fixture.repo_root(),
         active_branch: Some("main".to_string()),
@@ -245,6 +246,7 @@ async fn merged_delta_materializes_synthetic_enumerated_scenarios() -> Result<()
     });
     let context = fixture.context(support, vec![production_artefact()])?;
     let request = CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: "repo-1".to_string(),
         repo_root: fixture.repo_root(),
         active_branch: Some("main".to_string()),
@@ -313,6 +315,7 @@ async fn merged_delta_promotes_to_full_reconcile_when_production_artefacts_chang
     });
     let context = fixture.context(support, vec![production_artefact()])?;
     let request = CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: "repo-1".to_string(),
         repo_root: fixture.repo_root(),
         active_branch: Some("main".to_string()),
@@ -445,9 +448,11 @@ impl TestFixture {
             storage: Arc::new(RelationalStorage::local_only(self.db_path.clone())),
             relational: Arc::new(FakeRelationalGateway { production }),
             language_services: Arc::new(FakeLanguageServicesGateway { support }),
+            git_history: Arc::new(crate::host::capability_host::gateways::EmptyGitHistoryGateway),
             host_services: Arc::new(DefaultHostServicesGateway::new("repo-1"))
                 as Arc<dyn HostServicesGateway>,
             workplane: Arc::new(NoopWorkplaneGateway),
+            test_harness: None,
             init_session_id: None,
         })
     }

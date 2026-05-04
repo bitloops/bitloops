@@ -18,11 +18,22 @@ use crate::host::runtime_store::{
 
 use super::super::EnrichmentJobTarget;
 
+fn open_target_store(target: &EnrichmentJobTarget) -> Result<RepoSqliteRuntimeStore> {
+    match target.repo_id.as_deref() {
+        Some(repo_id) => RepoSqliteRuntimeStore::open_for_roots_with_repo_id(
+            &target.config_root,
+            &target.repo_root,
+            repo_id,
+        ),
+        None => RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root),
+    }
+}
+
 pub(crate) fn enqueue_workplane_summary_jobs(
     target: &EnrichmentJobTarget,
     artefact_ids: Vec<String>,
 ) -> Result<()> {
-    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let store = open_target_store(target)?;
     let result = if artefact_ids.is_empty() {
         store.enqueue_semantic_summary_mailbox_items(vec![
             SemanticSummaryMailboxItemInsert::new(
@@ -68,7 +79,7 @@ pub(crate) fn enqueue_workplane_embedding_jobs(
         EmbeddingRepresentationKind::Identity => SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
         EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     };
-    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let store = open_target_store(target)?;
     let result = if artefact_ids.is_empty() {
         store.enqueue_semantic_embedding_mailbox_items(vec![
             SemanticEmbeddingMailboxItemInsert::new(
@@ -109,7 +120,7 @@ pub(crate) fn enqueue_workplane_embedding_repo_backfill_job(
     if artefact_ids.is_empty() {
         return Ok(());
     }
-    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let store = open_target_store(target)?;
     let mailbox_name = match representation_kind {
         EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
         EmbeddingRepresentationKind::Identity => SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
@@ -143,7 +154,7 @@ pub(crate) fn enqueue_workplane_embedding_repo_backfill_job(
 }
 
 pub(crate) fn enqueue_workplane_clone_rebuild(target: &EnrichmentJobTarget) -> Result<()> {
-    let store = RepoSqliteRuntimeStore::open_for_roots(&target.config_root, &target.repo_root)?;
+    let store = open_target_store(target)?;
     let _ = store.enqueue_capability_workplane_jobs(
         SEMANTIC_CLONES_CAPABILITY_ID,
         vec![

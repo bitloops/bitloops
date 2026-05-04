@@ -27,7 +27,7 @@ use super::jobs::load_workplane_jobs_by_status;
 use super::mailbox_persistence::{
     load_embedding_mailbox_items_by_status, load_summary_mailbox_items_by_status,
 };
-use super::sql::fallback_repo_identity;
+use super::sql::repo_identity_from_runtime_metadata;
 
 pub(crate) fn current_workplane_mailbox_blocked_statuses(
     workplane_store: &DaemonSqliteRuntimeStore,
@@ -268,8 +268,7 @@ fn resolve_mailbox_provider_readiness(
         }
     }
 
-    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
     if text_generation
         && job.capability_id == SEMANTIC_CLONES_CAPABILITY_ID
@@ -319,8 +318,7 @@ fn resolve_optional_text_generation_readiness(
     job: &WorkplaneJobRecord,
     slot_name: &str,
 ) -> Result<WorkplaneMailboxReadiness> {
-    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
     let inference = capability_host.inference_for_capability(&job.capability_id);
 
@@ -340,8 +338,7 @@ fn resolve_optional_text_generation_readiness(
 pub(crate) fn workplane_mailbox_registration_for_job(
     job: &WorkplaneJobRecord,
 ) -> Result<Option<CapabilityMailboxRegistration>> {
-    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
     Ok(capability_host.mailbox_registration(&job.capability_id, &job.mailbox_name))
 }

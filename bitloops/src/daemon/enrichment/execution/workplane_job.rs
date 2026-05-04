@@ -25,13 +25,11 @@ use crate::capability_packs::semantic_clones::{
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::capability_host::CapabilityMailboxHandler;
-use crate::host::devql::{
-    DevqlConfig, RelationalStorage, build_capability_host, resolve_repo_identity,
-};
+use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host};
 use crate::host::runtime_store::WorkplaneJobRecord;
 
 use super::super::JobExecutionOutcome;
-use super::super::workplane::fallback_repo_identity;
+use super::super::workplane::repo_identity_from_runtime_metadata;
 use super::follow_ups::clone_edges_rebuild_follow_up_from_workplane;
 use super::helpers::clear_embedding_outputs;
 use super::loaders::{load_workplane_embedding_refresh_inputs, load_workplane_job_inputs};
@@ -50,8 +48,7 @@ fn summary_refresh_mode(
 }
 
 pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecutionOutcome {
-    let repo = resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let cfg = match DevqlConfig::from_roots(job.config_root.clone(), job.repo_root.clone(), repo) {
         Ok(cfg) => cfg,
         Err(err) => return JobExecutionOutcome::failed(err),

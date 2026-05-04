@@ -26,6 +26,8 @@ pub enum DevqlCommand {
     Packs(DevqlPacksArgs),
     /// Manage repository-scoped external knowledge.
     Knowledge(DevqlKnowledgeArgs),
+    /// Inspect and rebaseline codebase navigation context views.
+    NavigationContext(DevqlNavigationContextArgs),
     /// Test harness ingestion for DevQL production artefacts.
     TestHarness(DevqlTestHarnessArgs),
 }
@@ -290,6 +292,91 @@ pub struct DevqlKnowledgeAssociateArgs {
 #[derive(Args, Debug, Clone)]
 pub struct DevqlKnowledgeRefArgs {
     pub knowledge_ref: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlNavigationContextArgs {
+    #[command(subcommand)]
+    pub command: DevqlNavigationContextCommand,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum DevqlNavigationContextCommand {
+    /// List navigation context views and stale dependency changes.
+    Status(DevqlNavigationContextStatusArgs),
+    /// Materialise a navigation context view snapshot into the system of record.
+    Materialise(DevqlNavigationContextMaterialiseArgs),
+    /// Accept a navigation context view's current signature as the new baseline.
+    Accept(DevqlNavigationContextAcceptArgs),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum DevqlNavigationContextStatusArg {
+    Fresh,
+    Stale,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlNavigationContextStatusArgs {
+    /// Project path to inspect.
+    #[arg(long, default_value = ".")]
+    pub project: String,
+
+    /// Limit output to one view id.
+    #[arg(long)]
+    pub view: Option<String>,
+
+    /// Limit output to fresh or stale views.
+    #[arg(long, value_enum)]
+    pub status: Option<DevqlNavigationContextStatusArg>,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+
+    /// Maximum changed primitives to show per stale view in text mode.
+    #[arg(long = "changed-limit", default_value_t = 10)]
+    pub changed_limit: usize,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlNavigationContextAcceptArgs {
+    /// View id to accept.
+    pub view_id: String,
+
+    /// Reject acceptance if the current signature no longer matches this value.
+    #[arg(long)]
+    pub expected_current_signature: Option<String>,
+
+    /// Human-readable reason to store with the acceptance.
+    #[arg(long)]
+    pub reason: Option<String>,
+
+    /// Materialised artefact reference reviewed for this baseline.
+    #[arg(long = "materialised-ref")]
+    pub materialised_ref: Option<String>,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlNavigationContextMaterialiseArgs {
+    /// View id to materialise.
+    pub view_id: String,
+
+    /// Reject materialisation if the current signature no longer matches this value.
+    #[arg(long)]
+    pub expected_current_signature: Option<String>,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+
+    /// Print the rendered materialisation text instead of a compact summary.
+    #[arg(long = "rendered", default_value_t = false)]
+    pub rendered: bool,
 }
 
 #[derive(Args, Debug, Clone)]

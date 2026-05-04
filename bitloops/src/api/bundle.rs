@@ -9,12 +9,15 @@ use std::env;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 use tar::Archive;
 use uuid::Uuid;
 
 const DASHBOARD_CDN_BASE_URL_ENV: &str = "BITLOOPS_DASHBOARD_CDN_BASE_URL";
 const DASHBOARD_MANIFEST_URL_ENV: &str = "BITLOOPS_DASHBOARD_MANIFEST_URL";
 const MANIFEST_FILE_NAME: &str = "bundle_versions.json";
+const BUNDLE_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const BUNDLE_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 mod dashboard_env {
     include!(concat!(env!("OUT_DIR"), "/dashboard_env.rs"));
@@ -199,7 +202,9 @@ async fn download_text(url: &str) -> Result<String, BundleError> {
         });
     }
 
-    let response = reqwest::get(url)
+    let response = bundle_http_client()?
+        .get(url)
+        .send()
         .await
         .map_err(|err| BundleError::BundleDownloadFailed(format!("GET {url} failed: {err}")))?;
 
@@ -222,7 +227,9 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, BundleError> {
         });
     }
 
-    let response = reqwest::get(url)
+    let response = bundle_http_client()?
+        .get(url)
+        .send()
         .await
         .map_err(|err| BundleError::BundleDownloadFailed(format!("GET {url} failed: {err}")))?;
 
@@ -239,6 +246,16 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, BundleError> {
         .map(|bytes| bytes.to_vec())
         .map_err(|err| {
             BundleError::BundleDownloadFailed(format!("reading body {url} failed: {err}"))
+        })
+}
+
+fn bundle_http_client() -> Result<reqwest::Client, BundleError> {
+    reqwest::Client::builder()
+        .connect_timeout(BUNDLE_HTTP_CONNECT_TIMEOUT)
+        .timeout(BUNDLE_HTTP_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|err| {
+            BundleError::BundleDownloadFailed(format!("building HTTP client failed: {err}"))
         })
 }
 

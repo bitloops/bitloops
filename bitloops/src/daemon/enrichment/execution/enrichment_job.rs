@@ -19,19 +19,16 @@ use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
 };
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{
-    DevqlConfig, RelationalStorage, build_capability_host, resolve_repo_identity,
-};
+use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host};
 
-use super::super::workplane::fallback_repo_identity;
+use super::super::workplane::repo_identity_from_runtime_metadata;
 use super::super::{EnrichmentJob, EnrichmentJobKind, JobExecutionOutcome};
 use super::follow_ups::{clone_edges_rebuild_follow_up, symbol_embeddings_follow_up};
 use super::helpers::clear_embedding_outputs;
 use super::loaders::load_enrichment_job_inputs;
 
 pub(crate) async fn execute_job(job: &EnrichmentJob) -> JobExecutionOutcome {
-    let repo = resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let cfg = match DevqlConfig::from_roots(job.config_root.clone(), job.repo_root.clone(), repo) {
         Ok(cfg) => cfg,
         Err(err) => return JobExecutionOutcome::failed(err),

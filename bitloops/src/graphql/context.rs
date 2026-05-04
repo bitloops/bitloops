@@ -1,3 +1,4 @@
+mod architecture_graph;
 mod bootstrap;
 mod commit_checkpoints;
 mod enrichment;
@@ -6,6 +7,7 @@ mod git_history;
 mod historical_context;
 mod interactions;
 mod knowledge;
+mod navigation_context;
 mod repository_graph;
 mod temporal_scope;
 

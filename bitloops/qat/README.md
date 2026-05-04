@@ -827,13 +827,14 @@ cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only 
 The helper layer still supports negative drift assertions, and the active sync set now
 includes drift validation plus accumulated-drift coverage.
 
-### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 24 scenarios)
+### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 25 scenarios)
 
 Exercises the strict offline DevQL capability surface: agent queryability,
 checkpoint and chat-history retrieval, artefact-scoped dependency blast radius,
 artefact-scoped TestHarness proof-map queries, guide-aligned deterministic
-semantic clones, deterministic Confluence knowledge add/query/associate/refresh,
-knowledge rejection handling, and one final integrated cross-capability smoke.
+semantic clones, architecture graph entry-point/assertion reads, deterministic
+Confluence knowledge add/query/associate/refresh, knowledge rejection handling,
+and one final integrated cross-capability smoke.
 The semantic-clones lane validates the offline fake-runtime path rather than real
 local-model warm-cache behavior.
 
@@ -870,6 +871,8 @@ cargo nextest run --features qat-tests --test qat_devql_capabilities --run-ignor
   - handler-clone ranking, explanations, and filtering
   - DevQL clone summary grouped counts
   - GraphQL clone summary grouped counts
+- Architecture graph (1 scenario)
+  - CLI entry points from language/config evidence plus assert, suppress, and revoke behaviour
 - Deterministic Confluence knowledge flows (3 scenarios)
   - add/query/associate happy path for deterministic fixtures
   - refresh creates a new version

@@ -470,8 +470,11 @@ mod tests {
         assert_eq!(
             ids,
             [
+                "architecture_graph",
+                "codecity",
                 "context_guidance",
                 "knowledge",
+                "navigation_context",
                 "semantic_clones",
                 "test_harness"
             ]
@@ -488,7 +491,10 @@ mod tests {
         let host = DevqlCapabilityHost::builtin(tmp.path(), sample_repo()).expect("builtin host");
         let report = host.registry_report();
         let text = format_registry_report_human(&report);
+        assert!(text.contains("architecture_graph"));
+        assert!(text.contains("codecity"));
         assert!(text.contains("knowledge"));
+        assert!(text.contains("navigation_context"));
         assert!(text.contains("semantic_clones"));
         assert!(text.contains("test_harness"));
         assert!(text.contains("migration_plan"));

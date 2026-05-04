@@ -8,11 +8,11 @@ use crate::graphql::{
 };
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
-    CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
-    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    ArchitectureGraphNode, ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge,
+    CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination,
+    DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection,
+    DepsFilterInput, DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
 
 const GRAPHQL_SCORE_PRECISION_SCALE: f64 = 10_000.0;
@@ -530,6 +530,19 @@ impl Artefact {
             .await
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
+    }
+
+    #[graphql(name = "architectureNode")]
+    async fn architecture_node(&self, ctx: &Context<'_>) -> Result<Option<ArchitectureGraphNode>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .architecture_node_for_artefact(&self.scope, self.id.as_ref())
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve architecture node for artefact {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })
     }
 
     async fn copy_lineage(&self, ctx: &Context<'_>) -> Result<Vec<ArtefactCopyLineage>> {

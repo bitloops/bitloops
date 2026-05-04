@@ -33,6 +33,38 @@ const SYNC_FOLLOW_UP_POLL_INTERVAL: std::time::Duration = std::time::Duration::f
 const SYNC_FOLLOW_UP_PENDING_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 const SYNC_FOLLOW_UP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+#[derive(Debug, Clone)]
+struct SyncFollowUpBaseline {
+    current_state_failed_runs: u64,
+    enrichment: EnrichmentFailureCounts,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(super) struct EnrichmentFailureCounts {
+    pub(super) failed_jobs: u64,
+    pub(super) failed_semantic_jobs: u64,
+    pub(super) failed_embedding_jobs: u64,
+    pub(super) failed_clone_edges_rebuild_jobs: u64,
+}
+
+impl EnrichmentFailureCounts {
+    fn from_status(status: &daemon::EnrichmentQueueStatus) -> Self {
+        Self {
+            failed_jobs: status.state.failed_jobs,
+            failed_semantic_jobs: status.state.failed_semantic_jobs,
+            failed_embedding_jobs: status.state.failed_embedding_jobs,
+            failed_clone_edges_rebuild_jobs: status.state.failed_clone_edges_rebuild_jobs,
+        }
+    }
+
+    fn has_new_failures_since(self, baseline: Self) -> bool {
+        self.failed_jobs > baseline.failed_jobs
+            || self.failed_semantic_jobs > baseline.failed_semantic_jobs
+            || self.failed_embedding_jobs > baseline.failed_embedding_jobs
+            || self.failed_clone_edges_rebuild_jobs > baseline.failed_clone_edges_rebuild_jobs
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum DaemonStartPolicy {
     AutoStart,
@@ -323,17 +355,22 @@ pub(crate) async fn watch_task_via_graphql(
     initial_task: TaskGraphqlRecord,
 ) -> Result<Option<TaskGraphqlRecord>> {
     let task_id = initial_task.task_id.clone();
+    let follow_up_baseline = sync_follow_up_baseline_if_needed(&initial_task)?;
     let mut renderer = TaskProgressRenderer::new();
     renderer.render(&initial_task)?;
 
     if initial_task.is_terminal() {
-        wait_for_sync_follow_up_work_if_needed(&initial_task).await?;
+        wait_for_sync_follow_up_work_if_needed(&initial_task, follow_up_baseline.as_ref()).await?;
         renderer.finish()?;
         return handle_terminal_task(task_id.as_str(), initial_task).map(Some);
     }
 
     match watch_task_via_subscription(scope, task_id.as_str(), &mut renderer).await {
         Ok(final_task) => {
+            if let Some(final_task) = final_task.as_ref() {
+                wait_for_sync_follow_up_work_if_needed(final_task, follow_up_baseline.as_ref())
+                    .await?;
+            }
             renderer.finish()?;
             return Ok(final_task);
         }
@@ -359,7 +396,11 @@ pub(crate) async fn watch_task_via_graphql(
                 renderer.render(&latest_task)?;
                 match latest_task.status.to_ascii_lowercase().as_str() {
                     "completed" => {
-                        wait_for_sync_follow_up_work_if_needed(&latest_task).await?;
+                        wait_for_sync_follow_up_work_if_needed(
+                            &latest_task,
+                            follow_up_baseline.as_ref(),
+                        )
+                        .await?;
                         renderer.finish()?;
                         return Ok(Some(latest_task));
                     }
@@ -374,10 +415,39 @@ pub(crate) async fn watch_task_via_graphql(
     }
 }
 
-async fn wait_for_sync_follow_up_work_if_needed(task: &TaskGraphqlRecord) -> Result<()> {
+fn sync_follow_up_baseline_if_needed(
+    task: &TaskGraphqlRecord,
+) -> Result<Option<SyncFollowUpBaseline>> {
+    if !task.is_sync() {
+        return Ok(None);
+    }
+    capture_sync_follow_up_baseline(task.repo_id.as_str()).map(Some)
+}
+
+fn capture_sync_follow_up_baseline(repo_id: &str) -> Result<SyncFollowUpBaseline> {
+    let current_state = daemon::current_state_consumer_status(Some(repo_id))?;
+    let enrichment = daemon::enrichment_status()?;
+    Ok(SyncFollowUpBaseline {
+        current_state_failed_runs: current_state.state.failed_runs,
+        enrichment: EnrichmentFailureCounts::from_status(&enrichment),
+    })
+}
+
+async fn wait_for_sync_follow_up_work_if_needed(
+    task: &TaskGraphqlRecord,
+    baseline: Option<&SyncFollowUpBaseline>,
+) -> Result<()> {
     if !task.is_sync() || !task.status.eq_ignore_ascii_case("completed") {
         return Ok(());
     }
+    let captured_baseline;
+    let baseline = match baseline {
+        Some(baseline) => baseline,
+        None => {
+            captured_baseline = capture_sync_follow_up_baseline(task.repo_id.as_str())?;
+            &captured_baseline
+        }
+    };
 
     let started = std::time::Instant::now();
     let mut poll_interval = tokio::time::interval(SYNC_FOLLOW_UP_POLL_INTERVAL);
@@ -397,16 +467,21 @@ async fn wait_for_sync_follow_up_work_if_needed(task: &TaskGraphqlRecord) -> Res
             observed_enrichment_activity = true;
         }
 
-        if current_state.state.failed_runs > 0 {
+        if current_state.state.failed_runs > baseline.current_state_failed_runs {
             bail!(
-                "sync task completed but current-state follow-up work failed for repo `{}`",
-                task.repo_id
+                "{}",
+                current_state_follow_up_failure_message(&task.repo_id, baseline, &current_state)
             );
         }
-        if enrichment.state.failed_jobs > 0 {
+        let enrichment_failures = EnrichmentFailureCounts::from_status(&enrichment);
+        if enrichment_failures.has_new_failures_since(baseline.enrichment) {
             bail!(
-                "sync task completed but enrichment follow-up work failed after sync for repo `{}`",
-                task.repo_id
+                "{}",
+                enrichment_follow_up_failure_message(
+                    &task.repo_id,
+                    &baseline.enrichment,
+                    &enrichment,
+                )
             );
         }
         if current_state_idle {
@@ -431,6 +506,92 @@ async fn wait_for_sync_follow_up_work_if_needed(task: &TaskGraphqlRecord) -> Res
         }
 
         poll_interval.tick().await;
+    }
+}
+
+fn current_state_follow_up_failure_message(
+    repo_id: &str,
+    baseline: &SyncFollowUpBaseline,
+    status: &daemon::CapabilityEventQueueStatus,
+) -> String {
+    format!(
+        "sync task completed but current-state consumer follow-up work failed for repo `{repo_id}` \
+(failed runs increased from {} to {}). Inspect with `bitloops daemon status`.",
+        baseline.current_state_failed_runs, status.state.failed_runs
+    )
+}
+
+pub(super) fn enrichment_follow_up_failure_message(
+    repo_id: &str,
+    baseline: &EnrichmentFailureCounts,
+    status: &daemon::EnrichmentQueueStatus,
+) -> String {
+    let current = EnrichmentFailureCounts::from_status(status);
+    let pool_deltas = enrichment_failure_pool_deltas(*baseline, current);
+    let stage = if pool_deltas.is_empty() {
+        "semantic enrichment".to_string()
+    } else {
+        format!("semantic enrichment ({})", pool_deltas.join(", "))
+    };
+    let mut message = format!(
+        "sync task completed but {stage} follow-up work failed for repo `{repo_id}` \
+(failed jobs increased from {} to {})",
+        baseline.failed_jobs, current.failed_jobs
+    );
+    let embedding_failure_delta = current
+        .failed_embedding_jobs
+        .saturating_sub(baseline.failed_embedding_jobs);
+    if embedding_failure_delta > 0
+        && let Some(failed) = status.last_failed_embedding.as_ref()
+    {
+        message.push_str(&format!(
+            "; last failed embedding job `{}` repo={} kind={} artefacts={} attempts={}",
+            failed.job_id,
+            failed.repo_id,
+            failed.representation_kind,
+            failed.artefact_count,
+            failed.attempts
+        ));
+        if let Some(error) = failed.error.as_ref() {
+            message.push_str(&format!(" error={error}"));
+        }
+    }
+    message.push_str(". Inspect with `bitloops daemon enrichments status`.");
+    message
+}
+
+pub(super) fn enrichment_failure_pool_deltas(
+    baseline: EnrichmentFailureCounts,
+    current: EnrichmentFailureCounts,
+) -> Vec<String> {
+    let mut deltas = Vec::new();
+    push_enrichment_failure_delta(
+        &mut deltas,
+        "Code summaries",
+        current
+            .failed_semantic_jobs
+            .saturating_sub(baseline.failed_semantic_jobs),
+    );
+    push_enrichment_failure_delta(
+        &mut deltas,
+        "Semantic search indexing",
+        current
+            .failed_embedding_jobs
+            .saturating_sub(baseline.failed_embedding_jobs),
+    );
+    push_enrichment_failure_delta(
+        &mut deltas,
+        "Clone matching",
+        current
+            .failed_clone_edges_rebuild_jobs
+            .saturating_sub(baseline.failed_clone_edges_rebuild_jobs),
+    );
+    deltas
+}
+
+fn push_enrichment_failure_delta(deltas: &mut Vec<String>, label: &str, delta: u64) {
+    if delta > 0 {
+        deltas.push(format!("{label} +{delta}"));
     }
 }
 
