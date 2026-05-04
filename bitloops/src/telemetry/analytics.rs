@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::Path;
+#[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::thread;
