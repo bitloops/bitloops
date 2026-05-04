@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::config::{
-    ContextGuidanceConfig, InferenceConfig, ProviderConfig, SemanticClonesConfig,
-    StoreBackendConfig,
+    ArchitectureConfig, ContextGuidanceConfig, InferenceConfig, ProviderConfig,
+    SemanticClonesConfig, StoreBackendConfig,
 };
 
 pub(super) fn build_capability_config_root(
@@ -10,6 +10,7 @@ pub(super) fn build_capability_config_root(
     providers: &ProviderConfig,
     semantic_clones: &SemanticClonesConfig,
     context_guidance: &ContextGuidanceConfig,
+    architecture: &ArchitectureConfig,
     inference: &InferenceConfig,
 ) -> Value {
     serde_json::json!({
@@ -44,6 +45,11 @@ pub(super) fn build_capability_config_root(
                 "guidance_generation": context_guidance.inference.guidance_generation,
             },
         },
+        "architecture_graph": {
+            "inference": {
+                "fact_synthesis": architecture.inference.fact_synthesis,
+            },
+        },
         "inference": {
             "runtimes": inference.runtimes.iter().map(|(name, runtime)| (
                 name.clone(),
@@ -63,6 +69,8 @@ pub(super) fn build_capability_config_root(
                     "model": profile.model,
                     "api_key": profile.api_key.as_ref().map(|_| "<configured>"),
                     "base_url": profile.base_url,
+                    "temperature": profile.temperature,
+                    "max_output_tokens": profile.max_output_tokens,
                     "cache_dir": profile.cache_dir,
                 })
             )).collect::<serde_json::Map<_, _>>(),

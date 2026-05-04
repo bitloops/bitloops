@@ -449,6 +449,7 @@ impl TestFixture {
             relational: Arc::new(FakeRelationalGateway { production }),
             language_services: Arc::new(FakeLanguageServicesGateway { support }),
             git_history: Arc::new(crate::host::capability_host::gateways::EmptyGitHistoryGateway),
+            inference: Arc::new(crate::host::inference::EmptyInferenceGateway),
             host_services: Arc::new(DefaultHostServicesGateway::new("repo-1"))
                 as Arc<dyn HostServicesGateway>,
             workplane: Arc::new(NoopWorkplaneGateway),

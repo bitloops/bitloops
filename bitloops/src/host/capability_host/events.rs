@@ -13,6 +13,7 @@ use super::gateways::{
 };
 use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::devql::RelationalStorage;
+use crate::host::inference::InferenceGateway;
 
 #[derive(Debug, Clone)]
 pub enum HostEvent {
@@ -93,6 +94,7 @@ pub struct CurrentStateConsumerContext {
     pub relational: Arc<dyn RelationalGateway>,
     pub language_services: Arc<dyn LanguageServicesGateway>,
     pub git_history: Arc<dyn GitHistoryGateway>,
+    pub inference: Arc<dyn InferenceGateway>,
     pub host_services: Arc<dyn HostServicesGateway>,
     pub workplane: Arc<dyn CapabilityWorkplaneGateway>,
     pub test_harness: Option<Arc<std::sync::Mutex<BitloopsTestHarnessRepository>>>,

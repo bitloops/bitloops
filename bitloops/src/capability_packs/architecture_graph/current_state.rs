@@ -1,13 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
-use serde_json::{Value, json};
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 
 use crate::host::capability_host::{
     CurrentStateConsumer, CurrentStateConsumerContext, CurrentStateConsumerFuture,
     CurrentStateConsumerRequest, CurrentStateConsumerResult,
 };
+use crate::host::inference::StructuredGenerationRequest;
 use crate::host::language_adapter::{
     LanguageEntryPointArtefact, LanguageEntryPointCandidate, LanguageEntryPointFile,
 };
@@ -17,12 +19,12 @@ use crate::models::{
 
 use super::storage::{
     ArchitectureGraphEdgeFact, ArchitectureGraphFacts, ArchitectureGraphNodeFact,
-    component_node_id, container_node_id, deployment_unit_node_id, edge_id, node_id,
-    replace_computed_graph, system_node_id,
+    component_node_id, container_node_id, deployment_unit_node_id, edge_id, edge_id_for_kind,
+    node_id, replace_computed_graph, system_node_id,
 };
 use super::types::{
-    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID, ArchitectureGraphEdgeKind,
-    ArchitectureGraphNodeKind,
+    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID,
+    ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT, ArchitectureGraphEdgeKind, ArchitectureGraphNodeKind,
 };
 
 mod entry_points;
@@ -81,11 +83,25 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             builder.add_components_for_containers(&artefacts);
             add_test_harness_facts(context, &mut builder, &mut warnings).await;
             builder.add_change_unit(request);
+            let mut synthesised_nodes = 0usize;
+            let mut synthesised_edges = 0usize;
+            match add_agent_synthesised_facts(context, request, &mut builder).await {
+                Ok(Some(counts)) => {
+                    synthesised_nodes = counts.0;
+                    synthesised_edges = counts.1;
+                }
+                Ok(None) => {}
+                Err(err) => warnings.push(format!(
+                    "Architecture fact synthesis output rejected: {err:#}"
+                )),
+            }
 
             let facts = builder.finish();
             let metrics = json!({
                 "nodes": facts.nodes.len(),
                 "edges": facts.edges.len(),
+                "synthesised_nodes": synthesised_nodes,
+                "synthesised_edges": synthesised_edges,
                 "files": files.len(),
                 "artefacts": artefacts.len(),
                 "dependency_edges": dependency_edges.len(),
@@ -147,6 +163,13 @@ impl GraphBuilder {
         ArchitectureGraphFacts {
             nodes: self.nodes.into_values().collect(),
             edges: self.edges.into_values().collect(),
+        }
+    }
+
+    fn finish_snapshot(&self) -> ArchitectureGraphFacts {
+        ArchitectureGraphFacts {
+            nodes: self.nodes.values().cloned().collect(),
+            edges: self.edges.values().cloned().collect(),
         }
     }
 
@@ -764,6 +787,373 @@ impl GraphBuilder {
     fn fallback_system_id(&self) -> String {
         system_node_id(&self.fallback_system_key())
     }
+
+    fn add_synthesised_facts(&mut self, value: Value) -> Result<(usize, usize)> {
+        let output: StructuredArchitectureFacts =
+            serde_json::from_value(value).context("parse structured architecture facts")?;
+        let mut nodes = Vec::new();
+        let mut known_node_ids = self.nodes.keys().cloned().collect::<BTreeSet<_>>();
+        for node in output.nodes {
+            let kind = parse_node_kind(&node.kind)?;
+            let identity = non_empty_string("node.identity", node.identity)?;
+            let label = non_empty_string("node.label", node.label)?;
+            let confidence = valid_confidence("node.confidence", node.confidence)?;
+            let node_id = node_id(&self.repo_id, kind, &identity);
+            known_node_ids.insert(node_id.clone());
+            nodes.push(ArchitectureGraphNodeFact {
+                repo_id: self.repo_id.clone(),
+                node_id,
+                node_kind: kind.as_str().to_string(),
+                label,
+                artefact_id: node.artefact_id.filter(|value| !value.trim().is_empty()),
+                symbol_id: node.symbol_id.filter(|value| !value.trim().is_empty()),
+                path: node.path.filter(|value| !value.trim().is_empty()),
+                entry_kind: node.entry_kind.filter(|value| !value.trim().is_empty()),
+                source_kind: "AGENT_SYNTHESIS".to_string(),
+                confidence,
+                provenance: self.provenance("agent_fact_synthesis"),
+                evidence: node.evidence.unwrap_or_else(|| json!([])),
+                properties: node.properties.unwrap_or_else(|| json!({})),
+                last_observed_generation: Some(self.generation),
+            });
+        }
+
+        let mut edges = Vec::new();
+        for edge in output.edges {
+            let kind = parse_edge_kind(&edge.kind)?;
+            let from_node_id = non_empty_string("edge.from_node_id", edge.from_node_id)?;
+            let to_node_id = non_empty_string("edge.to_node_id", edge.to_node_id)?;
+            if !known_node_ids.contains(&from_node_id) {
+                bail!("edge.from_node_id `{from_node_id}` does not reference a known node");
+            }
+            if !known_node_ids.contains(&to_node_id) {
+                bail!("edge.to_node_id `{to_node_id}` does not reference a known node");
+            }
+            let confidence = valid_confidence("edge.confidence", edge.confidence)?;
+            let edge_id =
+                edge_id_for_kind(&self.repo_id, kind.as_str(), &from_node_id, &to_node_id);
+            edges.push(ArchitectureGraphEdgeFact {
+                repo_id: self.repo_id.clone(),
+                edge_id,
+                edge_kind: kind.as_str().to_string(),
+                from_node_id,
+                to_node_id,
+                source_kind: "AGENT_SYNTHESIS".to_string(),
+                confidence,
+                provenance: self.provenance("agent_fact_synthesis"),
+                evidence: edge.evidence.unwrap_or_else(|| json!([])),
+                properties: edge.properties.unwrap_or_else(|| json!({})),
+                last_observed_generation: Some(self.generation),
+            });
+        }
+
+        let counts = (nodes.len(), edges.len());
+        for node in nodes {
+            self.upsert_node(node);
+        }
+        for edge in edges {
+            match self.edges.get(&edge.edge_id) {
+                Some(existing) if existing.confidence >= edge.confidence => {}
+                _ => {
+                    self.edges.insert(edge.edge_id.clone(), edge);
+                }
+            }
+        }
+        Ok(counts)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredArchitectureFacts {
+    #[serde(default)]
+    nodes: Vec<StructuredArchitectureNode>,
+    #[serde(default)]
+    edges: Vec<StructuredArchitectureEdge>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredArchitectureNode {
+    kind: String,
+    identity: String,
+    label: String,
+    confidence: f64,
+    #[serde(default)]
+    artefact_id: Option<String>,
+    #[serde(default)]
+    symbol_id: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    entry_kind: Option<String>,
+    #[serde(default)]
+    evidence: Option<Value>,
+    #[serde(default)]
+    properties: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredArchitectureEdge {
+    kind: String,
+    from_node_id: String,
+    to_node_id: String,
+    confidence: f64,
+    #[serde(default)]
+    evidence: Option<Value>,
+    #[serde(default)]
+    properties: Option<Value>,
+}
+
+async fn add_agent_synthesised_facts(
+    context: &CurrentStateConsumerContext,
+    request: &CurrentStateConsumerRequest,
+    builder: &mut GraphBuilder,
+) -> Result<Option<(usize, usize)>> {
+    if !context
+        .inference
+        .has_slot(ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT)
+    {
+        return Ok(None);
+    }
+    let service = context
+        .inference
+        .structured_generation(ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT)
+        .context("resolving architecture fact_synthesis inference slot")?;
+    let facts_snapshot = builder.finish_snapshot();
+    let mut metadata = Map::new();
+    metadata.insert(
+        "capability_id".to_string(),
+        Value::String(ARCHITECTURE_GRAPH_CAPABILITY_ID.to_string()),
+    );
+    metadata.insert(
+        "slot_name".to_string(),
+        Value::String(ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT.to_string()),
+    );
+    metadata.insert(
+        "repo_id".to_string(),
+        Value::String(request.repo_id.clone()),
+    );
+    metadata.insert(
+        "generation".to_string(),
+        Value::Number(request.to_generation_seq_inclusive.into()),
+    );
+
+    let response = service.generate(StructuredGenerationRequest {
+        system_prompt: architecture_fact_synthesis_system_prompt().to_string(),
+        user_prompt: architecture_fact_synthesis_user_prompt(request, &facts_snapshot),
+        json_schema: architecture_fact_synthesis_schema(),
+        workspace_path: Some(request.repo_root.display().to_string()),
+        metadata,
+    })?;
+
+    builder.add_synthesised_facts(response).map(Some)
+}
+
+fn architecture_fact_synthesis_system_prompt() -> &'static str {
+    "You synthesise architecture graph facts from a repository snapshot. Return only facts supported by the supplied evidence. Do not edit files. Do not invent node ids; use existing node ids for edge endpoints unless you create the node in this response."
+}
+
+fn architecture_fact_synthesis_user_prompt(
+    request: &CurrentStateConsumerRequest,
+    facts: &ArchitectureGraphFacts,
+) -> String {
+    let nodes = facts
+        .nodes
+        .iter()
+        .take(80)
+        .map(|node| {
+            json!({
+                "node_id": &node.node_id,
+                "kind": &node.node_kind,
+                "label": &node.label,
+                "path": &node.path,
+                "artefact_id": &node.artefact_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    let changed_paths = request
+        .affected_paths
+        .iter()
+        .chain(request.file_upserts.iter().map(|file| &file.path))
+        .take(80)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    json!({
+        "task": "Return structured architecture nodes and edges that are strongly supported by this current-state snapshot.",
+        "repo_id": &request.repo_id,
+        "generation": request.to_generation_seq_inclusive,
+        "changed_paths": changed_paths,
+        "existing_nodes": nodes,
+        "rules": [
+            "Use SCREAMING_SNAKE_CASE kind values.",
+            "Use confidence between 0 and 1.",
+            "For edges, from_node_id and to_node_id must reference existing node ids or node ids created by this response.",
+            "Prefer no fact over a weak or unsupported fact."
+        ]
+    })
+    .to_string()
+}
+
+fn architecture_fact_synthesis_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "nodes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string", "enum": node_kind_names() },
+                        "identity": { "type": "string", "minLength": 1 },
+                        "label": { "type": "string", "minLength": 1 },
+                        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                        "artefact_id": { "type": ["string", "null"] },
+                        "symbol_id": { "type": ["string", "null"] },
+                        "path": { "type": ["string", "null"] },
+                        "entry_kind": { "type": ["string", "null"] },
+                        "evidence": {},
+                        "properties": {}
+                    },
+                    "required": ["kind", "identity", "label", "confidence"],
+                    "additionalProperties": false
+                }
+            },
+            "edges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": { "type": "string", "enum": edge_kind_names() },
+                        "from_node_id": { "type": "string", "minLength": 1 },
+                        "to_node_id": { "type": "string", "minLength": 1 },
+                        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                        "evidence": {},
+                        "properties": {}
+                    },
+                    "required": ["kind", "from_node_id", "to_node_id", "confidence"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["nodes", "edges"],
+        "additionalProperties": false
+    })
+}
+
+fn non_empty_string(field: &str, value: String) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("{field} must not be empty");
+    }
+    Ok(trimmed.to_string())
+}
+
+fn valid_confidence(field: &str, value: f64) -> Result<f64> {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        bail!("{field} must be a finite number between 0 and 1");
+    }
+    Ok(value)
+}
+
+fn parse_node_kind(raw: &str) -> Result<ArchitectureGraphNodeKind> {
+    match raw.trim() {
+        "SYSTEM" => Ok(ArchitectureGraphNodeKind::System),
+        "DEPLOYMENT_UNIT" => Ok(ArchitectureGraphNodeKind::DeploymentUnit),
+        "CONTAINER" => Ok(ArchitectureGraphNodeKind::Container),
+        "COMPONENT" => Ok(ArchitectureGraphNodeKind::Component),
+        "DOMAIN" => Ok(ArchitectureGraphNodeKind::Domain),
+        "ENTITY" => Ok(ArchitectureGraphNodeKind::Entity),
+        "CAPABILITY" => Ok(ArchitectureGraphNodeKind::Capability),
+        "ENTRY_POINT" => Ok(ArchitectureGraphNodeKind::EntryPoint),
+        "FLOW" => Ok(ArchitectureGraphNodeKind::Flow),
+        "NODE" => Ok(ArchitectureGraphNodeKind::Node),
+        "PERSISTENCE_OBJECT" => Ok(ArchitectureGraphNodeKind::PersistenceObject),
+        "EVENT" => Ok(ArchitectureGraphNodeKind::Event),
+        "EXTERNAL_SYSTEM" => Ok(ArchitectureGraphNodeKind::ExternalSystem),
+        "CONTRACT" => Ok(ArchitectureGraphNodeKind::Contract),
+        "TEST" => Ok(ArchitectureGraphNodeKind::Test),
+        "CHANGE_UNIT" => Ok(ArchitectureGraphNodeKind::ChangeUnit),
+        "RISK_SIGNAL" => Ok(ArchitectureGraphNodeKind::RiskSignal),
+        other => bail!("unsupported node kind `{other}`"),
+    }
+}
+
+fn parse_edge_kind(raw: &str) -> Result<ArchitectureGraphEdgeKind> {
+    match raw.trim() {
+        "CONTAINS" => Ok(ArchitectureGraphEdgeKind::Contains),
+        "OWNS" => Ok(ArchitectureGraphEdgeKind::Owns),
+        "EXPOSES" => Ok(ArchitectureGraphEdgeKind::Exposes),
+        "PRODUCES" => Ok(ArchitectureGraphEdgeKind::Produces),
+        "REALISES" => Ok(ArchitectureGraphEdgeKind::Realises),
+        "TRIGGERS" => Ok(ArchitectureGraphEdgeKind::Triggers),
+        "TRAVERSES" => Ok(ArchitectureGraphEdgeKind::Traverses),
+        "READS" => Ok(ArchitectureGraphEdgeKind::Reads),
+        "WRITES" => Ok(ArchitectureGraphEdgeKind::Writes),
+        "EMITS" => Ok(ArchitectureGraphEdgeKind::Emits),
+        "CALLS" => Ok(ArchitectureGraphEdgeKind::Calls),
+        "IMPLEMENTS" => Ok(ArchitectureGraphEdgeKind::Implements),
+        "DEPENDS_ON" => Ok(ArchitectureGraphEdgeKind::DependsOn),
+        "VERIFIED_BY" => Ok(ArchitectureGraphEdgeKind::VerifiedBy),
+        "STORES" => Ok(ArchitectureGraphEdgeKind::Stores),
+        "MODIFIES" => Ok(ArchitectureGraphEdgeKind::Modifies),
+        "IMPACTS" => Ok(ArchitectureGraphEdgeKind::Impacts),
+        "SCORES" => Ok(ArchitectureGraphEdgeKind::Scores),
+        other => bail!("unsupported edge kind `{other}`"),
+    }
+}
+
+fn node_kind_names() -> Vec<&'static str> {
+    [
+        ArchitectureGraphNodeKind::System,
+        ArchitectureGraphNodeKind::DeploymentUnit,
+        ArchitectureGraphNodeKind::Container,
+        ArchitectureGraphNodeKind::Component,
+        ArchitectureGraphNodeKind::Domain,
+        ArchitectureGraphNodeKind::Entity,
+        ArchitectureGraphNodeKind::Capability,
+        ArchitectureGraphNodeKind::EntryPoint,
+        ArchitectureGraphNodeKind::Flow,
+        ArchitectureGraphNodeKind::Node,
+        ArchitectureGraphNodeKind::PersistenceObject,
+        ArchitectureGraphNodeKind::Event,
+        ArchitectureGraphNodeKind::ExternalSystem,
+        ArchitectureGraphNodeKind::Contract,
+        ArchitectureGraphNodeKind::Test,
+        ArchitectureGraphNodeKind::ChangeUnit,
+        ArchitectureGraphNodeKind::RiskSignal,
+    ]
+    .iter()
+    .map(|kind| kind.as_str())
+    .collect()
+}
+
+fn edge_kind_names() -> Vec<&'static str> {
+    [
+        ArchitectureGraphEdgeKind::Contains,
+        ArchitectureGraphEdgeKind::Owns,
+        ArchitectureGraphEdgeKind::Exposes,
+        ArchitectureGraphEdgeKind::Produces,
+        ArchitectureGraphEdgeKind::Realises,
+        ArchitectureGraphEdgeKind::Triggers,
+        ArchitectureGraphEdgeKind::Traverses,
+        ArchitectureGraphEdgeKind::Reads,
+        ArchitectureGraphEdgeKind::Writes,
+        ArchitectureGraphEdgeKind::Emits,
+        ArchitectureGraphEdgeKind::Calls,
+        ArchitectureGraphEdgeKind::Implements,
+        ArchitectureGraphEdgeKind::DependsOn,
+        ArchitectureGraphEdgeKind::VerifiedBy,
+        ArchitectureGraphEdgeKind::Stores,
+        ArchitectureGraphEdgeKind::Modifies,
+        ArchitectureGraphEdgeKind::Impacts,
+        ArchitectureGraphEdgeKind::Scores,
+    ]
+    .iter()
+    .map(|kind| kind.as_str())
+    .collect()
 }
 
 async fn add_test_harness_facts(

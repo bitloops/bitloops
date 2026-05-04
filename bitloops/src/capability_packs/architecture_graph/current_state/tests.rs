@@ -482,6 +482,74 @@ fn components_are_inferred_inside_detected_container() {
     );
 }
 
+#[test]
+fn synthesised_structured_output_is_validated_before_merge() {
+    let mut builder = GraphBuilder::new("repo", 7, "run");
+    builder.seed_repo_structure();
+    let system_id = builder.fallback_system_id();
+
+    let error = builder
+        .add_synthesised_facts(json!({
+            "nodes": [{
+                "kind": "DOMAIN",
+                "identity": "payments",
+                "label": "Payments",
+                "confidence": 0.82
+            }],
+            "edges": [{
+                "kind": "CONTAINS",
+                "from_node_id": "missing",
+                "to_node_id": system_id,
+                "confidence": 0.7
+            }]
+        }))
+        .expect_err("unknown edge endpoint should reject the whole response");
+
+    assert!(error.to_string().contains("known node"));
+    let facts = builder.finish();
+    assert!(
+        !facts.nodes.iter().any(|node| node.label == "Payments"),
+        "malformed structured output must not be partially merged"
+    );
+}
+
+#[test]
+fn synthesised_structured_output_adds_valid_facts() {
+    let mut builder = GraphBuilder::new("repo", 7, "run");
+    builder.seed_repo_structure();
+    let system_id = builder.fallback_system_id();
+
+    let (nodes, edges) = builder
+        .add_synthesised_facts(json!({
+            "nodes": [{
+                "kind": "DOMAIN",
+                "identity": "payments",
+                "label": "Payments",
+                "confidence": 0.82,
+                "properties": { "bounded_context": true }
+            }],
+            "edges": [{
+                "kind": "CONTAINS",
+                "from_node_id": system_id,
+                "to_node_id": node_id("repo", ArchitectureGraphNodeKind::Domain, "payments"),
+                "confidence": 0.74
+            }]
+        }))
+        .expect("valid structured response should merge");
+
+    assert_eq!((nodes, edges), (1, 1));
+    let facts = builder.finish();
+    assert!(facts.nodes.iter().any(|node| {
+        node.node_kind == ArchitectureGraphNodeKind::Domain.as_str()
+            && node.label == "Payments"
+            && node.source_kind == "AGENT_SYNTHESIS"
+    }));
+    assert!(facts.edges.iter().any(|edge| {
+        edge.edge_kind == ArchitectureGraphEdgeKind::Contains.as_str()
+            && edge.source_kind == "AGENT_SYNTHESIS"
+    }));
+}
+
 fn group_artefacts_for_test(
     artefacts: Vec<LanguageEntryPointArtefact>,
 ) -> BTreeMap<String, Vec<LanguageEntryPointArtefact>> {

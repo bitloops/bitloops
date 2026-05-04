@@ -256,6 +256,8 @@ impl DevqlCapabilityHost {
             });
         let git_history: Arc<dyn super::gateways::GitHistoryGateway> =
             Arc::new(super::runtime_contexts::LocalGitHistoryGateway);
+        let inference: Arc<dyn InferenceGateway> =
+            Arc::new(self.runtime.inference.owned_scoped(Some(capability_id)));
         let relational = Arc::new(SqliteRelationalGateway::new(sqlite_pool));
         let host_services: Arc<dyn HostServicesGateway> = Arc::new(
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
@@ -272,6 +274,7 @@ impl DevqlCapabilityHost {
             relational,
             language_services,
             git_history,
+            inference,
             host_services,
             workplane,
             test_harness: crate::capability_packs::test_harness::storage::open_repository_for_repo(

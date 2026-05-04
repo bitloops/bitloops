@@ -1,6 +1,12 @@
 use crate::host::capability_host::CapabilityDescriptor;
+use crate::host::inference::InferenceSlotDescriptor;
 
-use super::types::ARCHITECTURE_GRAPH_CAPABILITY_ID;
+use super::types::{ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT};
+
+const ARCHITECTURE_GRAPH_INFERENCE_SLOTS: &[InferenceSlotDescriptor] = &[InferenceSlotDescriptor {
+    name: ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT,
+    task: crate::config::InferenceTask::StructuredGeneration,
+}];
 
 pub static ARCHITECTURE_GRAPH_DESCRIPTOR: CapabilityDescriptor = CapabilityDescriptor {
     id: ARCHITECTURE_GRAPH_CAPABILITY_ID,
@@ -12,5 +18,5 @@ pub static ARCHITECTURE_GRAPH_DESCRIPTOR: CapabilityDescriptor = CapabilityDescr
     experimental: false,
     dependencies: &[],
     required_host_features: &[],
-    inference_slots: &[],
+    inference_slots: ARCHITECTURE_GRAPH_INFERENCE_SLOTS,
 };

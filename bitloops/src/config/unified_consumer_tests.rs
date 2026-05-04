@@ -2,18 +2,20 @@ use serde_json::json;
 use std::path::Path;
 
 use super::unified_config::{
-    UnifiedSettings, merge_layers, resolve_context_guidance_from_unified,
-    resolve_dashboard_from_unified, resolve_embedding_capability_from_unified,
-    resolve_embeddings_from_unified, resolve_inference_capability_from_unified,
-    resolve_provider_from_unified, resolve_semantic_clones_from_unified,
-    resolve_store_backend_from_unified, resolve_watch_from_unified,
+    UnifiedSettings, merge_layers, resolve_architecture_from_unified,
+    resolve_context_guidance_from_unified, resolve_dashboard_from_unified,
+    resolve_embedding_capability_from_unified, resolve_embeddings_from_unified,
+    resolve_inference_capability_from_unified, resolve_provider_from_unified,
+    resolve_semantic_clones_from_unified, resolve_store_backend_from_unified,
+    resolve_watch_from_unified,
 };
 use super::{
-    ContextGuidanceInferenceBindings, DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS,
-    DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
-    DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS, DashboardLocalDashboardConfig, ENV_WATCH_DEBOUNCE_MS,
-    ENV_WATCH_POLL_FALLBACK_MS, InferenceTask, SemanticCloneEmbeddingMode,
-    SemanticClonesInferenceBindings, SemanticSummaryMode,
+    ArchitectureInferenceBindings, ContextGuidanceInferenceBindings,
+    DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS, DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS,
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS,
+    DashboardLocalDashboardConfig, ENV_WATCH_DEBOUNCE_MS, ENV_WATCH_POLL_FALLBACK_MS,
+    InferenceTask, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
+    SemanticSummaryMode,
 };
 
 fn no_env(_key: &str) -> Option<String> {
@@ -236,6 +238,59 @@ fn context_guidance_and_inference_from_unified_read_slot_binding() {
             .expect("guidance profile")
             .task,
         InferenceTask::TextGeneration
+    );
+}
+
+#[test]
+fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
+    let settings = UnifiedSettings {
+        architecture: Some(json!({
+            "inference": {
+                "fact_synthesis": "local_agent"
+            }
+        })),
+        inference: Some(json!({
+            "runtimes": {
+                "codex": {
+                    "command": "codex",
+                    "args": [],
+                    "startup_timeout_secs": 5,
+                    "request_timeout_secs": 300
+                }
+            },
+            "profiles": {
+                "local_agent": {
+                    "task": "structured_generation",
+                    "driver": "codex_exec",
+                    "runtime": "codex",
+                    "model": "gpt-5.4-mini",
+                    "temperature": "0.1",
+                    "max_output_tokens": 4096
+                }
+            }
+        })),
+        ..Default::default()
+    };
+
+    let architecture = resolve_architecture_from_unified(&settings, no_env);
+    let capability =
+        resolve_inference_capability_from_unified(&settings, Path::new("/config"), no_env);
+
+    assert_eq!(
+        architecture.inference,
+        ArchitectureInferenceBindings {
+            fact_synthesis: Some("local_agent".to_string()),
+        }
+    );
+    assert_eq!(capability.architecture, architecture);
+    assert_eq!(
+        capability
+            .inference
+            .profiles
+            .get("local_agent")
+            .expect("local agent profile")
+            .task,
+        InferenceTask::StructuredGeneration
     );
 }
 

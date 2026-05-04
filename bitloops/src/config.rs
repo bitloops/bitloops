@@ -48,16 +48,16 @@ pub(crate) use resolve::{
     resolve_preferred_daemon_config_path_for_repo, resolve_semantic_clones_worker_settings_for_repo,
 };
 pub use types::{
-    AtlassianProviderConfig, BlobStorageConfig, ContextGuidanceConfig,
-    ContextGuidanceInferenceBindings, DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS,
-    DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS, DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS,
-    DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS, DashboardFileConfig, DashboardLocalDashboardConfig,
-    EmbeddingCapabilityConfig, EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig,
-    EventsBackendConfig, GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig,
-    InferenceProfileConfig, InferenceRuntimeConfig, InferenceTask, ProviderConfig,
-    RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig,
-    SemanticClonesInferenceBindings, SemanticSummaryMode, StoreBackendConfig, StoreFileConfig,
-    WatchFileConfig, WatchRuntimeConfig,
+    ArchitectureConfig, ArchitectureInferenceBindings, AtlassianProviderConfig, BlobStorageConfig,
+    ContextGuidanceConfig, ContextGuidanceInferenceBindings,
+    DEFAULT_SEMANTIC_CLONES_CLONE_REBUILD_WORKERS, DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS,
+    DEFAULT_SEMANTIC_CLONES_ENRICHMENT_WORKERS, DEFAULT_SEMANTIC_CLONES_SUMMARY_WORKERS,
+    DashboardFileConfig, DashboardLocalDashboardConfig, EmbeddingCapabilityConfig,
+    EmbeddingProfileConfig, EmbeddingsConfig, EmbeddingsRuntimeConfig, EventsBackendConfig,
+    GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig, InferenceProfileConfig,
+    InferenceRuntimeConfig, InferenceTask, ProviderConfig, RelationalBackendConfig,
+    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticClonesInferenceBindings,
+    SemanticSummaryMode, StoreBackendConfig, StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 
 #[cfg(test)]
