@@ -24,11 +24,8 @@ use crate::capability_packs::semantic_clones::{
     SEMANTIC_CLONES_SYMBOL_EMBEDDINGS_REFRESH_INGESTER_ID,
 };
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host};
 use crate::host::capability_host::CapabilityMailboxHandler;
-use crate::host::devql::{
-    DevqlConfig, RelationalStorage, build_capability_host, resolve_repo_identity,
-};
+use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host};
 use crate::host::runtime_store::WorkplaneJobRecord;
 
 use super::super::JobExecutionOutcome;

@@ -318,8 +318,7 @@ fn resolve_optional_text_generation_readiness(
     job: &WorkplaneJobRecord,
     slot_name: &str,
 ) -> Result<WorkplaneMailboxReadiness> {
-    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
     let inference = capability_host.inference_for_capability(&job.capability_id);
 
@@ -339,8 +338,7 @@ fn resolve_optional_text_generation_readiness(
 pub(crate) fn workplane_mailbox_registration_for_job(
     job: &WorkplaneJobRecord,
 ) -> Result<Option<CapabilityMailboxRegistration>> {
-    let repo = crate::host::devql::resolve_repo_identity(&job.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&job.repo_root, &job.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&job.repo_root, &job.repo_id);
     let capability_host = crate::host::devql::build_capability_host(&job.repo_root, repo)?;
     Ok(capability_host.mailbox_registration(&job.capability_id, &job.mailbox_name))
 }

@@ -472,10 +472,9 @@ mod tests {
             [
                 "architecture_graph",
                 "codecity",
-                "knowledge",
-                "navigation_context",
                 "context_guidance",
                 "knowledge",
+                "navigation_context",
                 "semantic_clones",
                 "test_harness"
             ]
