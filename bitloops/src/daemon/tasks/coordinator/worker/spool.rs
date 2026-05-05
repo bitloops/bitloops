@@ -87,16 +87,35 @@ impl DevqlTaskCoordinator {
                 )
             }
             crate::host::devql::ProducerSpoolJobPayload::PostMergeRefresh {
-                head_sha,
                 changed_files,
+                ..
             } => {
                 let cfg = self.devql_config_from_producer_spool_job(job)?;
-                crate::host::checkpoints::strategy::manual_commit::execute_devql_post_merge_refresh(
+                let backfill =
+                    crate::host::checkpoints::strategy::manual_commit::default_post_merge_history_backfill();
+                self.enqueue(
                     &cfg,
-                    head_sha,
+                    crate::daemon::DevqlTaskSource::PostMerge,
+                    crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+                        backfill: Some(backfill),
+                    }),
+                )?;
+                let paths = crate::host::devql::refresh_paths_for_sync(
+                    &cfg,
                     changed_files,
-                )
-                .await
+                    "post-merge",
+                )?;
+                if !paths.is_empty() {
+                    self.enqueue(
+                        &cfg,
+                        crate::daemon::DevqlTaskSource::PostMerge,
+                        crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                            mode: crate::daemon::SyncTaskMode::Paths { paths },
+                            post_commit_snapshot: None,
+                        }),
+                    )?;
+                }
+                Ok(())
             }
             crate::host::devql::ProducerSpoolJobPayload::PrePushSync {
                 remote,

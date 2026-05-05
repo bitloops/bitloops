@@ -82,11 +82,13 @@ pub(crate) use self::commands_query::{
     format_query_output, use_raw_graphql_mode,
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
-pub(crate) use self::commands_refresh::snapshot_committed_current_rows_for_commit_for_config;
 pub use self::commands_refresh::{
     PostCommitArtefactRefreshStats, QueuedSyncTaskMetadata, run_post_checkout_branch_seed,
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
+};
+pub(crate) use self::commands_refresh::{
+    refresh_paths_for_sync, snapshot_committed_current_rows_for_commit_for_config,
 };
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::run_sync_with_summary_and_stats_and_observer_and_diffs;

@@ -2,6 +2,10 @@ use super::*;
 
 const DEFAULT_POST_MERGE_HISTORY_BACKFILL: usize = 200;
 
+pub(crate) fn default_post_merge_history_backfill() -> usize {
+    DEFAULT_POST_MERGE_HISTORY_BACKFILL
+}
+
 pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, is_squash: bool) -> Result<()> {
     let Some(head_sha) = try_head_hash(repo_root)? else {
         return Ok(());
@@ -51,6 +55,7 @@ pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, is_squash: bool) ->
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn execute_devql_post_merge_refresh(
     cfg: &crate::host::devql::DevqlConfig,
     head_sha: &str,
