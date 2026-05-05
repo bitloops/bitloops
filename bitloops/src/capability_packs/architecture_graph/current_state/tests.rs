@@ -57,6 +57,24 @@ fn current_artefact(path: &str, name: &str) -> CurrentCanonicalArtefactRecord {
     }
 }
 
+fn synthesis_request() -> CurrentStateConsumerRequest {
+    CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: "repo".to_string(),
+        repo_root: std::path::PathBuf::from("/tmp/repo"),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 7,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: Vec::new(),
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    }
+}
+
 #[test]
 fn dependency_adjacency_keeps_resolved_edges_only() {
     let edges = vec![
@@ -498,8 +516,8 @@ fn synthesised_structured_output_is_validated_before_merge() {
             }],
             "edges": [{
                 "kind": "CONTAINS",
-                "from_node_id": "missing",
-                "to_node_id": system_id,
+                "from": { "node_id": "missing" },
+                "to": { "node_id": system_id },
                 "confidence": 0.7
             }]
         }))
@@ -530,8 +548,8 @@ fn synthesised_structured_output_adds_valid_facts() {
             }],
             "edges": [{
                 "kind": "CONTAINS",
-                "from_node_id": system_id,
-                "to_node_id": node_id("repo", ArchitectureGraphNodeKind::Domain, "payments"),
+                "from": { "node_id": system_id },
+                "to": { "kind": "DOMAIN", "identity": "payments" },
                 "confidence": 0.74
             }]
         }))
@@ -546,8 +564,74 @@ fn synthesised_structured_output_adds_valid_facts() {
     }));
     assert!(facts.edges.iter().any(|edge| {
         edge.edge_kind == ArchitectureGraphEdgeKind::Contains.as_str()
+            && edge.to_node_id == node_id("repo", ArchitectureGraphNodeKind::Domain, "payments")
             && edge.source_kind == "AGENT_SYNTHESIS"
     }));
+}
+
+#[test]
+fn synthesised_structured_output_rejects_ambiguous_edge_endpoint() {
+    let mut builder = GraphBuilder::new("repo", 7, "run");
+    builder.seed_repo_structure();
+    let system_id = builder.fallback_system_id();
+
+    let error = builder
+        .add_synthesised_facts(json!({
+            "nodes": [],
+            "edges": [{
+                "kind": "CONTAINS",
+                "from": {
+                    "node_id": system_id,
+                    "kind": "SYSTEM",
+                    "identity": "repo"
+                },
+                "to": { "node_id": system_id },
+                "confidence": 0.7
+            }]
+        }))
+        .expect_err("ambiguous endpoint should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("either node_id or kind plus identity")
+    );
+}
+
+#[test]
+fn architecture_fact_synthesis_prompt_limits_nodes_without_snapshot_edges() {
+    let mut builder = GraphBuilder::new("repo", 7, "run");
+    builder.seed_repo_structure();
+    let artefacts = (0..120)
+        .map(|index| current_artefact(&format!("src/file_{index}.rs"), &format!("symbol_{index}")))
+        .collect::<Vec<_>>();
+    builder.add_code_nodes(&artefacts);
+    builder.upsert_edge_by_kind(
+        ArchitectureGraphEdgeKind::Contains,
+        builder.fallback_system_id(),
+        node_id(
+            "repo",
+            ArchitectureGraphNodeKind::Node,
+            "src/file_0.rs:symbol_0:artefact",
+        ),
+        "COMPUTED",
+        0.9,
+        builder.provenance("test"),
+        json!([]),
+        json!({}),
+    );
+
+    let prompt = architecture_fact_synthesis_user_prompt(&synthesis_request(), &builder);
+    let prompt: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
+    let existing_nodes = prompt["existing_nodes"]
+        .as_array()
+        .expect("existing nodes are an array");
+
+    assert_eq!(existing_nodes.len(), 80);
+    assert!(
+        prompt.get("existing_edges").is_none(),
+        "prompt should not serialise edge snapshots"
+    );
 }
 
 fn group_artefacts_for_test(

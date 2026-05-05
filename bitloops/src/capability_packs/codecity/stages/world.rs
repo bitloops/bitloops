@@ -73,10 +73,12 @@ impl StageHandler for CodeCityWorldStageHandler {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
 
     use anyhow::Result;
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::CodeCityWorldStageHandler;
     use crate::host::capability_host::gateways::{CanonicalGraphGateway, RelationalGateway};
@@ -160,6 +162,7 @@ mod tests {
 
     struct DummyExecCtx {
         repo: RepoIdentity,
+        repo_root: TempDir,
         graph: LocalCanonicalGraphGateway,
         relational: FakeRelationalGateway,
     }
@@ -170,7 +173,7 @@ mod tests {
         }
 
         fn repo_root(&self) -> &Path {
-            Path::new(".")
+            self.repo_root.path()
         }
 
         fn graph(&self) -> &dyn CanonicalGraphGateway {
@@ -190,6 +193,20 @@ mod tests {
             identity: "local/bitloops/bitloops".to_string(),
             repo_id: "repo-1".to_string(),
         }
+    }
+
+    fn dummy_ctx(relational: FakeRelationalGateway) -> Result<DummyExecCtx> {
+        let repo_root = TempDir::new()?;
+        fs::write(
+            repo_root.path().join("config.toml"),
+            "[stores]\n[stores.relational]\nsqlite_path = \"stores/relational/devql.sqlite\"\n",
+        )?;
+        Ok(DummyExecCtx {
+            repo: repo(),
+            repo_root,
+            graph: LocalCanonicalGraphGateway,
+            relational,
+        })
     }
 
     fn file(path: &str) -> CurrentCanonicalFileRecord {
@@ -272,16 +289,12 @@ mod tests {
     #[tokio::test]
     async fn stage_rejects_temporal_scopes() -> Result<()> {
         let handler = CodeCityWorldStageHandler;
-        let mut ctx = DummyExecCtx {
-            repo: repo(),
-            graph: LocalCanonicalGraphGateway,
-            relational: FakeRelationalGateway {
-                files: Vec::new(),
-                artefacts: Vec::new(),
-                edges: Vec::new(),
-                fail_with: None,
-            },
-        };
+        let mut ctx = dummy_ctx(FakeRelationalGateway {
+            files: Vec::new(),
+            artefacts: Vec::new(),
+            edges: Vec::new(),
+            fail_with: None,
+        })?;
 
         let response = handler
             .execute(
@@ -306,16 +319,12 @@ mod tests {
     #[tokio::test]
     async fn stage_returns_missing_payload_when_no_snapshot_is_available() -> Result<()> {
         let handler = CodeCityWorldStageHandler;
-        let mut ctx = DummyExecCtx {
-            repo: repo(),
-            graph: LocalCanonicalGraphGateway,
-            relational: FakeRelationalGateway {
-                files: Vec::new(),
-                artefacts: Vec::new(),
-                edges: Vec::new(),
-                fail_with: None,
-            },
-        };
+        let mut ctx = dummy_ctx(FakeRelationalGateway {
+            files: Vec::new(),
+            artefacts: Vec::new(),
+            edges: Vec::new(),
+            fail_with: None,
+        })?;
 
         let response = handler
             .execute(
@@ -340,85 +349,81 @@ mod tests {
     #[tokio::test]
     async fn stage_returns_scoped_missing_snapshot_without_building_on_read() -> Result<()> {
         let handler = CodeCityWorldStageHandler;
-        let mut ctx = DummyExecCtx {
-            repo: repo(),
-            graph: LocalCanonicalGraphGateway,
-            relational: FakeRelationalGateway {
-                files: vec![
-                    file("packages/api/src/caller.ts"),
-                    file("packages/api/src/target.ts"),
-                    file("packages/web/src/page.ts"),
-                ],
-                artefacts: vec![
-                    artefact(
-                        "packages/api/src/caller.ts",
-                        "file::caller",
-                        "artefact::file-caller",
-                        "file",
-                        None,
-                        "packages/api/src/caller.ts",
-                        (1, 6),
-                    ),
-                    artefact(
-                        "packages/api/src/caller.ts",
-                        "sym::caller",
-                        "artefact::caller",
-                        "function",
-                        Some("artefact::file-caller"),
-                        "packages/api/src/caller.ts::caller",
-                        (4, 6),
-                    ),
-                    artefact(
-                        "packages/api/src/target.ts",
-                        "file::target",
-                        "artefact::file-target",
-                        "file",
-                        None,
-                        "packages/api/src/target.ts",
-                        (1, 3),
-                    ),
-                    artefact(
-                        "packages/api/src/target.ts",
-                        "sym::target",
-                        "artefact::target",
-                        "function",
-                        Some("artefact::file-target"),
-                        "packages/api/src/target.ts::target",
-                        (1, 3),
-                    ),
-                    artefact(
-                        "packages/web/src/page.ts",
-                        "sym::page",
-                        "artefact::page",
-                        "function",
-                        None,
-                        "packages/web/src/page.ts::render",
-                        (1, 3),
-                    ),
-                ],
-                edges: vec![
-                    edge(
-                        "packages/api/src/caller.ts",
-                        "edge-local",
-                        "sym::caller",
-                        "artefact::caller",
-                        Some("sym::target"),
-                        Some("artefact::target"),
-                        Some("packages/api/src/target.ts::target"),
-                    ),
-                    edge(
-                        "packages/api/src/caller.ts",
-                        "edge-cross",
-                        "sym::caller",
-                        "artefact::caller",
-                        Some("sym::page"),
-                        Some("artefact::page"),
-                        Some("packages/web/src/page.ts::render"),
-                    ),
-                ],
-                fail_with: None,
-            },
-        };
+        let mut ctx = dummy_ctx(FakeRelationalGateway {
+            files: vec![
+                file("packages/api/src/caller.ts"),
+                file("packages/api/src/target.ts"),
+                file("packages/web/src/page.ts"),
+            ],
+            artefacts: vec![
+                artefact(
+                    "packages/api/src/caller.ts",
+                    "file::caller",
+                    "artefact::file-caller",
+                    "file",
+                    None,
+                    "packages/api/src/caller.ts",
+                    (1, 6),
+                ),
+                artefact(
+                    "packages/api/src/caller.ts",
+                    "sym::caller",
+                    "artefact::caller",
+                    "function",
+                    Some("artefact::file-caller"),
+                    "packages/api/src/caller.ts::caller",
+                    (4, 6),
+                ),
+                artefact(
+                    "packages/api/src/target.ts",
+                    "file::target",
+                    "artefact::file-target",
+                    "file",
+                    None,
+                    "packages/api/src/target.ts",
+                    (1, 3),
+                ),
+                artefact(
+                    "packages/api/src/target.ts",
+                    "sym::target",
+                    "artefact::target",
+                    "function",
+                    Some("artefact::file-target"),
+                    "packages/api/src/target.ts::target",
+                    (1, 3),
+                ),
+                artefact(
+                    "packages/web/src/page.ts",
+                    "sym::page",
+                    "artefact::page",
+                    "function",
+                    None,
+                    "packages/web/src/page.ts::render",
+                    (1, 3),
+                ),
+            ],
+            edges: vec![
+                edge(
+                    "packages/api/src/caller.ts",
+                    "edge-local",
+                    "sym::caller",
+                    "artefact::caller",
+                    Some("sym::target"),
+                    Some("artefact::target"),
+                    Some("packages/api/src/target.ts::target"),
+                ),
+                edge(
+                    "packages/api/src/caller.ts",
+                    "edge-cross",
+                    "sym::caller",
+                    "artefact::caller",
+                    Some("sym::page"),
+                    Some("artefact::page"),
+                    Some("packages/web/src/page.ts::render"),
+                ),
+            ],
+            fail_with: None,
+        })?;
 
         let response = handler
             .execute(
@@ -457,19 +462,15 @@ mod tests {
     #[tokio::test]
     async fn stage_reports_missing_snapshot_without_read_time_source_loading() -> Result<()> {
         let handler = CodeCityWorldStageHandler;
-        let mut ctx = DummyExecCtx {
-            repo: repo(),
-            graph: LocalCanonicalGraphGateway,
-            relational: FakeRelationalGateway {
-                files: Vec::new(),
-                artefacts: Vec::new(),
-                edges: Vec::new(),
-                fail_with: Some(
-                    "required DevQL sync table `current_file_state` is unavailable; run DevQL sync first."
-                        .to_string(),
-                ),
-            },
-        };
+        let mut ctx = dummy_ctx(FakeRelationalGateway {
+            files: Vec::new(),
+            artefacts: Vec::new(),
+            edges: Vec::new(),
+            fail_with: Some(
+                "required DevQL sync table `current_file_state` is unavailable; run DevQL sync first."
+                    .to_string(),
+            ),
+        })?;
 
         let response = handler
             .execute(
