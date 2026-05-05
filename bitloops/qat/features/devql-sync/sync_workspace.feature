@@ -158,7 +158,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_producer_post_merge @sync_known_gap @sync_gap_hook_race
+  @devql @sync @sync_producer @sync_producer_post_merge @sync_gap_hook_race
   Scenario: Sync indexes changes introduced by git pull
     Given I run CleanStart for flow "SyncGitPull"
     And I start the daemon in bitloops
@@ -396,7 +396,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_producer_post_commit @sync_producer_post_commit_add @sync_known_gap @sync_gap_hook_race
+  @devql @sync @sync_producer @sync_producer_post_commit @sync_producer_post_commit_add @sync_gap_hook_race
   Scenario: Producer contract post-commit hook materializes an added source file
     Given I run CleanStart for flow "SyncProducerPostCommitAdd"
     And I start the daemon in bitloops

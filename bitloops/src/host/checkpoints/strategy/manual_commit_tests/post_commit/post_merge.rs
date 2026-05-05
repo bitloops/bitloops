@@ -71,6 +71,62 @@ pub(crate) fn post_merge_refreshes_devql_current_state_for_merged_files() {
 }
 
 #[test]
+pub(crate) fn post_merge_squash_refreshes_devql_current_state_for_squashed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let devql_sqlite_path = init_devql_schema(dir.path());
+    let primary_branch = run_git(dir.path(), &["branch", "--show-current"]).unwrap();
+
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    commit_file(
+        dir.path(),
+        "src/base.ts",
+        "export const base = (value: number) => value;\n",
+    );
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    git_ok(dir.path(), &["checkout", "-b", "feature/post-merge-squash"]);
+    commit_file(
+        dir.path(),
+        "src/squashed_merge.ts",
+        "export const squashedMerge = (value: number) => value + 1;\n",
+    );
+
+    git_ok(dir.path(), &["checkout", &primary_branch]);
+    commit_file(
+        dir.path(),
+        "src/primary_only.ts",
+        "export const primaryOnly = (value: number) => value - 1;\n",
+    );
+    ManualCommitStrategy::new(dir.path()).post_commit().unwrap();
+
+    git_ok(
+        dir.path(),
+        &["merge", "--squash", "feature/post-merge-squash"],
+    );
+    let repo_id = crate::host::devql::resolve_repo_identity(dir.path())
+        .unwrap()
+        .repo_id;
+
+    ManualCommitStrategy::new(dir.path())
+        .post_merge(true)
+        .unwrap();
+
+    let sqlite = rusqlite::Connection::open(devql_sqlite_path).unwrap();
+    let indexed_rows: i64 = sqlite
+        .query_row(
+            "SELECT COUNT(*) FROM artefacts_current WHERE repo_id = ?1 AND path = ?2",
+            rusqlite::params![repo_id.as_str(), "src/squashed_merge.ts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        indexed_rows > 0,
+        "squash post_merge should refresh sync-owned current-state artefacts for squashed files"
+    );
+}
+
+#[test]
 pub(crate) fn post_merge_refresh_removes_devql_current_state_for_deleted_files() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

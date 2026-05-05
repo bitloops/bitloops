@@ -797,7 +797,7 @@ New QAT coverage should preserve the current design principles:
 Exercises sync reconciliation across three lanes:
 
 - `@sync_producer` is the primary product-contract inventory. It simulates real user usage after `bitloops init`: watcher, git hook, daemon restart/downtime, branch checkout, merge, reset, clean, and validation flows.
-- `@sync_known_gap` marks producer scenarios that describe the target contract but currently expose product gaps; the producer alias excludes them until the product fix lands. Current known gaps cover hook/watcher races around post-commit and post-merge.
+- `@sync_known_gap` marks producer scenarios that describe the target contract but currently expose product gaps; the producer alias excludes them until the product fix lands. There are currently no DevQL Sync producer scenarios carrying this tag.
 - `@sync_manual_smoke` is the small manual sync smoke subset for explicit enqueue/validate/repair/path-scoped behavior.
 - `@sync_legacy` is retained for historical `init --sync=true` manual convergence behavior and should not be treated as the main correctness signal.
 
@@ -817,7 +817,6 @@ Useful focused filters:
 
 ```bash
 CUCUMBER_FILTER_TAGS='@sync_manual_smoke' cargo qat-devql-sync
-CUCUMBER_FILTER_TAGS='@sync_known_gap' cargo qat-devql-sync
 CUCUMBER_FILTER_TAGS='@sync_legacy' cargo qat-devql-sync
 ```
 

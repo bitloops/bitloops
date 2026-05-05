@@ -85,7 +85,12 @@ pub(super) fn merge_existing_task(
                 && (source != DevqlTaskSource::RepoPolicyChange
                     || task.status == DevqlTaskStatus::Queued)
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing_spec| {
-                    sync_specs_have_compatible_snapshots(
+                    !should_keep_distinct_producer_sources(
+                        task.source,
+                        source,
+                        &existing_spec.mode,
+                        mode,
+                    ) && sync_specs_have_compatible_snapshots(
                         existing_spec,
                         sync_spec_from_task_spec(spec).expect("sync spec"),
                     ) && match (&existing_spec.mode, mode) {
@@ -133,7 +138,12 @@ pub(super) fn merge_existing_task(
                 && task.status == DevqlTaskStatus::Queued
                 && task.init_session_id.as_deref() == init_session_id
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing| {
-                    matches!(existing.mode, SyncTaskMode::Paths { .. })
+                    !should_keep_distinct_producer_sources(
+                        task.source,
+                        source,
+                        &existing.mode,
+                        mode,
+                    ) && matches!(existing.mode, SyncTaskMode::Paths { .. })
                         && sync_specs_have_compatible_snapshots(
                             existing,
                             sync_spec_from_task_spec(spec).expect("sync spec"),
@@ -317,6 +327,49 @@ fn is_git_hook_sync_task(task: &DevqlTaskRecord) -> bool {
         && task
             .sync_spec()
             .is_none_or(|spec| !matches!(spec.mode, SyncTaskMode::Validate))
+}
+
+fn should_keep_distinct_producer_sources(
+    existing: DevqlTaskSource,
+    incoming: DevqlTaskSource,
+    existing_mode: &SyncTaskMode,
+    incoming_mode: &SyncTaskMode,
+) -> bool {
+    if existing == incoming {
+        return false;
+    }
+    if existing == DevqlTaskSource::RepoPolicyChange
+        || incoming == DevqlTaskSource::RepoPolicyChange
+    {
+        return false;
+    }
+    if !is_background_producer_source(existing) || !is_background_producer_source(incoming) {
+        return false;
+    }
+    if existing == DevqlTaskSource::PostCheckout
+        && incoming == DevqlTaskSource::Watcher
+        && is_full_like(existing_mode)
+    {
+        return false;
+    }
+    if existing == DevqlTaskSource::Watcher
+        && incoming == DevqlTaskSource::PostCheckout
+        && matches!(existing_mode, SyncTaskMode::Paths { .. })
+        && is_stronger_than_paths(incoming_mode)
+    {
+        return false;
+    }
+    true
+}
+
+fn is_background_producer_source(source: DevqlTaskSource) -> bool {
+    matches!(
+        source,
+        DevqlTaskSource::Watcher
+            | DevqlTaskSource::PostCheckout
+            | DevqlTaskSource::PostCommit
+            | DevqlTaskSource::PostMerge
+    )
 }
 
 pub(super) fn recompute_queue_positions(tasks: &mut [DevqlTaskRecord]) {
@@ -927,6 +980,76 @@ mod tests {
         assert_eq!(state.tasks.len(), 1);
         assert_eq!(merged.task_id, "sync-task-1");
         assert_eq!(state.tasks[0].source, DevqlTaskSource::PostCheckout);
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Full
+        );
+    }
+
+    #[test]
+    fn queued_post_checkout_full_does_not_absorb_incoming_post_merge_paths() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::PostCheckout,
+                SyncTaskMode::Full,
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::PostMerge,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Paths {
+                paths: vec!["src/utils.rs".to_string()],
+            }),
+            Some("init-session-1"),
+        );
+
+        assert!(
+            merged.is_none(),
+            "post-merge producer work must keep its own task source instead of being hidden by queued post-checkout sync"
+        );
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.tasks[0].source, DevqlTaskSource::PostCheckout);
+        assert_eq!(
+            state.tasks[0].sync_spec().expect("sync spec").mode,
+            SyncTaskMode::Full
+        );
+    }
+
+    #[test]
+    fn queued_watcher_paths_are_upgraded_by_incoming_manual_full() {
+        let cfg = test_cfg();
+        let mut state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task(
+                "sync-task-1",
+                DevqlTaskSource::Watcher,
+                SyncTaskMode::Paths {
+                    paths: vec!["src/lib.rs".to_string()],
+                },
+                DevqlTaskStatus::Queued,
+            )],
+            ..Default::default()
+        };
+
+        let merged = merge_existing_task(
+            &mut state,
+            &cfg,
+            DevqlTaskSource::ManualCli,
+            DevqlTaskKind::Sync,
+            &sync_spec(SyncTaskMode::Full),
+            Some("init-session-1"),
+        )
+        .expect("incoming manual full sync should upgrade queued watcher path sync");
+
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(merged.task_id, "sync-task-1");
+        assert_eq!(state.tasks[0].source, DevqlTaskSource::ManualCli);
         assert_eq!(
             state.tasks[0].sync_spec().expect("sync spec").mode,
             SyncTaskMode::Full
