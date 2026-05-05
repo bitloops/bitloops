@@ -91,7 +91,7 @@ fn prepare_capture_temporary_checkpoint_batch(
     .context("building temporary checkpoint tree hash for devql watch")?;
 
     let tree_matches_parent = parent_tree.as_deref() == Some(tree_hash.as_str());
-    if tree_matches_parent && !local_sqlite_path_for_capture(cfg)?.exists() {
+    if tree_matches_parent && !local_sqlite_exists_for_capture(cfg)? {
         return Ok(None);
     }
 
@@ -110,14 +110,10 @@ fn prepare_capture_temporary_checkpoint_batch(
     }))
 }
 
-fn local_sqlite_path_for_capture(cfg: &crate::host::devql::DevqlConfig) -> Result<PathBuf> {
-    let backend = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
-        .context("resolving store backend config for watcher capture")?;
-    crate::config::resolve_sqlite_db_path_for_repo(
-        &cfg.repo_root,
-        backend.relational.sqlite_path.as_deref(),
-    )
-    .context("resolving local SQLite path for watcher capture")
+fn local_sqlite_exists_for_capture(cfg: &crate::host::devql::DevqlConfig) -> Result<bool> {
+    let relational = DefaultRelationalStore::open_local_for_repo_root(&cfg.repo_root)
+        .context("resolving local relational store for watcher capture")?;
+    Ok(relational.sqlite_path().exists())
 }
 
 fn latest_workspace_revision_tree_hash(
