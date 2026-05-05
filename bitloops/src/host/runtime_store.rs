@@ -22,7 +22,7 @@ pub use repo_workplane::{
     CapabilityWorkplaneMailboxStatus, SemanticEmbeddingMailboxItemInsert,
     SemanticEmbeddingMailboxItemRecord, SemanticMailboxItemKind, SemanticMailboxItemStatus,
     SemanticSummaryMailboxItemInsert, SemanticSummaryMailboxItemRecord, WorkplaneCursorRunRecord,
-    WorkplaneCursorRunStatus, WorkplaneJobRecord, WorkplaneJobStatus,
+    WorkplaneCursorRunStatus, WorkplaneJobQuery, WorkplaneJobRecord, WorkplaneJobStatus,
 };
 pub use types::{
     DaemonSqliteRuntimeStore, LegacySyncTaskRecord, PersistedCapabilityEventQueueState,

@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, anyhow, bail};
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 
+use crate::capability_packs::architecture_graph::roles::RoleAdjudicationMailboxPayload;
 use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
     collect_seed_evidence, run_seed_generation,
 };
@@ -23,9 +25,13 @@ use crate::capability_packs::architecture_graph::roles::storage::{
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     RoleSplitSpecFile, RuleSpecFile, SeededArchitectureTaxonomy,
 };
+use crate::capability_packs::architecture_graph::types::{
+    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+};
 use crate::config::InferenceTask;
 use crate::host::capability_host::DevqlCapabilityHost;
 use crate::host::inference::InferenceGateway;
+use crate::host::runtime_store::{RepoSqliteRuntimeStore, WorkplaneJobQuery, WorkplaneJobStatus};
 
 use super::*;
 
@@ -39,6 +45,8 @@ struct SeedSummary {
     rules_created: usize,
     rules_reused: usize,
 }
+
+const ROLE_REVIEW_STATUSES: &[&str] = &["needs_review", "stale", "rejected", "unknown"];
 
 pub(super) async fn run_architecture_command(
     scope: &SlimCliRepoScope,
@@ -64,6 +72,9 @@ async fn run_architecture_roles_command(
     match args.command {
         DevqlArchitectureRolesCommand::Seed(_) => {
             run_architecture_roles_seed(scope, host, context).await
+        }
+        DevqlArchitectureRolesCommand::Status(args) => {
+            run_architecture_roles_status(scope, context, args).await
         }
         DevqlArchitectureRolesCommand::Rename(args) => {
             let summary = create_rename_role_proposal(
@@ -214,6 +225,319 @@ async fn run_architecture_roles_command(
             }
         },
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RolesStatusOutput {
+    queue_summary: RoleAdjudicationQueueSummary,
+    queue_items: Vec<RoleAdjudicationQueueItem>,
+    review_items: Vec<RoleReviewItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RoleAdjudicationQueueSummary {
+    total: usize,
+    by_status: BTreeMap<String, usize>,
+    by_reason: BTreeMap<String, usize>,
+    parse_errors: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RoleAdjudicationQueueItem {
+    job_id: String,
+    status: String,
+    attempts: u32,
+    updated_at_unix: u64,
+    dedupe_key: Option<String>,
+    reason: Option<String>,
+    generation: Option<u64>,
+    artefact_id: Option<String>,
+    symbol_id: Option<String>,
+    path: Option<String>,
+    canonical_kind: Option<String>,
+    deterministic_confidence: Option<f64>,
+    parse_error: Option<String>,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RoleReviewItem {
+    assignment_id: String,
+    artefact_id: String,
+    path: Option<String>,
+    role_id: String,
+    source_kind: String,
+    confidence: f64,
+    status: String,
+    status_reason: String,
+    updated_at: Option<String>,
+}
+
+async fn run_architecture_roles_status(
+    scope: &SlimCliRepoScope,
+    context: &crate::host::capability_host::CurrentStateConsumerContext,
+    args: DevqlArchitectureRolesStatusArgs,
+) -> Result<()> {
+    let limit = usize::try_from(args.limit).context("converting --limit to usize")?;
+    let queue_items = load_role_adjudication_queue_items(scope, limit)?;
+    let review_items =
+        load_role_review_items(context.storage.as_ref(), &scope.repo.repo_id, limit).await?;
+    let summary = summarise_queue_items(&queue_items);
+    let output = RolesStatusOutput {
+        queue_summary: summary,
+        queue_items,
+        review_items,
+    };
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output)
+                .context("serialising roles status output as JSON")?
+        );
+        return Ok(());
+    }
+
+    print_roles_status_human(&output);
+    Ok(())
+}
+
+fn load_role_adjudication_queue_items(
+    scope: &SlimCliRepoScope,
+    limit: usize,
+) -> Result<Vec<RoleAdjudicationQueueItem>> {
+    let store = RepoSqliteRuntimeStore::open(&scope.repo_root)
+        .context("opening repo runtime store for architecture roles status")?;
+    let jobs = store
+        .list_capability_workplane_jobs(WorkplaneJobQuery {
+            capability_id: Some(ARCHITECTURE_GRAPH_CAPABILITY_ID.to_string()),
+            mailbox_name: Some(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string()),
+            statuses: vec![
+                WorkplaneJobStatus::Pending,
+                WorkplaneJobStatus::Running,
+                WorkplaneJobStatus::Failed,
+            ],
+            limit: Some(limit as u64),
+        })
+        .context("loading architecture role adjudication queue jobs")?;
+
+    Ok(jobs
+        .into_iter()
+        .map(role_adjudication_queue_item_from_job)
+        .collect())
+}
+
+fn role_adjudication_queue_item_from_job(
+    job: crate::host::runtime_store::WorkplaneJobRecord,
+) -> RoleAdjudicationQueueItem {
+    let mut item = RoleAdjudicationQueueItem {
+        job_id: job.job_id,
+        status: job.status.as_str().to_string(),
+        attempts: job.attempts,
+        updated_at_unix: job.updated_at_unix,
+        dedupe_key: job.dedupe_key,
+        reason: None,
+        generation: None,
+        artefact_id: None,
+        symbol_id: None,
+        path: None,
+        canonical_kind: None,
+        deterministic_confidence: None,
+        parse_error: None,
+        last_error: job.last_error,
+    };
+
+    match serde_json::from_value::<RoleAdjudicationMailboxPayload>(job.payload) {
+        Ok(payload) => {
+            item.reason = Some(payload.request.reason.as_str().to_string());
+            item.generation = Some(payload.request.generation);
+            item.artefact_id = payload.request.artefact_id;
+            item.symbol_id = payload.request.symbol_id;
+            item.path = payload.request.path;
+            item.canonical_kind = payload.request.canonical_kind;
+            item.deterministic_confidence = payload.request.deterministic_confidence;
+        }
+        Err(err) => {
+            item.parse_error = Some(err.to_string());
+        }
+    }
+
+    item
+}
+
+fn summarise_queue_items(items: &[RoleAdjudicationQueueItem]) -> RoleAdjudicationQueueSummary {
+    let mut by_status = BTreeMap::<String, usize>::new();
+    let mut by_reason = BTreeMap::<String, usize>::new();
+    let mut parse_errors = 0usize;
+    for item in items {
+        *by_status.entry(item.status.clone()).or_default() += 1;
+        if let Some(reason) = item.reason.as_ref() {
+            *by_reason.entry(reason.clone()).or_default() += 1;
+        }
+        if item.parse_error.is_some() {
+            parse_errors += 1;
+        }
+    }
+    RoleAdjudicationQueueSummary {
+        total: items.len(),
+        by_status,
+        by_reason,
+        parse_errors,
+    }
+}
+
+async fn load_role_review_items(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    limit: usize,
+) -> Result<Vec<RoleReviewItem>> {
+    let status_filters = ROLE_REVIEW_STATUSES
+        .iter()
+        .map(|status| format!("'{}'", status.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT a.assignment_id, a.artefact_id, a.role_id, a.source_kind, a.confidence, \
+                    a.status, a.status_reason, a.updated_at, ac.path \
+             FROM architecture_role_assignments a \
+             LEFT JOIN artefacts_current ac \
+               ON ac.repo_id = a.repo_id AND ac.artefact_id = a.artefact_id \
+             WHERE a.repo_id = {repo_id} \
+               AND a.status IN ({status_filters}) \
+             ORDER BY a.updated_at DESC \
+             LIMIT {limit};",
+            repo_id = sql_text(repo_id),
+        ))
+        .await
+        .context("loading architecture role review items")?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let assignment_id = value_str(&row, "assignment_id")
+            .ok_or_else(|| anyhow!("missing `assignment_id` in architecture role review row"))?
+            .to_string();
+        let artefact_id = value_str(&row, "artefact_id")
+            .ok_or_else(|| anyhow!("missing `artefact_id` in architecture role review row"))?
+            .to_string();
+        let role_id = value_str(&row, "role_id")
+            .ok_or_else(|| anyhow!("missing `role_id` in architecture role review row"))?
+            .to_string();
+        let source_kind = value_str(&row, "source_kind")
+            .ok_or_else(|| anyhow!("missing `source_kind` in architecture role review row"))?
+            .to_string();
+        let confidence = row.get("confidence").and_then(Value::as_f64).unwrap_or(0.0);
+        let status = value_str(&row, "status")
+            .ok_or_else(|| anyhow!("missing `status` in architecture role review row"))?
+            .to_string();
+        let status_reason = value_str(&row, "status_reason").unwrap_or("").to_string();
+        let updated_at = value_str(&row, "updated_at").map(ToOwned::to_owned);
+        let path = value_str(&row, "path").map(ToOwned::to_owned);
+
+        items.push(RoleReviewItem {
+            assignment_id,
+            artefact_id,
+            path,
+            role_id,
+            source_kind,
+            confidence,
+            status,
+            status_reason,
+            updated_at,
+        });
+    }
+
+    Ok(items)
+}
+
+fn print_roles_status_human(output: &RolesStatusOutput) {
+    if output.queue_items.is_empty() && output.review_items.is_empty() {
+        println!("no ambiguous architecture roles found");
+        return;
+    }
+
+    println!("queue summary:");
+    println!("  total={}", output.queue_summary.total);
+    if !output.queue_summary.by_status.is_empty() {
+        let entries = output
+            .queue_summary
+            .by_status
+            .iter()
+            .map(|(status, count)| format!("{status}={count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  by_status: {entries}");
+    }
+    if !output.queue_summary.by_reason.is_empty() {
+        let entries = output
+            .queue_summary
+            .by_reason
+            .iter()
+            .map(|(reason, count)| format!("{reason}={count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  by_reason: {entries}");
+    }
+    if output.queue_summary.parse_errors > 0 {
+        println!("  parse_errors={}", output.queue_summary.parse_errors);
+    }
+
+    if !output.queue_items.is_empty() {
+        println!("queue items:");
+        for item in &output.queue_items {
+            println!(
+                "  job={} status={} reason={} path={} artefact={} symbol={} generation={} confidence={} attempts={} updated_at_unix={}",
+                item.job_id,
+                item.status,
+                item.reason.as_deref().unwrap_or("<unknown>"),
+                item.path.as_deref().unwrap_or("<unknown>"),
+                item.artefact_id.as_deref().unwrap_or("<unknown>"),
+                item.symbol_id.as_deref().unwrap_or("<unknown>"),
+                item.generation
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                item.deterministic_confidence
+                    .map(|value| format!("{value:.3}"))
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                item.attempts,
+                item.updated_at_unix
+            );
+            if let Some(parse_error) = item.parse_error.as_deref() {
+                println!("    parse_error={parse_error}");
+            }
+            if let Some(last_error) = item.last_error.as_deref() {
+                println!("    last_error={last_error}");
+            }
+        }
+    }
+
+    if !output.review_items.is_empty() {
+        println!("review items:");
+        for item in &output.review_items {
+            println!(
+                "  assignment={} status={} role={} source={} confidence={:.3} artefact={} path={} updated_at={}",
+                item.assignment_id,
+                item.status,
+                item.role_id,
+                item.source_kind,
+                item.confidence,
+                item.artefact_id,
+                item.path.as_deref().unwrap_or("<unknown>"),
+                item.updated_at.as_deref().unwrap_or("<unknown>"),
+            );
+            if !item.status_reason.trim().is_empty() {
+                println!("    reason={}", item.status_reason);
+            }
+        }
+    }
+}
+
+fn sql_text(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn value_str<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
+    row.get(key).and_then(Value::as_str)
 }
 
 async fn run_architecture_roles_seed(
@@ -525,6 +849,7 @@ mod tests {
     };
     use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
     use crate::host::devql::RelationalStorage;
+    use crate::host::runtime_store::{WorkplaneJobRecord, WorkplaneJobStatus};
 
     async fn relational() -> Result<RelationalStorage> {
         let temp = tempfile::tempdir()?;
@@ -580,6 +905,78 @@ mod tests {
         ))
         .expect("configured profile");
         assert_eq!(profile, "local_agent");
+    }
+
+    #[test]
+    fn role_adjudication_queue_item_parses_valid_payload() {
+        let item = role_adjudication_queue_item_from_job(WorkplaneJobRecord {
+            job_id: "job-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            config_root: std::path::PathBuf::from("/tmp/config"),
+            capability_id: "architecture_graph".to_string(),
+            mailbox_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string(),
+            init_session_id: None,
+            dedupe_key: Some("k1".to_string()),
+            payload: json!({
+                "request": {
+                    "repo_id": "repo-1",
+                    "generation": 8,
+                    "artefact_id": "a1",
+                    "symbol_id": "s1",
+                    "path": "src/main.rs",
+                    "language": "rust",
+                    "canonical_kind": "function",
+                    "reason": "high_impact",
+                    "deterministic_confidence": 0.72,
+                    "candidate_role_ids": [],
+                    "current_assignment": null
+                }
+            }),
+            status: WorkplaneJobStatus::Pending,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            started_at_unix: None,
+            updated_at_unix: 1,
+            completed_at_unix: None,
+            lease_owner: None,
+            lease_expires_at_unix: None,
+            last_error: None,
+        });
+
+        assert_eq!(item.reason.as_deref(), Some("high_impact"));
+        assert_eq!(item.path.as_deref(), Some("src/main.rs"));
+        assert!(item.parse_error.is_none());
+    }
+
+    #[test]
+    fn role_adjudication_queue_item_keeps_malformed_payload_as_parse_error() {
+        let item = role_adjudication_queue_item_from_job(WorkplaneJobRecord {
+            job_id: "job-2".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            config_root: std::path::PathBuf::from("/tmp/config"),
+            capability_id: "architecture_graph".to_string(),
+            mailbox_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string(),
+            init_session_id: None,
+            dedupe_key: Some("k2".to_string()),
+            payload: json!({"bad": "shape"}),
+            status: WorkplaneJobStatus::Failed,
+            attempts: 2,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            started_at_unix: None,
+            updated_at_unix: 2,
+            completed_at_unix: None,
+            lease_owner: None,
+            lease_expires_at_unix: None,
+            last_error: Some("schema mismatch".to_string()),
+        });
+
+        assert!(item.reason.is_none());
+        assert!(item.parse_error.is_some());
+        assert_eq!(item.last_error.as_deref(), Some("schema mismatch"));
     }
 
     #[tokio::test]

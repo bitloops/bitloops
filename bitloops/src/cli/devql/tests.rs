@@ -1451,6 +1451,22 @@ fn devql_cli_parses_architecture_roles_role_mutation_commands() {
         parse_architecture_roles_command(&["bitloops", "devql", "architecture", "roles", "seed"]);
     assert!(matches!(seed, DevqlArchitectureRolesCommand::Seed(_)));
 
+    let status = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "status",
+        "--limit",
+        "25",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Status(status) = status else {
+        panic!("expected architecture roles status command");
+    };
+    assert_eq!(status.limit, 25);
+    assert!(status.json);
+
     let rename = parse_architecture_roles_command(&[
         "bitloops",
         "devql",

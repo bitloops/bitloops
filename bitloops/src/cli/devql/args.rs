@@ -279,6 +279,8 @@ pub struct DevqlArchitectureRolesArgs {
 pub enum DevqlArchitectureRolesCommand {
     /// Seed a repository-specific architecture role taxonomy.
     Seed(DevqlArchitectureRolesSeedArgs),
+    /// Show ambiguous role adjudication queue and needs-review assignments.
+    Status(DevqlArchitectureRolesStatusArgs),
     /// Rename a role's display name.
     Rename(DevqlArchitectureRolesRenameArgs),
     /// Deprecate a role, optionally pointing at a replacement role.
@@ -299,6 +301,17 @@ pub enum DevqlArchitectureRolesCommand {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArchitectureRolesSeedArgs {}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesStatusArgs {
+    /// Limit returned queue and review items.
+    #[arg(long, default_value_t = 50)]
+    pub limit: u32,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlArchitectureRolesRenameArgs {

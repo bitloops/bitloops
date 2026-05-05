@@ -17,5 +17,5 @@ pub use types::{
     CapabilityWorkplaneMailboxStatus, SemanticEmbeddingMailboxItemInsert,
     SemanticEmbeddingMailboxItemRecord, SemanticMailboxItemKind, SemanticMailboxItemStatus,
     SemanticSummaryMailboxItemInsert, SemanticSummaryMailboxItemRecord, WorkplaneCursorRunRecord,
-    WorkplaneCursorRunStatus, WorkplaneJobRecord, WorkplaneJobStatus,
+    WorkplaneCursorRunStatus, WorkplaneJobQuery, WorkplaneJobRecord, WorkplaneJobStatus,
 };

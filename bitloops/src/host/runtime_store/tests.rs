@@ -847,6 +847,104 @@ fn repo_runtime_store_persists_capability_workplane_mailbox_intents() {
 }
 
 #[test]
+fn repo_runtime_store_lists_workplane_jobs_by_capability_mailbox_and_status() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .enqueue_capability_workplane_jobs(
+            "architecture_graph",
+            vec![
+                CapabilityWorkplaneJobInsert::new(
+                    "architecture_graph.roles.adjudication",
+                    None,
+                    Some("queue-1".to_string()),
+                    serde_json::json!({"request": {"reason": "unknown"}}),
+                ),
+                CapabilityWorkplaneJobInsert::new(
+                    "architecture_graph.roles.adjudication",
+                    None,
+                    Some("queue-2".to_string()),
+                    serde_json::json!({"request": {"reason": "high_impact"}}),
+                ),
+                CapabilityWorkplaneJobInsert::new(
+                    "architecture_graph.snapshot",
+                    None,
+                    Some("snapshot-1".to_string()),
+                    serde_json::json!({"kind": "cursor"}),
+                ),
+            ],
+        )
+        .expect("enqueue architecture workplane jobs");
+    store
+        .enqueue_capability_workplane_jobs(
+            "semantic_clones",
+            vec![CapabilityWorkplaneJobInsert::new(
+                "semantic_clones.clone_rebuild",
+                None,
+                Some("clone-1".to_string()),
+                serde_json::json!({"kind": "clone"}),
+            )],
+        )
+        .expect("enqueue semantic workplane job");
+
+    let sqlite = store.connect_repo_sqlite().expect("connect sqlite");
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "UPDATE capability_workplane_jobs SET status = 'failed', payload = '{invalid', last_error = 'boom'
+                 WHERE repo_id = ?1 AND capability_id = 'architecture_graph'
+                   AND mailbox_name = 'architecture_graph.roles.adjudication'
+                   AND dedupe_key = 'queue-2';",
+                rusqlite::params![store.repo_id()],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("mark failed adjudication row");
+
+    let queue_rows = store
+        .list_capability_workplane_jobs(WorkplaneJobQuery {
+            capability_id: Some("architecture_graph".to_string()),
+            mailbox_name: Some("architecture_graph.roles.adjudication".to_string()),
+            statuses: vec![WorkplaneJobStatus::Pending, WorkplaneJobStatus::Failed],
+            limit: Some(10),
+        })
+        .expect("list adjudication jobs");
+    assert_eq!(queue_rows.len(), 2);
+    assert!(
+        queue_rows
+            .iter()
+            .any(|row| row.status == WorkplaneJobStatus::Pending)
+    );
+    assert!(
+        queue_rows
+            .iter()
+            .any(|row| row.status == WorkplaneJobStatus::Failed)
+    );
+    let failed = queue_rows
+        .iter()
+        .find(|row| row.status == WorkplaneJobStatus::Failed)
+        .expect("failed row");
+    assert_eq!(failed.payload, serde_json::Value::Null);
+    assert_eq!(failed.last_error.as_deref(), Some("boom"));
+
+    let pending_only = store
+        .list_capability_workplane_jobs(WorkplaneJobQuery {
+            capability_id: Some("architecture_graph".to_string()),
+            mailbox_name: Some("architecture_graph.roles.adjudication".to_string()),
+            statuses: vec![WorkplaneJobStatus::Pending],
+            limit: Some(1),
+        })
+        .expect("list pending adjudication jobs");
+    assert_eq!(pending_only.len(), 1);
+    assert_eq!(pending_only[0].status, WorkplaneJobStatus::Pending);
+}
+
+#[test]
 fn semantic_embedding_enqueue_batches_dedupe_pending_items() {
     let dir = TempDir::new().expect("tempdir");
     let repo_root = dir.path().join("repo");
