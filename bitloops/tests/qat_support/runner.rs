@@ -111,6 +111,7 @@ fn format_failed_scenarios(failed_scenarios: &[FailedScenario]) -> Option<String
 
 fn build_suite_failure_message(
     suite: &Suite,
+    rerun_alias: &str,
     feature_path: &Path,
     parsing_errors: usize,
     skipped_steps: usize,
@@ -120,7 +121,7 @@ fn build_suite_failure_message(
     let mut message = format!(
         "QAT suite `{}` failed\nrerun: {}\nfeatures: {}\nparsing_errors={}\nskipped_steps={}\nartifacts: {}",
         suite.id(),
-        suite.rerun_alias(),
+        rerun_alias,
         feature_path.display(),
         parsing_errors,
         skipped_steps,
@@ -144,6 +145,21 @@ pub async fn run_suite_with_tags(
     suite: Suite,
     explicit_tags_filter: Option<&str>,
 ) -> Result<()> {
+    run_suite_with_tags_and_rerun_alias(
+        binary_path,
+        suite,
+        explicit_tags_filter,
+        suite.rerun_alias(),
+    )
+    .await
+}
+
+pub async fn run_suite_with_tags_and_rerun_alias(
+    binary_path: PathBuf,
+    suite: Suite,
+    explicit_tags_filter: Option<&str>,
+    rerun_alias: &'static str,
+) -> Result<()> {
     let max_concurrent = resolve_max_concurrent_scenarios();
     let runs_root = resolve_runs_root()?;
     let suite_root = create_suite_root(&runs_root)?;
@@ -162,7 +178,7 @@ pub async fn run_suite_with_tags(
     println!(
         "[QAT suite start] {} | rerun: {} | features: {}",
         suite.id(),
-        suite.rerun_alias(),
+        rerun_alias,
         feature_path_display
     );
     println!(
@@ -234,13 +250,14 @@ pub async fn run_suite_with_tags(
         eprintln!(
             "[QAT suite fail] {} | rerun: {} | artifacts: {}",
             suite.id(),
-            suite.rerun_alias(),
+            rerun_alias,
             suite_root.display()
         );
         bail!(
             "{}",
             build_suite_failure_message(
                 &suite,
+                rerun_alias,
                 &feature_path,
                 result.parsing_errors(),
                 result.skipped_steps(),

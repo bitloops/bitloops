@@ -2,7 +2,7 @@ Feature: DevQL sync workspace reconciliation
   The sync command scans the current workspace state, compares it against
   stored state, and materializes current-state artefact tables.
 
-  @devql @sync @sync_manual
+  @devql @sync @sync_manual @sync_manual_smoke
   Scenario: Full sync indexes workspace source files into queryable artefacts
     Given I run CleanStart for flow "SyncFullIndex"
     And I start the daemon in bitloops
@@ -15,7 +15,7 @@ Feature: DevQL sync workspace reconciliation
     And DevQL sync summary shows 0 parse errors in bitloops
     And DevQL artefacts query returns results in bitloops
 
-  @devql @sync @sync_manual @test_harness_sync @develop_gate
+  @devql @sync @sync_manual @test_harness_sync
   Scenario: Sync materializes test-harness coverage for discovered tests
     Given I run CleanStart for flow "SyncTestHarnessPopulate"
     And I start the daemon in bitloops
@@ -158,7 +158,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_producer_post_merge
+  @devql @sync @sync_producer @sync_producer_post_merge @sync_known_gap @sync_gap_hook_race
   Scenario: Sync indexes changes introduced by git pull
     Given I run CleanStart for flow "SyncGitPull"
     And I start the daemon in bitloops
@@ -174,7 +174,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_manual
+  @devql @sync @sync_manual @sync_manual_smoke
   Scenario: Sync validate reports clean after a full sync
     Given I run CleanStart for flow "SyncValidateClean"
     And I start the daemon in bitloops
@@ -186,7 +186,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_manual
+  @devql @sync @sync_manual @sync_manual_smoke
   Scenario: Sync repair restores clean state after drift
     Given I run CleanStart for flow "SyncRepair"
     And I start the daemon in bitloops
@@ -201,7 +201,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_manual
+  @devql @sync @sync_manual @sync_manual_smoke
   Scenario: Sync validate reports drift when workspace changes are not reconciled
     Given I run CleanStart for flow "SyncValidateDrift"
     And I start the daemon in bitloops
@@ -216,7 +216,7 @@ Feature: DevQL sync workspace reconciliation
     Then DevQL sync validation reports drift in bitloops
     And DevQL sync validation shows expected greater than 0 in bitloops
 
-  @devql @sync @sync_manual
+  @devql @sync @sync_manual @sync_manual_smoke
   Scenario: Sync validate shows non-zero expected counts after multiple unsynced changes
     Given I run CleanStart for flow "SyncValidateAccumulatedDrift"
     And I start the daemon in bitloops
@@ -233,7 +233,7 @@ Feature: DevQL sync workspace reconciliation
     Then DevQL sync validation reports drift in bitloops
     And DevQL sync validation shows expected greater than 1 in bitloops
 
-  @devql @sync @sync_manual
+  @devql @sync @sync_manual @sync_manual_smoke
   Scenario: Path-scoped sync only updates the specified paths
     Given I run CleanStart for flow "SyncPathScoped"
     And I start the daemon in bitloops
@@ -396,7 +396,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_producer_post_commit @sync_producer_post_commit_add @develop_gate
+  @devql @sync @sync_producer @sync_producer_post_commit @sync_producer_post_commit_add @sync_known_gap @sync_gap_hook_race
   Scenario: Producer contract post-commit hook materializes an added source file
     Given I run CleanStart for flow "SyncProducerPostCommitAdd"
     And I start the daemon in bitloops
@@ -492,7 +492,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_git_reset @sync_git_reset_hard
+  @devql @sync @sync_producer @sync_git_reset @sync_git_reset_hard @sync_known_gap @sync_gap_git_reset
   Scenario: Producer contract handles git reset hard
     Given I run CleanStart for flow "SyncProducerGitResetHard"
     And I start the daemon in bitloops
@@ -514,7 +514,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_git_clean
+  @devql @sync @sync_producer @sync_git_clean @sync_known_gap @sync_gap_git_clean
   Scenario: Producer contract handles git clean
     Given I run CleanStart for flow "SyncProducerGitClean"
     And I start the daemon in bitloops

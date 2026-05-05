@@ -32,6 +32,7 @@ qat-agent-smoke = "nextest run --manifest-path bitloops/Cargo.toml --features qa
 qat-develop-gate = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_develop_gate --run-ignored only -- qat_develop_gate --exact"
 qat-devql-capabilities = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_capabilities --run-ignored only -- qat_devql_capabilities --exact"
 qat-devql-sync = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact"
+qat-devql-sync-producer = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_sync_producer --run-ignored only -- qat_devql_sync_producer --exact"
 qat-onboarding = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact"
 qat-devql-ingest = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_ingest --run-ignored only -- qat_devql_ingest --exact"
 qat-agents-checkpoints = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_agents_checkpoints --run-ignored only -- qat_agents_checkpoints --exact"

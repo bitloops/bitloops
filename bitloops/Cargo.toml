@@ -123,6 +123,11 @@ path = "tests/qat_devql_sync.rs"
 required-features = ["qat-tests"]
 
 [[test]]
+name = "qat_devql_sync_producer"
+path = "tests/qat_devql_sync_producer.rs"
+required-features = ["qat-tests"]
+
+[[test]]
 name = "qat_onboarding"
 path = "tests/qat_onboarding.rs"
 required-features = ["qat-tests"]
