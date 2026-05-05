@@ -43,3 +43,4 @@ sequenceDiagram
 - Watcher-driven and capture-triggered follow-up work lands in the repo-local producer spool before the daemon claims it.
 - Explicit CLI commands enqueue daemon tasks directly, while producer-spool jobs are drained by the same daemon task coordinator.
 - Current-state consumers and enrichment are downstream stages after current-state generation advances.
+- Producer ownership, allowed hook/watcher overlap, and QAT assertion policy are documented in [../devql-sync-producer-ownership.md](../devql-sync-producer-ownership.md).
