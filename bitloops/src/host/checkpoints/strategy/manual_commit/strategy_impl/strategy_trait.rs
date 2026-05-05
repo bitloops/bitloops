@@ -408,31 +408,8 @@ impl Strategy for ManualCommitStrategy {
             return Ok(());
         }
 
-        #[cfg(not(test))]
-        {
-            if let Err(err) = crate::host::devql::enqueue_spooled_post_commit_derivation(
-                &self.repo_root,
-                &head,
-                &committed_files_vec,
-                is_rebase_in_progress,
-            ) {
-                eprintln!(
-                    "[bitloops] Warning: failed to queue post-commit checkpoint derivation for commit {}: {err:#}",
-                    head
-                );
-            }
-            Ok(())
-        }
-
-        #[cfg(test)]
-        {
-            self.execute_post_commit_derivation(
-                &head,
-                &committed_files_vec,
-                is_rebase_in_progress,
-            )?;
-            Ok(())
-        }
+        self.execute_post_commit_derivation(&head, &committed_files_vec, is_rebase_in_progress)?;
+        Ok(())
     }
 
     /// Called by the `pre-push` git hook.

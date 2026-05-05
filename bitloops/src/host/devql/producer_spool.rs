@@ -16,9 +16,11 @@ mod storage;
 #[path = "producer_spool/tests.rs"]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use enqueue::enqueue_spooled_post_commit_derivation;
 pub(crate) use enqueue::{
-    enqueue_spooled_post_commit_derivation, enqueue_spooled_post_commit_refresh,
-    enqueue_spooled_post_merge_refresh, enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
+    enqueue_spooled_post_commit_refresh, enqueue_spooled_post_merge_refresh,
+    enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
     enqueue_spooled_sync_task_for_repo_root,
 };
 #[cfg(test)]

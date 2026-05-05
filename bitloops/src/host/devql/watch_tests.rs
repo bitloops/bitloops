@@ -84,6 +84,14 @@ fn wait_for_pid_exit(pid: u32) {
 }
 
 #[test]
+fn watcher_ready_timeout_allows_slow_ci_startup() {
+    assert!(
+        WATCHER_READY_TIMEOUT >= Duration::from_secs(30),
+        "watcher startup readiness must allow cold CI process startup"
+    );
+}
+
+#[test]
 fn watcher_registration_round_trips_through_repo_runtime_store() {
     let (_dir, repo_root, store) = seed_runtime_store();
 

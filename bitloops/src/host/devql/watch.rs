@@ -29,7 +29,7 @@ use registration::{
 
 const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
 pub const DISABLE_WATCHER_AUTOSTART_ENV: &str = "BITLOOPS_DISABLE_WATCHER_AUTOSTART";
-const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const WATCHER_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const WATCHER_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(2);
 const WATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
