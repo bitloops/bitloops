@@ -282,6 +282,19 @@ fn parse_json_array_field(value: Option<&Value>) -> Result<Value> {
     }
 }
 
+pub const ARCHITECTURE_ROLE_LLM_ASSIGNMENT_SOURCE: &str = "llm";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueuedRoleAdjudicationSummary {
+    pub queued_count: usize,
+}
+
+pub async fn queue_ambiguous_role_adjudication(
+    _assignments: &[super::taxonomy::ArchitectureRoleAssignment],
+) -> Result<QueuedRoleAdjudicationSummary> {
+    Ok(QueuedRoleAdjudicationSummary { queued_count: 0 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

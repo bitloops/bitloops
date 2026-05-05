@@ -33,8 +33,8 @@ pub use evidence_packet_builder::{
 };
 pub use llm_executor::execute_llm_adjudication;
 pub use orchestrator::{
-    RoleAdjudicationEnqueueMetrics, RoleAdjudicationServices,
-    enqueue_adjudication_jobs_for_delta, run_adjudication_request,
+    RoleAdjudicationEnqueueMetrics, RoleAdjudicationServices, enqueue_adjudication_jobs_for_delta,
+    run_adjudication_request,
 };
 pub use queue_store::{
     InMemoryRoleAdjudicationQueueStore, InMemoryRoleAssignmentWriter, InMemoryRoleFactsReader,
@@ -43,9 +43,15 @@ pub use queue_store::{
 };
 pub use response_validator::validate_adjudication_result;
 pub use taxonomy::{
-    RoleRuleCandidateSelector, RoleRuleCondition, RoleRuleScore, RoleSplitSpecFile,
-    RoleSplitTargetRole, RuleSpecFile, SeededArchitectureRole, SeededArchitectureRuleCandidate,
-    SeededArchitectureTaxonomy,
+    ArchitectureArtefactFact, ArchitectureRole, ArchitectureRoleAssignment,
+    ArchitectureRoleAssignmentHistory, ArchitectureRoleChangeProposal,
+    ArchitectureRoleDetectionRule, ArchitectureRoleReconcileMetrics,
+    ArchitectureRoleReconcileOutcome, ArchitectureRoleRuleSignal, AssignmentPriority,
+    AssignmentSource, AssignmentStatus, ProposalStatus, RoleCandidateSelector, RoleFactCondition,
+    RoleFactConditionOp, RoleLifecycle, RoleRuleCandidateSelector, RoleRuleCondition,
+    RoleRuleLifecycle, RoleRuleScore, RoleSignalPolarity, RoleSplitSpecFile, RoleSplitTargetRole,
+    RoleTarget, RuleSpecFile, SeededArchitectureRole, SeededArchitectureRuleCandidate,
+    SeededArchitectureTaxonomy, TargetKind,
 };
 
 #[cfg(test)]

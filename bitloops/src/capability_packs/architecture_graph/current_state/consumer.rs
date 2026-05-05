@@ -69,6 +69,30 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             }
 
             let facts = builder.finish();
+            let mut role_metrics = serde_json::Value::Null;
+            match crate::capability_packs::architecture_graph::roles::classifier::classify_architecture_roles_for_current_state(
+                context.storage.as_ref(),
+                crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
+                    repo_id: &request.repo_id,
+                    generation_seq: request.to_generation_seq_inclusive,
+                    affected_paths: crate::capability_packs::architecture_graph::roles::classifier::affected_role_paths_from_request(request),
+                    removed_paths: crate::capability_packs::architecture_graph::roles::classifier::removed_role_paths_from_request(request),
+                    files: &files,
+                    artefacts: &artefacts,
+                    dependency_edges: &dependency_edges,
+                },
+            )
+            .await
+            {
+                Ok(outcome) => {
+                    warnings.extend(outcome.warnings);
+                    role_metrics = serde_json::to_value(outcome.metrics)
+                        .unwrap_or_else(|_| json!({ "serialization_error": true }));
+                }
+                Err(err) => {
+                    warnings.push(format!("Architecture role classification failed: {err:#}"));
+                }
+            }
             let metrics = json!({
                 "nodes": facts.nodes.len(),
                 "edges": facts.edges.len(),
@@ -78,6 +102,7 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                 "artefacts": artefacts.len(),
                 "dependency_edges": dependency_edges.len(),
                 "reconcile_mode": format!("{:?}", request.reconcile_mode),
+                "roles": role_metrics,
             });
             replace_computed_graph(
                 &context.storage,

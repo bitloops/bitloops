@@ -9,7 +9,7 @@ use super::types::ARCHITECTURE_GRAPH_CAPABILITY_ID;
 
 fn run_architecture_graph_schema(ctx: &mut dyn CapabilityMigrationContext) -> Result<()> {
     let schema = architecture_graph_sqlite_schema_sql();
-    ctx.apply_devql_sqlite_ddl(&schema)
+    ctx.apply_devql_sqlite_ddl(schema)
 }
 
 pub static ARCHITECTURE_GRAPH_MIGRATIONS: &[CapabilityMigration] = &[CapabilityMigration {

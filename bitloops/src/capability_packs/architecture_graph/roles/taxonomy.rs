@@ -3,6 +3,471 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleLifecycle {
+    Active,
+    Deprecated,
+    Removed,
+}
+
+impl RoleLifecycle {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Deprecated => "deprecated",
+            Self::Removed => "removed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleRuleLifecycle {
+    Draft,
+    Active,
+    Disabled,
+    Deprecated,
+}
+
+impl RoleRuleLifecycle {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+            Self::Deprecated => "deprecated",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentStatus {
+    Active,
+    Stale,
+    NeedsReview,
+    Rejected,
+}
+
+impl AssignmentStatus {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Stale => "stale",
+            Self::NeedsReview => "needs_review",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentSource {
+    Rule,
+    Llm,
+    Human,
+    Migration,
+}
+
+impl AssignmentSource {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Rule => "rule",
+            Self::Llm => "llm",
+            Self::Human => "human",
+            Self::Migration => "migration",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssignmentPriority {
+    Primary,
+    Secondary,
+}
+
+impl AssignmentPriority {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Secondary => "secondary",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    File,
+    Artefact,
+    Symbol,
+}
+
+impl TargetKind {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Artefact => "artefact",
+            Self::Symbol => "symbol",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleSignalPolarity {
+    Positive,
+    Negative,
+}
+
+impl RoleSignalPolarity {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Positive => "positive",
+            Self::Negative => "negative",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalStatus {
+    Draft,
+    Previewed,
+    Applied,
+    Rejected,
+}
+
+impl ProposalStatus {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            Self::Draft => "draft",
+            Self::Previewed => "previewed",
+            Self::Applied => "applied",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RoleTarget {
+    pub target_kind: TargetKind,
+    pub artefact_id: Option<String>,
+    pub symbol_id: Option<String>,
+    pub path: String,
+}
+
+impl RoleTarget {
+    pub fn file(path: impl Into<String>) -> Self {
+        Self {
+            target_kind: TargetKind::File,
+            artefact_id: None,
+            symbol_id: None,
+            path: path.into(),
+        }
+    }
+
+    pub fn artefact(
+        artefact_id: impl Into<String>,
+        symbol_id: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_kind: TargetKind::Artefact,
+            artefact_id: Some(artefact_id.into()),
+            symbol_id: Some(symbol_id.into()),
+            path: path.into(),
+        }
+    }
+
+    pub fn symbol(
+        artefact_id: impl Into<String>,
+        symbol_id: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        Self {
+            target_kind: TargetKind::Symbol,
+            artefact_id: Some(artefact_id.into()),
+            symbol_id: Some(symbol_id.into()),
+            path: path.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureRole {
+    pub repo_id: String,
+    pub role_id: String,
+    pub family: String,
+    pub slug: String,
+    pub display_name: String,
+    pub description: String,
+    pub lifecycle: RoleLifecycle,
+    pub provenance: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureRoleDetectionRule {
+    pub repo_id: String,
+    pub rule_id: String,
+    pub role_id: String,
+    pub version: i64,
+    pub lifecycle: RoleRuleLifecycle,
+    pub priority: i64,
+    pub score: f64,
+    pub candidate_selector: Value,
+    pub positive_conditions: Value,
+    pub negative_conditions: Value,
+    pub provenance: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureArtefactFact {
+    pub repo_id: String,
+    pub fact_id: String,
+    pub target: RoleTarget,
+    pub language: Option<String>,
+    pub fact_kind: String,
+    pub fact_key: String,
+    pub fact_value: String,
+    pub source: String,
+    pub confidence: f64,
+    pub evidence: Value,
+    pub generation_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureRoleRuleSignal {
+    pub repo_id: String,
+    pub signal_id: String,
+    pub rule_id: String,
+    pub rule_version: i64,
+    pub role_id: String,
+    pub target: RoleTarget,
+    pub polarity: RoleSignalPolarity,
+    pub score: f64,
+    pub evidence: Value,
+    pub generation_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureRoleAssignment {
+    pub repo_id: String,
+    pub assignment_id: String,
+    pub role_id: String,
+    pub target: RoleTarget,
+    pub priority: AssignmentPriority,
+    pub status: AssignmentStatus,
+    pub source: AssignmentSource,
+    pub confidence: f64,
+    pub evidence: Value,
+    pub provenance: Value,
+    pub classifier_version: String,
+    pub rule_version: Option<i64>,
+    pub generation_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureRoleAssignmentHistory {
+    pub repo_id: String,
+    pub history_id: String,
+    pub assignment_id: String,
+    pub role_id: String,
+    pub target: RoleTarget,
+    pub previous_status: Option<AssignmentStatus>,
+    pub new_status: AssignmentStatus,
+    pub previous_confidence: Option<f64>,
+    pub new_confidence: f64,
+    pub change_kind: String,
+    pub evidence: Value,
+    pub provenance: Value,
+    pub generation_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureRoleChangeProposal {
+    pub repo_id: String,
+    pub proposal_id: String,
+    pub proposal_kind: String,
+    pub status: ProposalStatus,
+    pub payload: Value,
+    pub impact_preview: Value,
+    pub provenance: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleCandidateSelector {
+    #[serde(default)]
+    pub target_kinds: Vec<TargetKind>,
+    #[serde(default)]
+    pub path_prefixes: Vec<String>,
+    #[serde(default)]
+    pub path_suffixes: Vec<String>,
+    #[serde(default)]
+    pub required_facts: Vec<RoleFactCondition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoleFactCondition {
+    pub kind: String,
+    pub key: String,
+    pub op: RoleFactConditionOp,
+    pub value: String,
+    #[serde(default = "default_condition_score")]
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleFactConditionOp {
+    Eq,
+    Contains,
+    Prefix,
+    Suffix,
+    Gte,
+    Lte,
+}
+
+pub fn default_condition_score() -> f64 {
+    0.10
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArchitectureRoleReconcileMetrics {
+    pub affected_paths: usize,
+    pub facts_written: usize,
+    pub facts_deleted: usize,
+    pub rules_loaded: usize,
+    pub signals_written: usize,
+    pub assignments_written: usize,
+    pub assignments_marked_stale: usize,
+    pub assignment_history_rows: usize,
+    pub adjudication_candidates: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ArchitectureRoleReconcileOutcome {
+    pub metrics: ArchitectureRoleReconcileMetrics,
+    pub warnings: Vec<String>,
+}
+
+pub fn stable_role_id(repo_id: &str, family: &str, slug: &str) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role|{}|{}|{}",
+        repo_id,
+        normalize_role_fragment(family),
+        normalize_role_fragment(slug)
+    ))
+}
+
+pub fn role_alias_id(repo_id: &str, alias: &str) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_alias|{}|{}",
+        repo_id,
+        normalize_role_fragment(alias)
+    ))
+}
+
+pub fn fact_id(
+    repo_id: &str,
+    target: &RoleTarget,
+    fact_kind: &str,
+    fact_key: &str,
+    fact_value: &str,
+) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_fact|{}|{}|{}|{}|{}|{}|{}|{}",
+        repo_id,
+        target.target_kind.as_db(),
+        target.artefact_id.as_deref().unwrap_or(""),
+        target.symbol_id.as_deref().unwrap_or(""),
+        target.path,
+        normalize_role_fragment(fact_kind),
+        normalize_role_fragment(fact_key),
+        fact_value.trim().to_ascii_lowercase()
+    ))
+}
+
+pub fn rule_id(repo_id: &str, role_id: &str, slug: &str) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_detection_rule|{}|{}|{}",
+        repo_id,
+        role_id,
+        normalize_role_fragment(slug)
+    ))
+}
+
+pub fn rule_signal_id(
+    repo_id: &str,
+    rule_id: &str,
+    rule_version: i64,
+    role_id: &str,
+    target: &RoleTarget,
+    polarity: RoleSignalPolarity,
+) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_rule_signal|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        repo_id,
+        rule_id,
+        rule_version,
+        role_id,
+        target.target_kind.as_db(),
+        target.artefact_id.as_deref().unwrap_or(""),
+        target.symbol_id.as_deref().unwrap_or(""),
+        target.path,
+        polarity.as_db()
+    ))
+}
+
+pub fn assignment_id(repo_id: &str, role_id: &str, target: &RoleTarget) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_assignment|{}|{}|{}|{}|{}|{}",
+        repo_id,
+        role_id,
+        target.target_kind.as_db(),
+        target.artefact_id.as_deref().unwrap_or(""),
+        target.symbol_id.as_deref().unwrap_or(""),
+        target.path
+    ))
+}
+
+pub fn assignment_history_id(
+    repo_id: &str,
+    assignment_id: &str,
+    generation_seq: u64,
+    change_kind: &str,
+) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_assignment_history|{repo_id}|{assignment_id}|{generation_seq}|{change_kind}"
+    ))
+}
+
+pub fn proposal_id(repo_id: &str, proposal_kind: &str, payload: &Value) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_change_proposal|{}|{}|{}",
+        repo_id,
+        normalize_role_fragment(proposal_kind),
+        payload
+    ))
+}
+
+pub fn normalize_role_fragment(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SeededArchitectureTaxonomy {
@@ -466,10 +931,10 @@ fn validate_rule_shape(
     for condition in negative_conditions {
         validate_condition(&format!("{prefix}.negative_conditions"), condition)?;
     }
-    if let Some(base_confidence) = score.base_confidence {
-        if !(0.0..=1.0).contains(&base_confidence) {
-            bail!("{prefix}.score.base_confidence must be between 0 and 1");
-        }
+    if let Some(base_confidence) = score.base_confidence
+        && !(0.0..=1.0).contains(&base_confidence)
+    {
+        bail!("{prefix}.score.base_confidence must be between 0 and 1");
     }
     Ok(())
 }
@@ -502,104 +967,4 @@ fn validate_condition(field_name: &str, condition: &RoleRuleCondition) -> Result
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn validates_seeded_taxonomy_and_rejects_unknown_target_roles() {
-        let valid = SeededArchitectureTaxonomy {
-            roles: vec![SeededArchitectureRole {
-                canonical_key: "command_dispatcher".to_string(),
-                display_name: "Command Dispatcher".to_string(),
-                description: String::new(),
-                family: Some("entrypoint".to_string()),
-                lifecycle_status: Some("active".to_string()),
-                provenance: json!({}),
-                evidence: json!([]),
-            }],
-            rule_candidates: vec![SeededArchitectureRuleCandidate {
-                target_role_key: "command_dispatcher".to_string(),
-                candidate_selector: RoleRuleCandidateSelector {
-                    path_prefixes: vec!["src/cli".to_string()],
-                    ..Default::default()
-                },
-                positive_conditions: vec![],
-                negative_conditions: vec![],
-                score: RoleRuleScore {
-                    base_confidence: Some(0.8),
-                    weight: None,
-                },
-                evidence: json!([]),
-                metadata: json!({}),
-            }],
-        };
-        validate_seeded_taxonomy(&valid).expect("valid taxonomy");
-
-        let invalid = SeededArchitectureTaxonomy {
-            roles: valid.roles.clone(),
-            rule_candidates: vec![SeededArchitectureRuleCandidate {
-                target_role_key: "unknown".to_string(),
-                ..valid.rule_candidates[0].clone()
-            }],
-        };
-        let err = validate_seeded_taxonomy(&invalid).expect_err("invalid taxonomy");
-        assert!(err.to_string().contains("unknown target role key"));
-
-        let invalid_condition = SeededArchitectureTaxonomy {
-            roles: vec![SeededArchitectureRole {
-                canonical_key: "command_dispatcher".to_string(),
-                display_name: "Command Dispatcher".to_string(),
-                description: String::new(),
-                family: Some("entrypoint".to_string()),
-                lifecycle_status: Some("active".to_string()),
-                provenance: json!({}),
-                evidence: json!([]),
-            }],
-            rule_candidates: vec![SeededArchitectureRuleCandidate {
-                target_role_key: "command_dispatcher".to_string(),
-                candidate_selector: RoleRuleCandidateSelector::default(),
-                positive_conditions: vec![RoleRuleCondition {
-                    kind: "unsupported".to_string(),
-                    value: json!("x"),
-                }],
-                negative_conditions: vec![],
-                score: RoleRuleScore::default(),
-                evidence: json!([]),
-                metadata: json!({}),
-            }],
-        };
-        let err = validate_seeded_taxonomy(&invalid_condition).expect_err("invalid condition kind");
-        assert!(err.to_string().contains("unsupported rule condition kind"));
-    }
-
-    #[test]
-    fn selector_and_conditions_match_expected_artefacts() {
-        let artefact = MatchableArtefact {
-            artefact_id: "artefact-1".to_string(),
-            path: "src/cli/commands/run.rs".to_string(),
-            language: Some("rust".to_string()),
-            canonical_kind: Some("function".to_string()),
-            symbol_fqn: Some("crate::cli::commands::run".to_string()),
-        };
-
-        let selector = RoleRuleCandidateSelector {
-            path_prefixes: vec!["src/cli".to_string()],
-            languages: vec!["rust".to_string()],
-            ..Default::default()
-        };
-        let positive = vec![RoleRuleCondition {
-            kind: "path_contains".to_string(),
-            value: json!("commands"),
-        }];
-
-        assert!(role_rule_matches(&selector, &positive, &[], &artefact));
-
-        let negative = vec![RoleRuleCondition {
-            kind: "path_suffix".to_string(),
-            value: json!(".ts"),
-        }];
-        assert!(role_rule_matches(
-            &selector, &positive, &negative, &artefact
-        ));
-    }
-}
+mod tests;

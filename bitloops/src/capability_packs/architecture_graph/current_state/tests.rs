@@ -75,6 +75,163 @@ fn synthesis_request() -> CurrentStateConsumerRequest {
     }
 }
 
+#[derive(Default)]
+struct NoopWorkplaneGateway;
+
+impl crate::host::capability_host::gateways::CapabilityWorkplaneGateway for NoopWorkplaneGateway {
+    fn enqueue_jobs(
+        &self,
+        _jobs: Vec<crate::host::capability_host::gateways::CapabilityWorkplaneJob>,
+    ) -> anyhow::Result<crate::host::capability_host::gateways::CapabilityWorkplaneEnqueueResult>
+    {
+        Ok(
+            crate::host::capability_host::gateways::CapabilityWorkplaneEnqueueResult {
+                inserted_jobs: 0,
+                updated_jobs: 0,
+            },
+        )
+    }
+
+    fn mailbox_status(
+        &self,
+    ) -> anyhow::Result<
+        BTreeMap<String, crate::host::capability_host::gateways::CapabilityMailboxStatus>,
+    > {
+        Ok(BTreeMap::new())
+    }
+}
+
+#[tokio::test]
+async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
+    let temp = tempfile::TempDir::new()?;
+    let sqlite_path = temp.path().join("architecture-current-state.sqlite");
+    crate::host::devql::sqlite_exec_path_allow_create(
+        &sqlite_path,
+        crate::host::devql::devql_schema_sql_sqlite(),
+    )
+    .await?;
+    crate::host::devql::sqlite_exec_path_allow_create(
+        &sqlite_path,
+        crate::host::devql::sync::schema::sync_schema_sql(),
+    )
+    .await?;
+    crate::host::devql::sqlite_exec_path_allow_create(
+        &sqlite_path,
+        crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql(),
+    )
+    .await?;
+
+    let storage = std::sync::Arc::new(crate::host::devql::RelationalStorage::local_only(
+        sqlite_path.clone(),
+    ));
+    let sqlite_pool = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path.clone())?;
+    sqlite_pool.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
+             VALUES (?1, 'local', 'bitloops', 'repo', 'main')",
+            rusqlite::params!["repo"],
+        )?;
+        conn.execute(
+            "INSERT INTO current_file_state (
+                repo_id, path, analysis_mode, file_role, language, resolved_language,
+                effective_content_id, effective_source, parser_version, extractor_version,
+                exists_in_head, exists_in_index, exists_in_worktree, last_synced_at
+            ) VALUES (
+                ?1, ?2, 'code', 'source_code', 'rust', 'rust',
+                'content-a', 'worktree', 'parser-v1', 'extractor-v1',
+                1, 0, 1, '2026-05-05T10:00:00Z'
+            )",
+            rusqlite::params!["repo", "src/api.rs"],
+        )?;
+        Ok(())
+    })?;
+
+    crate::capability_packs::architecture_graph::roles::storage::upsert_classification_role(
+        storage.as_ref(),
+        &crate::capability_packs::architecture_graph::roles::ArchitectureRole {
+            repo_id: "repo".to_string(),
+            role_id: "role-api".to_string(),
+            family: "layer".to_string(),
+            slug: "api".to_string(),
+            display_name: "API".to_string(),
+            description: "API layer".to_string(),
+            lifecycle: crate::capability_packs::architecture_graph::roles::RoleLifecycle::Active,
+            provenance: json!({ "source": "test" }),
+        },
+    )
+    .await?;
+    crate::capability_packs::architecture_graph::roles::storage::upsert_detection_rule(
+        storage.as_ref(),
+        &crate::capability_packs::architecture_graph::roles::ArchitectureRoleDetectionRule {
+            repo_id: "repo".to_string(),
+            rule_id: "rule-api-path".to_string(),
+            role_id: "role-api".to_string(),
+            version: 1,
+            lifecycle:
+                crate::capability_packs::architecture_graph::roles::RoleRuleLifecycle::Active,
+            priority: 10,
+            score: 1.0,
+            candidate_selector: json!({ "targetKinds": ["file"] }),
+            positive_conditions: json!([
+                { "kind": "path", "key": "segment", "op": "eq", "value": "api", "score": 1.0 }
+            ]),
+            negative_conditions: json!([]),
+            provenance: json!({ "source": "test" }),
+        },
+    )
+    .await?;
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: "repo".to_string(),
+        repo_root: temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 7,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: vec!["src/api.rs".to_string()],
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+    let context = CurrentStateConsumerContext {
+        config_root: json!({}),
+        storage: std::sync::Arc::clone(&storage),
+        relational: std::sync::Arc::new(
+            crate::host::capability_host::gateways::SqliteRelationalGateway::new(sqlite_pool),
+        ),
+        language_services: std::sync::Arc::new(
+            crate::host::capability_host::gateways::EmptyLanguageServicesGateway,
+        ),
+        git_history: std::sync::Arc::new(
+            crate::host::capability_host::gateways::EmptyGitHistoryGateway,
+        ),
+        inference: std::sync::Arc::new(crate::host::inference::EmptyInferenceGateway),
+        host_services: std::sync::Arc::new(
+            crate::host::capability_host::gateways::DefaultHostServicesGateway::new("repo"),
+        ),
+        workplane: std::sync::Arc::new(NoopWorkplaneGateway),
+        test_harness: None,
+        init_session_id: None,
+    };
+
+    let result = ArchitectureGraphCurrentStateConsumer
+        .reconcile(&request, &context)
+        .await?;
+
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/rules_loaded"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    Ok(())
+}
+
 #[test]
 fn dependency_adjacency_keeps_resolved_edges_only() {
     let edges = vec![

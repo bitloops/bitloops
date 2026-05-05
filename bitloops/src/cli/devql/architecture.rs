@@ -838,7 +838,7 @@ fn seed_rule_hash(
 }
 
 #[cfg(test)]
-mod tests {
+mod deterministic_tests {
     use super::*;
     use crate::capability_packs::architecture_graph::roles::storage::{
         list_roles, load_role_by_id, load_role_rules,
@@ -857,7 +857,7 @@ mod tests {
         rusqlite::Connection::open(&sqlite_path)?;
         let relational = RelationalStorage::local_only(sqlite_path);
         relational
-            .exec(&architecture_graph_sqlite_schema_sql())
+            .exec(architecture_graph_sqlite_schema_sql())
             .await?;
         std::mem::forget(temp);
         Ok(relational)
