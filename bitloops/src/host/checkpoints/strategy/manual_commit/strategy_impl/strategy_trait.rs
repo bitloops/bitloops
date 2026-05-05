@@ -541,7 +541,7 @@ impl ManualCommitStrategy {
                 Ok(repository) => (repository, interaction_spool_ref),
                 Err(err) => {
                     let context = format_post_commit_derivation_context(
-                        &head,
+                        head,
                         None,
                         None,
                         &[],
@@ -562,7 +562,7 @@ impl ManualCommitStrategy {
                         );
                         update_active_session_base_commits(
                             self.backend.as_ref(),
-                            &head,
+                            head,
                             &std::collections::HashSet::new(),
                         );
                         return Ok(());

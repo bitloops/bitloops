@@ -6,6 +6,12 @@ use crate::test_support::process_state::with_env_var;
 use std::process::Command;
 use tempfile::TempDir;
 
+use super::registration::{
+    ExistingWatcherRegistrationDisposition, ExistingWatcherRegistrationHandle,
+    TimedOutPendingRecovery, classify_existing_watcher_registration,
+    handle_existing_watcher_registration, recover_timed_out_pending_registration,
+    wait_for_watcher_registration_ready,
+};
 use super::*;
 
 fn seed_runtime_store() -> (TempDir, PathBuf, RepoSqliteRuntimeStore) {
