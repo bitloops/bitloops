@@ -230,6 +230,220 @@ fn dirty_worktree_rescan_adds_paths_without_internal_store_paths() {
 }
 
 #[test]
+fn watcher_defers_git_work_when_index_lock_exists() {
+    let (_dir, repo_root, _store) = seed_runtime_store();
+    fs::write(repo_root.join(".git").join("index.lock"), "").expect("write index lock");
+
+    assert!(
+        should_defer_watcher_git_work(&repo_root),
+        "watcher should defer git-backed work while .git/index.lock exists"
+    );
+}
+
+#[test]
+fn watcher_does_not_defer_git_work_without_index_lock() {
+    let (_dir, repo_root, _store) = seed_runtime_store();
+
+    assert!(
+        !should_defer_watcher_git_work(&repo_root),
+        "watcher should proceed when the git index is unlocked"
+    );
+}
+
+#[test]
+fn watcher_defers_git_work_for_linked_worktree_git_file() {
+    let dir = TempDir::new().expect("temp dir");
+    let repo_root = dir.path().join("worktree");
+    let git_dir = dir
+        .path()
+        .join("main.git")
+        .join("worktrees")
+        .join("worktree");
+    fs::create_dir_all(&repo_root).expect("create worktree root");
+    fs::create_dir_all(&git_dir).expect("create linked git dir");
+    fs::write(
+        repo_root.join(".git"),
+        format!("gitdir: {}\n", git_dir.display()),
+    )
+    .expect("write git file");
+    fs::write(git_dir.join("index.lock"), "").expect("write linked git index lock");
+
+    assert!(
+        should_defer_watcher_git_work(&repo_root),
+        "watcher should defer git-backed work when a linked git dir has index.lock"
+    );
+}
+
+#[test]
+fn watcher_detects_branch_changes_once() {
+    let (_dir, repo_root, _store) = seed_runtime_store();
+    let mut observed_branch = current_watcher_branch(&repo_root).expect("read initial branch");
+    assert!(
+        !watcher_branch_changed(&repo_root, &mut observed_branch).expect("detect branch change"),
+        "unchanged branch should not request checkout sync"
+    );
+
+    let output = Command::new("git")
+        .args(["checkout", "-b", "feature"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("checkout feature branch");
+    assert!(
+        output.status.success(),
+        "checkout feature branch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        watcher_branch_changed(&repo_root, &mut observed_branch).expect("detect branch change"),
+        "branch transition should request checkout sync"
+    );
+    assert!(
+        !watcher_branch_changed(&repo_root, &mut observed_branch).expect("detect branch change"),
+        "same branch should not repeatedly request checkout sync"
+    );
+}
+
+#[test]
+fn watcher_detects_detached_head_checkout_changes() {
+    let (_dir, repo_root, _store) = seed_runtime_store();
+    fs::write(repo_root.join("src_one.rs"), "fn one() {}\n").expect("write first source");
+    let first = Command::new("git")
+        .args(["add", "src_one.rs"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("stage first source");
+    assert!(
+        first.status.success(),
+        "stage first source failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first = Command::new("git")
+        .args(["commit", "-m", "first"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("commit first source");
+    assert!(
+        first.status.success(),
+        "commit first source failed: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("read first head");
+    assert!(first_head.status.success(), "read first head failed");
+    let first_head = String::from_utf8(first_head.stdout)
+        .expect("first head should be utf8")
+        .trim()
+        .to_string();
+
+    fs::write(repo_root.join("src_two.rs"), "fn two() {}\n").expect("write second source");
+    let second = Command::new("git")
+        .args(["add", "src_two.rs"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("stage second source");
+    assert!(
+        second.status.success(),
+        "stage second source failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second = Command::new("git")
+        .args(["commit", "-m", "second"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("commit second source");
+    assert!(
+        second.status.success(),
+        "commit second source failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let checkout_first = Command::new("git")
+        .args(["checkout", "--detach", &first_head])
+        .current_dir(&repo_root)
+        .output()
+        .expect("checkout first detached head");
+    assert!(
+        checkout_first.status.success(),
+        "checkout first detached head failed: {}",
+        String::from_utf8_lossy(&checkout_first.stderr)
+    );
+    let mut observed_branch = current_watcher_branch(&repo_root).expect("read detached branch");
+
+    let checkout_second = Command::new("git")
+        .args(["checkout", "--detach", "main"])
+        .current_dir(&repo_root)
+        .output()
+        .expect("checkout second detached head");
+    assert!(
+        checkout_second.status.success(),
+        "checkout second detached head failed: {}",
+        String::from_utf8_lossy(&checkout_second.stderr)
+    );
+
+    assert!(
+        watcher_branch_changed(&repo_root, &mut observed_branch).expect("detect detached checkout"),
+        "detached HEAD transition should request checkout sync"
+    );
+}
+
+#[test]
+fn watcher_checkout_window_is_active_until_deadline() {
+    let now = Instant::now();
+    let deadline = now + Duration::from_millis(10);
+
+    assert!(watcher_checkout_window_active(Some(deadline), now));
+    assert!(!watcher_checkout_window_active(None, now));
+    assert!(!watcher_checkout_window_active(
+        Some(deadline),
+        now + Duration::from_millis(11)
+    ));
+}
+
+#[test]
+fn watcher_checkout_promotion_window_covers_late_checkout_events() {
+    let now = Instant::now();
+    let deadline = now + WATCHER_CHECKOUT_PROMOTION_WINDOW;
+
+    assert!(
+        watcher_checkout_window_active(Some(deadline), now + Duration::from_secs(3)),
+        "checkout file events can arrive after the first post-checkout sync is queued"
+    );
+}
+
+#[test]
+fn checkout_enqueue_failure_retains_watcher_batch_for_retry() {
+    let now = Instant::now();
+    let mut batch = BTreeSet::from([PathBuf::from("src/branch_only.rs")]);
+    let mut window_start = Some(now);
+
+    let result = apply_checkout_enqueue_result(
+        &mut batch,
+        &mut window_start,
+        Err(anyhow::anyhow!("sqlite busy")),
+    );
+
+    assert!(result.is_err());
+    assert_eq!(batch, BTreeSet::from([PathBuf::from("src/branch_only.rs")]));
+    assert_eq!(window_start, Some(now));
+}
+
+#[test]
+fn checkout_enqueue_success_clears_watcher_batch() {
+    let mut batch = BTreeSet::from([PathBuf::from("src/branch_only.rs")]);
+    let mut window_start = Some(Instant::now());
+
+    apply_checkout_enqueue_result(&mut batch, &mut window_start, Ok(()))
+        .expect("apply successful enqueue");
+
+    assert!(batch.is_empty());
+    assert!(window_start.is_none());
+}
+
+#[test]
 fn wait_for_watcher_registration_ready_ignores_stale_rows_until_expected_entry_exists() {
     let (_dir, repo_root, store) = seed_runtime_store();
     store

@@ -25,6 +25,8 @@ const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(5);
 const WATCHER_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const WATCHER_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(2);
 const WATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const WATCHER_GIT_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+const WATCHER_CHECKOUT_PROMOTION_WINDOW: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -297,6 +299,8 @@ fn run_notify_loop(
     let mut last_rescan = Instant::now();
     let mut batch: BTreeSet<PathBuf> = BTreeSet::new();
     let mut window_start: Option<Instant> = None;
+    let mut observed_branch = current_watcher_branch(&cfg.repo_root).unwrap_or(None);
+    let mut checkout_window_deadline: Option<Instant> = None;
 
     while !shutdown.load(Ordering::SeqCst) {
         match evaluate_watcher_exit_reason(
@@ -323,12 +327,15 @@ fn run_notify_loop(
             return Ok(());
         }
 
+        let defer_git_work = should_defer_watcher_git_work(&cfg.repo_root);
+
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
                 for path in event.paths {
-                    if should_ignore_path(&cfg.repo_root, &path)
-                        || is_gitignored(&cfg.repo_root, &path)
-                    {
+                    if should_ignore_path(&cfg.repo_root, &path) {
+                        continue;
+                    }
+                    if !defer_git_work && is_gitignored(&cfg.repo_root, &path) {
                         continue;
                     }
                     batch.insert(path);
@@ -349,7 +356,47 @@ fn run_notify_loop(
             }
         }
 
-        if last_rescan.elapsed() >= rescan_interval {
+        if should_defer_watcher_git_work(&cfg.repo_root) {
+            if !batch.is_empty() && window_start.is_none() {
+                window_start = Some(Instant::now());
+            }
+            std::thread::sleep(WATCHER_GIT_LOCK_RETRY_INTERVAL);
+            continue;
+        }
+
+        let rescan_due = last_rescan.elapsed() >= rescan_interval;
+        if !batch.is_empty() || rescan_due {
+            let previous_branch = observed_branch.clone();
+            match watcher_branch_changed(&cfg.repo_root, &mut observed_branch) {
+                Ok(true) => {
+                    let now = Instant::now();
+                    checkout_window_deadline = Some(now + WATCHER_CHECKOUT_PROMOTION_WINDOW);
+                    if let Err(err) = apply_checkout_enqueue_result(
+                        &mut batch,
+                        &mut window_start,
+                        enqueue_watcher_post_checkout_full_sync(cfg),
+                    ) {
+                        observed_branch = previous_branch;
+                        if !batch.is_empty() && window_start.is_none() {
+                            window_start = Some(now);
+                        }
+                        log::warn!(
+                            "failed to enqueue watcher-detected branch checkout sync: {err:#}"
+                        );
+                        std::thread::sleep(WATCHER_GIT_LOCK_RETRY_INTERVAL);
+                    } else {
+                        last_rescan = now;
+                    }
+                    continue;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    log::debug!("failed to inspect watcher branch state: {err:#}");
+                }
+            }
+        }
+
+        if rescan_due {
             match add_dirty_worktree_paths_to_batch(&cfg.repo_root, &mut batch) {
                 Ok(added) => {
                     if added && window_start.is_none() {
@@ -367,7 +414,33 @@ fn run_notify_loop(
             && !batch.is_empty()
             && start.elapsed() >= debounce
         {
-            let paths = batch.iter().cloned().collect::<Vec<_>>();
+            let paths = batch
+                .iter()
+                .filter(|path| !is_gitignored(&cfg.repo_root, path))
+                .cloned()
+                .collect::<Vec<_>>();
+            if paths.is_empty() {
+                batch.clear();
+                window_start = None;
+                continue;
+            }
+            if watcher_checkout_window_active(checkout_window_deadline, Instant::now()) {
+                if let Err(err) = apply_checkout_enqueue_result(
+                    &mut batch,
+                    &mut window_start,
+                    enqueue_watcher_post_checkout_full_sync(cfg),
+                ) {
+                    if window_start.is_none() {
+                        window_start = Some(Instant::now());
+                    }
+                    log::warn!(
+                        "failed to promote watcher path batch to branch checkout sync: {err:#}"
+                    );
+                    std::thread::sleep(WATCHER_GIT_LOCK_RETRY_INTERVAL);
+                }
+                continue;
+            }
+            checkout_window_deadline = None;
             if let Err(err) = capture::capture_temporary_checkpoint_batch_with_handle(
                 cfg,
                 &paths,
@@ -385,6 +458,30 @@ fn run_notify_loop(
     }
 
     Ok(())
+}
+
+fn enqueue_watcher_post_checkout_full_sync(cfg: &crate::host::devql::DevqlConfig) -> Result<()> {
+    crate::host::devql::enqueue_spooled_sync_task(
+        cfg,
+        crate::daemon::DevqlTaskSource::PostCheckout,
+        crate::host::devql::SyncMode::Full,
+    )
+    .map(|_| ())
+}
+
+fn watcher_checkout_window_active(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| now < deadline)
+}
+
+fn apply_checkout_enqueue_result(
+    batch: &mut BTreeSet<PathBuf>,
+    window_start: &mut Option<Instant>,
+    enqueue_result: Result<()>,
+) -> Result<()> {
+    enqueue_result.map(|()| {
+        batch.clear();
+        *window_start = None;
+    })
 }
 
 fn add_dirty_worktree_paths_to_batch(
@@ -421,6 +518,68 @@ fn watcher_repo_root_missing(repo_root: &Path) -> bool {
     repo_root.try_exists().map(|exists| !exists).unwrap_or(true)
 }
 
+fn should_defer_watcher_git_work(repo_root: &Path) -> bool {
+    git_index_lock_path(repo_root).is_some_and(|path| path.exists())
+}
+
+fn git_index_lock_path(repo_root: &Path) -> Option<PathBuf> {
+    let dot_git = repo_root.join(".git");
+    let metadata = fs::metadata(&dot_git).ok()?;
+    if metadata.is_dir() {
+        return Some(dot_git.join("index.lock"));
+    }
+    if !metadata.is_file() {
+        return None;
+    }
+
+    let contents = fs::read_to_string(&dot_git).ok()?;
+    let gitdir = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir:").map(str::trim))?;
+    let gitdir = PathBuf::from(gitdir);
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        repo_root.join(gitdir)
+    };
+    Some(gitdir.join("index.lock"))
+}
+
+fn watcher_branch_changed(repo_root: &Path, observed_branch: &mut Option<String>) -> Result<bool> {
+    let current_branch = current_watcher_branch(repo_root)?;
+    if current_branch == *observed_branch {
+        return Ok(false);
+    }
+    *observed_branch = current_branch;
+    Ok(true)
+}
+
+fn current_watcher_branch(repo_root: &Path) -> Result<Option<String>> {
+    let branch = crate::host::checkpoints::strategy::manual_commit::run_git_env(
+        repo_root,
+        &["branch", "--show-current"],
+        &[("GIT_OPTIONAL_LOCKS", "0")],
+    )
+    .context("reading current branch for DevQL watcher")?;
+    let branch = branch.trim();
+    if !branch.is_empty() {
+        return Ok(Some(format!("branch:{branch}")));
+    }
+
+    let head = crate::host::checkpoints::strategy::manual_commit::run_git_env(
+        repo_root,
+        &["rev-parse", "--verify", "HEAD"],
+        &[("GIT_OPTIONAL_LOCKS", "0")],
+    )
+    .context("reading current detached HEAD for DevQL watcher")?;
+    let head = head.trim();
+    if head.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(format!("detached:{head}")))
+    }
+}
+
 fn should_ignore_path(repo_root: &Path, path: &Path) -> bool {
     let rel = path.strip_prefix(repo_root).unwrap_or(path);
     let rel_str = rel.to_string_lossy();
@@ -448,9 +607,10 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
         return false;
     }
 
-    crate::host::checkpoints::strategy::manual_commit::run_git(
+    crate::host::checkpoints::strategy::manual_commit::run_git_env(
         repo_root,
         &["check-ignore", "-q", &rel_str],
+        &[("GIT_OPTIONAL_LOCKS", "0")],
     )
     .is_ok()
 }

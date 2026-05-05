@@ -171,7 +171,15 @@ pub(super) fn merge_existing_task(
     None
 }
 
+#[cfg(test)]
 pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -> Vec<usize> {
+    next_runnable_task_indexes_blocking_repo_ids(state, &HashSet::new())
+}
+
+pub(super) fn next_runnable_task_indexes_blocking_repo_ids(
+    state: &PersistedDevqlTaskQueueState,
+    blocked_repo_ids: &HashSet<String>,
+) -> Vec<usize> {
     let paused_repo_ids = state
         .repo_controls
         .iter()
@@ -210,6 +218,9 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
         {
             continue;
         }
+        if blocked_repo_ids.contains(&task.repo_id) {
+            continue;
+        }
         if repo_policy_change_blocked_repo_ids.contains(task.repo_id.as_str())
             && !(task.kind == DevqlTaskKind::Sync
                 && task.source == DevqlTaskSource::RepoPolicyChange)
@@ -243,27 +254,69 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
     selected.into_iter().map(|(index, _)| index).collect()
 }
 
+pub(super) fn post_commit_derivation_claim_guards(
+    state: &PersistedDevqlTaskQueueState,
+) -> crate::host::devql::PostCommitDerivationClaimGuards {
+    let mut guards = crate::host::devql::PostCommitDerivationClaimGuards::default();
+    for task in state.tasks.iter().filter(|task| {
+        task.kind == DevqlTaskKind::Sync && task.source == DevqlTaskSource::PostCommit
+    }) {
+        let Some(snapshot) = task
+            .sync_spec()
+            .and_then(|spec| spec.post_commit_snapshot.as_ref())
+        else {
+            continue;
+        };
+        let key = (task.repo_id.clone(), snapshot.commit_sha.clone());
+        match task.status {
+            DevqlTaskStatus::Queued | DevqlTaskStatus::Running => {
+                guards.blocked.insert(key);
+            }
+            DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled => {
+                guards.abandoned.insert(key);
+            }
+            DevqlTaskStatus::Completed => {}
+        }
+    }
+    guards
+}
+
 fn pending_sort_key(index: usize, task: &DevqlTaskRecord) -> (u8, u64, usize) {
     (
         if task.kind == DevqlTaskKind::Sync && task.source == DevqlTaskSource::RepoPolicyChange {
             0
+        } else if is_git_hook_sync_task(task) {
+            1
         } else if matches!(
             task.kind,
             DevqlTaskKind::EmbeddingsBootstrap | DevqlTaskKind::SummaryBootstrap
         ) {
-            2
+            3
         } else if task.kind == DevqlTaskKind::Sync
             && task
                 .sync_spec()
                 .is_some_and(|spec| matches!(spec.mode, SyncTaskMode::Validate))
         {
-            3
+            4
         } else {
-            1
+            2
         },
         task.submitted_at_unix,
         index,
     )
+}
+
+fn is_git_hook_sync_task(task: &DevqlTaskRecord) -> bool {
+    task.kind == DevqlTaskKind::Sync
+        && matches!(
+            task.source,
+            DevqlTaskSource::PostCheckout
+                | DevqlTaskSource::PostCommit
+                | DevqlTaskSource::PostMerge
+        )
+        && task
+            .sync_spec()
+            .is_none_or(|spec| !matches!(spec.mode, SyncTaskMode::Validate))
 }
 
 pub(super) fn recompute_queue_positions(tasks: &mut [DevqlTaskRecord]) {
@@ -691,7 +744,11 @@ mod tests {
         DevqlTaskStatus, PostCommitSnapshotSpec, SyncTaskMode, SyncTaskSpec,
     };
     use super::super::state::PersistedDevqlTaskQueueState;
-    use super::{merge_existing_task, prune_terminal_tasks};
+    use super::{
+        merge_existing_task, next_runnable_task_indexes,
+        next_runnable_task_indexes_blocking_repo_ids, post_commit_derivation_claim_guards,
+        prune_terminal_tasks,
+    };
 
     fn test_cfg() -> DevqlConfig {
         DevqlConfig {
@@ -873,6 +930,147 @@ mod tests {
         assert_eq!(
             state.tasks[0].sync_spec().expect("sync spec").mode,
             SyncTaskMode::Full
+        );
+    }
+
+    #[test]
+    fn queued_post_checkout_full_runs_before_queued_watcher_paths() {
+        let state = PersistedDevqlTaskQueueState {
+            tasks: vec![
+                sync_task(
+                    "sync-task-1",
+                    DevqlTaskSource::Watcher,
+                    SyncTaskMode::Paths {
+                        paths: vec!["src/lib.rs".to_string()],
+                    },
+                    DevqlTaskStatus::Queued,
+                ),
+                sync_task(
+                    "sync-task-2",
+                    DevqlTaskSource::PostCheckout,
+                    SyncTaskMode::Full,
+                    DevqlTaskStatus::Queued,
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let runnable = next_runnable_task_indexes(&state);
+
+        assert_eq!(
+            runnable,
+            vec![1],
+            "post-checkout full sync should own checkout materialization before watcher paths"
+        );
+    }
+
+    #[test]
+    fn queued_tasks_wait_while_producer_spool_job_runs_for_repo() {
+        let mut other_repo_task = sync_task(
+            "sync-task-2",
+            DevqlTaskSource::Watcher,
+            SyncTaskMode::Paths {
+                paths: vec!["src/other.rs".to_string()],
+            },
+            DevqlTaskStatus::Queued,
+        );
+        other_repo_task.repo_id = "repo-2".to_string();
+
+        let state = PersistedDevqlTaskQueueState {
+            tasks: vec![
+                sync_task(
+                    "sync-task-1",
+                    DevqlTaskSource::Watcher,
+                    SyncTaskMode::Paths {
+                        paths: vec!["src/lib.rs".to_string()],
+                    },
+                    DevqlTaskStatus::Queued,
+                ),
+                other_repo_task,
+            ],
+            ..Default::default()
+        };
+
+        let blocked_repo_ids = HashSet::from(["repo-1".to_string()]);
+        let runnable = next_runnable_task_indexes_blocking_repo_ids(&state, &blocked_repo_ids);
+
+        assert_eq!(
+            runnable,
+            vec![1],
+            "tasks for a repo with running producer spool work should wait"
+        );
+    }
+
+    #[test]
+    fn queued_post_commit_sync_blocks_matching_post_commit_derivation() {
+        let state = PersistedDevqlTaskQueueState {
+            tasks: vec![
+                sync_task_with_spec(
+                    "sync-task-1",
+                    DevqlTaskSource::PostCommit,
+                    sync_spec_with_snapshot(
+                        SyncTaskMode::Paths {
+                            paths: vec!["src/lib.rs".to_string()],
+                        },
+                        "commit-head",
+                        &["src/lib.rs"],
+                    ),
+                    DevqlTaskStatus::Queued,
+                ),
+                sync_task_with_spec(
+                    "sync-task-2",
+                    DevqlTaskSource::PostCommit,
+                    sync_spec_with_snapshot(
+                        SyncTaskMode::Paths {
+                            paths: vec!["src/main.rs".to_string()],
+                        },
+                        "completed-commit",
+                        &["src/main.rs"],
+                    ),
+                    DevqlTaskStatus::Completed,
+                ),
+            ],
+            ..Default::default()
+        };
+
+        let guards = post_commit_derivation_claim_guards(&state);
+
+        assert_eq!(
+            guards.blocked,
+            HashSet::from([("repo-1".to_string(), "commit-head".to_string())]),
+            "only incomplete post-commit sync snapshots should block derivation"
+        );
+        assert!(
+            guards.abandoned.is_empty(),
+            "completed post-commit sync snapshots should not abandon derivation"
+        );
+    }
+
+    #[test]
+    fn failed_post_commit_sync_abandons_matching_post_commit_derivation() {
+        let state = PersistedDevqlTaskQueueState {
+            tasks: vec![sync_task_with_spec(
+                "sync-task-1",
+                DevqlTaskSource::PostCommit,
+                sync_spec_with_snapshot(
+                    SyncTaskMode::Paths {
+                        paths: vec!["src/lib.rs".to_string()],
+                    },
+                    "commit-head",
+                    &["src/lib.rs"],
+                ),
+                DevqlTaskStatus::Failed,
+            )],
+            ..Default::default()
+        };
+
+        let guards = post_commit_derivation_claim_guards(&state);
+
+        assert!(guards.blocked.is_empty());
+        assert_eq!(
+            guards.abandoned,
+            HashSet::from([("repo-1".to_string(), "commit-head".to_string())]),
+            "failed post-commit refresh sync should abandon dependent derivation"
         );
     }
 

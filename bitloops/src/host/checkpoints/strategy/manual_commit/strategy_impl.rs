@@ -30,3 +30,4 @@ pub(super) use self::pre_push_sync::run_devql_pre_push_sync;
 pub(super) use self::reference_transaction_cleanup::{
     collect_reference_transaction_branch_deletions, run_devql_reference_transaction_cleanup,
 };
+pub(crate) use self::strategy_trait::execute_devql_post_commit_derivation;

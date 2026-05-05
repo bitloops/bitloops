@@ -74,6 +74,18 @@ impl DevqlTaskCoordinator {
                 )
                 .await
             }
+            crate::host::devql::ProducerSpoolJobPayload::PostCommitDerivation {
+                commit_sha,
+                committed_files,
+                is_rebase_in_progress,
+            } => {
+                crate::host::checkpoints::strategy::manual_commit::execute_devql_post_commit_derivation(
+                    &job.repo_root,
+                    commit_sha,
+                    committed_files,
+                    *is_rebase_in_progress,
+                )
+            }
             crate::host::devql::ProducerSpoolJobPayload::PostMergeRefresh {
                 head_sha,
                 changed_files,

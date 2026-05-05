@@ -5,7 +5,9 @@ use std::sync::atomic::Ordering;
 use anyhow::Result;
 use tokio::time::{Duration, sleep};
 
-use crate::daemon::tasks::queue::next_runnable_task_indexes;
+use crate::daemon::tasks::queue::{
+    next_runnable_task_indexes_blocking_repo_ids, post_commit_derivation_claim_guards,
+};
 use crate::daemon::types::{DevqlTaskKind, DevqlTaskRecord, DevqlTaskStatus};
 use crate::graphql::SubscriptionHub;
 
@@ -94,11 +96,14 @@ impl DevqlTaskCoordinator {
 
             if !reconcile_blocked {
                 match self.schedule_pending_producer_spool_jobs(&producer_spool_config_root) {
-                    Ok(progressed) => made_progress |= progressed,
+                    Ok(true) => {
+                        continue;
+                    }
+                    Ok(false) => {}
                     Err(err) => log::warn!("daemon DevQL producer spool worker error: {err:#}"),
                 }
             }
-            match self.schedule_pending_tasks() {
+            match self.schedule_pending_tasks(&producer_spool_config_root) {
                 Ok(progressed) => made_progress |= progressed,
                 Err(err) => log::warn!("daemon DevQL task worker error: {err:#}"),
             }
@@ -114,7 +119,19 @@ impl DevqlTaskCoordinator {
     }
 
     fn schedule_pending_producer_spool_jobs(self: &Arc<Self>, config_root: &Path) -> Result<bool> {
-        let jobs = crate::host::devql::claim_next_producer_spool_jobs(config_root)?;
+        let state = self.load_state()?;
+        let running_task_repo_ids = state
+            .tasks
+            .iter()
+            .filter(|task| task.status == DevqlTaskStatus::Running)
+            .map(|task| task.repo_id.clone())
+            .collect();
+        let post_commit_derivation_guards = post_commit_derivation_claim_guards(&state);
+        let jobs = crate::host::devql::claim_next_producer_spool_jobs_excluding(
+            config_root,
+            &running_task_repo_ids,
+            &post_commit_derivation_guards,
+        )?;
         if jobs.is_empty() {
             return Ok(false);
         }
@@ -131,9 +148,14 @@ impl DevqlTaskCoordinator {
         Ok(true)
     }
 
-    fn schedule_pending_tasks(self: &Arc<Self>) -> Result<bool> {
+    fn schedule_pending_tasks(self: &Arc<Self>, config_root: &Path) -> Result<bool> {
+        let producer_spool_running_repo_ids =
+            crate::host::devql::running_producer_spool_repo_ids(config_root)?;
         let tasks = self.mutate_state(|state| {
-            let indexes = next_runnable_task_indexes(state);
+            let indexes = next_runnable_task_indexes_blocking_repo_ids(
+                state,
+                &producer_spool_running_repo_ids,
+            );
             if indexes.is_empty() {
                 return Ok(Vec::new());
             }
