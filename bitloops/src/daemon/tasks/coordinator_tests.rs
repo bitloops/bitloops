@@ -184,6 +184,113 @@ async fn producer_spool_task_job_enqueues_devql_task_and_clears_spool_row() {
 }
 
 #[tokio::test]
+async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_row() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo src dir");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(
+        repo_root.join("src/lib.rs"),
+        "pub fn qa_merge() -> i32 { 7 }\n",
+    )
+    .expect("write source file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+    let head_sha = crate::test_support::git_fixtures::git_ok(&repo_root, &["rev-parse", "HEAD"]);
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo.clone())
+        .expect("build devql config");
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        &head_sha,
+        &["src/lib.rs".to_string()],
+    )
+    .expect("enqueue post-merge producer spool job");
+
+    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs");
+    assert_eq!(jobs.len(), 1, "expected one post-merge producer job");
+
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+
+    Arc::clone(&coordinator)
+        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+        .await
+        .expect("process producer spool job");
+
+    let ingest_tasks = coordinator
+        .tasks(
+            Some(&cfg.repo.repo_id),
+            Some(DevqlTaskKind::Ingest),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued ingest tasks");
+    assert_eq!(
+        ingest_tasks.len(),
+        1,
+        "post-merge history catch-up should be a visible queued task"
+    );
+    assert_eq!(
+        ingest_tasks[0]
+            .ingest_spec()
+            .expect("ingest task spec")
+            .backfill,
+        Some(200)
+    );
+
+    let sync_tasks = coordinator
+        .tasks(
+            Some(&cfg.repo.repo_id),
+            Some(DevqlTaskKind::Sync),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued sync tasks");
+    assert_eq!(
+        sync_tasks.len(),
+        1,
+        "post-merge current-state refresh should be a visible queued task"
+    );
+    assert_eq!(sync_tasks[0].source, DevqlTaskSource::PostMerge);
+    assert_eq!(
+        sync_tasks[0].sync_spec().expect("sync task spec").mode,
+        SyncTaskMode::Paths {
+            paths: vec!["src/lib.rs".to_string()],
+        }
+    );
+
+    let remaining_jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs after processing");
+    assert!(
+        remaining_jobs.is_empty(),
+        "completed producer spool jobs should be removed from the repo runtime store"
+    );
+}
+
+#[tokio::test]
 async fn producer_spool_claim_prunes_jobs_for_now_excluded_paths() {
     let dir = TempDir::new().expect("temp dir");
     let config_root = dir.path().join("config");

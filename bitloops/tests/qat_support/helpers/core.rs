@@ -193,6 +193,278 @@ fn open_scenario_runtime_sqlite(
     Ok(sqlite)
 }
 
+fn open_scenario_daemon_runtime_store(world: &QatWorld) -> Result<QatDaemonSqliteRuntimeStore> {
+    with_scenario_app_env(world, QatDaemonSqliteRuntimeStore::open)
+        .context("opening scenario daemon runtime store")
+}
+
+fn latest_completed_sync_task_source(world: &QatWorld) -> Result<Option<DevqlTaskSource>> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for latest completed sync task source")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(None);
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|task| {
+            task.1.repo_id == repo_id
+                && task.1.kind == DevqlTaskKind::Sync
+                && task.1.status == DevqlTaskStatus::Completed
+        })
+        .max_by_key(|(index, task)| {
+            (
+                task.completed_at_unix.unwrap_or(0),
+                task.updated_at_unix,
+                *index,
+            )
+        })
+        .map(|(_, task)| task.source))
+}
+
+fn completed_sync_task_source_count(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+) -> Result<usize> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for completed sync task source count")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(0);
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Sync
+                && task.status == DevqlTaskStatus::Completed
+                && task.source == expected_source
+        })
+        .count())
+}
+
+fn completed_sync_task_with_source_exists(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+) -> Result<bool> {
+    Ok(completed_sync_task_source_count(world, expected_source)? > 0)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncTaskSummaryField {
+    Work,
+    Added,
+    Changed,
+    Removed,
+    Unchanged,
+    CacheHits,
+    CacheMisses,
+    ParseErrors,
+}
+
+impl SyncTaskSummaryField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Added => "added",
+            Self::Changed => "changed",
+            Self::Removed => "removed",
+            Self::Unchanged => "unchanged",
+            Self::CacheHits => "cache hits",
+            Self::CacheMisses => "cache misses",
+            Self::ParseErrors => "parse errors",
+        }
+    }
+}
+
+fn parse_sync_task_summary_field(raw: &str) -> Result<SyncTaskSummaryField> {
+    let normalised = raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-'], " ");
+    match normalised.as_str() {
+        "work" => Ok(SyncTaskSummaryField::Work),
+        "added" => Ok(SyncTaskSummaryField::Added),
+        "changed" => Ok(SyncTaskSummaryField::Changed),
+        "removed" => Ok(SyncTaskSummaryField::Removed),
+        "unchanged" => Ok(SyncTaskSummaryField::Unchanged),
+        "cache hits" => Ok(SyncTaskSummaryField::CacheHits),
+        "cache misses" => Ok(SyncTaskSummaryField::CacheMisses),
+        "parse errors" => Ok(SyncTaskSummaryField::ParseErrors),
+        other => bail!("unsupported DevQL sync task summary field `{other}`"),
+    }
+}
+
+fn sync_task_summary_field_value(
+    summary: &bitloops::host::devql::SyncSummary,
+    field: SyncTaskSummaryField,
+) -> usize {
+    match field {
+        SyncTaskSummaryField::Work => {
+            summary.paths_added
+                + summary.paths_changed
+                + summary.paths_removed
+                + summary.paths_unchanged
+        }
+        SyncTaskSummaryField::Added => summary.paths_added,
+        SyncTaskSummaryField::Changed => summary.paths_changed,
+        SyncTaskSummaryField::Removed => summary.paths_removed,
+        SyncTaskSummaryField::Unchanged => summary.paths_unchanged,
+        SyncTaskSummaryField::CacheHits => summary.cache_hits,
+        SyncTaskSummaryField::CacheMisses => summary.cache_misses,
+        SyncTaskSummaryField::ParseErrors => summary.parse_errors,
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CompletedSyncTaskSummaryBrief {
+    task_id: String,
+    source: String,
+    mode: String,
+    paths_added: usize,
+    paths_changed: usize,
+    paths_removed: usize,
+    paths_unchanged: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+    parse_errors: usize,
+}
+
+fn completed_sync_task_summary_brief(
+    task: &bitloops::daemon::DevqlTaskRecord,
+) -> CompletedSyncTaskSummaryBrief {
+    let Some(summary) = task.sync_result() else {
+        return CompletedSyncTaskSummaryBrief {
+            task_id: task.task_id.clone(),
+            source: task.source.to_string(),
+            mode: "<missing sync result>".to_string(),
+            ..Default::default()
+        };
+    };
+
+    CompletedSyncTaskSummaryBrief {
+        task_id: task.task_id.clone(),
+        source: task.source.to_string(),
+        mode: summary.mode.clone(),
+        paths_added: summary.paths_added,
+        paths_changed: summary.paths_changed,
+        paths_removed: summary.paths_removed,
+        paths_unchanged: summary.paths_unchanged,
+        cache_hits: summary.cache_hits,
+        cache_misses: summary.cache_misses,
+        parse_errors: summary.parse_errors,
+    }
+}
+
+fn completed_sync_task_summary_brief_field_value(
+    brief: &CompletedSyncTaskSummaryBrief,
+    field: SyncTaskSummaryField,
+) -> usize {
+    match field {
+        SyncTaskSummaryField::Work => {
+            brief.paths_added + brief.paths_changed + brief.paths_removed + brief.paths_unchanged
+        }
+        SyncTaskSummaryField::Added => brief.paths_added,
+        SyncTaskSummaryField::Changed => brief.paths_changed,
+        SyncTaskSummaryField::Removed => brief.paths_removed,
+        SyncTaskSummaryField::Unchanged => brief.paths_unchanged,
+        SyncTaskSummaryField::CacheHits => brief.cache_hits,
+        SyncTaskSummaryField::CacheMisses => brief.cache_misses,
+        SyncTaskSummaryField::ParseErrors => brief.parse_errors,
+    }
+}
+
+fn completed_sync_task_summary_field_exceeds_min(
+    tasks: &[CompletedSyncTaskSummaryBrief],
+    field: SyncTaskSummaryField,
+    min: usize,
+) -> bool {
+    tasks
+        .iter()
+        .any(|task| completed_sync_task_summary_brief_field_value(task, field) > min)
+}
+
+fn format_completed_sync_task_summary_diagnostics(
+    tasks: &[CompletedSyncTaskSummaryBrief],
+) -> String {
+    if tasks.is_empty() {
+        return "no post-snapshot completed sync tasks".to_string();
+    }
+
+    tasks
+        .iter()
+        .map(|task| {
+            format!(
+                "task_id={} source={} mode={} added={} changed={} removed={} unchanged={} cache_hits={} cache_misses={} parse_errors={}",
+                task.task_id,
+                task.source,
+                task.mode,
+                task.paths_added,
+                task.paths_changed,
+                task.paths_removed,
+                task.paths_unchanged,
+                task.cache_hits,
+                task.cache_misses,
+                task.parse_errors
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn completed_sync_task_summary_briefs_after_source_snapshot(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+    snapshot_count: usize,
+) -> Result<Vec<CompletedSyncTaskSummaryBrief>> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for completed sync task summary assertion")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Sync
+                && task.status == DevqlTaskStatus::Completed
+                && task.source == expected_source
+        })
+        .skip(snapshot_count)
+        .map(completed_sync_task_summary_brief)
+        .collect())
+}
+
+fn parse_devql_task_source(raw: &str) -> Result<DevqlTaskSource> {
+    match raw.trim() {
+        "init" => Ok(DevqlTaskSource::Init),
+        "manual_cli" | "manual-cli" | "manual" => Ok(DevqlTaskSource::ManualCli),
+        "watcher" => Ok(DevqlTaskSource::Watcher),
+        "post_commit" | "post-commit" => Ok(DevqlTaskSource::PostCommit),
+        "post_merge" | "post-merge" => Ok(DevqlTaskSource::PostMerge),
+        "post_checkout" | "post-checkout" => Ok(DevqlTaskSource::PostCheckout),
+        "repo_policy_change" | "repo-policy-change" => Ok(DevqlTaskSource::RepoPolicyChange),
+        other => bail!("unsupported expected DevQL task source `{other}`"),
+    }
+}
+
 fn watcher_process_is_running(pid: u32) -> Result<bool> {
     #[cfg(windows)]
     {
@@ -343,6 +615,44 @@ fn stop_registered_watcher_for_scenario(world: &QatWorld) -> Result<()> {
         .context("clearing scenario watcher registration")?;
     append_world_log(world, "Cleared DevQL watcher registration for scenario.\n")?;
 
+    Ok(())
+}
+
+pub fn assert_devql_watcher_registered_and_running_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let repo_root = world.repo_dir().to_string_lossy().to_string();
+    let sqlite = open_scenario_runtime_sqlite(world)?;
+    let Some((pid, state)) = sqlite
+        .with_connection(|conn| {
+            use rusqlite::OptionalExtension as _;
+
+            conn.query_row(
+                "SELECT pid, state
+                 FROM repo_watcher_registrations
+                 WHERE repo_root = ?1
+                 LIMIT 1",
+                rusqlite::params![repo_root.as_str()],
+                |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .context("loading DevQL watcher registration")?
+    else {
+        bail!("expected DevQL watcher registration for repo `{repo_name}`");
+    };
+
+    ensure!(
+        state == "ready",
+        "expected DevQL watcher registration state `ready`, got `{state}`"
+    );
+    ensure!(
+        watcher_process_is_running(pid)?,
+        "expected DevQL watcher pid {pid} to be running"
+    );
     Ok(())
 }
 
@@ -800,6 +1110,42 @@ fn build_init_bitloops_args_with_options(
     }
 
     args
+}
+
+fn build_init_bitloops_args_with_producer_contract_options(
+    agent_name: &str,
+    sync: bool,
+) -> Vec<String> {
+    vec![
+        "init".to_string(),
+        "--install-default-daemon".to_string(),
+        "--agent".to_string(),
+        agent_name.to_string(),
+        "--no-embeddings".to_string(),
+        "--no-summaries".to_string(),
+        format!("--sync={sync}"),
+        "--ingest=false".to_string(),
+    ]
+}
+
+pub fn run_init_bitloops_producer_contract_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    sync: bool,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    enable_watcher_autostart_for_scenario(world)?;
+
+    let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
+    world.agent_name = Some(normalised_agent_name.to_string());
+    let args_owned =
+        build_init_bitloops_args_with_producer_contract_options(normalised_agent_name, sync);
+    let label = format!("bitloops {}", args_owned.join(" "));
+    let args = args_owned.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = run_command_capture(world, &label, build_bitloops_command(world, &args)?)
+        .with_context(|| format!("running {label}"))?;
+    ensure_success(&output, &label)
 }
 
 pub fn run_bitloops_enable_with_flags(
@@ -1711,7 +2057,7 @@ pub fn run_devql_tasks_status_for_repo(world: &mut QatWorld, repo_name: &str) ->
 }
 
 fn devql_task_queue_status_is_idle(snapshot: &DevqlTaskQueueStatusSnapshot) -> bool {
-    snapshot.queued == 0 && snapshot.running == 0
+    snapshot.queued == 0 && snapshot.running == 0 && snapshot.failed == 0
 }
 
 pub fn wait_for_devql_task_queue_idle_for_repo(
@@ -1719,30 +2065,148 @@ pub fn wait_for_devql_task_queue_idle_for_repo(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let status = wait_for_qat_condition(
-        qat_eventual_timeout(),
-        qat_eventual_poll_interval(),
-        "DevQL task queue to become idle",
-        || {
-            run_devql_tasks_status_for_repo(world, repo_name)?;
-            parse_task_queue_status(world.last_command_stdout.as_deref().unwrap_or(""))
-        },
-        devql_task_queue_status_is_idle,
-        |snapshot| {
-            format!(
-                "queued={}, running={}, failed={}, current_repo_tasks={}",
-                snapshot.queued,
-                snapshot.running,
-                snapshot.failed,
-                snapshot.current_repo_tasks.len()
-            )
-        },
-    )?;
+    let timeout = qat_eventual_timeout();
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+
+    let status = loop {
+        attempts += 1;
+        run_devql_tasks_status_for_repo(world, repo_name)?;
+        let status =
+            parse_task_queue_status(world.last_command_stdout.as_deref().unwrap_or(""))?;
+        let observation = format!(
+            "queued={}, running={}, failed={}, current_repo_tasks={}",
+            status.queued,
+            status.running,
+            status.failed,
+            status.current_repo_tasks.len()
+        );
+        ensure!(
+            status.failed == 0,
+            "DevQL task queue has failed tasks while waiting for idle; attempts={attempts}; observation={observation}"
+        );
+        if devql_task_queue_status_is_idle(&status) {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            bail!(
+                "timed out after {}s waiting for DevQL task queue to become idle; attempts={attempts}; last observation: {observation}",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(qat_eventual_poll_interval());
+    };
     world.last_command_exit_code = Some(0);
     world.last_command_stdout = Some(format!(
         "DevQL task queue reached idle state: queued={}, running={}",
         status.queued, status.running
     ));
+    Ok(())
+}
+
+pub fn wait_for_completed_sync_task_source_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let source_key = expected_source.to_string();
+    if let Some(snapshot_count) = world
+        .completed_sync_task_source_snapshots
+        .get(&source_key)
+        .copied()
+    {
+        wait_for_qat_condition(
+            qat_eventual_timeout(),
+            qat_eventual_poll_interval(),
+            &format!(
+                "completed DevQL sync task with source `{expected_source}` after snapshot count {snapshot_count}"
+            ),
+            || completed_sync_task_source_count(world, expected_source),
+            |count| *count > snapshot_count,
+            |count| format!("count={count}, snapshot={snapshot_count}"),
+        )?;
+    } else {
+        wait_for_qat_condition(
+            qat_eventual_timeout(),
+            qat_eventual_poll_interval(),
+            &format!("completed DevQL sync task with source `{expected_source}`"),
+            || completed_sync_task_with_source_exists(world, expected_source),
+            |exists| *exists,
+            |exists| format!("exists={exists}"),
+        )?;
+    }
+    Ok(())
+}
+
+pub fn wait_for_completed_sync_task_source_summary_field_greater_than_since_snapshot_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+    field: &str,
+    min: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let source_key = expected_source.to_string();
+    let snapshot_count = world
+        .completed_sync_task_source_snapshots
+        .get(&source_key)
+        .copied()
+        .ok_or_else(|| {
+            anyhow!(
+                "no completed DevQL sync task source snapshot captured for `{expected_source}`"
+            )
+        })?;
+    let field = parse_sync_task_summary_field(field)?;
+
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!(
+            "completed DevQL sync task with source `{expected_source}` to show {} > {min} after snapshot count {snapshot_count}",
+            field.label()
+        ),
+        || {
+            completed_sync_task_summary_briefs_after_source_snapshot(
+                world,
+                expected_source,
+                snapshot_count,
+            )
+        },
+        |tasks| completed_sync_task_summary_field_exceeds_min(tasks, field, min),
+        |tasks| format_completed_sync_task_summary_diagnostics(tasks),
+    )?;
+    Ok(())
+}
+
+pub fn snapshot_completed_sync_task_source_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let count = completed_sync_task_source_count(world, expected_source)?;
+    world
+        .completed_sync_task_source_snapshots
+        .insert(expected_source.to_string(), count);
+    Ok(())
+}
+
+pub fn assert_latest_completed_sync_task_source_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let actual = latest_completed_sync_task_source(world)?;
+    ensure!(
+        actual == Some(expected_source),
+        "expected latest completed sync task source `{expected_source}`, got `{actual:?}`"
+    );
     Ok(())
 }
 
@@ -1880,6 +2344,99 @@ pub fn commit_without_hooks(world: &mut QatWorld) -> Result<()> {
     Ok(())
 }
 
+pub fn commit_with_hooks(world: &mut QatWorld) -> Result<()> {
+    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
+    let diff_output = run_command_capture(
+        world,
+        "git diff --cached --quiet",
+        build_git_command(world, &["diff", "--cached", "--quiet"], &[]),
+    )?;
+    let diff_code = diff_output.status.code().unwrap_or_default();
+    let mut args = vec!["commit", "-m", "QAT change (hooks enabled)"];
+    if diff_code == 0 {
+        args.insert(1, "--allow-empty");
+    }
+    let output = run_command_capture(
+        world,
+        "git commit (hooks enabled)",
+        build_git_command(world, &args, &[]),
+    )?;
+    ensure_success(&output, "git commit (hooks enabled)")?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn create_branch_with_source_file_and_return_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    branch_name: &str,
+    relative_path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let base_branch = current_branch_name(world)?;
+    run_git_success(
+        world,
+        &["checkout", "-b", branch_name],
+        &[],
+        &format!("git checkout -b {branch_name}"),
+    )?;
+    write_deterministic_source_file(world.repo_dir(), relative_path, false)?;
+    commit_without_hooks(world)?;
+    run_git_success(
+        world,
+        &["checkout", base_branch.as_str()],
+        &[],
+        &format!("git checkout {base_branch}"),
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn checkout_branch_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    branch_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(
+        world,
+        &["checkout", branch_name],
+        &[],
+        &format!("git checkout {branch_name}"),
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn checkout_previous_branch_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(
+        world,
+        &["checkout", "-"],
+        &[],
+        "git checkout previous branch",
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn git_reset_hard_head_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(
+        world,
+        &["reset", "--hard", "HEAD"],
+        &[],
+        "git reset --hard HEAD",
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn git_clean_fd_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(world, &["clean", "-fd"], &[], "git clean -fd")
+}
+
 pub fn stage_changes_without_committing(world: &QatWorld) -> Result<()> {
     let output = run_command_capture(
         world,
@@ -1902,13 +2459,7 @@ pub fn simulate_git_pull_with_changes(world: &mut QatWorld) -> Result<()> {
         "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
     )
     .with_context(|| format!("writing {}", file_path.display()))?;
-    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
-    run_git_success(
-        world,
-        &["commit", "-m", "feat: add utils module from remote"],
-        &[],
-        "git commit utils",
-    )?;
+    commit_without_hooks(world)?;
     run_git_success(
         world,
         &["checkout", "-"],
@@ -5106,6 +5657,23 @@ pub fn assert_artefacts_current_contains_path_eventually(
     Ok(())
 }
 
+pub fn assert_artefacts_current_contains_path_eventually_without_nudge(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("artefacts_current to contain `{path}` without nudge"),
+        || assert_artefacts_current_contains_path(world, repo_name, path),
+        |_| true,
+        |_| format!("artefacts_current contains `{path}`"),
+    )?;
+    Ok(())
+}
+
 pub fn assert_artefacts_current_lacks_path(
     world: &QatWorld,
     repo_name: &str,
@@ -5117,6 +5685,26 @@ pub fn assert_artefacts_current_lacks_path(
         count == 0,
         "expected artefacts_current to omit `{path}`, got {count} rows"
     );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_lacks_path_eventually(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("artefacts_current to omit `{path}`"),
+        || {
+            assert_artefacts_current_lacks_path(world, repo_name, path)?;
+            Ok(true)
+        },
+        |ready| *ready,
+        |ready| format!("ready={ready}"),
+    )?;
     Ok(())
 }
 
@@ -5155,6 +5743,28 @@ pub fn assert_current_file_state_content_id_changed_since_snapshot_for_path(
         after != before,
         "expected current_file_state effective_content_id for `{path}` to change, but both snapshots were {after:?}"
     );
+    Ok(())
+}
+
+pub fn assert_current_file_state_content_id_changed_eventually_for_path(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("current_file_state content id for `{path}` to change"),
+        || {
+            assert_current_file_state_content_id_changed_since_snapshot_for_path(
+                world, repo_name, path,
+            )?;
+            Ok(true)
+        },
+        |ready| *ready,
+        |ready| format!("ready={ready}"),
+    )?;
     Ok(())
 }
 

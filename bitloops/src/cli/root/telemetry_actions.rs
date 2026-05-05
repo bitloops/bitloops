@@ -154,16 +154,6 @@ pub(crate) fn telemetry_action_for_command(
     }
 }
 
-pub(crate) fn should_attempt_watcher_autostart(command: &crate::cli::Commands) -> bool {
-    match command {
-        crate::cli::Commands::Devql(args) => !matches!(
-            args.command.as_ref(),
-            Some(crate::cli::devql::DevqlCommand::Schema(_))
-        ),
-        _ => false,
-    }
-}
-
 fn daemon_start_action(
     args: &crate::cli::daemon::DaemonStartArgs,
 ) -> crate::telemetry::analytics::ActionDescriptor {

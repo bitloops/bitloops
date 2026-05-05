@@ -38,14 +38,7 @@ async fn sync_changed_paths(
     source_hook: &str,
     post_commit_snapshot: Option<crate::daemon::PostCommitSnapshotSpec>,
 ) -> Result<PostCommitArtefactRefreshStats> {
-    let mut paths = changed_files
-        .iter()
-        .map(|raw| normalize_repo_path(raw))
-        .filter(|path| !path.is_empty())
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.dedup();
-    let paths = filter_refresh_paths_for_sync(cfg, &paths, source_hook)?;
+    let paths = refresh_paths_for_sync(cfg, changed_files, source_hook)?;
     let post_commit_snapshot = post_commit_snapshot.map(|mut snapshot| {
         snapshot.changed_paths = paths.clone();
         snapshot
@@ -105,4 +98,19 @@ async fn sync_changed_paths(
             queued,
         ))
     }
+}
+
+pub(crate) fn refresh_paths_for_sync(
+    cfg: &DevqlConfig,
+    changed_files: &[String],
+    source_hook: &str,
+) -> Result<Vec<String>> {
+    let mut paths = changed_files
+        .iter()
+        .map(|raw| normalize_repo_path(raw))
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    filter_refresh_paths_for_sync(cfg, &paths, source_hook)
 }

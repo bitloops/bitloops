@@ -64,6 +64,24 @@ pub(crate) fn enqueue_spooled_post_commit_refresh(
     )
 }
 
+#[cfg(test)]
+pub(crate) fn enqueue_spooled_post_commit_derivation(
+    repo_root: &Path,
+    commit_sha: &str,
+    committed_files: &[String],
+    is_rebase_in_progress: bool,
+) -> Result<ProducerSpoolEnqueueResult> {
+    enqueue_hook_job(
+        repo_root,
+        Some(format!("post_commit_derivation:{}", commit_sha.trim())),
+        ProducerSpoolJobPayload::PostCommitDerivation {
+            commit_sha: commit_sha.trim().to_string(),
+            committed_files: normalize_paths(committed_files),
+            is_rebase_in_progress,
+        },
+    )
+}
+
 pub(crate) fn enqueue_spooled_post_merge_refresh(
     repo_root: &Path,
     head_sha: &str,

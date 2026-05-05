@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{DevqlConfig, RelationalStorage, esc_pg, sql_string_list_pg};
@@ -18,11 +18,12 @@ pub(crate) async fn snapshot_committed_current_rows_for_commit_for_config(
     let current_head = crate::host::checkpoints::strategy::manual_commit::head_hash(&cfg.repo_root)
         .context("resolving HEAD before post-commit semantic snapshot")?;
     if current_head.trim() != commit_sha {
-        bail!(
-            "skipping post-commit semantic snapshot for commit {} because repository HEAD is {}",
+        log::debug!(
+            "skipping stale post-commit semantic snapshot for commit {} because repository HEAD is {}",
             commit_sha,
             current_head.trim()
         );
+        return Ok(());
     }
 
     let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)

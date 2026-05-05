@@ -19,4 +19,5 @@ pub use self::branch_seed::run_post_checkout_branch_seed;
 pub use self::checkpoint_projection::run_post_commit_checkpoint_projection_refresh;
 pub(crate) use self::snapshot::snapshot_committed_current_rows_for_commit_for_config;
 pub use self::stats::{PostCommitArtefactRefreshStats, QueuedSyncTaskMetadata};
+pub(crate) use self::sync_refresh::refresh_paths_for_sync;
 pub use self::sync_refresh::{run_post_commit_artefact_refresh, run_post_merge_artefact_refresh};

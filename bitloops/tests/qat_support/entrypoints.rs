@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 use super::bundle::{BundleResult, combine_bundle_results};
 use super::runner::{self, Suite};
-use super::subsets::{DEVELOP_GATE_RERUN_ALIAS, DEVELOP_GATE_SUITES, DEVELOP_GATE_TAG_EXPR};
+use super::subsets::{
+    DEVELOP_GATE_RERUN_ALIAS, DEVELOP_GATE_SUITES, DEVELOP_GATE_TAG_EXPR,
+    DEVQL_SYNC_PRODUCER_RERUN_ALIAS, DEVQL_SYNC_PRODUCER_TAG_EXPR,
+};
 
 pub(crate) fn resolve_binary() -> PathBuf {
     if let Ok(path_raw) = std::env::var("BITLOOPS_QAT_BINARY") {
@@ -33,6 +36,28 @@ pub(crate) async fn run_develop_gate_entrypoint() -> Result<()> {
         Some(DEVELOP_GATE_TAG_EXPR),
         DEVELOP_GATE_RERUN_ALIAS,
         runner::run_suite_with_tags,
+    )
+    .await
+}
+
+pub(crate) async fn run_devql_sync_producer_entrypoint() -> Result<()> {
+    let binary = resolve_binary();
+    run_devql_sync_producer_with_runner(binary, runner::run_suite_with_tags_and_rerun_alias).await
+}
+
+pub(crate) async fn run_devql_sync_producer_with_runner<Runner, SuiteFuture>(
+    binary: PathBuf,
+    runner: Runner,
+) -> Result<()>
+where
+    Runner: Fn(PathBuf, Suite, Option<&'static str>, &'static str) -> SuiteFuture,
+    SuiteFuture: Future<Output = Result<()>>,
+{
+    runner(
+        binary,
+        Suite::DevqlSync,
+        Some(DEVQL_SYNC_PRODUCER_TAG_EXPR),
+        DEVQL_SYNC_PRODUCER_RERUN_ALIAS,
     )
     .await
 }

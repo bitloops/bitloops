@@ -31,7 +31,11 @@ fn recursive_symbol_file_paths(world: &QatWorld, stem: &str) -> Vec<String> {
                 .contains(&file_name.to_string())
                 .then_some(path.to_path_buf())
         })
-        .filter_map(|path| path.strip_prefix(world.repo_dir()).ok().map(Path::to_path_buf))
+        .filter_map(|path| {
+            path.strip_prefix(world.repo_dir())
+                .ok()
+                .map(Path::to_path_buf)
+        })
         .map(|path| path.to_string_lossy().replace('\\', "/"))
         .collect::<Vec<_>>();
     matches.sort();

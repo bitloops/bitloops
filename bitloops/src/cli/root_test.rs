@@ -1,20 +1,15 @@
 use super::root::{
     CompletionShell, ROOT_NAME, ROOT_SHORT_ABOUT, build_commit, build_date, build_target,
     build_version, has_hidden_in_chain, run_curl_bash_post_install_command_with_io,
-    should_attempt_watcher_autostart, telemetry_action_for_command, write_completion, write_help,
-    write_version,
+    telemetry_action_for_command, write_completion, write_help, write_version,
 };
-use super::{Cli, Commands, resolve_watcher_autostart_config_root};
-use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, ENV_DAEMON_CONFIG_PATH_OVERRIDE, REPO_POLICY_LOCAL_FILE_NAME,
-};
+use super::{Cli, Commands};
 use crate::test_support::git_fixtures::init_test_repo;
-use crate::test_support::process_state::{enter_process_state, with_env_var, with_env_vars};
+use crate::test_support::process_state::{enter_process_state, with_env_vars};
 use crate::utils::branding::bitloops_wordmark;
 use clap::{Command, CommandFactory, Parser};
 use serde_json::Value;
 use std::io::Cursor;
-use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 fn find_subcommand<'a>(cmd: &'a Command, name: &str) -> &'a Command {
@@ -35,53 +30,6 @@ fn render_custom_help(path: &[&str], show_tree: bool) -> String {
     let command_path = path.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     write_help(&mut out, &command_path, show_tree).expect("custom help should render");
     String::from_utf8(out).expect("help should be valid utf-8")
-}
-
-fn write_test_daemon_config(config_root: &Path) -> PathBuf {
-    let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    std::fs::write(
-        &config_path,
-        r#"[runtime]
-local_dev = false
-
-[stores.relational]
-sqlite_path = "stores/relational/relational.db"
-
-[stores.events]
-duckdb_path = "stores/event/events.duckdb"
-
-[stores.blob]
-local_path = "stores/blob"
-"#,
-    )
-    .expect("write test daemon config");
-    config_path
-}
-
-fn write_enabled_repo_local_policy(repo_root: &Path) {
-    std::fs::write(
-        repo_root.join(REPO_POLICY_LOCAL_FILE_NAME),
-        r#"[capture]
-enabled = true
-strategy = "manual-commit"
-"#,
-    )
-    .expect("write repo-local policy");
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn TestRootCommand_HooksDoNotAutostartWatcher() {
-    let parsed = Cli::try_parse_from(["bitloops", "hooks", "git", "post-commit"])
-        .expect("hooks command should parse");
-    let Some(command) = parsed.command else {
-        panic!("expected hooks command");
-    };
-
-    assert!(
-        !should_attempt_watcher_autostart(&command),
-        "hook commands should not attempt DevQL watcher autostart"
-    );
 }
 
 #[test]
@@ -210,88 +158,6 @@ fn TestRootCommand_HiddenVisibilityForInternalCommands() {
 fn TestRootCommand_HasHiddenInChain_MixedValues() {
     assert!(has_hidden_in_chain(&[false, true, false]));
     assert!(!has_hidden_in_chain(&[false, false, false]));
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn TestRootCommand_WatcherAutostartMatrix() {
-    let cases = [
-        (["bitloops", "clean"].as_slice(), false),
-        (["bitloops", "disable"].as_slice(), false),
-        (["bitloops", "uninstall", "--full"].as_slice(), false),
-        (["bitloops", "help"].as_slice(), false),
-        (["bitloops", "version"].as_slice(), false),
-        (["bitloops", "status"].as_slice(), false),
-        (["bitloops", "dashboard"].as_slice(), false),
-        (["bitloops", "doctor"].as_slice(), false),
-        (["bitloops", "resume", "main"].as_slice(), false),
-        (
-            ["bitloops", "devql", "query", "repo(\"bitloops\")"].as_slice(),
-            true,
-        ),
-        (["bitloops", "devql", "schema"].as_slice(), false),
-    ];
-
-    for (argv, expected) in cases {
-        let parsed = Cli::try_parse_from(argv).expect("command should parse");
-        let Some(command) = parsed.command else {
-            panic!("expected subcommand for {:?}", argv);
-        };
-
-        assert_eq!(
-            should_attempt_watcher_autostart(&command),
-            expected,
-            "unexpected watcher autostart decision for {:?}",
-            argv
-        );
-    }
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn TestRootCommand_ResolveWatcherAutostartConfigRoot_UsesDaemonOverrideRoot() {
-    let dir = TempDir::new().expect("tempdir");
-    let repo_root = dir.path().join("bitloops");
-    std::fs::create_dir_all(&repo_root).expect("create repo root");
-    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
-    write_enabled_repo_local_policy(&repo_root);
-
-    let config_path = write_test_daemon_config(dir.path());
-    let config_path_string = config_path.to_string_lossy().to_string();
-
-    with_env_var(
-        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
-        Some(config_path_string.as_str()),
-        || {
-            let config_root = resolve_watcher_autostart_config_root(&repo_root, &repo_root)
-                .expect("watcher autostart should resolve daemon config root");
-            let expected_root = dir
-                .path()
-                .canonicalize()
-                .unwrap_or_else(|_| dir.path().to_path_buf());
-
-            assert_eq!(config_root, expected_root);
-            assert_ne!(config_root, repo_root);
-        },
-    );
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn TestRootCommand_ResolveWatcherAutostartConfigRoot_DoesNotFallBackToRepoRoot() {
-    let dir = TempDir::new().expect("tempdir");
-    let repo_root = dir.path().join("bitloops");
-    std::fs::create_dir_all(&repo_root).expect("create repo root");
-    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
-    write_enabled_repo_local_policy(&repo_root);
-
-    with_env_var(ENV_DAEMON_CONFIG_PATH_OVERRIDE, None, || {
-        let config_root = resolve_watcher_autostart_config_root(&repo_root, &repo_root);
-        assert!(
-            config_root.is_none(),
-            "watcher autostart should fail closed when no daemon config root is available"
-        );
-    });
 }
 
 #[test]

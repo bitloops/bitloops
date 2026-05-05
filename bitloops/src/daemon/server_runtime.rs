@@ -65,6 +65,7 @@ pub(super) async fn run_server(
             .context("building DevQL config for daemon startup")?;
     let _ = crate::host::devql::ensure_devql_storage_current(&devql_cfg, "Bitloops daemon startup")
         .await?;
+    ensure_bound_repo_watchers_for_daemon_startup(daemon_config);
     let _ = crate::daemon::shared_enrichment_coordinator();
 
     let config_root = daemon_config
@@ -331,6 +332,43 @@ pub(super) fn stop_bound_repo_watchers_for_daemon_shutdown(daemon_config: &Resol
     }
 }
 
+pub(super) fn ensure_bound_repo_watchers_for_daemon_startup(daemon_config: &ResolvedDaemonConfig) {
+    ensure_bound_repo_watchers_for_daemon_startup_with(
+        daemon_config,
+        crate::host::devql::watch::ensure_watcher_running,
+    );
+}
+
+pub(super) fn ensure_bound_repo_watchers_for_daemon_startup_with<F>(
+    daemon_config: &ResolvedDaemonConfig,
+    mut ensure_watcher_running: F,
+) where
+    F: FnMut(&Path, &Path) -> Result<()>,
+{
+    let repo_roots = match bound_repo_roots_for_daemon_config(daemon_config) {
+        Ok(repo_roots) => repo_roots,
+        Err(err) => {
+            log::warn!(
+                "failed to resolve bound repo watchers for daemon startup (config={}): {err:#}",
+                daemon_config.config_path.display()
+            );
+            return;
+        }
+    };
+
+    for repo_root in repo_roots {
+        if !crate::config::settings::is_enabled_for_hooks(&repo_root) {
+            continue;
+        }
+        if let Err(err) = ensure_watcher_running(&repo_root, &daemon_config.config_root) {
+            log::warn!(
+                "failed to start DevQL watcher during daemon startup for repo {}: {err:#}",
+                repo_root.display()
+            );
+        }
+    }
+}
+
 fn bound_repo_roots_for_daemon_config(
     daemon_config: &ResolvedDaemonConfig,
 ) -> Result<Vec<PathBuf>> {
@@ -340,7 +378,7 @@ fn bound_repo_roots_for_daemon_config(
     let mut repo_roots = std::collections::BTreeSet::new();
 
     if let Some(repo_root) = repo_root_for_current_working_tree(&daemon_config.config_root)?
-        && crate::devql_transport::repo_daemon_binding_identifier(&repo_root) == current_binding
+        && repo_has_local_daemon_binding(&repo_root, &current_binding)
     {
         repo_roots.insert(repo_root);
     }
@@ -349,7 +387,7 @@ fn bound_repo_roots_for_daemon_config(
         crate::devql_transport::load_repo_path_registry(&daemon_config.repo_registry_path)
             .with_context(|| {
                 format!(
-                    "loading repo path registry {} during daemon shutdown",
+                    "loading repo path registry {} while resolving bound daemon repos",
                     daemon_config.repo_registry_path.display()
                 )
             })?;
@@ -359,12 +397,30 @@ fn bound_repo_roots_for_daemon_config(
             .repo_root
             .canonicalize()
             .unwrap_or_else(|_| entry.repo_root.clone());
-        if crate::devql_transport::repo_daemon_binding_identifier(&repo_root) == current_binding {
+        if repo_has_local_daemon_binding(&repo_root, &current_binding) {
             repo_roots.insert(repo_root);
         }
     }
 
     Ok(repo_roots.into_iter().collect())
+}
+
+fn repo_has_local_daemon_binding(repo_root: &Path, current_binding: &str) -> bool {
+    let policy = match crate::config::discover_repo_policy_optional(repo_root) {
+        Ok(policy) => policy,
+        Err(err) => {
+            log::warn!(
+                "failed to read repo daemon binding for {} while resolving bound daemon repos: {err:#}",
+                repo_root.display()
+            );
+            return false;
+        }
+    };
+    let Some(config_path) = policy.daemon_config_path.as_deref() else {
+        return false;
+    };
+    crate::devql_transport::daemon_binding_identifier_for_config_path(config_path)
+        == current_binding
 }
 
 fn repo_root_for_current_working_tree(cwd: &Path) -> Result<Option<PathBuf>> {

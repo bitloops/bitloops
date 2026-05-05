@@ -44,6 +44,7 @@ The suite is intentionally DB-first and artifact-first. Many assertions do not s
 - `bitloops/tests/qat_develop_gate.rs`
 - `bitloops/tests/qat_devql_capabilities.rs`
 - `bitloops/tests/qat_devql_sync.rs`
+- `bitloops/tests/qat_devql_sync_producer.rs`
 - `bitloops/tests/qat_devql_ingest.rs`
 - `bitloops/tests/qat_onboarding.rs`
 - `bitloops/tests/qat_agents_checkpoints.rs`
@@ -64,6 +65,7 @@ The suite is intentionally DB-first and artifact-first. Many assertions do not s
 The source of truth for the current QAT commands is:
 
 - `.cargo/config.toml` for the repo-root aliases
+- `bitloops/.cargo/config.toml` for crate-local aliases
 - `bitloops/Cargo.toml` for the `[[test]]` targets and required features
 
 Current checked-in aliases:
@@ -74,6 +76,7 @@ cargo qat-agent-smoke
 cargo qat-develop-gate
 cargo qat-devql-capabilities
 cargo qat-devql-sync
+cargo qat-devql-sync-producer
 cargo qat-devql-ingest
 cargo qat-onboarding
 cargo qat-agents-checkpoints
@@ -100,6 +103,7 @@ Examples:
 
 - `qat_agent_smoke` runs `Suite::AgentSmoke`
 - `qat_devql_sync` runs `Suite::DevqlSync`
+- `qat_devql_sync_producer` runs `Suite::DevqlSync` filtered to `@sync_producer and not @sync_known_gap`
 - `qat_develop_gate` runs a serial filtered orchestration entrypoint instead of a single suite
 - `qat` runs the bundled multi-suite lane
 
@@ -175,6 +179,8 @@ Purpose of the develop gate:
 - membership is determined by tagging those existing scenarios or `Examples:` blocks with `@develop_gate`
 
 In practice, `cargo qat-develop-gate` walks the existing suite set above, applies an explicit Cucumber tag expression of `@develop_gate`, and runs only the tagged subset. That is how the same scenarios can participate both in their full focused lane and in the smaller CI gate for `develop`.
+
+For DevQL Sync specifically, `@develop_gate` coverage is producer-contract coverage. Sync scenarios in the gate must also be tagged `@sync_producer`, must not be tagged `@sync_known_gap`, and manual sync plus legacy init-sync scenarios stay out of the gate.
 
 Because of that design, the source of truth for the gate is in code and feature tags:
 
@@ -696,6 +702,7 @@ Those Claude-specific variables mainly matter for the older external-Claude help
 ```bash
 cargo qat-agent-smoke
 cargo qat-agents-checkpoints
+cargo qat-devql-sync-producer
 cargo qat-devql-sync
 cargo qat-devql-ingest
 cargo qat-devql-capabilities
@@ -785,47 +792,35 @@ New QAT coverage should preserve the current design principles:
 | 12  | Uninstall removes agent and git hooks              | `uninstall-repo`               |
 | 13  | Full uninstall removes all artefacts               | `uninstall-full`               |
 
-### 3. DevQL Sync (`cargo qat-devql-sync`, 23 scenarios)
+### 3. DevQL Sync (`cargo qat-devql-sync`, 31 scenarios)
 
-Exercises the queue-backed `bitloops devql tasks enqueue --kind sync` workspace
-reconciliation flow: full indexing, TestHarness current-state sync, incremental
-add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
-validation and repair, explicit full and path-scoped modes, task queue control,
-`--require-daemon` failure handling, and watcher-driven `init --sync=true`
-added-file materialization.
+Exercises sync reconciliation across three lanes:
+
+- `@sync_producer` is the primary product-contract inventory. It simulates real user usage after `bitloops init`: watcher, git hook, daemon restart/downtime, branch checkout, merge, reset, clean, and validation flows.
+- `@sync_known_gap` marks producer scenarios that describe the target contract but currently expose product gaps; the producer alias excludes them until the product fix lands. There are currently no DevQL Sync producer scenarios carrying this tag.
+- `@sync_manual_smoke` is the small manual sync smoke subset for explicit enqueue/validate/repair/path-scoped behavior.
+- `@sync_legacy` is retained for historical `init --sync=true` manual convergence behavior and should not be treated as the main correctness signal.
 
 ```bash
 cargo qat-devql-sync
+cargo qat-devql-sync-producer
 ```
 
 Or equivalently:
 
 ```bash
 cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact
+cargo nextest run --features qat-tests --test qat_devql_sync_producer --run-ignored only -- qat_devql_sync_producer --exact
 ```
 
-**Active scenarios:**
+Useful focused filters:
 
-| #   | Scenario                                                                  | Flow                            |
-| --- | ------------------------------------------------------------------------- | ------------------------------- |
-| 1   | Full sync indexes workspace source files                                  | `SyncFullIndex`                 |
-| 2   | Sync materializes test-harness coverage for discovered tests              | `SyncTestHarnessPopulate`       |
-| 3   | Sync removes test-harness coverage when test files are deleted            | `SyncTestHarnessDeleteTestFile` |
-| 4   | Sync detects newly added source files                                     | `SyncNewFiles`                  |
-| 5   | Sync detects and re-indexes modified source files                         | `SyncModifiedFiles`             |
-| 6   | Sync removes artefacts for deleted source files                           | `SyncDeletedFiles`              |
-| 7   | No-op sync reports zero changes                                           | `SyncNoop`                      |
-| 8   | Sync after branch checkout reflects the new branch state                  | `SyncBranchCheckout`            |
-| 9   | Sync catches up after daemon downtime with accumulated changes            | `SyncDaemonDowntime`            |
-| 10  | Sync indexes changes introduced by git pull                               | `SyncGitPull`                   |
-| 11  | Sync validate reports clean after a full sync                             | `SyncValidateClean`             |
-| 12  | Sync repair restores clean state after drift                              | `SyncRepair`                    |
-| 13  | Init with sync=true makes immediate follow-up sync report no changes      | `SyncInitSyncTrueNoop`          |
-| 14  | Watcher-driven materialization after init --sync=true                     | `SyncInitSyncTrueIncremental`   |
-| 15  | Init with sync=true keeps sync validation clean without workspace changes | `SyncInitSyncTrueValidateClean` |
+```bash
+CUCUMBER_FILTER_TAGS='@sync_manual_smoke' cargo qat-devql-sync
+CUCUMBER_FILTER_TAGS='@sync_legacy' cargo qat-devql-sync
+```
 
-The helper layer still supports negative drift assertions, and the active sync set now
-includes drift validation plus accumulated-drift coverage.
+The producer alias supplies an explicit `@sync_producer and not @sync_known_gap` filter in code, so it is not affected by `CUCUMBER_FILTER_TAGS`. The develop gate also supplies its filter explicitly and only admits producer-tagged DevQL Sync scenarios that are not known gaps.
 
 ### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 25 scenarios)
 
