@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::host::devql::{RelationalStorage, sql_json_value, sql_now};
 
@@ -8,7 +8,7 @@ use super::rows::{assignment_from_row, sql_opt_i64, sql_opt_text, sql_text};
 use super::signals::{delete_signals_for_paths_sql, insert_signal_sql};
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRoleAssignment, ArchitectureRoleRuleSignal,
-    AssignmentStatus, RoleLifecycle, assignment_history_id,
+    AssignmentSource, AssignmentStatus, RoleLifecycle, assignment_history_id, assignment_id,
 };
 
 pub async fn upsert_assignment(
@@ -276,6 +276,153 @@ pub async fn load_assignments_for_paths(
         .collect()
 }
 
+pub async fn load_current_assignment_by_id(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    assignment_id: &str,
+) -> Result<Option<ArchitectureRoleAssignment>> {
+    let sql = format!(
+        "SELECT repo_id, assignment_id, role_id, target_kind, artefact_id, symbol_id, path,
+                priority, status, source, confidence, evidence_json, provenance_json,
+                classifier_version, rule_version, generation_seq
+         FROM architecture_role_assignments_current
+         WHERE repo_id = {repo_id} AND assignment_id = {assignment_id}
+         LIMIT 1",
+        repo_id = sql_text(repo_id),
+        assignment_id = sql_text(assignment_id),
+    );
+    relational
+        .query_rows(&sql)
+        .await
+        .context("loading current architecture role assignment by id")?
+        .into_iter()
+        .map(assignment_from_row)
+        .next()
+        .transpose()
+}
+
+pub async fn list_current_assignments_for_role(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    role_id: &str,
+) -> Result<Vec<ArchitectureRoleAssignment>> {
+    let sql = format!(
+        "SELECT repo_id, assignment_id, role_id, target_kind, artefact_id, symbol_id, path,
+                priority, status, source, confidence, evidence_json, provenance_json,
+                classifier_version, rule_version, generation_seq
+         FROM architecture_role_assignments_current
+         WHERE repo_id = {repo_id} AND role_id = {role_id}
+         ORDER BY assignment_id ASC",
+        repo_id = sql_text(repo_id),
+        role_id = sql_text(role_id),
+    );
+    relational
+        .query_rows(&sql)
+        .await
+        .context("listing current architecture role assignments for role")?
+        .into_iter()
+        .map(assignment_from_row)
+        .collect()
+}
+
+pub async fn list_active_current_assignments_for_role(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    role_id: &str,
+) -> Result<Vec<ArchitectureRoleAssignment>> {
+    Ok(
+        list_current_assignments_for_role(relational, repo_id, role_id)
+            .await?
+            .into_iter()
+            .filter(|assignment| assignment.status == AssignmentStatus::Active)
+            .collect(),
+    )
+}
+
+pub async fn update_current_assignment_status(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    assignment_id: &str,
+    status: AssignmentStatus,
+    reason: &str,
+    migration_id: Option<&str>,
+    change_kind: &str,
+) -> Result<bool> {
+    let Some(previous) = load_current_assignment_by_id(relational, repo_id, assignment_id).await?
+    else {
+        return Ok(false);
+    };
+    let mut next = previous.clone();
+    next.status = status;
+    next.provenance = merge_provenance_patch(
+        next.provenance,
+        status_provenance_patch(reason, migration_id, None),
+    );
+    let statements = vec![
+        insert_assignment_history_sql(relational, Some(&previous), &next, change_kind),
+        insert_assignment_sql(relational, &next),
+    ];
+    relational
+        .exec_serialized_batch_transactional(&statements)
+        .await
+        .context("updating current architecture role assignment status")?;
+    Ok(true)
+}
+
+pub async fn migrate_current_assignment_to_role(
+    relational: &RelationalStorage,
+    previous: &ArchitectureRoleAssignment,
+    target_role_id: &str,
+    migration_id: &str,
+    migration_kind: &str,
+) -> Result<String> {
+    let new_assignment_id = assignment_id(&previous.repo_id, target_role_id, &previous.target);
+    let existing_target =
+        load_current_assignment_by_id(relational, &previous.repo_id, &new_assignment_id).await?;
+    let mut source_next = previous.clone();
+    source_next.status = AssignmentStatus::Stale;
+    source_next.provenance = merge_provenance_patch(
+        source_next.provenance,
+        status_provenance_patch(
+            "migrated by proposal",
+            Some(migration_id),
+            Some(&new_assignment_id),
+        ),
+    );
+
+    let mut statements = vec![
+        insert_assignment_history_sql(relational, Some(previous), &source_next, migration_kind),
+        insert_assignment_sql(relational, &source_next),
+    ];
+    if existing_target.is_none() {
+        let mut target_next = previous.clone();
+        target_next.assignment_id = new_assignment_id.clone();
+        target_next.role_id = target_role_id.to_string();
+        target_next.status = AssignmentStatus::Active;
+        target_next.source = AssignmentSource::Migration;
+        target_next.provenance = merge_provenance_patch(
+            target_next.provenance,
+            json_provenance_patch(&[
+                ("source", migration_kind),
+                ("migrationId", migration_id),
+                ("migratedFromAssignmentId", previous.assignment_id.as_str()),
+            ]),
+        );
+        statements.push(insert_assignment_history_sql(
+            relational,
+            None,
+            &target_next,
+            "role_migration_created",
+        ));
+        statements.push(insert_assignment_sql(relational, &target_next));
+    }
+    relational
+        .exec_serialized_batch_transactional(&statements)
+        .await
+        .context("migrating current architecture role assignment")?;
+    Ok(new_assignment_id)
+}
+
 pub async fn mark_assignments_for_paths_stale(
     relational: &RelationalStorage,
     repo_id: &str,
@@ -465,13 +612,64 @@ fn insert_assignment_history_sql(
 }
 
 fn assignment_history_id_for(next: &ArchitectureRoleAssignment, change_kind: &str) -> String {
+    let identity = format!(
+        "{}|{}|{}|{}|{}",
+        change_kind,
+        next.status.as_db(),
+        next.confidence,
+        next.provenance,
+        next.evidence
+    );
     assignment_history_id(
         &next.repo_id,
         &next.assignment_id,
         next.generation_seq,
-        change_kind,
+        &identity,
     )
 }
+
+fn status_provenance_patch(
+    reason: &str,
+    migration_id: Option<&str>,
+    migrated_to_assignment_id: Option<&str>,
+) -> Value {
+    let mut patch = json!({
+        "statusReason": reason,
+    });
+    if let Value::Object(object) = &mut patch {
+        if let Some(migration_id) = migration_id {
+            object.insert("migrationId".to_string(), json!(migration_id));
+        }
+        if let Some(migrated_to_assignment_id) = migrated_to_assignment_id {
+            object.insert(
+                "migratedToAssignmentId".to_string(),
+                json!(migrated_to_assignment_id),
+            );
+        }
+    }
+    patch
+}
+
+fn json_provenance_patch(values: &[(&str, &str)]) -> Value {
+    let mut patch = serde_json::Map::new();
+    for (key, value) in values {
+        patch.insert((*key).to_string(), json!(value));
+    }
+    Value::Object(patch)
+}
+
+fn merge_provenance_patch(mut provenance: Value, patch: Value) -> Value {
+    match (&mut provenance, patch) {
+        (Value::Object(provenance), Value::Object(patch)) => {
+            for (key, value) in patch {
+                provenance.insert(key, value);
+            }
+            Value::Object(provenance.clone())
+        }
+        (_, patch) => patch,
+    }
+}
+
 fn insert_assignment_sql(
     relational: &RelationalStorage,
     assignment: &ArchitectureRoleAssignment,

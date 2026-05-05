@@ -197,4 +197,85 @@ mod seeded_tests {
             &selector, &positive, &negative, &artefact
         ));
     }
+
+    #[test]
+    fn legacy_selector_multi_values_keep_or_semantics() {
+        let rust_artefact = MatchableArtefact {
+            artefact_id: "artefact-1".to_string(),
+            path: "src/cli/commands/run.rs".to_string(),
+            language: Some("rust".to_string()),
+            canonical_kind: Some("function".to_string()),
+            symbol_fqn: None,
+        };
+        let python_artefact = MatchableArtefact {
+            artefact_id: "artefact-2".to_string(),
+            path: "src/cli/commands/run.py".to_string(),
+            language: Some("python".to_string()),
+            canonical_kind: Some("function".to_string()),
+            symbol_fqn: None,
+        };
+        let selector = RoleRuleCandidateSelector {
+            path_prefixes: vec!["src/cli".to_string()],
+            languages: vec!["rust".to_string(), "typescript".to_string()],
+            ..Default::default()
+        };
+
+        assert!(role_rule_matches(&selector, &[], &[], &rust_artefact));
+        assert!(!role_rule_matches(&selector, &[], &[], &python_artefact));
+    }
+
+    #[test]
+    fn rule_spec_serializes_to_rule_management_contract() -> anyhow::Result<()> {
+        let spec = RuleSpecFile {
+            role_ref: "command_dispatcher".to_string(),
+            candidate_selector: RoleRuleCandidateSelector {
+                path_prefixes: vec!["src/cli".to_string()],
+                languages: vec!["rust".to_string()],
+                ..Default::default()
+            },
+            positive_conditions: vec![RoleRuleCondition {
+                kind: "path_contains".to_string(),
+                value: json!("commands"),
+            }],
+            negative_conditions: vec![RoleRuleCondition {
+                kind: "canonical_kind_is".to_string(),
+                value: json!("test"),
+            }],
+            score: RoleRuleScore {
+                base_confidence: Some(0.8),
+                weight: Some(1.0),
+            },
+            evidence: json!([]),
+            metadata: json!({}),
+        };
+
+        let value = serde_json::to_value(&spec)?;
+        let round_tripped: RuleSpecFile = serde_json::from_value(value.clone())?;
+
+        assert_eq!(
+            value["candidate_selector"],
+            json!({
+                "path_prefixes": ["src/cli"],
+                "path_suffixes": [],
+                "path_contains": [],
+                "languages": ["rust"],
+                "canonical_kinds": [],
+                "symbol_fqn_contains": []
+            })
+        );
+        assert_eq!(
+            value["positive_conditions"],
+            json!([
+                { "kind": "path_contains", "value": "commands" }
+            ])
+        );
+        assert_eq!(
+            value["negative_conditions"],
+            json!([
+                { "kind": "canonical_kind_is", "value": "test" }
+            ])
+        );
+        assert_eq!(round_tripped, spec);
+        Ok(())
+    }
 }

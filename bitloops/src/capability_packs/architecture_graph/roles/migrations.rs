@@ -16,10 +16,9 @@ pub use application::apply_proposal;
 
 #[cfg(test)]
 use super::storage::{
-    ArchitectureRoleAssignmentRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,
-    deterministic_assignment_id, deterministic_role_id, deterministic_rule_id,
-    insert_role_assignment, insert_role_rule, load_assignment_by_id, load_role_by_alias,
-    load_role_by_id, next_role_rule_version, upsert_role,
+    ArchitectureRoleRecord, ArchitectureRoleRuleRecord, deterministic_role_id,
+    deterministic_rule_id, insert_role_rule, load_current_assignment_by_id, load_role_by_alias,
+    load_role_by_id, load_role_rules, next_role_rule_version, upsert_assignment, upsert_role,
 };
 #[cfg(test)]
 use super::taxonomy::{self, RoleRuleCandidateSelector};

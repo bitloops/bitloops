@@ -9,7 +9,6 @@ pub async fn upsert_detection_rule(
     relational: &RelationalStorage,
     rule: &ArchitectureRoleDetectionRule,
 ) -> Result<()> {
-    // TODO(CLI-1797): Seed command should call this after validating LLM-proposed rule candidates.
     let sql = format!(
         "INSERT INTO architecture_role_detection_rules (
             repo_id, rule_id, role_id, version, lifecycle, priority, score,

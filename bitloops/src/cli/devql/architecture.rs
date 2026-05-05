@@ -23,7 +23,8 @@ use crate::capability_packs::architecture_graph::roles::storage::{
     next_role_rule_version, normalize_role_alias, normalize_role_key, upsert_role,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    RoleSplitSpecFile, RuleSpecFile, SeededArchitectureTaxonomy,
+    RoleSplitSpecFile, RuleSpecFile, SeededArchitectureRuleCandidate, SeededArchitectureTaxonomy,
+    role_rule_candidate_selector_contract, role_rule_conditions_contract,
 };
 use crate::capability_packs::architecture_graph::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
@@ -398,11 +399,10 @@ async fn load_role_review_items(
         .join(", ");
     let rows = relational
         .query_rows(&format!(
-            "SELECT a.assignment_id, a.artefact_id, a.role_id, a.source_kind, a.confidence, \
-                    a.status, a.status_reason, a.updated_at, ac.path \
-             FROM architecture_role_assignments a \
-             LEFT JOIN artefacts_current ac \
-               ON ac.repo_id = a.repo_id AND ac.artefact_id = a.artefact_id \
+            "SELECT a.assignment_id, COALESCE(a.artefact_id, a.symbol_id, a.path) AS artefact_id, \
+                    a.role_id, a.source AS source_kind, a.confidence, a.status, \
+                    a.provenance_json, a.updated_at, a.path \
+             FROM architecture_role_assignments_current a \
              WHERE a.repo_id = {repo_id} \
                AND a.status IN ({status_filters}) \
              ORDER BY a.updated_at DESC \
@@ -430,7 +430,14 @@ async fn load_role_review_items(
         let status = value_str(&row, "status")
             .ok_or_else(|| anyhow!("missing `status` in architecture role review row"))?
             .to_string();
-        let status_reason = value_str(&row, "status_reason").unwrap_or("").to_string();
+        let status_reason = value_json(&row, "provenance_json")
+            .and_then(|value| {
+                value
+                    .get("statusReason")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_default();
         let updated_at = value_str(&row, "updated_at").map(ToOwned::to_owned);
         let path = value_str(&row, "path").map(ToOwned::to_owned);
 
@@ -538,6 +545,14 @@ fn sql_text(value: &str) -> String {
 
 fn value_str<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
     row.get(key).and_then(Value::as_str)
+}
+
+fn value_json(row: &Value, key: &str) -> Option<Value> {
+    match row.get(key) {
+        Some(Value::String(text)) => serde_json::from_str(text).ok(),
+        Some(value) => Some(value.clone()),
+        None => None,
+    }
 }
 
 async fn run_architecture_roles_seed(
@@ -700,9 +715,15 @@ async fn persist_seeded_taxonomy(
             version,
             lifecycle_status: "draft".to_string(),
             canonical_hash,
-            candidate_selector: serde_json::to_value(&candidate.candidate_selector)?,
-            positive_conditions: serde_json::to_value(&candidate.positive_conditions)?,
-            negative_conditions: serde_json::to_value(&candidate.negative_conditions)?,
+            candidate_selector: serde_json::to_value(role_rule_candidate_selector_contract(
+                &candidate.candidate_selector,
+            ))?,
+            positive_conditions: serde_json::to_value(role_rule_conditions_contract(
+                &candidate.positive_conditions,
+            )?)?,
+            negative_conditions: serde_json::to_value(role_rule_conditions_contract(
+                &candidate.negative_conditions,
+            )?)?,
             score: serde_json::to_value(&candidate.score)?,
             provenance: json!({
                 "source": "architecture_roles_seed",
@@ -822,15 +843,12 @@ async fn ensure_seed_alias(
     }
 }
 
-fn seed_rule_hash(
-    role_id: &str,
-    candidate: &crate::capability_packs::architecture_graph::roles::taxonomy::SeededArchitectureRuleCandidate,
-) -> Result<String> {
+fn seed_rule_hash(role_id: &str, candidate: &SeededArchitectureRuleCandidate) -> Result<String> {
     let bytes = serde_json::to_vec(&json!({
         "role_id": role_id,
-        "candidate_selector": candidate.candidate_selector,
-        "positive_conditions": candidate.positive_conditions,
-        "negative_conditions": candidate.negative_conditions,
+        "candidate_selector": role_rule_candidate_selector_contract(&candidate.candidate_selector),
+        "positive_conditions": role_rule_conditions_contract(&candidate.positive_conditions)?,
+        "negative_conditions": role_rule_conditions_contract(&candidate.negative_conditions)?,
         "score": candidate.score,
     }))
     .context("serialising seeded rule candidate for hashing")?;
@@ -838,227 +856,4 @@ fn seed_rule_hash(
 }
 
 #[cfg(test)]
-mod deterministic_tests {
-    use super::*;
-    use crate::capability_packs::architecture_graph::roles::storage::{
-        list_roles, load_role_by_id, load_role_rules,
-    };
-    use crate::capability_packs::architecture_graph::roles::taxonomy::{
-        RoleRuleCandidateSelector, RoleRuleScore, SeededArchitectureRole,
-        SeededArchitectureRuleCandidate,
-    };
-    use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
-    use crate::host::devql::RelationalStorage;
-    use crate::host::runtime_store::{WorkplaneJobRecord, WorkplaneJobStatus};
-
-    async fn relational() -> Result<RelationalStorage> {
-        let temp = tempfile::tempdir()?;
-        let sqlite_path = temp.path().join("roles.sqlite");
-        rusqlite::Connection::open(&sqlite_path)?;
-        let relational = RelationalStorage::local_only(sqlite_path);
-        relational
-            .exec(architecture_graph_sqlite_schema_sql())
-            .await?;
-        std::mem::forget(temp);
-        Ok(relational)
-    }
-
-    fn seeded_taxonomy(role_key: &str) -> SeededArchitectureTaxonomy {
-        SeededArchitectureTaxonomy {
-            roles: vec![SeededArchitectureRole {
-                canonical_key: role_key.to_string(),
-                display_name: "Command Dispatcher".to_string(),
-                description: "Routes CLI commands".to_string(),
-                family: Some("entrypoint".to_string()),
-                lifecycle_status: Some("active".to_string()),
-                provenance: json!({"source": "test"}),
-                evidence: json!(["cli surface"]),
-            }],
-            rule_candidates: vec![SeededArchitectureRuleCandidate {
-                target_role_key: role_key.to_string(),
-                candidate_selector: RoleRuleCandidateSelector {
-                    path_prefixes: vec!["src/cli".to_string()],
-                    ..Default::default()
-                },
-                positive_conditions: vec![],
-                negative_conditions: vec![],
-                score: RoleRuleScore {
-                    base_confidence: Some(0.9),
-                    weight: Some(1.0),
-                },
-                evidence: json!(["path prefix"]),
-                metadata: json!({"source": "test"}),
-            }],
-        }
-    }
-
-    #[test]
-    fn configured_seed_profile_name_requires_fact_synthesis_config() {
-        let err = configured_seed_profile_name(Some(&json!({}))).expect_err("missing config");
-        assert!(
-            err.to_string()
-                .contains("[architecture.inference].fact_synthesis")
-        );
-
-        let profile = configured_seed_profile_name(Some(
-            &json!({"inference": {"fact_synthesis": "local_agent"}}),
-        ))
-        .expect("configured profile");
-        assert_eq!(profile, "local_agent");
-    }
-
-    #[test]
-    fn role_adjudication_queue_item_parses_valid_payload() {
-        let item = role_adjudication_queue_item_from_job(WorkplaneJobRecord {
-            job_id: "job-1".to_string(),
-            repo_id: "repo-1".to_string(),
-            repo_root: std::path::PathBuf::from("/tmp/repo"),
-            config_root: std::path::PathBuf::from("/tmp/config"),
-            capability_id: "architecture_graph".to_string(),
-            mailbox_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string(),
-            init_session_id: None,
-            dedupe_key: Some("k1".to_string()),
-            payload: json!({
-                "request": {
-                    "repo_id": "repo-1",
-                    "generation": 8,
-                    "artefact_id": "a1",
-                    "symbol_id": "s1",
-                    "path": "src/main.rs",
-                    "language": "rust",
-                    "canonical_kind": "function",
-                    "reason": "high_impact",
-                    "deterministic_confidence": 0.72,
-                    "candidate_role_ids": [],
-                    "current_assignment": null
-                }
-            }),
-            status: WorkplaneJobStatus::Pending,
-            attempts: 0,
-            available_at_unix: 1,
-            submitted_at_unix: 1,
-            started_at_unix: None,
-            updated_at_unix: 1,
-            completed_at_unix: None,
-            lease_owner: None,
-            lease_expires_at_unix: None,
-            last_error: None,
-        });
-
-        assert_eq!(item.reason.as_deref(), Some("high_impact"));
-        assert_eq!(item.path.as_deref(), Some("src/main.rs"));
-        assert!(item.parse_error.is_none());
-    }
-
-    #[test]
-    fn role_adjudication_queue_item_keeps_malformed_payload_as_parse_error() {
-        let item = role_adjudication_queue_item_from_job(WorkplaneJobRecord {
-            job_id: "job-2".to_string(),
-            repo_id: "repo-1".to_string(),
-            repo_root: std::path::PathBuf::from("/tmp/repo"),
-            config_root: std::path::PathBuf::from("/tmp/config"),
-            capability_id: "architecture_graph".to_string(),
-            mailbox_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string(),
-            init_session_id: None,
-            dedupe_key: Some("k2".to_string()),
-            payload: json!({"bad": "shape"}),
-            status: WorkplaneJobStatus::Failed,
-            attempts: 2,
-            available_at_unix: 1,
-            submitted_at_unix: 1,
-            started_at_unix: None,
-            updated_at_unix: 2,
-            completed_at_unix: None,
-            lease_owner: None,
-            lease_expires_at_unix: None,
-            last_error: Some("schema mismatch".to_string()),
-        });
-
-        assert!(item.reason.is_none());
-        assert!(item.parse_error.is_some());
-        assert_eq!(item.last_error.as_deref(), Some("schema mismatch"));
-    }
-
-    #[tokio::test]
-    async fn persist_seeded_taxonomy_is_idempotent_for_repeated_runs() -> Result<()> {
-        let relational = relational().await?;
-
-        let first = persist_seeded_taxonomy(
-            &relational,
-            "repo-1",
-            "local_agent",
-            seeded_taxonomy("command_dispatcher"),
-        )
-        .await?;
-        assert_eq!(first.roles_created, 1);
-        assert_eq!(first.rules_created, 1);
-
-        let second = persist_seeded_taxonomy(
-            &relational,
-            "repo-1",
-            "local_agent",
-            seeded_taxonomy("command_dispatcher"),
-        )
-        .await?;
-        assert_eq!(second.roles_reused, 1);
-        assert_eq!(second.rules_reused, 1);
-
-        let roles = list_roles(&relational, "repo-1").await?;
-        assert_eq!(roles.len(), 1);
-        let rules = load_role_rules(&relational, "repo-1", &roles[0].role_id).await?;
-        assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].lifecycle_status, "draft");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn persist_seeded_taxonomy_reuses_alias_equivalent_roles() -> Result<()> {
-        let relational = relational().await?;
-        let existing = ArchitectureRoleRecord {
-            role_id: deterministic_role_id("repo-1", "command_dispatcher"),
-            repo_id: "repo-1".to_string(),
-            canonical_key: "command_dispatcher".to_string(),
-            display_name: "Command Dispatcher".to_string(),
-            description: "Routes CLI commands".to_string(),
-            family: Some("entrypoint".to_string()),
-            lifecycle_status: "active".to_string(),
-            provenance: json!({"source": "test"}),
-            evidence: json!([]),
-            metadata: json!({}),
-        };
-        let existing = upsert_role(&relational, &existing).await?;
-        ensure_seed_alias(
-            &relational,
-            &ArchitectureRoleAliasRecord {
-                alias_id: deterministic_alias_id("repo-1", "cli_command_dispatcher"),
-                repo_id: "repo-1".to_string(),
-                role_id: existing.role_id.clone(),
-                alias_key: "cli_command_dispatcher".to_string(),
-                alias_normalized: normalize_role_alias("cli_command_dispatcher"),
-                source_kind: "manual".to_string(),
-                metadata: json!({}),
-            },
-        )
-        .await?;
-
-        let summary = persist_seeded_taxonomy(
-            &relational,
-            "repo-1",
-            "local_agent",
-            seeded_taxonomy("cli_command_dispatcher"),
-        )
-        .await?;
-        assert_eq!(summary.roles_created, 0);
-        assert_eq!(summary.roles_reused, 1);
-
-        let roles = list_roles(&relational, "repo-1").await?;
-        assert_eq!(roles.len(), 1);
-        let loaded = load_role_by_id(&relational, "repo-1", &existing.role_id)
-            .await?
-            .expect("existing role");
-        assert_eq!(loaded.canonical_key, "command_dispatcher");
-        let rules = load_role_rules(&relational, "repo-1", &existing.role_id).await?;
-        assert_eq!(rules.len(), 1);
-        Ok(())
-    }
-}
+mod deterministic_tests;

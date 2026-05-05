@@ -454,6 +454,167 @@ async fn assignment_history_records_meaningful_status_change() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn current_assignment_management_updates_status_with_history() -> anyhow::Result<()> {
+    let (_temp, relational) = test_relational()?;
+    let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
+    upsert_classification_role(&relational, &role).await?;
+    let assignment = assignment_fixture(&role, "src/main.rs");
+    upsert_assignment(&relational, &assignment).await?;
+
+    let updated = update_current_assignment_status(
+        &relational,
+        "repo-1",
+        &assignment.assignment_id,
+        AssignmentStatus::NeedsReview,
+        "rule disabled",
+        Some("migration-1"),
+        "rule_lifecycle_changed",
+    )
+    .await?;
+
+    assert!(updated);
+    let loaded = load_current_assignment_by_id(&relational, "repo-1", &assignment.assignment_id)
+        .await?
+        .expect("assignment");
+    assert_eq!(loaded.status, AssignmentStatus::NeedsReview);
+    assert_eq!(loaded.provenance["statusReason"], "rule disabled");
+    assert_eq!(loaded.provenance["migrationId"], "migration-1");
+    assert_eq!(
+        assignment_history_count(&relational, "repo-1", &assignment.assignment_id).await?,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_assignment_management_migrates_assignment_to_target_role() -> anyhow::Result<()> {
+    let (_temp, relational) = test_relational()?;
+    let source = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
+    let target = role_fixture("repo-1", "runtime", "consumer", "Consumer");
+    upsert_classification_role(&relational, &source).await?;
+    upsert_classification_role(&relational, &target).await?;
+    let assignment = assignment_fixture(&source, "src/main.rs");
+    upsert_assignment(&relational, &assignment).await?;
+
+    let migrated_assignment_id = migrate_current_assignment_to_role(
+        &relational,
+        &assignment,
+        &target.role_id,
+        "migration-1",
+        "merge_roles",
+    )
+    .await?;
+
+    let source_assignment =
+        load_current_assignment_by_id(&relational, "repo-1", &assignment.assignment_id)
+            .await?
+            .expect("source assignment");
+    let target_assignment =
+        load_current_assignment_by_id(&relational, "repo-1", &migrated_assignment_id)
+            .await?
+            .expect("target assignment");
+    assert_eq!(source_assignment.status, AssignmentStatus::Stale);
+    assert_eq!(
+        source_assignment.provenance["migratedToAssignmentId"],
+        migrated_assignment_id
+    );
+    assert_eq!(target_assignment.status, AssignmentStatus::Active);
+    assert_eq!(target_assignment.source, AssignmentSource::Migration);
+    assert_eq!(target_assignment.role_id, target.role_id);
+    assert_eq!(target_assignment.target, assignment.target);
+    assert_eq!(
+        assignment_history_count(&relational, "repo-1", &assignment.assignment_id).await?,
+        1
+    );
+    assert_eq!(
+        assignment_history_count(&relational, "repo-1", &migrated_assignment_id).await?,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_assignment_management_preserves_existing_target_assignment() -> anyhow::Result<()>
+{
+    let (_temp, relational) = test_relational()?;
+    let source = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
+    let target = role_fixture("repo-1", "runtime", "consumer", "Consumer");
+    upsert_classification_role(&relational, &source).await?;
+    upsert_classification_role(&relational, &target).await?;
+    let source_assignment = assignment_fixture(&source, "src/main.rs");
+    let mut target_assignment = assignment_fixture(&target, "src/main.rs");
+    target_assignment.confidence = 0.42;
+    target_assignment.evidence = serde_json::json!([{ "phase": "existing-target" }]);
+    upsert_assignment(&relational, &source_assignment).await?;
+    upsert_assignment(&relational, &target_assignment).await?;
+
+    let migrated_assignment_id = migrate_current_assignment_to_role(
+        &relational,
+        &source_assignment,
+        &target.role_id,
+        "migration-1",
+        "merge_roles",
+    )
+    .await?;
+
+    let loaded_target =
+        load_current_assignment_by_id(&relational, "repo-1", &migrated_assignment_id)
+            .await?
+            .expect("target assignment");
+    let loaded_source =
+        load_current_assignment_by_id(&relational, "repo-1", &source_assignment.assignment_id)
+            .await?
+            .expect("source assignment");
+    assert_eq!(migrated_assignment_id, target_assignment.assignment_id);
+    assert_eq!(loaded_target.confidence, 0.42);
+    assert_eq!(loaded_target.evidence[0]["phase"], "existing-target");
+    assert_eq!(loaded_target.source, AssignmentSource::Rule);
+    assert_eq!(loaded_source.status, AssignmentStatus::Stale);
+    assert_eq!(
+        assignment_history_count(&relational, "repo-1", &target_assignment.assignment_id).await?,
+        0
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_assignment_management_records_repeated_history_in_same_generation()
+-> anyhow::Result<()> {
+    let (_temp, relational) = test_relational()?;
+    let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
+    upsert_classification_role(&relational, &role).await?;
+    let assignment = assignment_fixture(&role, "src/main.rs");
+    upsert_assignment(&relational, &assignment).await?;
+
+    update_current_assignment_status(
+        &relational,
+        "repo-1",
+        &assignment.assignment_id,
+        AssignmentStatus::NeedsReview,
+        "first management change",
+        None,
+        "role_lifecycle_changed",
+    )
+    .await?;
+    update_current_assignment_status(
+        &relational,
+        "repo-1",
+        &assignment.assignment_id,
+        AssignmentStatus::NeedsReview,
+        "second management change",
+        None,
+        "role_lifecycle_changed",
+    )
+    .await?;
+
+    assert_eq!(
+        assignment_history_count(&relational, "repo-1", &assignment.assignment_id).await?,
+        2
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn change_proposal_persists_payload_and_preview() -> anyhow::Result<()> {
     let (_temp, relational) = test_relational()?;
     let payload = serde_json::json!({

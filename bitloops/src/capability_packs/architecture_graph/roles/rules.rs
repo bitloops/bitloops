@@ -8,7 +8,8 @@ use serde_json::Value;
 use super::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRoleDetectionRule, ArchitectureRoleRuleSignal,
     RoleCandidateSelector, RoleFactCondition, RoleFactConditionOp, RoleSignalPolarity, RoleTarget,
-    rule_signal_id,
+    parse_rule_conditions, parse_rule_selector, role_rule_candidate_selector_contract,
+    role_rule_conditions_contract, rule_signal_id,
 };
 
 #[derive(Debug, Clone)]
@@ -30,21 +31,16 @@ pub fn compile_detection_rules(
     rules
         .into_iter()
         .map(|rule| {
-            let selector =
-                serde_json::from_value::<RoleCandidateSelector>(rule.candidate_selector.clone())
-                    .with_context(|| {
-                        format!("parsing candidate selector for rule {}", rule.rule_id)
-                    })?;
-            let positive_conditions =
-                serde_json::from_value::<Vec<RoleFactCondition>>(rule.positive_conditions.clone())
-                    .with_context(|| {
-                        format!("parsing positive conditions for rule {}", rule.rule_id)
-                    })?;
-            let negative_conditions =
-                serde_json::from_value::<Vec<RoleFactCondition>>(rule.negative_conditions.clone())
-                    .with_context(|| {
-                        format!("parsing negative conditions for rule {}", rule.rule_id)
-                    })?;
+            let selector = parse_candidate_selector_contract(&rule)
+                .with_context(|| format!("parsing candidate selector for rule {}", rule.rule_id))?;
+            let positive_conditions = parse_conditions_contract(&rule.positive_conditions)
+                .with_context(|| {
+                    format!("parsing positive conditions for rule {}", rule.rule_id)
+                })?;
+            let negative_conditions = parse_conditions_contract(&rule.negative_conditions)
+                .with_context(|| {
+                    format!("parsing negative conditions for rule {}", rule.rule_id)
+                })?;
             Ok(CompiledArchitectureRoleRule {
                 rule,
                 selector,
@@ -53,6 +49,24 @@ pub fn compile_detection_rules(
             })
         })
         .collect()
+}
+
+fn parse_candidate_selector_contract(
+    rule: &ArchitectureRoleDetectionRule,
+) -> Result<RoleCandidateSelector> {
+    parse_rule_selector(&rule.candidate_selector)
+        .map(|selector| role_rule_candidate_selector_contract(&selector))
+        .or_else(|_| -> Result<RoleCandidateSelector> {
+            serde_json::from_value::<RoleCandidateSelector>(rule.candidate_selector.clone())
+                .context("parse fact-backed role rule selector")
+        })
+}
+
+fn parse_conditions_contract(value: &Value) -> Result<Vec<RoleFactCondition>> {
+    serde_json::from_value::<Vec<RoleFactCondition>>(value.clone()).or_else(|_| {
+        parse_rule_conditions(value)
+            .and_then(|conditions| role_rule_conditions_contract(&conditions))
+    })
 }
 
 pub fn evaluate_rules_over_facts(
@@ -134,6 +148,21 @@ fn selector_matches(
     }
     for required in &selector.required_facts {
         if !any_condition_matches(required, facts)? {
+            return Ok(false);
+        }
+    }
+    for group in &selector.required_fact_any_groups {
+        if group.is_empty() {
+            continue;
+        }
+        let mut matched = false;
+        for condition in group {
+            if any_condition_matches(condition, facts)? {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
             return Ok(false);
         }
     }
@@ -399,6 +428,141 @@ mod tests {
             .collect();
         assert_eq!(evidence_fact_ids, vec!["fact-1"]);
         assert!(!evidence_fact_ids.contains(&"fact-2"));
+        Ok(())
+    }
+
+    #[test]
+    fn compile_detection_rules_accepts_legacy_rule_management_contract() -> anyhow::Result<()> {
+        let rules = compile_detection_rules(vec![ArchitectureRoleDetectionRule {
+            repo_id: "repo-1".to_string(),
+            rule_id: "rule-1".to_string(),
+            role_id: "role-1".to_string(),
+            version: 1,
+            lifecycle: RoleRuleLifecycle::Active,
+            priority: 10,
+            score: 1.0,
+            candidate_selector: serde_json::json!({
+                "path_prefixes": ["src/cli"],
+                "languages": ["rust"]
+            }),
+            positive_conditions: serde_json::json!([
+                { "kind": "path_contains", "value": "commands" }
+            ]),
+            negative_conditions: serde_json::json!([]),
+            provenance: serde_json::json!({ "source": "test" }),
+        }])?;
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector.path_prefixes, vec!["src/cli"]);
+        assert_eq!(rules[0].selector.required_facts.len(), 1);
+        assert_eq!(rules[0].selector.required_facts[0].kind, "language");
+        assert_eq!(rules[0].selector.required_facts[0].key, "resolved");
+        assert_eq!(rules[0].positive_conditions.len(), 1);
+        assert_eq!(rules[0].positive_conditions[0].kind, "path");
+        assert_eq!(rules[0].positive_conditions[0].key, "full");
+        Ok(())
+    }
+
+    #[test]
+    fn compile_detection_rules_preserves_fact_backed_selector_contract() -> anyhow::Result<()> {
+        let file_target = RoleTarget::file("src/cli/main.rs");
+        let symbol_target = RoleTarget::symbol("artefact-1", "symbol-1", "src/cli/main.rs");
+        let facts = vec![
+            ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "fact-1".to_string(),
+                target: file_target,
+                language: Some("rust".to_string()),
+                fact_kind: "path".to_string(),
+                fact_key: "segment".to_string(),
+                fact_value: "cli".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: serde_json::json!([]),
+                generation_seq: 1,
+            },
+            ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "fact-2".to_string(),
+                target: symbol_target,
+                language: Some("rust".to_string()),
+                fact_kind: "path".to_string(),
+                fact_key: "segment".to_string(),
+                fact_value: "cli".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: serde_json::json!([]),
+                generation_seq: 1,
+            },
+        ];
+        let rules = compile_detection_rules(vec![ArchitectureRoleDetectionRule {
+            repo_id: "repo-1".to_string(),
+            rule_id: "rule-1".to_string(),
+            role_id: "role-1".to_string(),
+            version: 1,
+            lifecycle: RoleRuleLifecycle::Active,
+            priority: 10,
+            score: 1.0,
+            candidate_selector: serde_json::json!({
+                "targetKinds": ["file"],
+                "requiredFacts": [
+                    { "kind": "path", "key": "segment", "op": "eq", "value": "cli" }
+                ]
+            }),
+            positive_conditions: serde_json::json!([
+                { "kind": "path", "key": "segment", "op": "eq", "value": "cli", "score": 0.8 }
+            ]),
+            negative_conditions: serde_json::json!([]),
+            provenance: serde_json::json!({ "source": "test" }),
+        }])?;
+
+        let result = evaluate_rules_over_facts(&rules, &facts)?;
+
+        assert_eq!(rules[0].selector.target_kinds.len(), 1);
+        assert_eq!(rules[0].selector.required_facts.len(), 1);
+        assert_eq!(result.signals.len(), 1);
+        assert_eq!(result.signals[0].target.target_kind.as_db(), "file");
+        Ok(())
+    }
+
+    #[test]
+    fn compile_detection_rules_preserves_fact_condition_scores_and_numeric_ops()
+    -> anyhow::Result<()> {
+        let target = RoleTarget::file("src/cli/main.rs");
+        let facts = vec![ArchitectureArtefactFact {
+            repo_id: "repo-1".to_string(),
+            fact_id: "fact-1".to_string(),
+            target,
+            language: Some("rust".to_string()),
+            fact_kind: "metrics".to_string(),
+            fact_key: "fan_in".to_string(),
+            fact_value: "12".to_string(),
+            source: "test".to_string(),
+            confidence: 1.0,
+            evidence: serde_json::json!([]),
+            generation_seq: 1,
+        }];
+        let rules = compile_detection_rules(vec![ArchitectureRoleDetectionRule {
+            repo_id: "repo-1".to_string(),
+            rule_id: "rule-1".to_string(),
+            role_id: "role-1".to_string(),
+            version: 1,
+            lifecycle: RoleRuleLifecycle::Active,
+            priority: 10,
+            score: 1.0,
+            candidate_selector: serde_json::json!({ "targetKinds": ["file"] }),
+            positive_conditions: serde_json::json!([
+                { "kind": "metrics", "key": "fan_in", "op": "gte", "value": "10", "score": 0.5 }
+            ]),
+            negative_conditions: serde_json::json!([]),
+            provenance: serde_json::json!({ "source": "test" }),
+        }])?;
+
+        let result = evaluate_rules_over_facts(&rules, &facts)?;
+
+        assert_eq!(rules[0].positive_conditions[0].score, 0.5);
+        assert_eq!(result.signals.len(), 1);
+        assert_eq!(result.signals[0].score, 0.5);
         Ok(())
     }
 }

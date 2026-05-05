@@ -1,3 +1,4 @@
+mod adjudication;
 mod assignments;
 mod facts;
 mod management;
@@ -8,12 +9,15 @@ mod rows;
 mod rules;
 mod signals;
 
+pub use adjudication::{DbRoleAssignmentWriter, DbRoleFactsReader, DbRoleTaxonomyReader};
 pub use assignments::{
     AssignmentHistoryWrite, RoleClassificationStateReplacement, RoleClassificationStateWriteCounts,
-    load_assignments_for_path, load_assignments_for_paths, mark_assignments_for_paths_stale,
+    list_active_current_assignments_for_role, list_current_assignments_for_role,
+    load_assignments_for_path, load_assignments_for_paths, load_current_assignment_by_id,
+    mark_assignments_for_paths_stale, migrate_current_assignment_to_role,
     record_assignment_history, replace_assignments_for_paths,
     replace_assignments_for_paths_with_history, replace_role_classification_state,
-    retire_role_and_mark_assignments, upsert_assignment,
+    retire_role_and_mark_assignments, update_current_assignment_status, upsert_assignment,
 };
 pub use facts::{delete_role_facts_for_paths, load_facts_for_paths, replace_facts_for_paths};
 pub use management::{

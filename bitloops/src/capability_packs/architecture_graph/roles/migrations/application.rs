@@ -16,21 +16,22 @@ use super::{
 };
 use crate::capability_packs::architecture_graph::roles::storage::{
     ArchitectureRoleAliasRecord, ArchitectureRoleAssignmentMigrationRecord,
-    ArchitectureRoleAssignmentRecord, ArchitectureRoleProposalRecord, ArchitectureRoleRecord,
-    ArchitectureRoleRuleRecord, create_role_alias, deterministic_alias_id,
-    deterministic_assignment_id, deterministic_migration_id, deterministic_proposal_id,
-    deterministic_role_id, deterministic_rule_id, insert_assignment_migration_record,
-    insert_role_assignment, insert_role_proposal, insert_role_rule,
-    list_assignment_migrations_for_proposal, list_assignments_for_role, list_role_aliases,
-    load_assignment_by_id, load_role_by_alias, load_role_by_canonical_key, load_role_by_id,
-    load_role_proposal_by_id, load_role_rule_by_id, load_role_rules, mark_assignment_invalidated,
-    mark_assignment_migrated, mark_role_proposal_applied, next_role_rule_version,
-    normalize_role_alias, normalize_role_key, update_assignment_status, update_role_rule_lifecycle,
-    upsert_role,
+    ArchitectureRoleProposalRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,
+    create_role_alias, deterministic_alias_id, deterministic_migration_id,
+    deterministic_proposal_id, deterministic_role_id, deterministic_rule_id,
+    insert_assignment_migration_record, insert_role_proposal, insert_role_rule,
+    list_active_current_assignments_for_role, list_assignment_migrations_for_proposal,
+    list_role_aliases, load_role_by_alias, load_role_by_canonical_key, load_role_by_id,
+    load_role_proposal_by_id, load_role_rule_by_id, load_role_rules, mark_role_proposal_applied,
+    migrate_current_assignment_to_role, next_role_rule_version, normalize_role_alias,
+    normalize_role_key, update_current_assignment_status, update_role_rule_lifecycle, upsert_role,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    MatchableArtefact, RoleRuleCandidateSelector, RoleRuleCondition, RoleSplitSpecFile,
-    RuleSpecFile, parse_rule_conditions, parse_rule_selector, role_rule_matches,
+    ArchitectureRoleAssignment, AssignmentStatus, MatchableArtefact, RoleCandidateSelector,
+    RoleFactCondition, RoleRuleCandidateSelector, RoleRuleCondition, RoleSplitSpecFile,
+    RuleSpecFile, parse_rule_conditions, parse_rule_selector,
+    role_rule_candidate_selector_contract, role_rule_conditions_contract,
+    role_rule_contract_matches, role_rule_matches,
 };
 
 pub async fn apply_proposal(
@@ -176,12 +177,13 @@ pub(super) async fn preview_role_change(
     operation: &str,
     replacement_role_id: Option<&str>,
 ) -> Result<Value> {
-    let assignments = list_assignments_for_role(relational, &role.repo_id, &role.role_id).await?;
+    let assignments =
+        list_active_current_assignments_for_role(relational, &role.repo_id, &role.role_id).await?;
     let rules = load_role_rules(relational, &role.repo_id, &role.role_id).await?;
     let aliases = list_role_aliases(relational, &role.repo_id, &role.role_id).await?;
     let affected_artefacts = assignments
         .iter()
-        .map(|assignment| assignment.artefact_id.clone())
+        .map(assignment_target_key)
         .collect::<BTreeSet<_>>();
     let affected_assignments = assignments
         .iter()
@@ -212,7 +214,7 @@ pub(super) async fn preview_role_change(
         "affected_assignments": assignments.len(),
         "affected_artefacts": assignments
             .iter()
-            .map(|assignment| assignment.artefact_id.clone())
+            .map(assignment_target_key)
             .collect::<BTreeSet<_>>()
             .len(),
         "alias_count": aliases.len(),
@@ -228,11 +230,12 @@ pub(super) async fn preview_split_role_change(
     role: &ArchitectureRoleRecord,
     split_spec: &RoleSplitSpecFile,
 ) -> Result<Value> {
-    let assignments = list_assignments_for_role(relational, &role.repo_id, &role.role_id).await?;
+    let assignments =
+        list_active_current_assignments_for_role(relational, &role.repo_id, &role.role_id).await?;
     let rules = load_role_rules(relational, &role.repo_id, &role.role_id).await?;
     let affected_artefacts = assignments
         .iter()
-        .map(|assignment| assignment.artefact_id.clone())
+        .map(assignment_target_key)
         .collect::<BTreeSet<_>>();
     Ok(json!({
         "operation": "split",
@@ -314,10 +317,7 @@ pub(super) async fn preview_rule_spec(
         &spec.negative_conditions,
     );
     let current_matches = if let Some(rule) = existing_rule {
-        let selector = parse_rule_selector(&rule.candidate_selector)?;
-        let positive = parse_rule_conditions(&rule.positive_conditions)?;
-        let negative = parse_rule_conditions(&rule.negative_conditions)?;
-        compute_rule_matches(&artefacts, &selector, &positive, &negative)
+        compute_stored_rule_matches(&artefacts, rule)?
     } else {
         BTreeSet::new()
     };
@@ -360,11 +360,12 @@ pub(super) async fn preview_rule_lifecycle_change(
     rule: &ArchitectureRoleRuleRecord,
     operation: &str,
 ) -> Result<Value> {
-    let assignments = list_assignments_for_role(relational, &rule.repo_id, &rule.role_id)
-        .await?
-        .into_iter()
-        .filter(|assignment| assignment.rule_id.as_deref() == Some(rule.rule_id.as_str()))
-        .collect::<Vec<_>>();
+    let assignments =
+        list_active_current_assignments_for_role(relational, &rule.repo_id, &rule.role_id)
+            .await?
+            .into_iter()
+            .filter(|assignment| assignment_references_rule(assignment, &rule.rule_id))
+            .collect::<Vec<_>>();
     Ok(json!({
         "operation": operation,
         "rule_id": rule.rule_id,
@@ -378,12 +379,12 @@ pub(super) async fn preview_rule_lifecycle_change(
             .collect::<Vec<_>>(),
         "affected_artefact_ids": assignments
             .iter()
-            .map(|assignment| assignment.artefact_id.clone())
+            .map(assignment_target_key)
             .collect::<BTreeSet<_>>(),
         "affected_roles": 1,
         "affected_rules": 1,
         "affected_assignments": assignments.len(),
-        "affected_artefacts": assignments.iter().map(|assignment| assignment.artefact_id.clone()).collect::<BTreeSet<_>>().len(),
+        "affected_artefacts": assignments.iter().map(assignment_target_key).collect::<BTreeSet<_>>().len(),
         "downstream_review_work": {
             "reclassification_required": true,
         }
@@ -439,7 +440,8 @@ async fn apply_lifecycle_role_proposal(
         ),
         None => None,
     };
-    let assignments = list_assignments_for_role(relational, repo_id, &role.role_id).await?;
+    let assignments =
+        list_active_current_assignments_for_role(relational, repo_id, &role.role_id).await?;
     role.lifecycle_status = lifecycle_status.to_string();
     upsert_role(relational, &role).await?;
 
@@ -460,13 +462,14 @@ async fn apply_lifecycle_role_proposal(
         }
     } else {
         for assignment in assignments {
-            update_assignment_status(
+            update_current_assignment_status(
                 relational,
                 repo_id,
                 &assignment.assignment_id,
-                invalidated_status,
+                assignment_status_from_management_value(invalidated_status)?,
                 &format!("proposal applied: {lifecycle_status}"),
                 None,
+                "role_lifecycle_changed",
             )
             .await?;
             invalidated += 1;
@@ -495,7 +498,8 @@ async fn apply_merge_role_proposal(
     let target_role = load_role_by_id(relational, repo_id, &request.target_role_id)
         .await?
         .ok_or_else(|| anyhow!("target role `{}` was not found", request.target_role_id))?;
-    let assignments = list_assignments_for_role(relational, repo_id, &source_role.role_id).await?;
+    let assignments =
+        list_active_current_assignments_for_role(relational, repo_id, &source_role.role_id).await?;
     for assignment in &assignments {
         migrate_assignment_to_role(
             relational,
@@ -540,7 +544,8 @@ async fn apply_split_role_proposal(
     let source_role = load_role_by_id(relational, repo_id, &request.source_role_id)
         .await?
         .ok_or_else(|| anyhow!("source role `{}` was not found", request.source_role_id))?;
-    let assignments = list_assignments_for_role(relational, repo_id, &source_role.role_id).await?;
+    let assignments =
+        list_active_current_assignments_for_role(relational, repo_id, &source_role.role_id).await?;
 
     let mut created_roles = Vec::new();
     for target_role in &request.split_spec.target_roles {
@@ -574,13 +579,14 @@ async fn apply_split_role_proposal(
 
     let migration_id = deterministic_migration_id(repo_id, proposal_id, "split_role");
     for assignment in assignments.iter() {
-        update_assignment_status(
+        update_current_assignment_status(
             relational,
             repo_id,
             &assignment.assignment_id,
-            "needs_review",
+            AssignmentStatus::NeedsReview,
             "role split requires reclassification",
             Some(&migration_id),
+            "role_split",
         )
         .await?;
     }
@@ -648,6 +654,7 @@ async fn apply_rule_draft_proposal(
 ) -> Result<Value> {
     let version = next_role_rule_version(relational, repo_id, &request.role_id).await?;
     let canonical_hash = canonical_rule_hash(&request.spec)?;
+    let storage = rule_spec_storage_payload(&request.spec)?;
     let rule = ArchitectureRoleRuleRecord {
         rule_id: deterministic_rule_id(repo_id, &request.role_id, version, &canonical_hash),
         repo_id: repo_id.to_string(),
@@ -655,9 +662,9 @@ async fn apply_rule_draft_proposal(
         version,
         lifecycle_status: "draft".to_string(),
         canonical_hash,
-        candidate_selector: serde_json::to_value(&request.spec.candidate_selector)?,
-        positive_conditions: serde_json::to_value(&request.spec.positive_conditions)?,
-        negative_conditions: serde_json::to_value(&request.spec.negative_conditions)?,
+        candidate_selector: storage.candidate_selector,
+        positive_conditions: storage.positive_conditions,
+        negative_conditions: storage.negative_conditions,
         score: serde_json::to_value(&request.spec.score)?,
         provenance: json!({"source": PROPOSAL_DRAFT_RULE}),
         evidence: request.spec.evidence.clone(),
@@ -683,6 +690,7 @@ async fn apply_rule_edit_proposal(
         .ok_or_else(|| anyhow!("rule `{}` was not found", request.rule_id))?;
     let version = next_role_rule_version(relational, repo_id, &request.role_id).await?;
     let canonical_hash = canonical_rule_hash(&request.spec)?;
+    let storage = rule_spec_storage_payload(&request.spec)?;
     let rule = ArchitectureRoleRuleRecord {
         rule_id: deterministic_rule_id(repo_id, &request.role_id, version, &canonical_hash),
         repo_id: repo_id.to_string(),
@@ -690,9 +698,9 @@ async fn apply_rule_edit_proposal(
         version,
         lifecycle_status: "draft".to_string(),
         canonical_hash,
-        candidate_selector: serde_json::to_value(&request.spec.candidate_selector)?,
-        positive_conditions: serde_json::to_value(&request.spec.positive_conditions)?,
-        negative_conditions: serde_json::to_value(&request.spec.negative_conditions)?,
+        candidate_selector: storage.candidate_selector,
+        positive_conditions: storage.positive_conditions,
+        negative_conditions: storage.negative_conditions,
         score: serde_json::to_value(&request.spec.score)?,
         provenance: json!({"source": PROPOSAL_EDIT_RULE}),
         evidence: request.spec.evidence.clone(),
@@ -718,18 +726,21 @@ async fn apply_rule_lifecycle_proposal(
         .ok_or_else(|| anyhow!("rule `{rule_id}` was not found"))?;
     update_role_rule_lifecycle(relational, repo_id, rule_id, lifecycle_status).await?;
 
-    let assignments = list_assignments_for_role(relational, repo_id, &rule.role_id)
+    let assignments = list_active_current_assignments_for_role(relational, repo_id, &rule.role_id)
         .await?
         .into_iter()
-        .filter(|assignment| assignment.rule_id.as_deref() == Some(rule_id))
+        .filter(|assignment| assignment_references_rule(assignment, rule_id))
         .collect::<Vec<_>>();
     let mut invalidated = 0usize;
     for assignment in &assignments {
-        mark_assignment_invalidated(
+        update_current_assignment_status(
             relational,
             repo_id,
             &assignment.assignment_id,
+            AssignmentStatus::NeedsReview,
             &format!("rule lifecycle changed to {lifecycle_status}"),
+            None,
+            "rule_lifecycle_changed",
         )
         .await?;
         invalidated += 1;
@@ -747,49 +758,18 @@ async fn migrate_assignment_to_role(
     relational: &RelationalStorage,
     repo_id: &str,
     proposal_id: &str,
-    assignment: &ArchitectureRoleAssignmentRecord,
+    assignment: &ArchitectureRoleAssignment,
     target_role: &ArchitectureRoleRecord,
     migration_kind: &str,
 ) -> Result<()> {
-    let new_assignment_id =
-        deterministic_assignment_id(repo_id, &assignment.artefact_id, &target_role.role_id);
     let migration_token = format!("{proposal_id}|{}", assignment.assignment_id);
     let migration_id = deterministic_migration_id(repo_id, &migration_token, migration_kind);
-    if load_assignment_by_id(relational, repo_id, &new_assignment_id)
-        .await?
-        .is_none()
-    {
-        insert_role_assignment(
-            relational,
-            &ArchitectureRoleAssignmentRecord {
-                assignment_id: new_assignment_id.clone(),
-                repo_id: repo_id.to_string(),
-                artefact_id: assignment.artefact_id.clone(),
-                role_id: target_role.role_id.clone(),
-                source_kind: "proposal_migration".to_string(),
-                confidence: assignment.confidence,
-                status: "active".to_string(),
-                status_reason: String::new(),
-                rule_id: None,
-                migration_id: Some(migration_id.clone()),
-                migrated_to_assignment_id: None,
-                provenance: json!({"source": migration_kind}),
-                evidence: assignment.evidence.clone(),
-                metadata: json!({
-                    "migrated_from_assignment_id": assignment.assignment_id,
-                    "source_rule_id": assignment.rule_id,
-                }),
-            },
-        )
-        .await?;
-    }
-
-    mark_assignment_migrated(
+    let new_assignment_id = migrate_current_assignment_to_role(
         relational,
-        repo_id,
-        &assignment.assignment_id,
-        &new_assignment_id,
-        Some(&migration_id),
+        assignment,
+        &target_role.role_id,
+        &migration_id,
+        migration_kind,
     )
     .await?;
     insert_assignment_migration_record(
@@ -805,7 +785,7 @@ async fn migrate_assignment_to_role(
             summary: json!({
                 "from_assignment_id": assignment.assignment_id,
                 "to_assignment_id": new_assignment_id,
-                "artefact_id": assignment.artefact_id,
+                "target": assignment.target,
             }),
         },
     )
@@ -882,9 +862,101 @@ fn compute_rule_matches(
         .collect()
 }
 
+fn assignment_target_key(assignment: &ArchitectureRoleAssignment) -> String {
+    assignment
+        .target
+        .artefact_id
+        .clone()
+        .or_else(|| assignment.target.symbol_id.clone())
+        .unwrap_or_else(|| assignment.target.path.clone())
+}
+
+fn assignment_references_rule(assignment: &ArchitectureRoleAssignment, rule_id: &str) -> bool {
+    assignment
+        .evidence
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|evidence| evidence.get("ruleId").and_then(Value::as_str) == Some(rule_id))
+}
+
+fn assignment_status_from_management_value(status: &str) -> Result<AssignmentStatus> {
+    match status {
+        "active" => Ok(AssignmentStatus::Active),
+        "stale" => Ok(AssignmentStatus::Stale),
+        "needs_review" => Ok(AssignmentStatus::NeedsReview),
+        "rejected" => Ok(AssignmentStatus::Rejected),
+        other => bail!("unsupported assignment status `{other}`"),
+    }
+}
+
+fn compute_stored_rule_matches(
+    artefacts: &[MatchableArtefact],
+    rule: &ArchitectureRoleRuleRecord,
+) -> Result<BTreeSet<String>> {
+    if let (Ok(selector), Ok(positive), Ok(negative)) = (
+        parse_rule_selector(&rule.candidate_selector),
+        parse_rule_conditions(&rule.positive_conditions),
+        parse_rule_conditions(&rule.negative_conditions),
+    ) {
+        return Ok(compute_rule_matches(
+            artefacts, &selector, &positive, &negative,
+        ));
+    }
+
+    let selector = serde_json::from_value::<RoleCandidateSelector>(rule.candidate_selector.clone())
+        .with_context(|| format!("parse fact-backed selector for rule `{}`", rule.rule_id))?;
+    let positive =
+        serde_json::from_value::<Vec<RoleFactCondition>>(rule.positive_conditions.clone())
+            .with_context(|| {
+                format!(
+                    "parse fact-backed positive conditions for rule `{}`",
+                    rule.rule_id
+                )
+            })?;
+    let negative =
+        serde_json::from_value::<Vec<RoleFactCondition>>(rule.negative_conditions.clone())
+            .with_context(|| {
+                format!(
+                    "parse fact-backed negative conditions for rule `{}`",
+                    rule.rule_id
+                )
+            })?;
+
+    Ok(artefacts
+        .iter()
+        .filter(|artefact| role_rule_contract_matches(&selector, &positive, &negative, artefact))
+        .map(|artefact| artefact.artefact_id.clone())
+        .collect())
+}
+
 pub(super) fn canonical_rule_hash(spec: &RuleSpecFile) -> Result<String> {
-    let bytes = serde_json::to_vec(spec).context("serialise rule spec for hashing")?;
+    let bytes = serde_json::to_vec(&rule_spec_storage_payload(spec)?)
+        .context("serialise rule spec for hashing")?;
     Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+#[derive(Debug, Serialize)]
+struct RuleSpecStoragePayload {
+    candidate_selector: Value,
+    positive_conditions: Value,
+    negative_conditions: Value,
+    score: Value,
+}
+
+fn rule_spec_storage_payload(spec: &RuleSpecFile) -> Result<RuleSpecStoragePayload> {
+    Ok(RuleSpecStoragePayload {
+        candidate_selector: serde_json::to_value(role_rule_candidate_selector_contract(
+            &spec.candidate_selector,
+        ))?,
+        positive_conditions: serde_json::to_value(role_rule_conditions_contract(
+            &spec.positive_conditions,
+        )?)?,
+        negative_conditions: serde_json::to_value(role_rule_conditions_contract(
+            &spec.negative_conditions,
+        )?)?,
+        score: serde_json::to_value(&spec.score)?,
+    })
 }
 
 fn sha256_json(value: &Value) -> Result<String> {

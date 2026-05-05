@@ -119,58 +119,6 @@ pub fn default_queue_store() -> Arc<dyn RoleAdjudicationQueueStore> {
 }
 
 #[derive(Default)]
-pub struct NoopRoleTaxonomyReader;
-
-impl RoleTaxonomyReader for NoopRoleTaxonomyReader {
-    fn load_active_role_ids(&self, _repo_id: &str, _generation: u64) -> Result<BTreeSet<String>> {
-        Ok(BTreeSet::new())
-    }
-}
-
-#[derive(Default)]
-pub struct NoopRoleFactsReader;
-
-impl RoleFactsReader for NoopRoleFactsReader {
-    fn load_facts(&self, _request: &RoleAdjudicationRequest) -> Result<RoleFactsBundle> {
-        Ok(RoleFactsBundle {
-            facts: Vec::new(),
-            rule_signals: Vec::new(),
-            dependency_context: Vec::new(),
-            related_artefacts: Vec::new(),
-            source_snippets: Vec::new(),
-            reachability: None,
-        })
-    }
-}
-
-#[derive(Default)]
-pub struct NoopRoleAssignmentWriter;
-
-impl RoleAssignmentWriter for NoopRoleAssignmentWriter {
-    fn apply_llm_assignment(
-        &self,
-        _event: RoleAssignmentWriteEvent,
-    ) -> Result<RoleAssignmentWriteOutcome> {
-        Ok(RoleAssignmentWriteOutcome {
-            source: "noop",
-            persisted: false,
-        })
-    }
-
-    fn mark_needs_review(
-        &self,
-        _request: &RoleAdjudicationRequest,
-        _failure: &RoleAdjudicationFailure,
-        _provenance: &RoleAdjudicationProvenance,
-    ) -> Result<RoleAssignmentWriteOutcome> {
-        Ok(RoleAssignmentWriteOutcome {
-            source: "noop",
-            persisted: false,
-        })
-    }
-}
-
-#[derive(Default)]
 pub struct InMemoryRoleAssignmentWriter {
     applied: Mutex<Vec<RoleAssignmentWriteEvent>>,
     review: Mutex<

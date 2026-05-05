@@ -1,6 +1,6 @@
 use super::*;
 use crate::capability_packs::architecture_graph::roles::{
-    default_queue_store, enqueue_adjudication_jobs_for_delta,
+    default_queue_store, enqueue_adjudication_requests,
 };
 
 pub struct ArchitectureGraphCurrentStateConsumer;
@@ -70,6 +70,7 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
 
             let facts = builder.finish();
             let mut role_metrics = serde_json::Value::Null;
+            let mut adjudication_requests = Vec::new();
             match crate::capability_packs::architecture_graph::roles::classifier::classify_architecture_roles_for_current_state(
                 context.storage.as_ref(),
                 crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
@@ -86,6 +87,7 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             {
                 Ok(outcome) => {
                     warnings.extend(outcome.warnings);
+                    adjudication_requests = outcome.adjudication_requests;
                     role_metrics = serde_json::to_value(outcome.metrics)
                         .unwrap_or_else(|_| json!({ "serialization_error": true }));
                 }
@@ -114,10 +116,8 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             )
             .await?;
 
-            let adjudication_metrics = enqueue_adjudication_jobs_for_delta(
-                &request.repo_id,
-                request.to_generation_seq_inclusive,
-                &request.artefact_upserts,
+            let adjudication_metrics = enqueue_adjudication_requests(
+                &adjudication_requests,
                 context.workplane.as_ref(),
                 default_queue_store().as_ref(),
             )?;

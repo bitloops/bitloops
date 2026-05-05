@@ -34,18 +34,15 @@ pub struct RoleAdjudicationEnqueueMetrics {
     pub deduped: usize,
 }
 
-pub fn enqueue_adjudication_jobs_for_delta(
-    repo_id: &str,
-    generation: u64,
-    artefact_upserts: &[crate::host::capability_host::ChangedArtefact],
+pub fn enqueue_adjudication_requests(
+    requests: &[RoleAdjudicationRequest],
     workplane: &dyn CapabilityWorkplaneGateway,
     queue: &dyn RoleAdjudicationQueueStore,
 ) -> Result<RoleAdjudicationEnqueueMetrics> {
-    let requests = role_requests_from_delta(repo_id, generation, artefact_upserts);
     let mut jobs = Vec::new();
     let mut deduped = 0usize;
 
-    for request in &requests {
+    for request in requests {
         let dedupe_key = request.scope_key();
         match queue.enqueue(request, &dedupe_key)? {
             super::contracts::RoleQueueEnqueueResult::Enqueued => {
@@ -74,6 +71,17 @@ pub fn enqueue_adjudication_jobs_for_delta(
         enqueued: requests.len().saturating_sub(deduped),
         deduped,
     })
+}
+
+pub fn enqueue_adjudication_jobs_for_delta(
+    repo_id: &str,
+    generation: u64,
+    artefact_upserts: &[crate::host::capability_host::ChangedArtefact],
+    workplane: &dyn CapabilityWorkplaneGateway,
+    queue: &dyn RoleAdjudicationQueueStore,
+) -> Result<RoleAdjudicationEnqueueMetrics> {
+    let requests = role_requests_from_delta(repo_id, generation, artefact_upserts);
+    enqueue_adjudication_requests(&requests, workplane, queue)
 }
 
 fn role_requests_from_delta(

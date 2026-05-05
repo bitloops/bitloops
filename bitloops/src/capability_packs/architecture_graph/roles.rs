@@ -34,14 +34,14 @@ pub use evidence_packet_builder::{
 pub use llm_executor::execute_llm_adjudication;
 pub use orchestrator::{
     RoleAdjudicationEnqueueMetrics, RoleAdjudicationServices, enqueue_adjudication_jobs_for_delta,
-    run_adjudication_request,
+    enqueue_adjudication_requests, run_adjudication_request,
 };
 pub use queue_store::{
     InMemoryRoleAdjudicationQueueStore, InMemoryRoleAssignmentWriter, InMemoryRoleFactsReader,
-    InMemoryRoleTaxonomyReader, NoopRoleAssignmentWriter, NoopRoleFactsReader,
-    NoopRoleTaxonomyReader, RoleAdjudicationQueueStore, default_queue_store,
+    InMemoryRoleTaxonomyReader, RoleAdjudicationQueueStore, default_queue_store,
 };
 pub use response_validator::validate_adjudication_result;
+pub use storage::{DbRoleAssignmentWriter, DbRoleFactsReader, DbRoleTaxonomyReader};
 pub use taxonomy::{
     ArchitectureArtefactFact, ArchitectureRole, ArchitectureRoleAssignment,
     ArchitectureRoleAssignmentHistory, ArchitectureRoleChangeProposal,
