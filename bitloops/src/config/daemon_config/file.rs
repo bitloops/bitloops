@@ -239,6 +239,10 @@ fn parse_daemon_config_text(data: &str, path: &Path) -> Result<DaemonTomlFile> {
         .with_context(|| format!("parsing Bitloops daemon config {}", path.display()))
 }
 
+pub(crate) fn validate_daemon_config_text(data: &str, path: &Path) -> Result<()> {
+    parse_daemon_config_text(data, path).map(|_| ())
+}
+
 fn persist_daemon_cli_settings_at(
     explicit_path: Option<&Path>,
     update: &DaemonCliSettings,

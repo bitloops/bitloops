@@ -305,7 +305,13 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert_eq!(sdl_status, StatusCode::OK);
     assert_eq!(sdl_body, crate::api::runtime_schema_sdl());
     assert!(sdl_body.contains("type RuntimeQueryRoot"));
+    assert!(sdl_body.contains("configTargets: [RuntimeConfigTargetObject!]!"));
+    assert!(sdl_body.contains("configSnapshot(targetId: ID!): RuntimeConfigSnapshotObject!"));
     assert!(sdl_body.contains("runtimeSnapshot(repoId: String!): RuntimeSnapshotObject!"));
+    assert!(
+        sdl_body
+            .contains("updateConfig(input: UpdateRuntimeConfigInput!): UpdateRuntimeConfigResult!")
+    );
     assert!(
         sdl_body.contains("startInit(repoId: String!, input: StartInitInput!): StartInitResult!")
     );
@@ -319,9 +325,231 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert!(!slim_sdl.contains("runtimeEvents("));
 
     let global_sdl = crate::graphql::schema_sdl();
+    assert!(!global_sdl.contains("configTargets"));
+    assert!(!global_sdl.contains("updateConfig("));
     assert!(!global_sdl.contains("runtimeSnapshot("));
     assert!(!global_sdl.contains("startInit("));
     assert!(!global_sdl.contains("runtimeEvents("));
+}
+
+#[tokio::test]
+async fn devql_runtime_config_targets_list_existing_config_files() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_FILE_NAME),
+        "[capture]\nenabled = true\n",
+    )
+    .expect("write shared policy");
+    let nested = repo.path().join("packages").join("app");
+    fs::create_dir_all(&nested).expect("create nested package");
+    fs::write(
+        nested.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        "[capture]\nstrategy = \"manual-commit\"\n",
+    )
+    .expect("write nested local policy");
+    fs::create_dir_all(repo.path().join("target").join("ignored")).expect("create target dir");
+    fs::write(
+        repo.path()
+            .join("target")
+            .join("ignored")
+            .join(crate::config::REPO_POLICY_FILE_NAME),
+        "[capture]\nenabled = false\n",
+    )
+    .expect("write ignored policy");
+
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "{ configTargets { kind label group path exists } }"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let targets = payload["data"]["configTargets"]
+        .as_array()
+        .expect("config targets");
+    let paths = targets
+        .iter()
+        .map(|target| target["path"].as_str().expect("target path").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH)),
+        "expected daemon config target in {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with(crate::config::REPO_POLICY_FILE_NAME)),
+        "expected shared repo target in {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("packages/app/.bitloops.local.toml")),
+        "expected nested local repo target in {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains("/target/ignored/")),
+        "target scan should skip heavy target directories: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_config_snapshot_and_update_config_mutation() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, targets_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "{ configTargets { id kind path } }"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let daemon_target = targets_payload["data"]["configTargets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .find(|target| target["kind"] == "daemon")
+        .expect("daemon target");
+    let target_id = daemon_target["id"].as_str().expect("target id");
+
+    let (status, snapshot_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "query Snapshot($targetId: ID!) { configSnapshot(targetId: $targetId) { revision valid restartRequired sections { key fields { key fieldType value allowedValues } } } }",
+                "variables": { "targetId": target_id }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        snapshot_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        snapshot_payload.get("errors")
+    );
+    let revision = snapshot_payload["data"]["configSnapshot"]["revision"]
+        .as_str()
+        .expect("snapshot revision");
+    assert_eq!(snapshot_payload["data"]["configSnapshot"]["valid"], true);
+    assert_eq!(
+        snapshot_payload["data"]["configSnapshot"]["restartRequired"],
+        true
+    );
+
+    let (status, update_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { restartRequired snapshot { revision sections { key fields { key value } } } } }",
+                "variables": {
+                    "input": {
+                        "targetId": target_id,
+                        "expectedRevision": revision,
+                        "patches": [{
+                            "path": ["runtime", "local_dev"],
+                            "value": true
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        update_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        update_payload.get("errors")
+    );
+    assert_ne!(
+        update_payload["data"]["updateConfig"]["snapshot"]["revision"]
+            .as_str()
+            .expect("updated revision"),
+        revision
+    );
+    let config_text = fs::read_to_string(
+        repo.path()
+            .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("read config");
+    assert!(config_text.contains("local_dev = true"));
+
+    let (status, stale_payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { snapshot { revision } } }",
+                "variables": {
+                    "input": {
+                        "targetId": target_id,
+                        "expectedRevision": revision,
+                        "patches": [{
+                            "path": ["runtime", "local_dev"],
+                            "value": false
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        stale_payload["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("changed on disk")),
+        "unexpected stale response: {stale_payload}"
+    );
 }
 
 #[tokio::test]

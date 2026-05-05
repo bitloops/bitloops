@@ -5,6 +5,11 @@ use async_graphql::futures_util::{Stream, stream};
 use async_graphql::{Context, ID, Object, Result, Subscription};
 
 use super::config::{map_runtime_api_error, resolve_runtime_devql_config};
+use super::config_management::{
+    RuntimeConfigSnapshotObject, RuntimeConfigTargetObject, UpdateRuntimeConfigInput,
+    UpdateRuntimeConfigResult, list_config_targets, load_config_snapshot,
+    update_config as update_runtime_config,
+};
 use super::events::RuntimeEventObject;
 use super::snapshot::RuntimeSnapshotObject;
 use super::start_init::{StartInitInput, StartInitResult};
@@ -22,6 +27,20 @@ pub(crate) struct RuntimeQueryRoot;
 
 #[Object]
 impl RuntimeQueryRoot {
+    #[graphql(name = "configTargets")]
+    async fn config_targets(&self, ctx: &Context<'_>) -> Result<Vec<RuntimeConfigTargetObject>> {
+        list_config_targets(ctx.data_unchecked::<DashboardState>()).await
+    }
+
+    #[graphql(name = "configSnapshot")]
+    async fn config_snapshot(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "targetId")] target_id: ID,
+    ) -> Result<RuntimeConfigSnapshotObject> {
+        load_config_snapshot(ctx.data_unchecked::<DashboardState>(), &target_id).await
+    }
+
     #[graphql(name = "runtimeSnapshot")]
     async fn runtime_snapshot(
         &self,
@@ -53,6 +72,15 @@ pub(crate) struct RuntimeMutationRoot;
 
 #[Object]
 impl RuntimeMutationRoot {
+    #[graphql(name = "updateConfig")]
+    async fn update_config(
+        &self,
+        ctx: &Context<'_>,
+        input: UpdateRuntimeConfigInput,
+    ) -> Result<UpdateRuntimeConfigResult> {
+        update_runtime_config(ctx.data_unchecked::<DashboardState>(), input).await
+    }
+
     #[graphql(name = "startInit")]
     async fn start_init(
         &self,
