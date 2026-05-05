@@ -1,0 +1,1 @@
+pub const ARCHITECTURE_ROLE_LLM_ASSIGNMENT_SOURCE: &str = "llm";

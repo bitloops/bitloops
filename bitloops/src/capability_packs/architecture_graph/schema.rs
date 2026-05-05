@@ -1,3 +1,6 @@
+use std::sync::OnceLock;
+
+use crate::capability_packs::architecture_graph::roles::schema::architecture_roles_sqlite_schema_sql;
 use crate::host::capability_host::SchemaModule;
 
 use super::types::ARCHITECTURE_GRAPH_CAPABILITY_ID;
@@ -8,8 +11,7 @@ pub static ARCHITECTURE_GRAPH_SCHEMA_MODULE: SchemaModule = SchemaModule {
     description: "Architecture graph capability fact and assertion schema",
 };
 
-pub fn architecture_graph_sqlite_schema_sql() -> &'static str {
-    r#"
+const ARCHITECTURE_GRAPH_CORE_SQLITE_SCHEMA_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS architecture_graph_nodes_current (
     repo_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
@@ -109,7 +111,19 @@ CREATE TABLE IF NOT EXISTS architecture_graph_runs_current (
     metrics_json TEXT NOT NULL DEFAULT '{}',
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-"#
+"#;
+
+pub fn architecture_graph_sqlite_schema_sql() -> &'static str {
+    static ARCHITECTURE_GRAPH_SCHEMA_SQL: OnceLock<String> = OnceLock::new();
+    ARCHITECTURE_GRAPH_SCHEMA_SQL
+        .get_or_init(|| {
+            format!(
+                "{}{}",
+                ARCHITECTURE_GRAPH_CORE_SQLITE_SCHEMA_SQL,
+                architecture_roles_sqlite_schema_sql()
+            )
+        })
+        .as_str()
 }
 
 #[cfg(test)]
@@ -125,6 +139,16 @@ mod tests {
             "architecture_graph_assertions",
             "architecture_graph_runs_current",
         ] {
+            assert!(sql.contains(table), "schema should include {table}");
+        }
+    }
+
+    #[test]
+    fn schema_includes_role_tables() {
+        let sql = architecture_graph_sqlite_schema_sql();
+        for table in
+            crate::capability_packs::architecture_graph::roles::schema::ARCHITECTURE_ROLE_TABLES
+        {
             assert!(sql.contains(table), "schema should include {table}");
         }
     }
