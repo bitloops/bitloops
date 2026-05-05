@@ -232,3 +232,36 @@ async fn run_serial_suites_with_runner_reports_develop_gate_rerun_hint() {
         "develop gate failure should point to the gate rerun alias: {message}"
     );
 }
+
+#[tokio::test]
+async fn run_devql_sync_producer_with_runner_filters_to_producer_contract() {
+    use tokio::sync::mpsc;
+
+    let (tx, mut rx) =
+        mpsc::unbounded_channel::<(&'static str, Option<&'static str>, &'static str)>();
+
+    run_devql_sync_producer_with_runner(
+        PathBuf::from("/tmp/bitloops"),
+        move |_binary, suite, tags_filter, rerun_alias| {
+            let tx = tx.clone();
+            async move {
+                tx.send((suite.id(), tags_filter, rerun_alias))
+                    .expect("producer run should send");
+                Ok(())
+            }
+        },
+    )
+    .await
+    .expect("producer subset run should succeed");
+
+    let observed = rx.recv().await.expect("producer run should start");
+    assert_eq!(
+        observed,
+        (
+            "devql-sync",
+            Some("@sync_producer and not @sync_known_gap"),
+            "cargo qat-devql-sync-producer"
+        ),
+        "producer entrypoint should run the DevQL Sync suite with the producer-only filter and rerun alias"
+    );
+}

@@ -1485,6 +1485,7 @@ mod tests {
             "qat_devql_capabilities",
             "qat_devql_ingest",
             "qat_devql_sync",
+            "qat_devql_sync_producer",
             "qat_onboarding",
             "qat_agents_checkpoints",
         ] {
@@ -1538,6 +1539,11 @@ mod tests {
             (
                 "qat_devql_sync",
                 "tests/qat_devql_sync.rs",
+                &["qat-tests"][..],
+            ),
+            (
+                "qat_devql_sync_producer",
+                "tests/qat_devql_sync_producer.rs",
                 &["qat-tests"][..],
             ),
             (
@@ -1598,6 +1604,12 @@ mod tests {
                 "qat-devql-sync = ",
                 "qat_devql_sync",
                 "qat_devql_sync",
+                false,
+            ),
+            (
+                "qat-devql-sync-producer = ",
+                "qat_devql_sync_producer",
+                "qat_devql_sync_producer",
                 false,
             ),
             (
@@ -1693,6 +1705,12 @@ mod tests {
                 false,
             ),
             (
+                "qat-devql-sync-producer = ",
+                "qat_devql_sync_producer",
+                "qat_devql_sync_producer",
+                false,
+            ),
+            (
                 "qat-onboarding = ",
                 "qat_onboarding",
                 "qat_onboarding",
@@ -1775,6 +1793,7 @@ mod tests {
             "qat_devql_capabilities",
             "qat_devql_ingest",
             "qat_devql_sync",
+            "qat_devql_sync_producer",
             "qat_onboarding",
             "qat_agents_checkpoints",
         ] {
@@ -1788,6 +1807,68 @@ mod tests {
         assert!(
             !config.contains("binary(=qat_acceptance)"),
             "nextest config should no longer reference the legacy qat_acceptance target"
+        );
+    }
+
+    #[test]
+    fn devql_sync_develop_gate_scenarios_are_producer_contract_scenarios() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        let feature_path = workspace_root
+            .join("bitloops")
+            .join("qat")
+            .join("features")
+            .join("devql-sync")
+            .join("sync_workspace.feature");
+        let feature = fs::read_to_string(&feature_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", feature_path.display()));
+
+        let mut active_tags = Vec::new();
+        let mut develop_gate_sync_scenarios = 0;
+        for line in feature.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('@') {
+                active_tags = trimmed
+                    .split_whitespace()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                continue;
+            }
+
+            if trimmed.starts_with("Scenario:") {
+                if active_tags.iter().any(|tag| tag == "@develop_gate")
+                    && active_tags.iter().any(|tag| tag == "@sync")
+                {
+                    develop_gate_sync_scenarios += 1;
+                    assert!(
+                        active_tags.iter().any(|tag| tag == "@sync_producer"),
+                        "develop-gate sync scenario `{trimmed}` should use @sync_producer tags"
+                    );
+                    assert!(
+                        !active_tags.iter().any(|tag| tag == "@sync_manual"),
+                        "develop-gate sync scenario `{trimmed}` should not use @sync_manual"
+                    );
+                    assert!(
+                        !active_tags.iter().any(|tag| tag == "@sync_legacy"),
+                        "develop-gate sync scenario `{trimmed}` should not use @sync_legacy"
+                    );
+                    assert!(
+                        !active_tags.iter().any(|tag| tag == "@sync_known_gap"),
+                        "develop-gate sync scenario `{trimmed}` should not include known product gaps"
+                    );
+                }
+                active_tags.clear();
+            }
+        }
+
+        assert!(
+            develop_gate_sync_scenarios > 0,
+            "devql-sync feature should keep producer sync scenarios in the develop gate"
+        );
+        assert!(
+            feature.contains("@sync_manual_smoke"),
+            "devql-sync feature should keep a small taggable manual smoke subset"
         );
     }
 

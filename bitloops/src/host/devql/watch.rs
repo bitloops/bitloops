@@ -18,15 +18,23 @@ use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 #[path = "capture.rs"]
 mod capture;
+#[path = "watch_registration.rs"]
+mod registration;
+
+use registration::{
+    ExistingWatcherRegistrationHandle, TimedOutPendingRecovery, WatcherRegistrationReadyError,
+    handle_existing_watcher_registration, recover_timed_out_pending_registration,
+    wait_for_watcher_registration_ready,
+};
 
 const WATCHER_COMMAND_NAME: &str = "__devql-watcher";
 pub const DISABLE_WATCHER_AUTOSTART_ENV: &str = "BITLOOPS_DISABLE_WATCHER_AUTOSTART";
-const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(5);
+const WATCHER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const WATCHER_READY_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const WATCHER_RESCAN_MIN_INTERVAL: Duration = Duration::from_secs(2);
 const WATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
-const DEFAULT_WATCHER_IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-const WATCHER_IDLE_TIMEOUT_ENV: &str = "BITLOOPS_WATCHER_IDLE_TIMEOUT_SECS";
+const WATCHER_GIT_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+const WATCHER_CHECKOUT_PROMOTION_WINDOW: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
@@ -299,8 +307,8 @@ fn run_notify_loop(
     let mut last_rescan = Instant::now();
     let mut batch: BTreeSet<PathBuf> = BTreeSet::new();
     let mut window_start: Option<Instant> = None;
-    let idle_timeout = watcher_idle_timeout();
-    let mut last_external_activity = Instant::now();
+    let mut observed_branch = current_watcher_branch(&cfg.repo_root).unwrap_or(None);
+    let mut checkout_window_deadline: Option<Instant> = None;
 
     while !shutdown.load(Ordering::SeqCst) {
         match evaluate_watcher_exit_reason(
@@ -308,9 +316,6 @@ fn run_notify_loop(
             &registration_guard.runtime_store,
             registration_guard.pid,
             &registration_guard.restart_token,
-            last_external_activity,
-            idle_timeout,
-            !batch.is_empty() || window_start.is_some(),
         ) {
             Ok(Some(reason)) => {
                 log::info!(
@@ -330,20 +335,18 @@ fn run_notify_loop(
             return Ok(());
         }
 
+        let defer_git_work = should_defer_watcher_git_work(&cfg.repo_root);
+
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
-                let mut saw_relevant_path = false;
                 for path in event.paths {
-                    if should_ignore_path(&cfg.repo_root, &path)
-                        || is_gitignored(&cfg.repo_root, &path)
-                    {
+                    if should_ignore_path(&cfg.repo_root, &path) {
+                        continue;
+                    }
+                    if !defer_git_work && is_gitignored(&cfg.repo_root, &path) {
                         continue;
                     }
                     batch.insert(path);
-                    saw_relevant_path = true;
-                }
-                if saw_relevant_path {
-                    last_external_activity = Instant::now();
                 }
                 if !batch.is_empty() && window_start.is_none() {
                     window_start = Some(Instant::now());
@@ -361,7 +364,47 @@ fn run_notify_loop(
             }
         }
 
-        if last_rescan.elapsed() >= rescan_interval {
+        if should_defer_watcher_git_work(&cfg.repo_root) {
+            if !batch.is_empty() && window_start.is_none() {
+                window_start = Some(Instant::now());
+            }
+            std::thread::sleep(WATCHER_GIT_LOCK_RETRY_INTERVAL);
+            continue;
+        }
+
+        let rescan_due = last_rescan.elapsed() >= rescan_interval;
+        if !batch.is_empty() || rescan_due {
+            let previous_branch = observed_branch.clone();
+            match watcher_branch_changed(&cfg.repo_root, &mut observed_branch) {
+                Ok(true) => {
+                    let now = Instant::now();
+                    checkout_window_deadline = Some(now + WATCHER_CHECKOUT_PROMOTION_WINDOW);
+                    if let Err(err) = apply_checkout_enqueue_result(
+                        &mut batch,
+                        &mut window_start,
+                        enqueue_watcher_post_checkout_full_sync(cfg),
+                    ) {
+                        observed_branch = previous_branch;
+                        if !batch.is_empty() && window_start.is_none() {
+                            window_start = Some(now);
+                        }
+                        log::warn!(
+                            "failed to enqueue watcher-detected branch checkout sync: {err:#}"
+                        );
+                        std::thread::sleep(WATCHER_GIT_LOCK_RETRY_INTERVAL);
+                    } else {
+                        last_rescan = now;
+                    }
+                    continue;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    log::debug!("failed to inspect watcher branch state: {err:#}");
+                }
+            }
+        }
+
+        if rescan_due {
             match add_dirty_worktree_paths_to_batch(&cfg.repo_root, &mut batch) {
                 Ok(added) => {
                     if added && window_start.is_none() {
@@ -379,7 +422,33 @@ fn run_notify_loop(
             && !batch.is_empty()
             && start.elapsed() >= debounce
         {
-            let paths = batch.iter().cloned().collect::<Vec<_>>();
+            let paths = batch
+                .iter()
+                .filter(|path| !is_gitignored(&cfg.repo_root, path))
+                .cloned()
+                .collect::<Vec<_>>();
+            if paths.is_empty() {
+                batch.clear();
+                window_start = None;
+                continue;
+            }
+            if watcher_checkout_window_active(checkout_window_deadline, Instant::now()) {
+                if let Err(err) = apply_checkout_enqueue_result(
+                    &mut batch,
+                    &mut window_start,
+                    enqueue_watcher_post_checkout_full_sync(cfg),
+                ) {
+                    if window_start.is_none() {
+                        window_start = Some(Instant::now());
+                    }
+                    log::warn!(
+                        "failed to promote watcher path batch to branch checkout sync: {err:#}"
+                    );
+                    std::thread::sleep(WATCHER_GIT_LOCK_RETRY_INTERVAL);
+                }
+                continue;
+            }
+            checkout_window_deadline = None;
             if let Err(err) = capture::capture_temporary_checkpoint_batch_with_handle(
                 cfg,
                 &paths,
@@ -397,6 +466,30 @@ fn run_notify_loop(
     }
 
     Ok(())
+}
+
+fn enqueue_watcher_post_checkout_full_sync(cfg: &crate::host::devql::DevqlConfig) -> Result<()> {
+    crate::host::devql::enqueue_spooled_sync_task(
+        cfg,
+        crate::daemon::DevqlTaskSource::PostCheckout,
+        crate::host::devql::SyncMode::Full,
+    )
+    .map(|_| ())
+}
+
+fn watcher_checkout_window_active(deadline: Option<Instant>, now: Instant) -> bool {
+    deadline.is_some_and(|deadline| now < deadline)
+}
+
+fn apply_checkout_enqueue_result(
+    batch: &mut BTreeSet<PathBuf>,
+    window_start: &mut Option<Instant>,
+    enqueue_result: Result<()>,
+) -> Result<()> {
+    enqueue_result.map(|()| {
+        batch.clear();
+        *window_start = None;
+    })
 }
 
 fn add_dirty_worktree_paths_to_batch(
@@ -433,6 +526,68 @@ fn watcher_repo_root_missing(repo_root: &Path) -> bool {
     repo_root.try_exists().map(|exists| !exists).unwrap_or(true)
 }
 
+fn should_defer_watcher_git_work(repo_root: &Path) -> bool {
+    git_index_lock_path(repo_root).is_some_and(|path| path.exists())
+}
+
+fn git_index_lock_path(repo_root: &Path) -> Option<PathBuf> {
+    let dot_git = repo_root.join(".git");
+    let metadata = fs::metadata(&dot_git).ok()?;
+    if metadata.is_dir() {
+        return Some(dot_git.join("index.lock"));
+    }
+    if !metadata.is_file() {
+        return None;
+    }
+
+    let contents = fs::read_to_string(&dot_git).ok()?;
+    let gitdir = contents
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir:").map(str::trim))?;
+    let gitdir = PathBuf::from(gitdir);
+    let gitdir = if gitdir.is_absolute() {
+        gitdir
+    } else {
+        repo_root.join(gitdir)
+    };
+    Some(gitdir.join("index.lock"))
+}
+
+fn watcher_branch_changed(repo_root: &Path, observed_branch: &mut Option<String>) -> Result<bool> {
+    let current_branch = current_watcher_branch(repo_root)?;
+    if current_branch == *observed_branch {
+        return Ok(false);
+    }
+    *observed_branch = current_branch;
+    Ok(true)
+}
+
+fn current_watcher_branch(repo_root: &Path) -> Result<Option<String>> {
+    let branch = crate::host::checkpoints::strategy::manual_commit::run_git_env(
+        repo_root,
+        &["branch", "--show-current"],
+        &[("GIT_OPTIONAL_LOCKS", "0")],
+    )
+    .context("reading current branch for DevQL watcher")?;
+    let branch = branch.trim();
+    if !branch.is_empty() {
+        return Ok(Some(format!("branch:{branch}")));
+    }
+
+    let head = crate::host::checkpoints::strategy::manual_commit::run_git_env(
+        repo_root,
+        &["rev-parse", "--verify", "HEAD"],
+        &[("GIT_OPTIONAL_LOCKS", "0")],
+    )
+    .context("reading current detached HEAD for DevQL watcher")?;
+    let head = head.trim();
+    if head.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(format!("detached:{head}")))
+    }
+}
+
 fn should_ignore_path(repo_root: &Path, path: &Path) -> bool {
     let rel = path.strip_prefix(repo_root).unwrap_or(path);
     let rel_str = rel.to_string_lossy();
@@ -460,9 +615,10 @@ fn is_gitignored(repo_root: &Path, path: &Path) -> bool {
         return false;
     }
 
-    crate::host::checkpoints::strategy::manual_commit::run_git(
+    crate::host::checkpoints::strategy::manual_commit::run_git_env(
         repo_root,
         &["check-ignore", "-q", &rel_str],
+        &[("GIT_OPTIONAL_LOCKS", "0")],
     )
     .is_ok()
 }
@@ -549,22 +705,11 @@ fn wait_for_process_exit(pid: u32, timeout: Duration) -> bool {
     }
 }
 
-fn watcher_idle_timeout() -> Duration {
-    watcher_idle_timeout_from_env(env::var(WATCHER_IDLE_TIMEOUT_ENV).ok().as_deref())
-}
-
-fn watcher_idle_timeout_from_env(raw: Option<&str>) -> Duration {
-    raw.and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(DEFAULT_WATCHER_IDLE_TIMEOUT)
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WatcherExitReason {
     RepoMissing,
     CaptureDisabled,
     RegistrationLost,
-    Idle,
 }
 
 impl WatcherExitReason {
@@ -573,7 +718,6 @@ impl WatcherExitReason {
             Self::RepoMissing => "repo_missing",
             Self::CaptureDisabled => "capture_disabled",
             Self::RegistrationLost => "registration_lost",
-            Self::Idle => "idle_timeout",
         }
     }
 }
@@ -583,9 +727,6 @@ fn evaluate_watcher_exit_reason(
     runtime_store: &RepoSqliteRuntimeStore,
     pid: u32,
     restart_token: &str,
-    last_external_activity: Instant,
-    idle_timeout: Duration,
-    has_pending_batch: bool,
 ) -> Result<Option<WatcherExitReason>> {
     if watcher_repo_root_missing(&cfg.repo_root) {
         return Ok(Some(WatcherExitReason::RepoMissing));
@@ -595,9 +736,6 @@ fn evaluate_watcher_exit_reason(
     }
     if !watcher_registration_matches(runtime_store, pid, restart_token)? {
         return Ok(Some(WatcherExitReason::RegistrationLost));
-    }
-    if !has_pending_batch && last_external_activity.elapsed() >= idle_timeout {
-        return Ok(Some(WatcherExitReason::Idle));
     }
     Ok(None)
 }
@@ -645,209 +783,6 @@ fn current_watcher_restart_token() -> Result<String> {
     let bytes = fs::read(&current_exe)
         .with_context(|| format!("reading watcher executable {}", current_exe.display()))?;
     Ok(hex::encode(Sha256::digest(bytes)))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExistingWatcherRegistrationDisposition {
-    Ready,
-    WaitForReady,
-    Replace { kill_running_process: bool },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExistingWatcherRegistrationHandle {
-    Handled,
-    RetrySpawn,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WatcherRegistrationReadyError {
-    ExitedBeforeReady { pid: u32 },
-    TimedOut { pid: u32 },
-}
-
-impl std::fmt::Display for WatcherRegistrationReadyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ExitedBeforeReady { pid } => {
-                write!(
-                    f,
-                    "spawned DevQL watcher process {pid} exited before becoming ready"
-                )
-            }
-            Self::TimedOut { pid } => {
-                write!(
-                    f,
-                    "timed out waiting for DevQL watcher process {pid} to become ready"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for WatcherRegistrationReadyError {}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TimedOutPendingRecovery {
-    PendingReleased,
-    ReadyRegistrationPresent,
-}
-
-fn classify_existing_watcher_registration(
-    entry: &crate::host::runtime_store::RepoWatcherRegistration,
-    expected_restart_token: &str,
-    watcher_running: bool,
-) -> ExistingWatcherRegistrationDisposition {
-    if watcher_running && entry.restart_token == expected_restart_token {
-        return match entry.state {
-            crate::host::runtime_store::RepoWatcherRegistrationState::Ready => {
-                ExistingWatcherRegistrationDisposition::Ready
-            }
-            crate::host::runtime_store::RepoWatcherRegistrationState::Pending => {
-                ExistingWatcherRegistrationDisposition::WaitForReady
-            }
-        };
-    }
-
-    ExistingWatcherRegistrationDisposition::Replace {
-        kill_running_process: watcher_running && entry.restart_token != expected_restart_token,
-    }
-}
-
-fn handle_existing_watcher_registration(
-    runtime_store: &RepoSqliteRuntimeStore,
-    entry: crate::host::runtime_store::RepoWatcherRegistration,
-    expected_restart_token: &str,
-    timeout: Duration,
-    poll_interval: Duration,
-) -> Result<ExistingWatcherRegistrationHandle> {
-    match classify_existing_watcher_registration(
-        &entry,
-        expected_restart_token,
-        process_is_running(entry.pid),
-    ) {
-        ExistingWatcherRegistrationDisposition::Ready => {
-            Ok(ExistingWatcherRegistrationHandle::Handled)
-        }
-        ExistingWatcherRegistrationDisposition::WaitForReady => {
-            match wait_for_watcher_registration_ready(
-                entry.pid,
-                expected_restart_token,
-                timeout,
-                poll_interval,
-                || runtime_store.load_watcher_registration(),
-                || Ok(process_is_running(entry.pid)),
-            ) {
-                Ok(()) => Ok(ExistingWatcherRegistrationHandle::Handled),
-                Err(wait_error)
-                    if matches!(
-                        wait_error.downcast_ref::<WatcherRegistrationReadyError>(),
-                        Some(WatcherRegistrationReadyError::ExitedBeforeReady { .. })
-                    ) =>
-                {
-                    runtime_store.delete_pending_watcher_registration_if_matches(
-                        entry.pid,
-                        &entry.restart_token,
-                    )?;
-                    Ok(ExistingWatcherRegistrationHandle::RetrySpawn)
-                }
-                Err(wait_error)
-                    if matches!(
-                        wait_error.downcast_ref::<WatcherRegistrationReadyError>(),
-                        Some(WatcherRegistrationReadyError::TimedOut { .. })
-                    ) =>
-                {
-                    match recover_timed_out_pending_registration(
-                        runtime_store,
-                        entry.pid,
-                        &entry.restart_token,
-                    )? {
-                        Some(TimedOutPendingRecovery::ReadyRegistrationPresent) => {
-                            Ok(ExistingWatcherRegistrationHandle::Handled)
-                        }
-                        Some(TimedOutPendingRecovery::PendingReleased) => {
-                            Ok(ExistingWatcherRegistrationHandle::RetrySpawn)
-                        }
-                        None => Err(wait_error),
-                    }
-                }
-                Err(wait_error) => Err(wait_error),
-            }
-        }
-        ExistingWatcherRegistrationDisposition::Replace {
-            kill_running_process,
-        } => {
-            if kill_running_process {
-                // Restart token mismatch means a different binary is now serving watcher work.
-                // Kill the stale watcher so the new process can re-run startup schema init.
-                kill_process(entry.pid);
-            }
-            runtime_store
-                .delete_watcher_registration_if_matches(entry.pid, &entry.restart_token)?;
-            Ok(ExistingWatcherRegistrationHandle::RetrySpawn)
-        }
-    }
-}
-
-fn recover_timed_out_pending_registration(
-    runtime_store: &RepoSqliteRuntimeStore,
-    pid: u32,
-    expected_restart_token: &str,
-) -> Result<Option<TimedOutPendingRecovery>> {
-    if runtime_store.delete_pending_watcher_registration_if_matches(pid, expected_restart_token)? {
-        return Ok(Some(TimedOutPendingRecovery::PendingReleased));
-    }
-
-    match runtime_store.load_watcher_registration()? {
-        Some(entry)
-            if entry.restart_token == expected_restart_token
-                && entry.state
-                    == crate::host::runtime_store::RepoWatcherRegistrationState::Ready
-                && process_is_running(entry.pid) =>
-        {
-            Ok(Some(TimedOutPendingRecovery::ReadyRegistrationPresent))
-        }
-        None => Ok(Some(TimedOutPendingRecovery::PendingReleased)),
-        Some(_) => Ok(None),
-    }
-}
-
-fn wait_for_watcher_registration_ready<FLoad, FWatcherRunning>(
-    expected_pid: u32,
-    expected_restart_token: &str,
-    timeout: Duration,
-    poll_interval: Duration,
-    mut load_registration: FLoad,
-    mut watcher_running: FWatcherRunning,
-) -> Result<()>
-where
-    FLoad: FnMut() -> Result<Option<crate::host::runtime_store::RepoWatcherRegistration>>,
-    FWatcherRunning: FnMut() -> Result<bool>,
-{
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(entry) = load_registration()?
-            && entry.pid == expected_pid
-            && entry.restart_token == expected_restart_token
-            && entry.state == crate::host::runtime_store::RepoWatcherRegistrationState::Ready
-        {
-            return Ok(());
-        }
-
-        if !watcher_running()? {
-            return Err(anyhow::Error::new(
-                WatcherRegistrationReadyError::ExitedBeforeReady { pid: expected_pid },
-            ));
-        }
-
-        if Instant::now() >= deadline {
-            return Err(anyhow::Error::new(
-                WatcherRegistrationReadyError::TimedOut { pid: expected_pid },
-            ));
-        }
-
-        std::thread::sleep(poll_interval);
-    }
 }
 
 async fn wait_for_shutdown_signal() {

@@ -370,6 +370,96 @@ fn parse_ingest_summary_field_reads_key_value_pairs() {
 }
 
 #[test]
+fn sync_task_summary_field_parsing_accepts_supported_labels() {
+    assert_eq!(
+        parse_sync_task_summary_field("work").expect("parse work"),
+        SyncTaskSummaryField::Work
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("added").expect("parse added"),
+        SyncTaskSummaryField::Added
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("changed").expect("parse changed"),
+        SyncTaskSummaryField::Changed
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("removed").expect("parse removed"),
+        SyncTaskSummaryField::Removed
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("cache hits").expect("parse cache hits"),
+        SyncTaskSummaryField::CacheHits
+    );
+    assert!(parse_sync_task_summary_field("not-a-field").is_err());
+}
+
+#[test]
+fn sync_task_summary_field_reads_values_from_summary() {
+    let summary = bitloops::host::devql::SyncSummary {
+        paths_added: 2,
+        paths_changed: 3,
+        paths_removed: 4,
+        paths_unchanged: 5,
+        cache_hits: 6,
+        cache_misses: 7,
+        parse_errors: 8,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Work),
+        14
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Added),
+        2
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Changed),
+        3
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Removed),
+        4
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::CacheMisses),
+        7
+    );
+}
+
+#[test]
+fn completed_sync_task_summary_diagnostics_include_post_snapshot_counts() {
+    let tasks = vec![CompletedSyncTaskSummaryBrief {
+        task_id: "sync-task-1".to_string(),
+        source: "watcher".to_string(),
+        mode: "incremental".to_string(),
+        paths_added: 1,
+        paths_changed: 2,
+        paths_removed: 3,
+        paths_unchanged: 4,
+        ..Default::default()
+    }];
+
+    assert!(
+        completed_sync_task_summary_field_exceeds_min(&tasks, SyncTaskSummaryField::Changed, 1),
+        "expected changed count to exceed min"
+    );
+    assert!(
+        !completed_sync_task_summary_field_exceeds_min(&tasks, SyncTaskSummaryField::Removed, 3),
+        "expected removed count equal to min not to match"
+    );
+
+    let diagnostics = format_completed_sync_task_summary_diagnostics(&tasks);
+    assert!(diagnostics.contains("task_id=sync-task-1"));
+    assert!(diagnostics.contains("source=watcher"));
+    assert!(diagnostics.contains("mode=incremental"));
+    assert!(diagnostics.contains("added=1 changed=2 removed=3 unchanged=4"));
+    assert!(diagnostics.contains("cache_hits=0 cache_misses=0 parse_errors=0"));
+}
+
+#[test]
 fn build_devql_task_enqueue_args_builds_sync_command_with_flags() {
     let args = build_devql_task_enqueue_args(DevqlTaskEnqueueKind::Sync, &["--repair", "--status"]);
     assert_eq!(
@@ -540,7 +630,7 @@ task task-123: kind=sync status=queued repo=bitloops\n";
 }
 
 #[test]
-fn devql_task_queue_status_is_idle_requires_zero_queued_and_running_tasks() {
+fn devql_task_queue_status_is_idle_requires_zero_queued_running_and_failed_tasks() {
     let busy = DevqlTaskQueueStatusSnapshot {
         state: "running".to_string(),
         queued: 1,
@@ -556,8 +646,15 @@ fn devql_task_queue_status_is_idle_requires_zero_queued_and_running_tasks() {
         running: 0,
         ..busy.clone()
     };
+    let failed = DevqlTaskQueueStatusSnapshot {
+        queued: 0,
+        running: 0,
+        failed: 1,
+        ..busy.clone()
+    };
 
     assert!(!devql_task_queue_status_is_idle(&busy));
+    assert!(!devql_task_queue_status_is_idle(&failed));
     assert!(devql_task_queue_status_is_idle(&idle));
 }
 

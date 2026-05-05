@@ -44,10 +44,15 @@ pub(super) fn process_is_running(pid: u32) -> Result<bool> {
         }
 
         let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        Ok(unix_kill_zero_indicates_running(
+        let visible = unix_kill_zero_indicates_running(
             result,
             std::io::Error::last_os_error().raw_os_error(),
-        ))
+        );
+        if !visible {
+            return Ok(false);
+        }
+
+        Ok(!unix_process_is_zombie(pid))
     }
 }
 
@@ -58,6 +63,24 @@ fn unix_kill_zero_indicates_running(result: i32, raw_os_error: Option<i32>) -> b
     }
 
     matches!(raw_os_error, Some(libc::EPERM))
+}
+
+#[cfg(not(windows))]
+fn unix_process_is_zombie(pid: u32) -> bool {
+    let output = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .trim_start()
+        .starts_with('Z')
 }
 
 pub(super) fn terminate_process(pid: u32) -> Result<()> {
@@ -296,7 +319,7 @@ mod tests {
     #[cfg(unix)]
     use std::process::Command;
     #[cfg(unix)]
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     #[cfg(unix)]
     use tempfile::TempDir;
 
@@ -323,7 +346,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn reaps_exited_child_process_by_pid() {
+    fn process_liveness_treats_zombie_child_as_exited() {
         let child = Command::new("sh")
             .args(["-c", "exit 0"])
             .spawn()
@@ -331,11 +354,14 @@ mod tests {
         let pid = child.id();
         drop(child);
 
-        std::thread::sleep(Duration::from_millis(50));
-        assert!(
-            process_is_running(pid).expect("inspect child process state before reap"),
-            "expected exited child to remain visible until it is reaped"
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while process_is_running(pid).expect("inspect child process state before reap") {
+            assert!(
+                Instant::now() < deadline,
+                "expected exited zombie child to be treated as no longer running"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
 
         assert!(
             reap_terminated_child_process(pid, Duration::from_secs(1))

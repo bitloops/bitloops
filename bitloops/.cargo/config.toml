@@ -46,6 +46,7 @@ qat-agent-smoke = "nextest run --features qat-tests --test qat_agent_smoke --run
 qat-develop-gate = "nextest run --features qat-tests --test qat_develop_gate --run-ignored only -- qat_develop_gate --exact"
 qat-devql-capabilities = "nextest run --features qat-tests --test qat_devql_capabilities --run-ignored only -- qat_devql_capabilities --exact"
 qat-devql-sync = "nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact"
+qat-devql-sync-producer = "nextest run --features qat-tests --test qat_devql_sync_producer --run-ignored only -- qat_devql_sync_producer --exact"
 qat-onboarding = "nextest run --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact"
 qat-devql-ingest = "nextest run --features qat-tests --test qat_devql_ingest --run-ignored only -- qat_devql_ingest --exact"
 qat-agents-checkpoints = "nextest run --features qat-tests --test qat_agents_checkpoints --run-ignored only -- qat_agents_checkpoints --exact"

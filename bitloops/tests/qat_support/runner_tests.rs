@@ -248,6 +248,7 @@ fn failed_scenario_from_event_ignores_passing_scenarios() {
 fn build_suite_failure_message_lists_failed_scenarios() {
     let message = build_suite_failure_message(
         &Suite::DevqlSync,
+        "cargo qat-devql-sync-producer",
         Path::new("qat/features/devql-sync/sync_workspace.feature"),
         0,
         0,
@@ -267,6 +268,10 @@ fn build_suite_failure_message_lists_failed_scenarios() {
     assert!(
         message.contains("failed_scenarios:"),
         "suite failure message should include a failed_scenarios section: {message}"
+    );
+    assert!(
+        message.contains("rerun: cargo qat-devql-sync-producer"),
+        "suite failure message should use the supplied rerun alias: {message}"
     );
     assert!(
         message.contains(

@@ -556,6 +556,7 @@ pub(crate) fn working_tree_changes(
     let output = new_git_command()
         .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
         .current_dir(repo_root)
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
         .output()
         .context("running git status --porcelain=v1 -z")?;
