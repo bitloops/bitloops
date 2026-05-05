@@ -492,7 +492,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_git_reset @sync_git_reset_hard @sync_known_gap @sync_gap_git_reset
+  @devql @sync @sync_producer @sync_git_reset @sync_git_reset_hard
   Scenario: Producer contract handles git reset hard
     Given I run CleanStart for flow "SyncProducerGitResetHard"
     And I start the daemon in bitloops
@@ -514,7 +514,7 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
-  @devql @sync @sync_producer @sync_git_clean @sync_known_gap @sync_gap_git_clean
+  @devql @sync @sync_producer @sync_git_clean
   Scenario: Producer contract handles git clean
     Given I run CleanStart for flow "SyncProducerGitClean"
     And I start the daemon in bitloops

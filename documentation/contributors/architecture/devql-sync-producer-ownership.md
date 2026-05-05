@@ -88,7 +88,7 @@ The high-value DevQL Sync QAT lane is producer-contract coverage:
 - Develop-gate sync coverage is also producer-contract coverage. Any DevQL Sync scenario tagged `@develop_gate` must also be tagged `@sync_producer` and must not be tagged `@sync_known_gap`.
 - `@sync_manual_smoke` marks the smaller manual sync smoke subset for explicit enqueue, validate, repair, and path-scoped behavior.
 - `@sync_legacy` remains available for historical `init --sync=true` convergence behavior, but it is not the main correctness signal for the product contract.
-- `@sync_known_gap` keeps target-contract scenarios visible when they currently reproduce known product gaps.
+- `@sync_known_gap` keeps target-contract scenarios visible when they currently reproduce known product gaps. Remove the tag from a scenario when its product fix lands so the producer lane starts enforcing it.
 
 The producer lane supplies its filter in code, so `CUCUMBER_FILTER_TAGS` does not accidentally widen or narrow the passing producer contract run. Run `CUCUMBER_FILTER_TAGS='@sync_known_gap' cargo qat-devql-sync` when intentionally investigating those product gaps.
 
