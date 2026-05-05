@@ -280,6 +280,7 @@ fn architecture_and_inference_from_unified_read_fact_synthesis_slot_binding() {
         architecture.inference,
         ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: None,
         }
     );
     assert_eq!(capability.architecture, architecture);

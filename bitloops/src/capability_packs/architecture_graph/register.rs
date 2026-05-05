@@ -2,25 +2,40 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::host::capability_host::{
-    CapabilityMailboxHandler, CapabilityMailboxPolicy, CapabilityMailboxRegistration,
-    CapabilityRegistrar, CurrentStateConsumerRegistration,
+    CapabilityMailboxBacklogPolicy, CapabilityMailboxHandler, CapabilityMailboxPolicy,
+    CapabilityMailboxRegistration, CapabilityRegistrar, CurrentStateConsumerRegistration,
 };
 
 use super::current_state::ArchitectureGraphCurrentStateConsumer;
-use super::ingesters::{build_assert_ingester, build_revoke_ingester};
+use super::ingesters::{
+    build_assert_ingester, build_revoke_ingester, build_role_adjudication_ingester,
+};
 use super::query_examples::ARCHITECTURE_GRAPH_QUERY_EXAMPLES;
 use super::schema::ARCHITECTURE_GRAPH_SCHEMA_MODULE;
-use super::types::{ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID};
+use super::types::{
+    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID,
+    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+};
 
 pub fn register_architecture_graph_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
     registrar.register_ingester(build_assert_ingester())?;
     registrar.register_ingester(build_revoke_ingester())?;
+    registrar.register_ingester(build_role_adjudication_ingester())?;
     registrar.register_mailbox(CapabilityMailboxRegistration::new(
         ARCHITECTURE_GRAPH_CAPABILITY_ID,
         ARCHITECTURE_GRAPH_CONSUMER_ID,
         CapabilityMailboxPolicy::Cursor,
         CapabilityMailboxHandler::CurrentStateConsumer(ARCHITECTURE_GRAPH_CONSUMER_ID),
     ))?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            ARCHITECTURE_GRAPH_CAPABILITY_ID,
+            ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID),
+        )
+        .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
+    )?;
     registrar.register_current_state_consumer(CurrentStateConsumerRegistration::new(
         ARCHITECTURE_GRAPH_CAPABILITY_ID,
         ARCHITECTURE_GRAPH_CONSUMER_ID,
@@ -35,6 +50,8 @@ pub fn register_architecture_graph_pack(registrar: &mut dyn CapabilityRegistrar)
 mod tests {
     use super::super::types::{
         ARCHITECTURE_GRAPH_ASSERT_INGESTER_ID, ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID,
+        ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID,
+        ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
     };
     use super::*;
     use crate::host::capability_host::{
@@ -107,6 +124,10 @@ mod tests {
                     ARCHITECTURE_GRAPH_CAPABILITY_ID,
                     ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID
                 ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID
+                ),
             ]
         );
         assert_eq!(
@@ -118,10 +139,16 @@ mod tests {
         );
         assert_eq!(
             registrar.mailboxes,
-            vec![(
-                ARCHITECTURE_GRAPH_CAPABILITY_ID,
-                ARCHITECTURE_GRAPH_CONSUMER_ID
-            )]
+            vec![
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_CONSUMER_ID
+                ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX
+                ),
+            ]
         );
         assert_eq!(
             registrar.schema_modules,

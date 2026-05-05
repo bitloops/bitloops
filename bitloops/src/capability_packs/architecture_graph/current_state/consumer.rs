@@ -1,4 +1,7 @@
 use super::*;
+use crate::capability_packs::architecture_graph::roles::{
+    default_queue_store, enqueue_adjudication_jobs_for_delta,
+};
 
 pub struct ArchitectureGraphCurrentStateConsumer;
 
@@ -86,10 +89,33 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             )
             .await?;
 
+            let adjudication_metrics = enqueue_adjudication_jobs_for_delta(
+                &request.repo_id,
+                request.to_generation_seq_inclusive,
+                &request.artefact_upserts,
+                context.workplane.as_ref(),
+                default_queue_store().as_ref(),
+            )?;
+            let mut metrics_with_adjudication = metrics;
+            if let Some(metrics_obj) = metrics_with_adjudication.as_object_mut() {
+                metrics_obj.insert(
+                    "role_adjudication_selected".to_string(),
+                    serde_json::Value::from(adjudication_metrics.selected as u64),
+                );
+                metrics_obj.insert(
+                    "role_adjudication_enqueued".to_string(),
+                    serde_json::Value::from(adjudication_metrics.enqueued as u64),
+                );
+                metrics_obj.insert(
+                    "role_adjudication_deduped".to_string(),
+                    serde_json::Value::from(adjudication_metrics.deduped as u64),
+                );
+            }
+
             Ok(CurrentStateConsumerResult {
                 applied_to_generation_seq: request.to_generation_seq_inclusive,
                 warnings,
-                metrics: Some(metrics),
+                metrics: Some(metrics_with_adjudication),
             })
         })
     }

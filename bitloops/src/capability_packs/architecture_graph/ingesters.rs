@@ -13,8 +13,16 @@ use super::storage::{
 };
 use super::types::{
     ARCHITECTURE_GRAPH_ASSERT_INGESTER_ID, ARCHITECTURE_GRAPH_CAPABILITY_ID,
-    ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID, ArchitectureGraphAssertionAction,
-    ArchitectureGraphTargetKind,
+    ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID,
+    ArchitectureGraphAssertionAction, ArchitectureGraphTargetKind,
+};
+use super::{
+    roles::{
+        NoopRoleAssignmentWriter, NoopRoleFactsReader, NoopRoleTaxonomyReader,
+        RoleAdjudicationMailboxPayload, RoleAdjudicationServices, default_queue_store,
+        run_adjudication_request,
+    },
+    types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -96,6 +104,7 @@ impl IngesterHandler for ArchitectureGraphAssertIngester {
 }
 
 pub struct ArchitectureGraphRevokeIngester;
+pub struct ArchitectureRoleAdjudicationIngester;
 
 impl IngesterHandler for ArchitectureGraphRevokeIngester {
     fn ingest<'a>(
@@ -129,6 +138,66 @@ impl IngesterHandler for ArchitectureGraphRevokeIngester {
     }
 }
 
+impl IngesterHandler for ArchitectureRoleAdjudicationIngester {
+    fn ingest<'a>(
+        &'a self,
+        request: IngestRequest,
+        ctx: &'a mut dyn CapabilityIngestContext,
+    ) -> BoxFuture<'a, Result<IngestResult>> {
+        Box::pin(async move {
+            let payload: RoleAdjudicationMailboxPayload = request
+                .parse_json()
+                .context("parse architecture_graph.role_adjudication payload")?;
+            let queue = default_queue_store();
+            static TAXONOMY: NoopRoleTaxonomyReader = NoopRoleTaxonomyReader;
+            static FACTS: NoopRoleFactsReader = NoopRoleFactsReader;
+            static WRITER: NoopRoleAssignmentWriter = NoopRoleAssignmentWriter;
+
+            let services = RoleAdjudicationServices {
+                queue: queue.as_ref(),
+                taxonomy: &TAXONOMY,
+                facts: &FACTS,
+                writer: &WRITER,
+            };
+            let write_outcome = run_adjudication_request(
+                &payload.request,
+                ctx.inference(),
+                ctx.repo_root(),
+                &services,
+            )
+            .with_context(|| {
+                format!(
+                    "run role adjudication for scope `{}` using slot `{}`",
+                    payload.request.scope_key(),
+                    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT
+                )
+            })?;
+
+            Ok(IngestResult::new(
+                json!({
+                    "capability": ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    "ingester": ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID,
+                    "status": "ok",
+                    "scope_key": payload.request.scope_key(),
+                    "persisted": write_outcome.persisted,
+                    "writer_source": write_outcome.source,
+                }),
+                if write_outcome.persisted {
+                    format!(
+                        "architecture role adjudication persisted for `{}`",
+                        payload.request.scope_key()
+                    )
+                } else {
+                    format!(
+                        "architecture role adjudication completed without persistence for `{}`",
+                        payload.request.scope_key()
+                    )
+                },
+            ))
+        })
+    }
+}
+
 pub fn build_assert_ingester() -> IngesterRegistration {
     IngesterRegistration::new(
         ARCHITECTURE_GRAPH_CAPABILITY_ID,
@@ -142,6 +211,14 @@ pub fn build_revoke_ingester() -> IngesterRegistration {
         ARCHITECTURE_GRAPH_CAPABILITY_ID,
         ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID,
         std::sync::Arc::new(ArchitectureGraphRevokeIngester),
+    )
+}
+
+pub fn build_role_adjudication_ingester() -> IngesterRegistration {
+    IngesterRegistration::new(
+        ARCHITECTURE_GRAPH_CAPABILITY_ID,
+        ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID,
+        std::sync::Arc::new(ArchitectureRoleAdjudicationIngester),
     )
 }
 
