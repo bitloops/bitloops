@@ -89,25 +89,17 @@ fn prepare_capture_temporary_checkpoint_batch(
         &deleted,
     )
     .context("building temporary checkpoint tree hash for devql watch")?;
-    if parent_tree.as_deref() == Some(tree_hash.as_str()) {
+
+    let tree_matches_parent = parent_tree.as_deref() == Some(tree_hash.as_str());
+    if tree_matches_parent && !local_sqlite_path_for_capture(cfg)?.exists() {
         return Ok(None);
     }
 
-    let relational = DefaultRelationalStore::open_local_for_repo_root(repo_root)
-        .context("opening local relational store for watcher capture")?;
-    relational.initialise_local_devql_schema()?;
-    let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
-
-    let latest_tree_hash = sqlite.with_connection(|conn| {
-        conn.query_row(
-            "SELECT tree_hash FROM workspace_revisions WHERE repo_id = ?1 ORDER BY id DESC LIMIT 1",
-            rusqlite::params![cfg.repo.repo_id.as_str()],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .map_err(anyhow::Error::from)
-    })?;
+    let latest_tree_hash = latest_workspace_revision_tree_hash(cfg)?;
     if latest_tree_hash.as_deref() == Some(tree_hash.as_str()) {
+        return Ok(None);
+    }
+    if tree_matches_parent && latest_tree_hash.is_none() {
         return Ok(None);
     }
 
@@ -116,6 +108,34 @@ fn prepare_capture_temporary_checkpoint_batch(
         deleted,
         tree_hash,
     }))
+}
+
+fn local_sqlite_path_for_capture(cfg: &crate::host::devql::DevqlConfig) -> Result<PathBuf> {
+    let backend = crate::config::resolve_store_backend_config_for_repo(&cfg.repo_root)
+        .context("resolving store backend config for watcher capture")?;
+    crate::config::resolve_sqlite_db_path_for_repo(
+        &cfg.repo_root,
+        backend.relational.sqlite_path.as_deref(),
+    )
+    .context("resolving local SQLite path for watcher capture")
+}
+
+fn latest_workspace_revision_tree_hash(
+    cfg: &crate::host::devql::DevqlConfig,
+) -> Result<Option<String>> {
+    let relational = DefaultRelationalStore::open_local_for_repo_root(&cfg.repo_root)
+        .context("opening local relational store for watcher capture")?;
+    relational.initialise_local_devql_schema()?;
+    let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
+    sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT tree_hash FROM workspace_revisions WHERE repo_id = ?1 ORDER BY id DESC LIMIT 1",
+            rusqlite::params![cfg.repo.repo_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(anyhow::Error::from)
+    })
 }
 
 async fn sync_changed_paths(
@@ -191,12 +211,22 @@ fn persist_workspace_revision(
     relational.initialise_local_devql_schema()?;
     let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
     sqlite.with_connection(|conn| {
-        conn.execute(
-            "INSERT OR IGNORE INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
+        let tx = conn
+            .unchecked_transaction()
+            .context("starting watcher workspace revision transaction")?;
+        tx.execute(
+            "DELETE FROM workspace_revisions WHERE repo_id = ?1 AND tree_hash = ?2",
             rusqlite::params![cfg.repo.repo_id.as_str(), tree_hash],
         )
-        .map(|_| ())
-        .map_err(anyhow::Error::from)
+        .context("removing prior watcher workspace revision for tree hash")?;
+        tx.execute(
+            "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES (?1, ?2)",
+            rusqlite::params![cfg.repo.repo_id.as_str(), tree_hash],
+        )
+        .context("inserting latest watcher workspace revision")?;
+        tx.commit()
+            .context("committing watcher workspace revision transaction")?;
+        Ok(())
     })
 }
 
@@ -665,6 +695,106 @@ mod tests {
         assert_eq!(
             workspace_rows, 1,
             "duplicate tree hash should be deduplicated"
+        );
+    }
+
+    #[test]
+    fn capture_prepares_batch_when_delete_restores_head_tree_after_dirty_revision() {
+        let dir = seed_repo();
+        let target = dir.path().join("src/dirty_reset.rs");
+        fs::write(&target, "pub fn dirty_reset() {}\n").expect("write dirty source");
+
+        let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("capture dirty source");
+
+        fs::remove_file(&target).expect("delete dirty source");
+        let prepared =
+            prepare_capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+                .expect("prepare delete capture");
+
+        let prepared = prepared.expect("delete returning to HEAD should still produce a batch");
+        assert_eq!(prepared.modified, Vec::<String>::new());
+        assert_eq!(prepared.deleted, vec!["src/dirty_reset.rs".to_string()]);
+    }
+
+    #[test]
+    fn capture_prepares_batch_when_clean_removes_untracked_dirty_revision() {
+        let dir = seed_repo();
+        let target = dir.path().join("src/untracked_clean.rs");
+        fs::write(&target, "pub fn untracked_clean() {}\n").expect("write untracked source");
+
+        let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("capture untracked source");
+
+        fs::remove_file(&target).expect("delete untracked source");
+        let prepared =
+            prepare_capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+                .expect("prepare clean capture");
+
+        let prepared = prepared.expect("clean returning to HEAD should still produce a batch");
+        assert_eq!(prepared.modified, Vec::<String>::new());
+        assert_eq!(prepared.deleted, vec!["src/untracked_clean.rs".to_string()]);
+    }
+
+    #[test]
+    fn capture_marks_revisited_tree_hash_as_latest_after_full_capture() {
+        let dir = seed_repo();
+        let target = dir.path().join("src/revisit.rs");
+        let content = "pub fn revisit() {}\n";
+        fs::write(&target, content).expect("write revisit source");
+
+        let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("capture first revisit source");
+
+        fs::remove_file(&target).expect("delete revisit source");
+        capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("capture revisit cleanup");
+
+        fs::write(&target, content).expect("recreate revisit source");
+        capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+            .expect("capture revisited source");
+
+        let prepared =
+            prepare_capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+                .expect("prepare duplicate revisited source");
+        assert!(
+            prepared.is_none(),
+            "revisited tree hash should become latest and dedupe immediate duplicate events"
+        );
+    }
+
+    #[test]
+    fn prepare_noop_head_tree_does_not_create_sqlite_store() {
+        let dir = seed_repo();
+        let db_path = devql_sqlite_path(dir.path());
+        assert!(
+            !db_path.exists(),
+            "seeded clean repo should not start with a DevQL SQLite store"
+        );
+
+        let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+        let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+            .expect("build devql config");
+        let prepared =
+            prepare_capture_temporary_checkpoint_batch(&cfg, &[dir.path().join("src/lib.rs")])
+                .expect("prepare clean no-op capture");
+
+        assert!(
+            prepared.is_none(),
+            "unchanged HEAD file should not produce a batch"
+        );
+        assert!(
+            !db_path.exists(),
+            "clean no-op prepare should not create the DevQL SQLite store"
         );
     }
 
