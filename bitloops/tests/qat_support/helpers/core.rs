@@ -2090,7 +2090,7 @@ pub fn wait_for_devql_task_queue_idle_for_repo(
         }
         if started.elapsed() >= timeout {
             bail!(
-                "timed out after {}s waiting for DevQL task queue to become idle; attempts={attempts}; last observation=value: {observation}",
+                "timed out after {}s waiting for DevQL task queue to become idle; attempts={attempts}; last observation: {observation}",
                 timeout.as_secs()
             );
         }

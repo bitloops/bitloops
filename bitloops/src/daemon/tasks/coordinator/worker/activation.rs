@@ -79,36 +79,14 @@ impl DevqlTaskCoordinator {
         repo_registry_path: Option<std::path::PathBuf>,
     ) {
         loop {
-            let mut made_progress = false;
-            let reconcile_blocked = match self
-                .ensure_scope_exclusion_reconciles(
-                    &producer_spool_config_root,
-                    repo_registry_path.as_deref(),
-                )
+            if self
+                .run_worker_cycle(&producer_spool_config_root, repo_registry_path.as_deref())
                 .await
-            {
-                Ok(blocked) => blocked,
-                Err(err) => {
-                    log::warn!("daemon DevQL exclusion reconcile error: {err:#}");
+                .unwrap_or_else(|err| {
+                    log::warn!("daemon DevQL task worker cycle error: {err:#}");
                     false
-                }
-            };
-
-            if !reconcile_blocked {
-                match self.schedule_pending_producer_spool_jobs(&producer_spool_config_root) {
-                    Ok(true) => {
-                        continue;
-                    }
-                    Ok(false) => {}
-                    Err(err) => log::warn!("daemon DevQL producer spool worker error: {err:#}"),
-                }
-            }
-            match self.schedule_pending_tasks(&producer_spool_config_root) {
-                Ok(progressed) => made_progress |= progressed,
-                Err(err) => log::warn!("daemon DevQL task worker error: {err:#}"),
-            }
-
-            if made_progress {
+                })
+            {
                 continue;
             }
             tokio::select! {
@@ -116,6 +94,37 @@ impl DevqlTaskCoordinator {
                 _ = sleep(WORKER_POLL_INTERVAL) => {},
             }
         }
+    }
+
+    async fn run_worker_cycle(
+        self: &Arc<Self>,
+        producer_spool_config_root: &Path,
+        repo_registry_path: Option<&Path>,
+    ) -> Result<bool> {
+        let mut made_progress = false;
+        let reconcile_blocked = match self
+            .ensure_scope_exclusion_reconciles(producer_spool_config_root, repo_registry_path)
+            .await
+        {
+            Ok(blocked) => blocked,
+            Err(err) => {
+                log::warn!("daemon DevQL exclusion reconcile error: {err:#}");
+                false
+            }
+        };
+
+        if !reconcile_blocked {
+            match self.schedule_pending_producer_spool_jobs(producer_spool_config_root) {
+                Ok(progressed) => made_progress |= progressed,
+                Err(err) => log::warn!("daemon DevQL producer spool worker error: {err:#}"),
+            }
+        }
+        match self.schedule_pending_tasks(producer_spool_config_root) {
+            Ok(progressed) => made_progress |= progressed,
+            Err(err) => log::warn!("daemon DevQL task worker error: {err:#}"),
+        }
+
+        Ok(made_progress)
     }
 
     fn schedule_pending_producer_spool_jobs(self: &Arc<Self>, config_root: &Path) -> Result<bool> {
@@ -200,5 +209,107 @@ impl DevqlTaskCoordinator {
             DevqlTaskKind::EmbeddingsBootstrap => self.run_embeddings_bootstrap_task(task).await,
             DevqlTaskKind::SummaryBootstrap => self.run_summary_bootstrap_task(task).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    use tempfile::TempDir;
+    use tokio::sync::Notify;
+
+    use crate::daemon::tasks::DevqlTaskCoordinator;
+    use crate::daemon::types::{
+        DevqlTaskKind, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus, SyncTaskMode, SyncTaskSpec,
+    };
+    use crate::host::devql::DevqlConfig;
+    use crate::host::runtime_store::DaemonSqliteRuntimeStore;
+
+    fn coordinator(temp: &TempDir) -> Arc<DevqlTaskCoordinator> {
+        Arc::new(DevqlTaskCoordinator {
+            runtime_store: DaemonSqliteRuntimeStore::open_at(
+                temp.path().join("daemon-runtime.sqlite"),
+            )
+            .expect("open daemon runtime store"),
+            lock: Mutex::new(()),
+            notify: Notify::new(),
+            worker_started: AtomicBool::new(false),
+            subscription_hub: Mutex::new(None),
+        })
+    }
+
+    fn bound_repo_config(
+        config_root: &std::path::Path,
+        repo_root: &std::path::Path,
+    ) -> DevqlConfig {
+        std::fs::create_dir_all(repo_root).expect("create repo root");
+        crate::test_support::git_fixtures::init_test_repo(
+            repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops-test@example.com",
+        );
+        let config_path = crate::test_support::git_fixtures::write_test_daemon_config(config_root);
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &config_path,
+        )
+        .expect("write repo daemon binding");
+
+        let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo");
+        DevqlConfig::from_roots(config_root.to_path_buf(), repo_root.to_path_buf(), repo)
+            .expect("build devql config")
+    }
+
+    #[tokio::test]
+    async fn worker_cycle_schedules_visible_tasks_after_claiming_producer_spool_work() {
+        let dir = TempDir::new().expect("temp dir");
+        let config_root = dir.path().join("config");
+        let visible_repo_root = dir.path().join("visible-repo");
+        let producer_repo_root = dir.path().join("producer-repo");
+        std::fs::create_dir_all(&config_root).expect("create config root");
+
+        let visible_cfg = bound_repo_config(&config_root, &visible_repo_root);
+        let producer_cfg = bound_repo_config(&config_root, &producer_repo_root);
+        let coordinator = coordinator(&dir);
+        coordinator
+            .enqueue(
+                &visible_cfg,
+                DevqlTaskSource::Watcher,
+                DevqlTaskSpec::Sync(SyncTaskSpec {
+                    mode: SyncTaskMode::Paths {
+                        paths: vec!["src/lib.rs".to_string()],
+                    },
+                    post_commit_snapshot: None,
+                }),
+            )
+            .expect("enqueue visible sync task");
+        crate::host::devql::enqueue_spooled_sync_task(
+            &producer_cfg,
+            DevqlTaskSource::Watcher,
+            crate::host::devql::SyncMode::Paths(vec!["src/lib.rs".to_string()]),
+        )
+        .expect("enqueue producer spool task");
+
+        let made_progress = coordinator
+            .run_worker_cycle(&config_root, None)
+            .await
+            .expect("run worker cycle");
+
+        assert!(made_progress, "worker cycle should claim or schedule work");
+        let queued_visible_tasks = coordinator
+            .tasks(
+                Some(&visible_cfg.repo.repo_id),
+                Some(DevqlTaskKind::Sync),
+                Some(DevqlTaskStatus::Queued),
+                None,
+            )
+            .expect("load queued visible tasks");
+        assert!(
+            queued_visible_tasks.is_empty(),
+            "visible tasks for other repos should be scheduled in the same cycle as producer spool work"
+        );
     }
 }

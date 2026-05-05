@@ -1870,10 +1870,6 @@ mod tests {
             feature.contains("@sync_manual_smoke"),
             "devql-sync feature should keep a small taggable manual smoke subset"
         );
-        assert!(
-            feature.contains("@sync_known_gap"),
-            "devql-sync feature should tag known product gaps for isolation"
-        );
     }
 
     #[test]
