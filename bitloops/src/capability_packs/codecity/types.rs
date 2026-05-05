@@ -1,0 +1,692 @@
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+
+use crate::capability_packs::codecity::services::config::CodeCityHealthConfig;
+use crate::host::capability_host::StageResponse;
+
+pub const CODECITY_CAPABILITY_ID: &str = "codecity";
+pub const CODECITY_WORLD_STAGE_ID: &str = "codecity_world";
+pub const CODECITY_BOUNDARIES_STAGE_ID: &str = "codecity_boundaries";
+pub const CODECITY_ARCHITECTURE_STAGE_ID: &str = "codecity_architecture";
+pub const CODECITY_VIOLATIONS_STAGE_ID: &str = "codecity_violations";
+pub const CODECITY_FILE_DETAIL_STAGE_ID: &str = "codecity_file_detail";
+pub const CODECITY_ARCS_STAGE_ID: &str = "codecity_arcs";
+pub const CODECITY_SNAPSHOT_CONSUMER_ID: &str = "codecity.snapshot";
+pub const CODECITY_DEFAULT_SNAPSHOT_KEY: &str = "root";
+pub const CODECITY_ROOT_BOUNDARY_ID: &str = "boundary:root";
+pub const CODECITY_UNCLASSIFIED_ZONE: &str = "unclassified";
+
+mod architecture_diagnostics;
+pub use architecture_diagnostics::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityWorldPayload {
+    pub capability: String,
+    pub stage: String,
+    pub status: String,
+    pub repo_id: String,
+    pub commit_sha: Option<String>,
+    pub config_fingerprint: String,
+    #[serde(default)]
+    pub snapshot_status: CodeCitySnapshotStatus,
+    pub summary: CodeCitySummary,
+    pub health: CodeCityHealthOverview,
+    pub legends: CodeCityLegends,
+    pub layout: CodeCityLayoutSummary,
+    pub boundaries: Vec<CodeCityBoundary>,
+    pub macro_graph: Option<CodeCityMacroGraph>,
+    pub architecture: Option<CodeCityArchitectureReport>,
+    pub boundary_layouts: Vec<CodeCityBoundaryLayoutSummary>,
+    pub buildings: Vec<CodeCityBuilding>,
+    pub arcs: Vec<CodeCityRenderArc>,
+    pub dependency_arcs: Vec<CodeCityDependencyArc>,
+    pub diagnostics: Vec<CodeCityDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityArchitecturePayload {
+    pub capability: String,
+    pub stage: String,
+    pub status: String,
+    pub repo_id: String,
+    pub commit_sha: Option<String>,
+    pub config_fingerprint: String,
+    pub summary: CodeCityArchitectureStageSummary,
+    pub macro_graph: Option<CodeCityMacroGraph>,
+    pub architecture: CodeCityArchitectureReport,
+    pub boundaries: Vec<CodeCityBoundary>,
+    pub boundary_reports: Vec<CodeCityBoundaryArchitectureReport>,
+    pub diagnostics: Vec<CodeCityDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityBoundariesPayload {
+    pub capability: String,
+    pub stage: String,
+    pub status: String,
+    pub repo_id: String,
+    pub commit_sha: Option<String>,
+    pub config_fingerprint: String,
+    pub boundaries: Vec<CodeCityBoundary>,
+    pub file_to_boundary: Vec<CodeCityFileBoundaryAssignment>,
+    pub diagnostics: Vec<CodeCityDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCitySummary {
+    pub file_count: usize,
+    pub artefact_count: usize,
+    pub dependency_count: usize,
+    pub boundary_count: usize,
+    pub macro_edge_count: usize,
+    pub included_file_count: usize,
+    pub excluded_file_count: usize,
+    pub unhealthy_floor_count: usize,
+    pub insufficient_health_data_count: usize,
+    pub coverage_available: bool,
+    pub git_history_available: bool,
+    pub violation_count: usize,
+    pub high_severity_violation_count: usize,
+    pub visible_arc_count: usize,
+    pub cross_boundary_arc_count: usize,
+    pub max_importance: f64,
+    pub max_height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityArchitectureStageSummary {
+    pub boundary_count: usize,
+    pub macro_edge_count: usize,
+    pub macro_topology: CodeCityMacroTopology,
+    pub primary_pattern: CodeCityArchitecturePattern,
+    pub mud_warning_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityLayoutSummary {
+    pub layout_kind: String,
+    pub width: f64,
+    pub depth: f64,
+    pub gap: f64,
+}
+
+impl Default for CodeCityLayoutSummary {
+    fn default() -> Self {
+        Self {
+            layout_kind: "grid_treemap".to_string(),
+            width: 0.0,
+            depth: 0.0,
+            gap: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityBuilding {
+    pub path: String,
+    pub language: String,
+    pub boundary_id: String,
+    pub zone: String,
+    pub inferred_zone: Option<String>,
+    pub convention_zone: Option<String>,
+    pub architecture_role: Option<String>,
+    pub importance: CodeCityImportance,
+    pub size: CodeCitySize,
+    pub geometry: CodeCityGeometry,
+    pub health_risk: Option<f64>,
+    pub health_status: String,
+    pub health_confidence: f64,
+    pub colour: String,
+    pub health_summary: CodeCityBuildingHealthSummary,
+    pub diagnostic_badges: Vec<CodeCityDiagnosticBadge>,
+    pub floors: Vec<CodeCityFloor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCityImportance {
+    pub score: f64,
+    pub blast_radius: usize,
+    pub weighted_fan_in: f64,
+    pub articulation_score: f64,
+    pub normalized_blast_radius: f64,
+    pub normalized_weighted_fan_in: f64,
+    pub normalized_articulation_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCitySize {
+    pub loc: i64,
+    pub artefact_count: usize,
+    pub total_height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCityGeometry {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub width: f64,
+    pub depth: f64,
+    pub side_length: f64,
+    pub footprint_area: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityFloor {
+    pub artefact_id: Option<String>,
+    pub symbol_id: Option<String>,
+    pub name: String,
+    pub canonical_kind: Option<String>,
+    pub language_kind: Option<String>,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub loc: i64,
+    pub floor_index: usize,
+    pub floor_height: f64,
+    pub health_risk: Option<f64>,
+    pub colour: String,
+    pub health_status: String,
+    pub health_confidence: f64,
+    pub health_metrics: CodeCityHealthMetrics,
+    pub health_evidence: CodeCityHealthEvidence,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthOverview {
+    pub status: String,
+    pub analysis_window_months: u32,
+    pub generated_at: Option<String>,
+    pub confidence: f64,
+    pub missing_signals: Vec<String>,
+    pub coverage_available: bool,
+    pub git_history_available: bool,
+    pub weights: CodeCityHealthWeights,
+}
+
+impl CodeCityHealthOverview {
+    pub fn not_requested(analysis_window_months: u32, weights: CodeCityHealthWeights) -> Self {
+        Self {
+            status: "not_requested".to_string(),
+            analysis_window_months,
+            generated_at: None,
+            confidence: 0.0,
+            missing_signals: Vec::new(),
+            coverage_available: false,
+            git_history_available: false,
+            weights,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthWeights {
+    pub churn: f64,
+    pub complexity: f64,
+    pub bugs: f64,
+    pub coverage: f64,
+    pub author_concentration: f64,
+}
+
+impl From<&CodeCityHealthConfig> for CodeCityHealthWeights {
+    fn from(config: &CodeCityHealthConfig) -> Self {
+        Self {
+            churn: config.churn_weight,
+            complexity: config.complexity_weight,
+            bugs: config.bug_weight,
+            coverage: config.coverage_weight,
+            author_concentration: config.author_concentration_weight,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCityBuildingHealthSummary {
+    pub floor_count: usize,
+    pub high_risk_floor_count: usize,
+    pub insufficient_data_floor_count: usize,
+    pub average_risk: Option<f64>,
+    pub max_risk: Option<f64>,
+    pub missing_signals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthMetrics {
+    pub churn: u64,
+    pub complexity: f64,
+    pub bug_count: u64,
+    pub coverage: Option<f64>,
+    pub author_concentration: Option<f64>,
+}
+
+impl Default for CodeCityHealthMetrics {
+    fn default() -> Self {
+        Self {
+            churn: 0,
+            complexity: 0.0,
+            bug_count: 0,
+            coverage: None,
+            author_concentration: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityHealthEvidence {
+    pub commits_touching: u64,
+    pub bug_fix_commits: u64,
+    pub distinct_authors: u64,
+    pub covered_lines: Option<u64>,
+    pub total_coverable_lines: Option<u64>,
+    pub complexity_source: String,
+    pub coverage_source: String,
+    pub git_history_source: String,
+    pub missing_signals: Vec<String>,
+}
+
+impl Default for CodeCityHealthEvidence {
+    fn default() -> Self {
+        Self {
+            commits_touching: 0,
+            bug_fix_commits: 0,
+            distinct_authors: 0,
+            covered_lines: None,
+            total_coverable_lines: None,
+            complexity_source: MetricSource::Unavailable.as_str().to_string(),
+            coverage_source: MetricSource::Unavailable.as_str().to_string(),
+            git_history_source: MetricSource::Unavailable.as_str().to_string(),
+            missing_signals: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthStatus {
+    Ok,
+    Partial,
+    InsufficientData,
+    NotRequested,
+}
+
+impl HealthStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Partial => "partial",
+            Self::InsufficientData => "insufficient_data",
+            Self::NotRequested => "not_requested",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthSignal {
+    Churn,
+    Complexity,
+    Bugs,
+    Coverage,
+    AuthorConcentration,
+}
+
+impl HealthSignal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Churn => "churn",
+            Self::Complexity => "complexity",
+            Self::Bugs => "bugs",
+            Self::Coverage => "coverage",
+            Self::AuthorConcentration => "author_concentration",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricSource {
+    Exact,
+    ArtefactLevel,
+    FileLevelFallback,
+    StructuralProxy,
+    Unavailable,
+}
+
+impl MetricSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::ArtefactLevel => "artefact_level",
+            Self::FileLevelFallback => "file_level_fallback",
+            Self::StructuralProxy => "structural_proxy",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityDependencyArc {
+    pub from_path: String,
+    pub to_path: String,
+    pub edge_count: usize,
+    pub arc_kind: String,
+    pub severity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodeCityDiagnostic {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+    pub path: Option<String>,
+    pub boundary_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityBoundary {
+    pub id: String,
+    pub name: String,
+    pub root_path: String,
+    pub kind: CodeCityBoundaryKind,
+    pub ecosystem: Option<String>,
+    pub parent_boundary_id: Option<String>,
+    pub source: CodeCityBoundarySource,
+    pub file_count: usize,
+    pub artefact_count: usize,
+    pub dependency_count: usize,
+    pub entry_points: Vec<CodeCityEntryPoint>,
+    pub shared_library: bool,
+    pub atomic: bool,
+    pub architecture: Option<CodeCityBoundaryArchitectureSummary>,
+    pub layout: Option<CodeCityBoundaryLayoutPreview>,
+    pub violation_summary: CodeCityViolationSummary,
+    pub diagnostics: Vec<CodeCityDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCityBoundaryKind {
+    Explicit,
+    Runtime,
+    Implicit,
+    Group,
+    RootFallback,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCityBoundarySource {
+    Manifest,
+    WorkspaceManifest,
+    EntryPoint,
+    CommunityDetection,
+    Hierarchy,
+    Fallback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodeCityEntryPoint {
+    pub path: String,
+    pub entry_kind: String,
+    pub closure_file_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityMacroGraph {
+    pub topology: CodeCityMacroTopology,
+    pub boundary_count: usize,
+    pub edge_count: usize,
+    pub density: f64,
+    pub modularity: Option<f64>,
+    pub edges: Vec<CodeCityMacroEdge>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCityMacroTopology {
+    SingleBoundary,
+    Star,
+    Layered,
+    Federated,
+    Tangled,
+    Unknown,
+}
+
+impl CodeCityMacroTopology {
+    pub fn as_layout_kind(self) -> &'static str {
+        match self {
+            Self::SingleBoundary => "grid_treemap",
+            Self::Star => "star_boundaries",
+            Self::Layered => "layered_boundaries",
+            Self::Federated => "federated_boundaries",
+            Self::Tangled => "tangled_boundaries",
+            Self::Unknown => "boundary_grid",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodeCityMacroEdge {
+    pub from_boundary_id: String,
+    pub to_boundary_id: String,
+    pub weight: usize,
+    pub file_edge_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityArchitectureReport {
+    pub macro_topology: CodeCityMacroTopology,
+    pub primary_pattern: CodeCityArchitecturePattern,
+    pub primary_score: f64,
+    pub secondary_pattern: Option<CodeCityArchitecturePattern>,
+    pub secondary_score: Option<f64>,
+    pub mud_score: f64,
+    pub mud_warning: bool,
+    pub boundary_reports: Vec<CodeCityBoundaryArchitectureReport>,
+    pub diagnostics: Vec<CodeCityDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityBoundaryArchitectureReport {
+    pub boundary_id: String,
+    pub primary_pattern: CodeCityArchitecturePattern,
+    pub primary_score: f64,
+    pub secondary_pattern: Option<CodeCityArchitecturePattern>,
+    pub secondary_score: Option<f64>,
+    pub scores: CodeCityArchitectureScores,
+    pub metrics: CodeCityBoundaryGraphMetrics,
+    pub evidence: Vec<CodeCityArchitectureEvidence>,
+    pub diagnostics: Vec<CodeCityDiagnostic>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCityArchitecturePattern {
+    Layered,
+    Hexagonal,
+    Modular,
+    EventDriven,
+    PipeAndFilter,
+    BallOfMud,
+    Unclassified,
+}
+
+impl CodeCityArchitecturePattern {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Layered => "layered",
+            Self::Hexagonal => "hexagonal",
+            Self::Modular => "modular",
+            Self::EventDriven => "event_driven",
+            Self::PipeAndFilter => "pipe_and_filter",
+            Self::BallOfMud => "ball_of_mud",
+            Self::Unclassified => "unclassified",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCityArchitectureScores {
+    pub layered: f64,
+    pub hexagonal: f64,
+    pub modular: f64,
+    pub event_driven: f64,
+    pub pipe_and_filter: f64,
+    pub ball_of_mud: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct CodeCityBoundaryGraphMetrics {
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub density: f64,
+    pub cycle_edge_count: usize,
+    pub largest_scc_size: usize,
+    pub scc_count: usize,
+    pub back_edge_ratio: f64,
+    pub modularity: f64,
+    pub community_count: usize,
+    pub max_fan_in: usize,
+    pub median_fan_in: f64,
+    pub max_fan_out: usize,
+    pub median_fan_out: f64,
+    pub average_path_length: Option<f64>,
+    pub clustering_coefficient: f64,
+    pub core_periphery_score: f64,
+    pub direct_coupling_ratio: f64,
+    pub branching_factor: f64,
+    pub longest_path_len: usize,
+    pub chain_dominance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityArchitectureEvidence {
+    pub name: String,
+    pub value: f64,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityBoundaryArchitectureSummary {
+    pub primary_pattern: CodeCityArchitecturePattern,
+    pub primary_score: f64,
+    pub secondary_pattern: Option<CodeCityArchitecturePattern>,
+    pub mud_score: f64,
+    pub modularity: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityBoundaryLayoutPreview {
+    pub strategy: CodeCityLayoutStrategy,
+    pub zone_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCityZone {
+    Core,
+    Application,
+    Periphery,
+    Edge,
+    Ports,
+    Shared,
+    Unclassified,
+}
+
+impl CodeCityZone {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Application => "application",
+            Self::Periphery => "periphery",
+            Self::Edge => "edge",
+            Self::Ports => "ports",
+            Self::Shared => "shared",
+            Self::Unclassified => CODECITY_UNCLASSIFIED_ZONE,
+        }
+    }
+
+    pub fn ordered() -> &'static [Self] {
+        &[
+            Self::Core,
+            Self::Application,
+            Self::Periphery,
+            Self::Ports,
+            Self::Edge,
+            Self::Shared,
+            Self::Unclassified,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityZoneAssignment {
+    pub path: String,
+    pub boundary_id: String,
+    pub zone: CodeCityZone,
+    pub convention_zone: Option<CodeCityZone>,
+    pub inferred_zone: Option<CodeCityZone>,
+    pub depth_score: Option<f64>,
+    pub confidence: f64,
+    pub disagreement: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodeCityLayoutStrategy {
+    GridTreemap,
+    HexagonalRings,
+    LayeredBands,
+    ModularIslands,
+    PipeAndFilterStrip,
+    MudForceDirected,
+    PlainTreemap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodeCityBoundaryLayoutSummary {
+    pub boundary_id: String,
+    pub strategy: CodeCityLayoutStrategy,
+    pub zone_count: usize,
+    pub width: f64,
+    pub depth: f64,
+    pub x: f64,
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CodeCityFileBoundaryAssignment {
+    pub path: String,
+    pub boundary_id: String,
+}
+
+pub fn codecity_current_scope_required_stage_response(stage_id: &str) -> StageResponse {
+    StageResponse::new(
+        json!({
+            "capability": CODECITY_CAPABILITY_ID,
+            "stage": stage_id,
+            "status": "failed",
+            "reason": "codecity_current_scope_required",
+        }),
+        format!(
+            "{stage_id} requires the current repository scope; historical and temporary asOf(...) scopes are not supported in CodeCity architecture analysis."
+        ),
+    )
+}
+
+pub fn codecity_source_data_unavailable_stage_response(
+    stage_id: &str,
+    message: impl Into<String>,
+) -> StageResponse {
+    let message = message.into();
+    StageResponse::new(
+        json!({
+            "capability": CODECITY_CAPABILITY_ID,
+            "stage": stage_id,
+            "status": "failed",
+            "reason": "codecity_source_data_unavailable",
+        }),
+        message,
+    )
+}

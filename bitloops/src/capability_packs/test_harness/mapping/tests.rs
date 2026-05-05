@@ -3,7 +3,7 @@ use std::fs;
 use std::sync::Arc;
 
 use crate::adapters::languages::python::test_support::{
-    collect_python_suites, resolve_python_import_to_repo_path,
+    collect_python_suites, python_test_support, resolve_python_import_to_repo_path,
 };
 use crate::adapters::languages::rust::test_support::RustTestMappingHelper;
 use crate::adapters::languages::rust::test_support::enumeration::parse_enumerated_doctests;
@@ -1045,6 +1045,50 @@ pub fn evaluate(value: &str) -> bool {
             .iter()
             .any(|edge| edge.to_symbol_id.as_deref() == Some("prod-compile-symbol")),
         "expected at least one static link to the compile production artefact"
+    );
+}
+
+#[test]
+fn execute_records_issue_for_non_utf8_python_test_file_and_continues() {
+    let temp = TempDir::new().expect("failed creating temp repo");
+    let repo_root = temp.path();
+    fs::create_dir_all(repo_root.join("tests")).expect("failed creating tests directory");
+    fs::write(
+        repo_root.join("tests/test_good.py"),
+        "def test_good():\n    assert True\n",
+    )
+    .expect("failed writing UTF-8 python fixture");
+    fs::write(
+        repo_root.join("tests/test_big5.py"),
+        [
+            0x23, 0x20, 0x2d, 0x2a, 0x2d, 0x20, 0x63, 0x6f, 0x64, 0x69, 0x6e, 0x67, 0x3a, 0x20,
+            0x62, 0x69, 0x67, 0x35, 0x20, 0x2d, 0x2a, 0x2d, 0x0a, 0x23, 0x20, 0xa4, 0x40, 0xa8,
+            0xc7, 0xa4, 0xa4, 0xa4, 0xe5, 0xa6, 0x72, 0x0a, 0x64, 0x65, 0x66, 0x20, 0x74, 0x65,
+            0x73, 0x74, 0x5f, 0x62, 0x69, 0x67, 0x35, 0x28, 0x29, 0x3a, 0x0a, 0x20, 0x20, 0x20,
+            0x20, 0x61, 0x73, 0x73, 0x65, 0x72, 0x74, 0x20, 0x54, 0x72, 0x75, 0x65, 0x0a,
+        ],
+    )
+    .expect("failed writing Big5 python fixture");
+
+    let gateway = SourceOnlyLanguageServicesGateway {
+        support: python_test_support(),
+    };
+    let output = execute("repo-1", repo_root, "commit-1", &[], &gateway)
+        .expect("mapping execution should degrade non-UTF-8 files");
+
+    assert!(
+        output
+            .test_artefacts
+            .iter()
+            .any(|artefact| artefact.path == "tests/test_good.py"),
+        "UTF-8 test file should still be discovered"
+    );
+    assert_eq!(output.issues.len(), 1);
+    assert_eq!(output.issues[0].path, "tests/test_big5.py");
+    assert!(
+        output.issues[0].message.contains("valid UTF-8"),
+        "issue should preserve the UTF-8 decoding failure: {}",
+        output.issues[0].message
     );
 }
 

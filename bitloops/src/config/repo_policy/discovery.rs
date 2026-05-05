@@ -286,3 +286,24 @@ fn parse_policy_text(raw: &str, path: &Path) -> Result<RepoPolicyTomlFile> {
         }
     }
 }
+
+pub(crate) fn validate_repo_policy_text(raw: &str, path: &Path) -> Result<()> {
+    let parsed = parse_policy_text(raw, path)?;
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == REPO_POLICY_FILE_NAME)
+        && parsed
+            .daemon
+            .config_path
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        anyhow::bail!(
+            "Bitloops daemon binding must be local-only. Move `[daemon].config_path` from {} into `{}`.",
+            path.display(),
+            REPO_POLICY_LOCAL_FILE_NAME
+        );
+    }
+    Ok(())
+}

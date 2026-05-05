@@ -364,6 +364,97 @@ pub(super) fn then_devql_select_artefacts_search_returns_symbol(
     })
 }
 
+pub(super) fn then_architecture_entry_point_effective(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let kind = ctx.matches[1].1.clone();
+        let path = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "Architecture graph entry point is effective",
+            helpers::assert_architecture_entry_point_effective(world, &repo_name, &kind, &path),
+        );
+    })
+}
+
+pub(super) fn then_architecture_container_exposes_entry_point(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let container_kind = ctx.matches[1].1.clone();
+        let entry_kind = ctx.matches[2].1.clone();
+        let path = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
+        run_step(
+            "Architecture graph container exposes entry point",
+            helpers::assert_architecture_container_exposes_entry_point(
+                world,
+                &repo_name,
+                &container_kind,
+                &entry_kind,
+                &path,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_architecture_system_membership_for_entry_point(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let system_key = ctx.matches[1].1.clone();
+        let entry_kind = ctx.matches[2].1.clone();
+        let path = ctx.matches[3].1.clone();
+        let repo_name = ctx.matches[4].1.clone();
+        run_step(
+            "Architecture graph system membership includes entry point",
+            helpers::assert_architecture_system_membership_for_entry_point(
+                world,
+                &repo_name,
+                &system_key,
+                &entry_kind,
+                &path,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_architecture_suppression_revoke_roundtrip(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let kind = ctx.matches[1].1.clone();
+        let path = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "Architecture graph suppression and revoke round-trip",
+            helpers::assert_architecture_suppression_revoke_roundtrip(
+                world, &repo_name, &kind, &path,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_architecture_manual_entry_point(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let kind = ctx.matches[1].1.clone();
+        let path = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "Architecture graph manual entry point assertion",
+            helpers::assert_architecture_manual_entry_point(world, &repo_name, &kind, &path),
+        );
+    })
+}
+
 pub(super) fn then_devql_select_artefacts_search_returns_at_least(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -507,6 +598,59 @@ pub(super) fn then_devql_artefacts_stable(
         run_step(
             "DevQL artefacts query result count is stable across ingests",
             helpers::assert_devql_artefacts_count_stable(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_daemon_enrichments_eventually_drain(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "daemon enrichments eventually drain",
+            helpers::wait_for_semantic_clone_enrichments_to_drain(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn then_devql_context_guidance_returns_at_least(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let min_count = ctx.matches[2]
+            .1
+            .parse::<usize>()
+            .expect("context guidance min_count should parse as usize");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "DevQL context guidance query returns at least",
+            helpers::assert_devql_context_guidance_returns_at_least(
+                world, &repo_name, &path, min_count,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_devql_context_guidance_includes_kind(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let expected_kind = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "DevQL context guidance query includes kind",
+            helpers::assert_devql_context_guidance_includes_kind(
+                world,
+                &repo_name,
+                &path,
+                &expected_kind,
+            ),
         );
     })
 }

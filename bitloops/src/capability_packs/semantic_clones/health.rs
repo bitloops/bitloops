@@ -192,6 +192,9 @@ fn check_semantic_clones_runtime_handshake(
         let resolution = match task {
             InferenceTask::Embeddings => ctx.inference().embeddings(slot_name).map(|_| ()),
             InferenceTask::TextGeneration => ctx.inference().text_generation(slot_name).map(|_| ()),
+            InferenceTask::StructuredGeneration => {
+                ctx.inference().structured_generation(slot_name).map(|_| ())
+            }
         };
         match resolution {
             Ok(_) => {

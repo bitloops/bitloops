@@ -8,9 +8,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::gateways::{
-    CapabilityWorkplaneGateway, HostServicesGateway, LanguageServicesGateway, RelationalGateway,
+    CapabilityWorkplaneGateway, GitHistoryGateway, HostServicesGateway, LanguageServicesGateway,
+    RelationalGateway,
 };
+use crate::capability_packs::test_harness::storage::BitloopsTestHarnessRepository;
 use crate::host::devql::RelationalStorage;
+use crate::host::inference::InferenceGateway;
 
 #[derive(Debug, Clone)]
 pub enum HostEvent {
@@ -90,8 +93,11 @@ pub struct CurrentStateConsumerContext {
     pub storage: Arc<RelationalStorage>,
     pub relational: Arc<dyn RelationalGateway>,
     pub language_services: Arc<dyn LanguageServicesGateway>,
+    pub git_history: Arc<dyn GitHistoryGateway>,
+    pub inference: Arc<dyn InferenceGateway>,
     pub host_services: Arc<dyn HostServicesGateway>,
     pub workplane: Arc<dyn CapabilityWorkplaneGateway>,
+    pub test_harness: Option<Arc<std::sync::Mutex<BitloopsTestHarnessRepository>>>,
     pub init_session_id: Option<String>,
 }
 
@@ -109,6 +115,7 @@ pub enum ReconcileMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurrentStateConsumerRequest {
+    pub run_id: Option<String>,
     pub repo_id: String,
     pub repo_root: PathBuf,
     pub active_branch: Option<String>,

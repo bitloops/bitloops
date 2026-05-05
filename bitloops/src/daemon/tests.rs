@@ -18,13 +18,13 @@ fn write_daemon_test_config(config_root: &Path) -> PathBuf {
     fs::write(
         &config_path,
         r#"[stores.relational]
-sqlite_path = ".bitloops/stores/daemon.sqlite"
+sqlite_path = "stores/daemon.sqlite"
 
 [stores.events]
-duckdb_path = ".bitloops/stores/daemon.duckdb"
+duckdb_path = "stores/daemon.duckdb"
 
 [stores.blob]
-local_path = ".bitloops/blob-store"
+local_path = "blob-store"
 "#,
     )
     .expect("write test config");
@@ -437,16 +437,13 @@ fn resolve_daemon_config_uses_explicit_config_path_independent_of_cwd() {
     assert_eq!(resolved.config_root, canonical_root);
     assert_eq!(
         resolved.relational_db_path,
-        canonical_root.join(".bitloops/stores/daemon.sqlite")
+        canonical_root.join("stores/daemon.sqlite")
     );
     assert_eq!(
         resolved.events_db_path,
-        canonical_root.join(".bitloops/stores/daemon.duckdb")
+        canonical_root.join("stores/daemon.duckdb")
     );
-    assert_eq!(
-        resolved.blob_store_path,
-        canonical_root.join(".bitloops/blob-store")
-    );
+    assert_eq!(resolved.blob_store_path, canonical_root.join("blob-store"));
     assert_eq!(
         resolved.repo_registry_path,
         global_daemon_dir_fallback().join("repo-path-registry.json")
@@ -483,7 +480,7 @@ fn resolve_daemon_config_uses_default_global_config_path() {
     assert_eq!(resolved.config_root, canonical_root);
     assert_eq!(
         resolved.relational_db_path,
-        canonical_root.join(".bitloops/stores/daemon.sqlite")
+        canonical_root.join("stores/daemon.sqlite")
     );
 }
 
@@ -540,7 +537,7 @@ fn resolve_daemon_config_uses_env_override_when_explicit_path_is_missing() {
     assert_eq!(resolved.config_root, canonical_root);
     assert_eq!(
         resolved.relational_db_path,
-        canonical_root.join(".bitloops/stores/daemon.sqlite")
+        canonical_root.join("stores/daemon.sqlite")
     );
 }
 

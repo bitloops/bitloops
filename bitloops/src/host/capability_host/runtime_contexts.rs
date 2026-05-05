@@ -11,7 +11,8 @@ mod tests;
 
 pub use language_services::BuiltinLanguageServicesGateway;
 pub use local_gateways::{
-    DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalStoreHealthGateway,
+    DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalGitHistoryGateway,
+    LocalStoreHealthGateway,
 };
 pub use local_resources::LocalCapabilityRuntimeResources;
 pub use local_runtime::LocalCapabilityRuntime;

@@ -461,13 +461,24 @@ mod tests {
     }
 
     #[test]
-    fn builtin_registry_report_lists_three_first_party_packs() {
+    fn builtin_registry_report_lists_first_party_packs() {
         let tmp = tempdir().expect("tempdir");
         let host = DevqlCapabilityHost::builtin(tmp.path(), sample_repo()).expect("builtin host");
         let report = host.registry_report();
         let mut ids: Vec<_> = report.packs.iter().map(|p| p.id.as_str()).collect();
         ids.sort();
-        assert_eq!(ids, ["knowledge", "semantic_clones", "test_harness"]);
+        assert_eq!(
+            ids,
+            [
+                "architecture_graph",
+                "codecity",
+                "context_guidance",
+                "knowledge",
+                "navigation_context",
+                "semantic_clones",
+                "test_harness"
+            ]
+        );
         assert!(
             !report.migration_plan.is_empty(),
             "expected at least one pack migration registered"
@@ -480,7 +491,10 @@ mod tests {
         let host = DevqlCapabilityHost::builtin(tmp.path(), sample_repo()).expect("builtin host");
         let report = host.registry_report();
         let text = format_registry_report_human(&report);
+        assert!(text.contains("architecture_graph"));
+        assert!(text.contains("codecity"));
         assert!(text.contains("knowledge"));
+        assert!(text.contains("navigation_context"));
         assert!(text.contains("semantic_clones"));
         assert!(text.contains("test_harness"));
         assert!(text.contains("migration_plan"));

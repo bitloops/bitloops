@@ -23,16 +23,15 @@ use crate::capability_packs::semantic_clones::{
     parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{
-    DevqlConfig, RelationalStorage, build_capability_host, resolve_repo_identity,
-};
+use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host};
 use crate::host::runtime_store::{
     SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind, SemanticSummaryMailboxItemInsert,
 };
 
 use super::super::semantic_writer::{CommitSummaryBatchRequest, SemanticBatchRepoContext};
 use super::super::workplane::{
-    ClaimedSummaryMailboxBatch, SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE, fallback_repo_identity,
+    ClaimedSummaryMailboxBatch, SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE,
+    repo_identity_from_runtime_metadata,
 };
 use super::helpers::{
     dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
@@ -52,8 +51,7 @@ pub(crate) async fn prepare_summary_mailbox_batch<F>(
 where
     F: FnMut(&str, &BTreeSet<String>),
 {
-    let repo = resolve_repo_identity(&batch.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&batch.repo_root, &batch.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&batch.repo_root, &batch.repo_id);
     let cfg = DevqlConfig::from_roots(batch.config_root.clone(), batch.repo_root.clone(), repo)?;
     let backends = resolve_store_backend_config_for_repo(&batch.config_root)?;
     let relational =

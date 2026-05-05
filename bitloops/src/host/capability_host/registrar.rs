@@ -327,6 +327,7 @@ pub enum CapabilityMailboxPolicy {
 pub enum CapabilityMailboxReadinessPolicy {
     None,
     TextGenerationSlot(&'static str),
+    OptionalTextGenerationSlot(&'static str),
     EmbeddingsSlot(&'static str),
 }
 

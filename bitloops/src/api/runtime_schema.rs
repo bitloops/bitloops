@@ -7,6 +7,7 @@
 // the test scaffolding).
 
 mod config;
+mod config_management;
 mod events;
 mod handlers;
 mod init_session;

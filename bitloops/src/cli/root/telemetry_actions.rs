@@ -370,6 +370,21 @@ fn init_action(args: &crate::cli::init::InitArgs) -> crate::telemetry::analytics
     if args.skip_baseline {
         flags.push("skip_baseline");
     }
+    if args.no_summaries {
+        flags.push("no_summaries");
+    }
+    if args.context_guidance_runtime.is_some() {
+        flags.push("context_guidance_runtime");
+    }
+    if args.no_context_guidance {
+        flags.push("no_context_guidance");
+    }
+    if args.context_guidance_gateway_url.is_some() {
+        flags.push("context_guidance_gateway_url");
+    }
+    if args.context_guidance_api_key_env.is_some() {
+        flags.push("context_guidance_api_key_env");
+    }
     if !args.exclude.is_empty() {
         flags.push("exclude");
     }
@@ -429,6 +444,18 @@ fn enable_action(
     }
     if args.install_embeddings {
         flags.push("install_embeddings");
+    }
+    if args.install_context_guidance {
+        flags.push("install_context_guidance");
+    }
+    if args.context_guidance_runtime.is_some() {
+        flags.push("context_guidance_runtime");
+    }
+    if args.context_guidance_gateway_url.is_some() {
+        flags.push("context_guidance_gateway_url");
+    }
+    if args.context_guidance_api_key_env.is_some() {
+        flags.push("context_guidance_api_key_env");
     }
     insert_flags(&mut props, flags);
     insert_bool_property(&mut props, "has_agent", args.agent.is_some());
@@ -682,6 +709,66 @@ fn devql_action(
                 HashMap::new(),
             )),
         },
+        crate::cli::devql::DevqlCommand::NavigationContext(args) => match &args.command {
+            crate::cli::devql::DevqlNavigationContextCommand::Status(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.json {
+                    flags.push("json");
+                }
+                insert_flags(&mut props, flags);
+                insert_bool_property(&mut props, "has_view", args.view.is_some());
+                insert_bool_property(&mut props, "has_status", args.status.is_some());
+                insert_count_property(&mut props, "changed_limit", args.changed_limit);
+                Some(new_action(
+                    "bitloops devql navigation-context status",
+                    props,
+                ))
+            }
+            crate::cli::devql::DevqlNavigationContextCommand::Materialise(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.json {
+                    flags.push("json");
+                }
+                if args.rendered {
+                    flags.push("rendered");
+                }
+                insert_flags(&mut props, flags);
+                insert_bool_property(
+                    &mut props,
+                    "has_expected_current_signature",
+                    args.expected_current_signature.is_some(),
+                );
+                Some(new_action(
+                    "bitloops devql navigation-context materialise",
+                    props,
+                ))
+            }
+            crate::cli::devql::DevqlNavigationContextCommand::Accept(args) => {
+                let mut props = HashMap::new();
+                let mut flags = Vec::new();
+                if args.json {
+                    flags.push("json");
+                }
+                insert_flags(&mut props, flags);
+                insert_bool_property(
+                    &mut props,
+                    "has_expected_current_signature",
+                    args.expected_current_signature.is_some(),
+                );
+                insert_bool_property(&mut props, "has_reason", args.reason.is_some());
+                insert_bool_property(
+                    &mut props,
+                    "has_materialised_ref",
+                    args.materialised_ref.is_some(),
+                );
+                Some(new_action(
+                    "bitloops devql navigation-context accept",
+                    props,
+                ))
+            }
+        },
         crate::cli::devql::DevqlCommand::TestHarness(args) => match &args.command {
             crate::cli::devql::DevqlTestHarnessCommand::IngestTests(_) => Some(new_action(
                 "bitloops devql test-harness ingest-tests",
@@ -842,122 +929,4 @@ fn inference_action(
 }
 
 #[cfg(test)]
-mod telemetry_actions_unit_tests {
-    use super::*;
-    use clap::Parser;
-
-    #[test]
-    fn stage_sequence_from_devql_query_splits_arrow_stages_and_strips_calls() {
-        assert_eq!(
-            stage_sequence_from_devql_query("a -> b( x ) -> c"),
-            vec!["a", "b", "c"]
-        );
-    }
-
-    #[test]
-    fn stage_sequence_from_devql_query_skips_empty_segments() {
-        assert_eq!(
-            stage_sequence_from_devql_query("  foo  ->   -> bar "),
-            vec!["foo", "bar"]
-        );
-    }
-
-    #[test]
-    fn telemetry_action_for_version_includes_check_flag() {
-        let with_check = telemetry_action_for_version(true);
-        assert_eq!(with_check.event, "bitloops version");
-        let flags = with_check
-            .properties
-            .get("flags")
-            .and_then(|v| v.as_array())
-            .expect("flags array");
-        assert_eq!(flags.len(), 1);
-        assert_eq!(flags[0].as_str(), Some("check"));
-
-        let plain = telemetry_action_for_version(false);
-        assert!(!plain.properties.contains_key("flags"));
-    }
-
-    #[test]
-    fn telemetry_action_for_init_with_repeated_agents_sets_has_agent() {
-        let cli = crate::cli::Cli::try_parse_from([
-            "bitloops",
-            "init",
-            "--agent",
-            "cursor",
-            "--agent",
-            "codex",
-            "--sync=false",
-            "--ingest=false",
-        ])
-        .expect("init command should parse");
-        let action = telemetry_action_for_command(
-            cli.command
-                .as_ref()
-                .expect("init command should produce a subcommand"),
-        )
-        .expect("init telemetry action should be emitted");
-
-        assert_eq!(action.event, "bitloops init");
-        assert_eq!(
-            action.properties.get("has_agent").and_then(Value::as_bool),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn telemetry_action_for_devql_tasks_enqueue_ingest_has_no_legacy_checkpoint_limit_property() {
-        let cli = crate::cli::Cli::try_parse_from([
-            "bitloops", "devql", "tasks", "enqueue", "--kind", "ingest",
-        ])
-        .expect("devql task enqueue should parse");
-        let action = telemetry_action_for_command(
-            cli.command
-                .as_ref()
-                .expect("devql task enqueue should produce a subcommand"),
-        )
-        .expect("devql task enqueue telemetry action should be emitted");
-
-        assert_eq!(action.event, "bitloops devql tasks enqueue");
-        assert_eq!(
-            action.properties.get("task_kind").and_then(Value::as_str),
-            Some("ingest")
-        );
-        assert!(
-            !action.properties.contains_key("max_checkpoints"),
-            "devql task enqueue should not emit the removed max_checkpoints property"
-        );
-    }
-
-    #[test]
-    fn telemetry_action_for_daemon_logs_records_level_filters() {
-        let cli = crate::cli::Cli::try_parse_from([
-            "bitloops", "daemon", "logs", "--level", "warning", "--level", "ERROR", "--follow",
-        ])
-        .expect("daemon logs should parse");
-        let action = telemetry_action_for_command(
-            cli.command
-                .as_ref()
-                .expect("daemon logs should produce a subcommand"),
-        )
-        .expect("daemon logs telemetry action should be emitted");
-
-        assert_eq!(action.event, "bitloops daemon logs");
-        assert_eq!(
-            action
-                .properties
-                .get("flags")
-                .and_then(Value::as_array)
-                .map(|flags| { flags.iter().filter_map(Value::as_str).collect::<Vec<_>>() }),
-            Some(vec!["follow"])
-        );
-        assert_eq!(
-            action
-                .properties
-                .get("levels")
-                .and_then(Value::as_array)
-                .map(|levels| { levels.iter().filter_map(Value::as_str).collect::<Vec<_>>() }),
-            Some(vec!["warn", "error"])
-        );
-    }
-}
+mod tests;

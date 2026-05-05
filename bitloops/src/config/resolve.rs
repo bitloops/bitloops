@@ -10,6 +10,7 @@ use super::daemon_config::{
     LoadedDaemonSettings, default_daemon_config_exists, default_daemon_config_path,
     load_daemon_settings,
 };
+pub(crate) use super::inference_resolve::resolve_inference_from_unified_with;
 use super::repo_policy::{REPO_POLICY_LOCAL_FILE_NAME, discover_repo_policy_optional};
 use super::store_config_utils::{
     current_repo_root_or_cwd, current_repo_root_or_cwd_result, normalize_blob_path,
@@ -17,14 +18,15 @@ use super::store_config_utils::{
     resolve_configured_path, resolve_required_provider_string,
 };
 use super::types::{
-    AtlassianProviderConfig, BlobStorageConfig, DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
+    ArchitectureConfig, ArchitectureInferenceBindings, AtlassianProviderConfig, BlobStorageConfig,
+    ContextGuidanceConfig, ContextGuidanceInferenceBindings, DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
     DashboardFileConfig, EmbeddingCapabilityConfig, EmbeddingsConfig, EventsBackendConfig,
-    GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig, InferenceProfileConfig,
-    InferenceRuntimeConfig, InferenceTask, MAX_SEMANTIC_CLONES_ANN_NEIGHBORS,
-    MIN_SEMANTIC_CLONES_ANN_NEIGHBORS, ProviderConfig, RelationalBackendConfig,
-    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig,
-    StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
+    GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig,
+    MAX_SEMANTIC_CLONES_ANN_NEIGHBORS, MIN_SEMANTIC_CLONES_ANN_NEIGHBORS, ProviderConfig,
+    RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
+    StoreBackendConfig, StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
 };
+
 use super::unified_config::{
     UnifiedSettings, resolve_dashboard_from_unified, resolve_inference_capability_from_unified,
     resolve_inference_from_unified, resolve_provider_from_unified,
@@ -401,10 +403,10 @@ pub fn resolve_blob_local_path_for_repo(
     }
 }
 
-/// Default relative paths for local backends (resolved against repo_root at use-time).
-const DEFAULT_SQLITE_PATH: &str = ".bitloops/stores/relational/relational.db";
-const DEFAULT_DUCKDB_PATH: &str = ".bitloops/stores/event/events.duckdb";
-const DEFAULT_BLOB_LOCAL_PATH: &str = ".bitloops/stores/blob";
+/// Default relative paths for local daemon backends.
+const DEFAULT_SQLITE_PATH: &str = "stores/relational/relational.db";
+const DEFAULT_DUCKDB_PATH: &str = "stores/event/events.duckdb";
+const DEFAULT_BLOB_LOCAL_PATH: &str = "stores/blob";
 
 pub(crate) fn resolve_store_backend_config_with(
     file_cfg: StoreFileConfig,
@@ -604,6 +606,59 @@ where
     }
 }
 
+pub(crate) fn resolve_context_guidance_from_unified_with<F>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> ContextGuidanceConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let root = settings
+        .context_guidance
+        .as_ref()
+        .and_then(Value::as_object);
+    let inference_root = root
+        .and_then(|map| map.get("inference"))
+        .and_then(Value::as_object);
+
+    ContextGuidanceConfig {
+        inference: ContextGuidanceInferenceBindings {
+            guidance_generation: inference_root
+                .and_then(|map| read_any_string(map, &["guidance_generation"]))
+                .or_else(|| {
+                    read_non_empty_env(&env_lookup, "BITLOOPS_CONTEXT_GUIDANCE_GUIDANCE_GENERATION")
+                })
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .filter(|value| !matches!(value.to_ascii_lowercase().as_str(), "off" | "disabled")),
+        },
+    }
+}
+
+pub(crate) fn resolve_architecture_from_unified_with<F>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> ArchitectureConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let root = settings.architecture.as_ref().and_then(Value::as_object);
+    let inference_root = root
+        .and_then(|map| map.get("inference"))
+        .and_then(Value::as_object);
+
+    ArchitectureConfig {
+        inference: ArchitectureInferenceBindings {
+            fact_synthesis: inference_root
+                .and_then(|map| read_any_string(map, &["fact_synthesis"]))
+                .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_ARCHITECTURE_FACT_SYNTHESIS"))
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .filter(|value| !matches!(value.to_ascii_lowercase().as_str(), "off" | "disabled")),
+        },
+    }
+}
+
 fn clamp_semantic_clones_ann_neighbors(value: i64) -> usize {
     if value < MIN_SEMANTIC_CLONES_ANN_NEIGHBORS as i64 {
         return MIN_SEMANTIC_CLONES_ANN_NEIGHBORS;
@@ -612,194 +667,6 @@ fn clamp_semantic_clones_ann_neighbors(value: i64) -> usize {
         return MAX_SEMANTIC_CLONES_ANN_NEIGHBORS;
     }
     value as usize
-}
-
-pub(crate) fn resolve_inference_from_unified_with<F>(
-    settings: &UnifiedSettings,
-    config_root: &Path,
-    env_lookup: F,
-) -> InferenceConfig
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let root = settings.inference.as_ref().and_then(Value::as_object);
-    let runtimes_root = root
-        .and_then(|map| map.get("runtimes"))
-        .and_then(Value::as_object);
-    let profiles_root = root
-        .and_then(|map| map.get("profiles"))
-        .and_then(Value::as_object);
-
-    let defaults = InferenceRuntimeConfig::default();
-    let mut warnings = Vec::new();
-    let mut runtimes = std::collections::BTreeMap::new();
-    if let Some(runtimes_root) = runtimes_root {
-        for (name, value) in runtimes_root {
-            let Some(runtime_root) = value.as_object() else {
-                warnings.push(format!(
-                    "inference.runtimes.{name} must be a table and was ignored"
-                ));
-                continue;
-            };
-
-            let command = resolve_runtime_string_opt(
-                Some(runtime_root),
-                "command",
-                &env_lookup,
-                &mut warnings,
-                &format!("inference.runtimes.{name}.command"),
-            )
-            .unwrap_or_default();
-            if command.trim().is_empty() {
-                warnings.push(format!(
-                    "inference.runtimes.{name}.command is empty; the runtime will fail if a profile references it"
-                ));
-            }
-
-            runtimes.insert(
-                name.to_string(),
-                InferenceRuntimeConfig {
-                    command,
-                    args: resolve_runtime_args(
-                        Some(runtime_root),
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.runtimes.{name}.args"),
-                    )
-                    .unwrap_or_default(),
-                    startup_timeout_secs: read_any_u64(runtime_root, &["startup_timeout_secs"])
-                        .unwrap_or(defaults.startup_timeout_secs),
-                    request_timeout_secs: read_any_u64(runtime_root, &["request_timeout_secs"])
-                        .unwrap_or(defaults.request_timeout_secs),
-                },
-            );
-        }
-    }
-
-    let mut profiles = std::collections::BTreeMap::new();
-    if let Some(profiles_root) = profiles_root {
-        for (name, value) in profiles_root {
-            let Some(profile_root) = value.as_object() else {
-                warnings.push(format!(
-                    "inference.profiles.{name} must be a table and was ignored"
-                ));
-                continue;
-            };
-
-            let task = resolve_runtime_string_opt(
-                Some(profile_root),
-                "task",
-                &env_lookup,
-                &mut warnings,
-                &format!("inference.profiles.{name}.task"),
-            )
-            .unwrap_or_default();
-            let driver = resolve_runtime_string_opt(
-                Some(profile_root),
-                "driver",
-                &env_lookup,
-                &mut warnings,
-                &format!("inference.profiles.{name}.driver"),
-            )
-            .unwrap_or_default();
-            if task.is_empty() || driver.is_empty() {
-                warnings.push(format!(
-                    "inference.profiles.{name} must declare both `task` and `driver` and was ignored"
-                ));
-                continue;
-            }
-            let task = parse_inference_task(&task);
-
-            let runtime = resolve_runtime_string_opt(
-                Some(profile_root),
-                "runtime",
-                &env_lookup,
-                &mut warnings,
-                &format!("inference.profiles.{name}.runtime"),
-            );
-            let temperature = resolve_runtime_string_opt(
-                Some(profile_root),
-                "temperature",
-                &env_lookup,
-                &mut warnings,
-                &format!("inference.profiles.{name}.temperature"),
-            );
-            let max_output_tokens = read_any_u64(profile_root, &["max_output_tokens"])
-                .map(|value| value.min(u32::MAX as u64) as u32);
-            if task == InferenceTask::TextGeneration
-                && runtime
-                    .as_deref()
-                    .map(str::trim)
-                    .is_none_or(|value| value.is_empty())
-            {
-                warnings.push(format!(
-                    "inference.profiles.{name} uses task `text_generation` and should declare `runtime`"
-                ));
-            }
-            if task == InferenceTask::TextGeneration
-                && temperature
-                    .as_deref()
-                    .map(str::trim)
-                    .is_none_or(|value| value.is_empty())
-            {
-                warnings.push(format!(
-                    "inference.profiles.{name} uses task `text_generation` and should declare `temperature`"
-                ));
-            }
-            if task == InferenceTask::TextGeneration && max_output_tokens.is_none() {
-                warnings.push(format!(
-                    "inference.profiles.{name} uses task `text_generation` and should declare `max_output_tokens`"
-                ));
-            }
-
-            profiles.insert(
-                name.to_string(),
-                InferenceProfileConfig {
-                    name: name.to_string(),
-                    task,
-                    driver,
-                    runtime,
-                    model: resolve_runtime_string_opt(
-                        Some(profile_root),
-                        "model",
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.profiles.{name}.model"),
-                    ),
-                    api_key: resolve_runtime_string_opt(
-                        Some(profile_root),
-                        "api_key",
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.profiles.{name}.api_key"),
-                    ),
-                    base_url: resolve_runtime_string_opt(
-                        Some(profile_root),
-                        "base_url",
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.profiles.{name}.base_url"),
-                    ),
-                    temperature,
-                    max_output_tokens,
-                    cache_dir: resolve_runtime_string_opt(
-                        Some(profile_root),
-                        "cache_dir",
-                        &env_lookup,
-                        &mut warnings,
-                        &format!("inference.profiles.{name}.cache_dir"),
-                    )
-                    .map(|path| resolve_configured_path(&path, config_root)),
-                },
-            );
-        }
-    }
-
-    InferenceConfig {
-        runtimes,
-        profiles,
-        warnings,
-    }
 }
 
 fn parse_github_provider_config<F>(
@@ -861,82 +728,6 @@ pub(crate) fn resolve_store_backend_config_for_tests(
     resolve_store_backend_config_with(file_cfg)
 }
 
-fn resolve_runtime_string_opt<F>(
-    root: Option<&Map<String, Value>>,
-    key: &str,
-    env_lookup: &F,
-    warnings: &mut Vec<String>,
-    field_name: &str,
-) -> Option<String>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let raw = root.and_then(|map| map.get(key)).and_then(Value::as_str)?;
-    match resolve_runtime_string(raw, env_lookup) {
-        Ok(Some(value)) => Some(value),
-        Ok(None) => None,
-        Err(err) => {
-            warnings.push(format!("{field_name}: {err}"));
-            None
-        }
-    }
-}
-
-fn resolve_runtime_args<F>(
-    root: Option<&Map<String, Value>>,
-    env_lookup: &F,
-    warnings: &mut Vec<String>,
-    field_name: &str,
-) -> Option<Vec<String>>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let raw = root.and_then(|map| map.get("args"))?;
-    let Some(items) = raw.as_array() else {
-        warnings.push(format!("{field_name}: expected an array of strings"));
-        return None;
-    };
-    let mut resolved = Vec::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
-        let Some(item) = item.as_str() else {
-            warnings.push(format!("{field_name}[{index}]: expected a string"));
-            continue;
-        };
-        match resolve_runtime_string(item, env_lookup) {
-            Ok(Some(value)) => resolved.push(value),
-            Ok(None) => {}
-            Err(err) => warnings.push(format!("{field_name}[{index}]: {err}")),
-        }
-    }
-    Some(resolved)
-}
-
-fn resolve_runtime_string<F>(raw: &str, env_lookup: &F) -> Result<Option<String>>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    if let Some(key) = trimmed
-        .strip_prefix("${")
-        .and_then(|value| value.strip_suffix('}'))
-    {
-        let Some(env_value) = env_lookup(key) else {
-            anyhow::bail!("environment variable `{key}` is not set");
-        };
-        let env_trimmed = env_value.trim();
-        if env_trimmed.is_empty() {
-            anyhow::bail!("environment variable `{key}` is empty");
-        }
-        return Ok(Some(env_trimmed.to_string()));
-    }
-
-    Ok(Some(trimmed.to_string()))
-}
-
 fn parse_summary_mode(raw: &str) -> SemanticSummaryMode {
     match raw.trim().to_ascii_lowercase().as_str() {
         "" | "auto" => SemanticSummaryMode::Auto,
@@ -954,13 +745,6 @@ fn parse_embedding_mode(raw: &str) -> SemanticCloneEmbeddingMode {
         "deterministic" => SemanticCloneEmbeddingMode::Deterministic,
         "refresh_on_upgrade" | "refresh-on-upgrade" => SemanticCloneEmbeddingMode::RefreshOnUpgrade,
         _ => SemanticCloneEmbeddingMode::SemanticAwareOnce,
-    }
-}
-
-fn parse_inference_task(raw: &str) -> InferenceTask {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "text_generation" | "text-generation" => InferenceTask::TextGeneration,
-        _ => InferenceTask::Embeddings,
     }
 }
 

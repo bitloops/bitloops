@@ -8,7 +8,7 @@ use axum::{
 };
 use base64::Engine as _;
 use serde_json::json;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 
 use crate::test_support::process_state::enter_env_vars;
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
@@ -30,6 +30,34 @@ use super::{WorkosDeviceLoginStart, WorkosLoginStart};
 struct AuthServerState {
     poll_count: Arc<Mutex<usize>>,
     refresh_count: Arc<Mutex<usize>>,
+}
+
+struct TestAuthServer {
+    base_url: String,
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl TestAuthServer {
+    async fn shutdown(mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.await;
+        }
+    }
+}
+
+impl Drop for TestAuthServer {
+    fn drop(&mut self) {
+        if let Some(shutdown_tx) = self.shutdown_tx.take() {
+            let _ = shutdown_tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
 }
 
 fn localhost_bind_available(test_name: &str) -> bool {
@@ -94,7 +122,8 @@ fn workos_device_login_persists_session_to_runtime_store() {
         },
         || {
             let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
-            let (base_url, _shutdown) = runtime.block_on(start_test_auth_server());
+            let server = runtime.block_on(start_test_auth_server());
+            let base_url = server.base_url.clone();
             let start = WorkosDeviceLoginStart {
                 verification_url: format!("{base_url}/verify"),
                 verification_url_complete: Some(format!("{base_url}/verify?code=TEST-CODE")),
@@ -125,6 +154,8 @@ fn workos_device_login_persists_session_to_runtime_store() {
                 .expect("load tokens")
                 .expect("tokens should exist");
             assert!(tokens.access_token.starts_with("ey"));
+
+            runtime.block_on(server.shutdown());
         },
     );
 }
@@ -148,7 +179,8 @@ fn prepare_workos_login_invalidates_session_for_different_client_id() {
         },
         || {
             let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
-            let (base_url, _shutdown) = runtime.block_on(start_test_auth_server());
+            let server = runtime.block_on(start_test_auth_server());
+            let base_url = server.base_url.clone();
             let key = credential_key_for_client("client_old");
             store
                 .save_tokens(
@@ -212,6 +244,8 @@ fn prepare_workos_login_invalidates_session_for_different_client_id() {
                     .expect("load old tokens")
                     .is_none()
             );
+
+            runtime.block_on(server.shutdown());
         },
     );
 }
@@ -234,7 +268,8 @@ fn workos_session_status_refreshes_expired_tokens() {
         },
         || {
             let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
-            let (base_url, _shutdown) = runtime.block_on(start_test_auth_server());
+            let server = runtime.block_on(start_test_auth_server());
+            let base_url = server.base_url.clone();
             let old_exp = now_secs().saturating_sub(30);
             let key = credential_key_for_client("client_test");
             store
@@ -278,11 +313,13 @@ fn workos_session_status_refreshes_expired_tokens() {
                     .access_token_expires_at_unix
                     .is_some_and(|value| value > now_secs())
             );
+
+            runtime.block_on(server.shutdown());
         },
     );
 }
 
-async fn start_test_auth_server() -> (String, tokio::task::JoinHandle<()>) {
+async fn start_test_auth_server() -> TestAuthServer {
     let state = AuthServerState {
         poll_count: Arc::new(Mutex::new(0)),
         refresh_count: Arc::new(Mutex::new(0)),
@@ -303,10 +340,22 @@ async fn start_test_auth_server() -> (String, tokio::task::JoinHandle<()>) {
         .await
         .expect("bind listener");
     let addr = listener.local_addr().expect("local addr");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("serve auth router");
+        if let Err(err) = axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+        {
+            eprintln!("test auth server stopped with error: {err}");
+        }
     });
-    (format!("http://127.0.0.1:{}", addr.port()), handle)
+    TestAuthServer {
+        base_url: format!("http://127.0.0.1:{}", addr.port()),
+        shutdown_tx: Some(shutdown_tx),
+        handle: Some(handle),
+    }
 }
 
 async fn handle_test_authorize_device() -> Json<serde_json::Value> {

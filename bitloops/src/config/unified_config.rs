@@ -67,6 +67,10 @@ pub struct UnifiedSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_clones: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_guidance: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inference: Option<Value>,
 
     // UX / tooling
@@ -176,9 +180,9 @@ pub fn merge_json_layers(layers: &[Value]) -> Result<UnifiedSettings> {
 /// Load effective config from all file scopes and merge them.
 ///
 /// Reads (when present):
-/// - `<global_dir>/.bitloops/config.json`   (scope: global)
-/// - `<project_root>/.bitloops/config.json`  (scope: project)
-/// - `<project_root>/.bitloops/config.local.json` (scope: project_local)
+/// - `<global_dir>/config.json`   (scope: global)
+/// - `<project_root>/config.json`  (scope: project)
+/// - `<project_root>/config.local.json` (scope: project_local)
 ///
 /// Missing files are silently skipped. Returns the merged [`UnifiedSettings`].
 pub fn load_effective_config(
@@ -187,14 +191,11 @@ pub fn load_effective_config(
 ) -> Result<UnifiedSettings> {
     let mut candidates: Vec<(std::path::PathBuf, ConfigScope)> = Vec::with_capacity(3);
     if let Some(dir) = global_dir {
-        candidates.push((dir.join(".bitloops/config.json"), ConfigScope::Global));
+        candidates.push((dir.join("config.json"), ConfigScope::Global));
     }
+    candidates.push((project_root.join("config.json"), ConfigScope::Project));
     candidates.push((
-        project_root.join(".bitloops/config.json"),
-        ConfigScope::Project,
-    ));
-    candidates.push((
-        project_root.join(".bitloops/config.local.json"),
+        project_root.join("config.local.json"),
         ConfigScope::ProjectLocal,
     ));
 
@@ -235,13 +236,14 @@ pub fn settings_from_json(value: Value) -> Result<UnifiedSettings> {
 // ---------------------------------------------------------------------------
 
 use super::resolve::{
+    resolve_architecture_from_unified_with, resolve_context_guidance_from_unified_with,
     resolve_inference_from_unified_with, resolve_provider_config_from_value_with,
     resolve_semantic_clones_from_unified_with, resolve_store_backend_config_with,
     resolve_watch_runtime_config_with,
 };
 use super::types::{
-    DashboardFileConfig, InferenceCapabilityConfig, InferenceConfig, ProviderConfig,
-    SemanticClonesConfig, StoreBackendConfig, WatchRuntimeConfig,
+    ArchitectureConfig, ContextGuidanceConfig, DashboardFileConfig, InferenceCapabilityConfig,
+    InferenceConfig, ProviderConfig, SemanticClonesConfig, StoreBackendConfig, WatchRuntimeConfig,
 };
 
 /// Resolve store backend configuration (relational, events, blob) from merged
@@ -295,6 +297,20 @@ pub fn resolve_semantic_clones_from_unified<F: Fn(&str) -> Option<String>>(
     resolve_semantic_clones_from_unified_with(settings, env_lookup)
 }
 
+pub fn resolve_context_guidance_from_unified<F: Fn(&str) -> Option<String>>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> ContextGuidanceConfig {
+    resolve_context_guidance_from_unified_with(settings, env_lookup)
+}
+
+pub fn resolve_architecture_from_unified<F: Fn(&str) -> Option<String>>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> ArchitectureConfig {
+    resolve_architecture_from_unified_with(settings, env_lookup)
+}
+
 pub fn resolve_inference_from_unified<F: Fn(&str) -> Option<String>>(
     settings: &UnifiedSettings,
     config_root: &Path,
@@ -317,10 +333,14 @@ pub fn resolve_inference_capability_from_unified<F: Fn(&str) -> Option<String>>(
     env_lookup: F,
 ) -> InferenceCapabilityConfig {
     let semantic_clones = resolve_semantic_clones_from_unified_with(settings, &env_lookup);
+    let context_guidance = resolve_context_guidance_from_unified_with(settings, &env_lookup);
+    let architecture = resolve_architecture_from_unified_with(settings, &env_lookup);
     let inference = resolve_inference_from_unified_with(settings, config_root, env_lookup);
 
     InferenceCapabilityConfig {
         semantic_clones,
+        context_guidance,
+        architecture,
         inference,
     }
 }

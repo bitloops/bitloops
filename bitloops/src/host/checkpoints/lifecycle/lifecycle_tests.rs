@@ -488,6 +488,11 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
 fn route_codex_second_turn_uses_transcript_offsets_for_fragment() -> anyhow::Result<()> {
     let repo = tempfile::tempdir().expect("tempdir");
     setup_git_repo(&repo);
+    crate::config::settings::set_devql_guidance_enabled(
+        &repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        false,
+    )
+    .expect("disable DevQL guidance for transcript offset fixture");
     let session_id = "codex-offset-session";
     let transcript_path = repo.path().join("codex-rollout.jsonl");
     std::fs::write(&transcript_path, "").expect("write transcript");

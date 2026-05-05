@@ -1,13 +1,5 @@
 pub const BITLOOPS_DIR: &str = ".bitloops";
 pub const BITLOOPS_TEST_STATE_DIR: &str = ".bitloops-test-state";
-pub const LEGACY_BITLOOPS_METADATA_DIR: &str = ".bitloops/metadata";
-pub const BITLOOPS_STORES_DIR: &str = ".bitloops/stores";
-pub const BITLOOPS_RELATIONAL_STORE_DIR: &str = ".bitloops/stores/relational";
-pub const BITLOOPS_RUNTIME_STORE_DIR: &str = ".bitloops/stores/runtime";
-pub const BITLOOPS_EVENT_STORE_DIR: &str = ".bitloops/stores/event";
-pub const BITLOOPS_BLOB_STORE_DIR: &str = ".bitloops/stores/blob";
-pub const BITLOOPS_EMBEDDINGS_DIR: &str = ".bitloops/embeddings";
-pub const BITLOOPS_EMBEDDING_MODELS_DIR: &str = ".bitloops/embeddings/models";
 pub const RELATIONAL_DB_FILE_NAME: &str = "relational.db";
 pub const RUNTIME_DB_FILE_NAME: &str = "runtime.sqlite";
 pub const EVENTS_DB_FILE_NAME: &str = "events.duckdb";

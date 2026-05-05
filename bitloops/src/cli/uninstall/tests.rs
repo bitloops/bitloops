@@ -367,7 +367,7 @@ supported = ["codex"]
             .unwrap();
             let skill_path = repo
                 .path()
-                .join(".agents/skills/bitloops/using-devql/SKILL.md");
+                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
             fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
             fs::write(&skill_path, "managed").unwrap();
 

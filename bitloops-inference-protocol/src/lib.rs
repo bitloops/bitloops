@@ -110,6 +110,8 @@ where
         response_modes: Vec<ResponseMode>,
         #[serde(default)]
         usage_reporting: bool,
+        #[serde(default)]
+        structured_output: Vec<String>,
     }
 
     let capabilities = ProviderCapabilitiesWire::deserialize(deserializer)?;
@@ -117,14 +119,18 @@ where
         ProviderCapabilitiesWire::Legacy(capabilities) => capabilities,
         ProviderCapabilitiesWire::Structured(capabilities) => {
             let _ = capabilities.usage_reporting;
-            capabilities
+            let mut output = capabilities
                 .response_modes
                 .into_iter()
                 .map(|mode| match mode {
                     ResponseMode::Text => "text".to_string(),
                     ResponseMode::JsonObject => "json_object".to_string(),
                 })
-                .collect()
+                .collect::<Vec<_>>();
+            output.extend(capabilities.structured_output);
+            output.sort();
+            output.dedup();
+            output
         }
     })
 }
@@ -217,7 +223,8 @@ mod tests {
                 "endpoint":"http://127.0.0.1:11434/api/chat",
                 "capabilities":{
                     "response_modes":["text","json_object"],
-                    "usage_reporting":true
+                    "usage_reporting":true,
+                    "structured_output":["json_schema"]
                 }
             }
         }"#;
@@ -233,7 +240,11 @@ mod tests {
         assert_eq!(response.provider.model_name, "ministral-3:3b");
         assert_eq!(
             response.provider.capabilities,
-            vec!["text".to_string(), "json_object".to_string()]
+            vec![
+                "json_object".to_string(),
+                "json_schema".to_string(),
+                "text".to_string()
+            ]
         );
     }
 }

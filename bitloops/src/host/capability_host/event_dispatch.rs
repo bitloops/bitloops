@@ -177,8 +177,11 @@ mod tests {
                 crate::host::capability_host::gateways::SqliteRelationalGateway::new(sqlite_pool),
             ),
             language_services: Arc::new(EmptyLanguageServicesGateway),
+            git_history: Arc::new(crate::host::capability_host::gateways::EmptyGitHistoryGateway),
+            inference: Arc::new(crate::host::inference::EmptyInferenceGateway),
             host_services: Arc::new(DefaultHostServicesGateway::new("repo-1")),
             workplane: Arc::new(NoopCapabilityWorkplaneGateway),
+            test_harness: None,
             init_session_id: None,
         })
     }

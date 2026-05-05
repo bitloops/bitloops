@@ -16,8 +16,9 @@ use super::super::{
     ExpandHintParameter, TestHarnessTestsResult,
 };
 use super::stages::{
-    CheckpointStageData, CloneExpandHint, CloneStageData, DependencyExpandHint,
-    DependencyStageData, TestsStageData,
+    CheckpointStageData, CloneExpandHint, CloneStageData, ContextGuidanceStageData,
+    DependencyExpandHint, DependencyStageData, HistoricalContextItem, HistoricalContextStageData,
+    HistoricalMatchReason, TestsStageData,
 };
 
 pub(super) fn decode_stage_rows<T: DeserializeOwned>(
@@ -228,12 +229,112 @@ pub(super) fn build_tests_summary(
     })
 }
 
+pub(crate) fn captured_preview(value: &str, max_chars: usize) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || max_chars == 0 {
+        return None;
+    }
+    Some(trimmed.chars().take(max_chars).collect())
+}
+
+pub(super) fn build_historical_context_expand_hint(item_count: usize) -> Option<Value> {
+    (item_count > 0).then(|| {
+        json!({
+            "intent": "Inspect captured historical context for selected artefacts",
+            "template": "bitloops devql query '{ selectArtefacts(...) { historicalContext { overview items(first: 20) { checkpointId sessionId turnId promptPreview transcriptPreview toolEvents { toolKind inputSummary outputSummary command } } } } }'",
+        })
+    })
+}
+
+fn historical_context_item_evidence_kinds(
+    row: &HistoricalContextItem,
+) -> Vec<HistoricalMatchReason> {
+    if row.evidence_kinds.is_empty() {
+        return vec![row.match_reason];
+    }
+    let mut evidence_kinds = Vec::new();
+    for reason in row.evidence_kinds.iter().copied() {
+        if !evidence_kinds.contains(&reason) {
+            evidence_kinds.push(reason);
+        }
+    }
+    evidence_kinds
+}
+
+pub(super) fn build_historical_context_summary(rows: &[HistoricalContextItem]) -> Value {
+    let latest_at = rows.first().map(|row| row.event_time.as_str().to_string());
+    let agents = rows
+        .iter()
+        .filter_map(|row| row.agent_type.as_deref())
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let checkpoint_count = rows
+        .iter()
+        .map(|row| row.checkpoint_id.as_ref().to_string())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let session_count = rows
+        .iter()
+        .map(|row| row.session_id.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let turn_count = rows
+        .iter()
+        .filter_map(|row| row.turn_id.as_deref())
+        .filter(|value| !value.trim().is_empty())
+        .collect::<BTreeSet<_>>()
+        .len();
+    let symbol_provenance = rows
+        .iter()
+        .flat_map(historical_context_item_evidence_kinds)
+        .filter(|reason| *reason == HistoricalMatchReason::SymbolProvenance)
+        .count();
+    let file_relation = rows
+        .iter()
+        .flat_map(historical_context_item_evidence_kinds)
+        .filter(|reason| *reason == HistoricalMatchReason::FileRelation)
+        .count();
+    let line_overlap = rows
+        .iter()
+        .flat_map(historical_context_item_evidence_kinds)
+        .filter(|reason| *reason == HistoricalMatchReason::LineOverlap)
+        .count();
+
+    let mut payload = json!({
+        "totalCount": rows.len(),
+        "latestAt": latest_at,
+        "agents": agents,
+        "checkpointCount": checkpoint_count,
+        "sessionCount": session_count,
+        "turnCount": turn_count,
+        "evidenceCounts": {
+            "symbolProvenance": symbol_provenance,
+            "fileRelation": file_relation,
+            "lineOverlap": line_overlap
+        }
+    });
+    if let Some(expand_hint) = build_historical_context_expand_hint(rows.len()) {
+        payload
+            .as_object_mut()
+            .expect("historical context summary is an object")
+            .insert("expandHint".to_string(), expand_hint);
+    }
+    payload
+}
+
 pub(super) fn build_selection_summary(
     selected_artefact_count: usize,
     checkpoints: &CheckpointStageData,
     clones: &CloneStageData,
     deps: &DependencyStageData,
     tests: &TestsStageData,
+    historical_context: &HistoricalContextStageData,
+    context_guidance: &ContextGuidanceStageData,
 ) -> Value {
     json!({
         "selectedArtefactCount": selected_artefact_count,
@@ -245,6 +346,16 @@ pub(super) fn build_selection_summary(
             deps.schema.as_deref(),
         ),
         "tests": selection_stage_entry(&tests.summary, None, tests.schema.as_deref()),
+        "historicalContext": selection_stage_entry(
+            &historical_context.summary,
+            None,
+            historical_context.schema.as_deref(),
+        ),
+        "contextGuidance": selection_stage_entry(
+            &context_guidance.summary,
+            None,
+            context_guidance.schema.as_deref(),
+        ),
     })
 }
 
@@ -479,4 +590,113 @@ type TestHarnessTestsResult {
   artefact: TestHarnessArtefactRef!
   coveringTests: [TestHarnessCoveringTest!]!
   summary: TestHarnessTestsSummary!
+}"#;
+
+pub(super) const HISTORICAL_CONTEXT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
+  historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
+}
+
+type HistoricalContextStageResult {
+  overview: JSON!
+  schema: String
+  items(first: Int! = 20): [HistoricalContextItem!]!
+}
+
+enum HistoricalEvidenceKind {
+  SYMBOL_PROVENANCE
+  FILE_RELATION
+  LINE_OVERLAP
+}
+
+type HistoricalContextItem {
+  checkpointId: ID!
+  sessionId: String!
+  turnId: String
+  agentType: String
+  model: String
+  eventTime: DateTime!
+  matchReason: HistoricalMatchReason!
+  matchStrength: HistoricalMatchStrength!
+  promptPreview: String
+  turnSummary: String
+  transcriptPreview: String
+  filesModified: [String!]!
+  fileRelations: [CheckpointFileRelation!]!
+  toolEvents: [HistoricalToolEvent!]!
+}
+
+enum HistoricalMatchReason {
+  SYMBOL_PROVENANCE
+  FILE_RELATION
+  LINE_OVERLAP
+}
+
+enum HistoricalMatchStrength {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+type HistoricalToolEvent {
+  toolKind: String
+  inputSummary: String
+  outputSummary: String
+  command: String
+}"#;
+
+pub(super) const CONTEXT_GUIDANCE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
+  contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
+}
+
+type ContextGuidanceStageResult {
+  overview: JSON!
+  schema: String
+  items(first: Int! = 20): [ContextGuidanceItem!]!
+}
+
+type ContextGuidanceItem {
+  id: ID!
+  category: ContextGuidanceCategory!
+  kind: String!
+  label: String!
+  guidance: String!
+  evidenceExcerpt: String!
+  confidence: ContextGuidanceConfidence!
+  relevanceScore: Float!
+  generatedAt: DateTime
+  sourceModel: String
+  sourceCount: Int!
+  sources: [ContextGuidanceSource!]!
+}
+
+type ContextGuidanceSource {
+  sourceType: String!
+  sourceId: String!
+  checkpointId: ID
+  sessionId: String
+  turnId: String
+  toolKind: String
+  knowledgeItemId: ID
+  knowledgeItemVersionId: ID
+  relationAssertionId: ID
+  provider: String
+  sourceKind: String
+  title: String
+  url: String
+  excerpt: String
+}
+
+enum ContextGuidanceCategory {
+  DECISION
+  CONSTRAINT
+  PATTERN
+  RISK
+  VERIFICATION
+  CONTEXT
+}
+
+enum ContextGuidanceConfidence {
+  HIGH
+  MEDIUM
+  LOW
 }"#;

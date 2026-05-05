@@ -10,8 +10,11 @@ use super::{Artefact, LineRangeInput};
 
 pub use stages::{
     CheckpointStageResult, CloneExpandHint, CloneStageResult, DependencyExpandHint,
-    DependencyStageResult, TestsStageResult,
+    DependencyStageResult, HistoricalContextItem, HistoricalContextStageResult,
+    HistoricalEvidenceKind, HistoricalMatchReason, HistoricalMatchStrength, HistoricalToolEvent,
+    TestsStageResult,
 };
+pub(crate) use support::captured_preview;
 use support::{dedup_strings, saturating_i32};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,6 +220,10 @@ impl ArtefactSelection {
                 .iter()
                 .map(|artefact| artefact.symbol_id.as_str()),
         )
+    }
+
+    fn paths(&self) -> Vec<String> {
+        dedup_strings(self.artefacts.iter().map(|artefact| artefact.path.as_str()))
     }
 }
 

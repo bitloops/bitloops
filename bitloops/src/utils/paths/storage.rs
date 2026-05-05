@@ -7,22 +7,27 @@ use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir, explicit_test_state_dir};
 use sha2::{Digest, Sha256};
 
-use super::constants::{
-    EVENTS_DB_FILE_NAME, LEGACY_BITLOOPS_METADATA_DIR, RELATIONAL_DB_FILE_NAME,
-    RUNTIME_DB_FILE_NAME,
-};
+#[cfg(test)]
+use super::constants::BITLOOPS_TEST_STATE_DIR;
+use super::constants::{EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME, RUNTIME_DB_FILE_NAME};
 
 fn platform_path_fallback(category: &str) -> PathBuf {
     std::env::temp_dir().join("bitloops").join(category)
 }
 
-pub fn legacy_session_metadata_dir_from_session_id(session_id: &str) -> String {
-    format!("{LEGACY_BITLOOPS_METADATA_DIR}/{session_id}")
-}
-
 #[cfg(test)]
 fn should_use_test_app_dirs(repo_root: &Path) -> bool {
     repo_root.is_relative()
+}
+
+#[cfg(test)]
+fn test_repo_data_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join(BITLOOPS_TEST_STATE_DIR).join("data")
+}
+
+#[cfg(test)]
+fn test_repo_cache_dir(repo_root: &Path) -> PathBuf {
+    repo_root.join(BITLOOPS_TEST_STATE_DIR).join("cache")
 }
 
 #[cfg(test)]
@@ -59,8 +64,7 @@ pub fn default_relational_db_path(repo_root: &Path) -> PathBuf {
             .join("relational")
             .join(RELATIONAL_DB_FILE_NAME);
     }
-    repo_root
-        .join(".bitloops")
+    test_repo_data_dir(repo_root)
         .join("stores")
         .join("relational")
         .join(RELATIONAL_DB_FILE_NAME)
@@ -84,8 +88,7 @@ pub fn default_events_db_path(repo_root: &Path) -> PathBuf {
             .join("event")
             .join(EVENTS_DB_FILE_NAME);
     }
-    repo_root
-        .join(".bitloops")
+    test_repo_data_dir(repo_root)
         .join("stores")
         .join("event")
         .join(EVENTS_DB_FILE_NAME)
@@ -108,7 +111,7 @@ pub fn default_blob_store_path(repo_root: &Path) -> PathBuf {
             .join("stores")
             .join("blob");
     }
-    repo_root.join(".bitloops").join("stores").join("blob")
+    test_repo_data_dir(repo_root).join("stores").join("blob")
 }
 
 #[cfg(not(test))]
@@ -127,8 +130,7 @@ pub fn default_embedding_model_cache_dir(repo_root: &Path) -> PathBuf {
             .join("embeddings")
             .join("models");
     }
-    repo_root
-        .join(".bitloops")
+    test_repo_cache_dir(repo_root)
         .join("embeddings")
         .join("models")
 }
@@ -159,11 +161,7 @@ pub fn default_runtime_state_dir(_repo_root: &Path) -> PathBuf {
 }
 
 pub fn default_repo_runtime_db_path(repo_root: &Path) -> PathBuf {
-    repo_root
-        .join(".bitloops")
-        .join("stores")
-        .join("runtime")
-        .join(RUNTIME_DB_FILE_NAME)
+    default_runtime_state_dir(repo_root).join(RUNTIME_DB_FILE_NAME)
 }
 
 pub fn default_global_runtime_db_path() -> PathBuf {

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::adapters::connectors::BuiltinConnectorRegistry;
+use crate::capability_packs::context_guidance::storage::SqliteContextGuidanceRepository;
 use crate::capability_packs::knowledge::storage::{
     BlobKnowledgePayloadStore, DuckdbKnowledgeDocumentStore, SqliteKnowledgeRelationalRepository,
 };
@@ -25,7 +26,7 @@ use super::capability_config::build_capability_config_root;
 use super::language_services::{BuiltinLanguageServicesGateway, builtin_language_services};
 use super::local_gateways::{
     DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalCapabilityWorkplaneGateway,
-    LocalStoreHealthGateway,
+    LocalGitHistoryGateway, LocalStoreHealthGateway,
 };
 use super::local_runtime::LocalCapabilityRuntime;
 
@@ -37,6 +38,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub provider_config: ProviderConfig,
     pub inference_config: InferenceCapabilityConfig,
     pub relational: SqliteRelationalGateway,
+    pub context_guidance: SqliteContextGuidanceRepository,
     pub knowledge_relational: SqliteKnowledgeRelationalRepository,
     pub knowledge_documents: DuckdbKnowledgeDocumentStore,
     pub blob_payloads: BlobKnowledgePayloadStore,
@@ -44,6 +46,7 @@ pub struct LocalCapabilityRuntimeResources {
     pub provenance: DefaultProvenanceBuilder,
     pub graph: LocalCanonicalGraphGateway,
     pub stores: LocalStoreHealthGateway,
+    pub git_history: LocalGitHistoryGateway,
     pub inference: LocalInferenceGateway,
     pub test_harness: Option<std::sync::Mutex<BitloopsTestHarnessRepository>>,
     pub languages: &'static BuiltinLanguageServicesGateway,
@@ -58,6 +61,7 @@ impl LocalCapabilityRuntimeResources {
         let relational_store = DefaultRelationalStore::open_local_for_repo_root(repo_root)?;
         let sqlite_pool = relational_store.local_sqlite_pool_allow_create()?;
         let relational = SqliteRelationalGateway::new(sqlite_pool.clone());
+        let context_guidance = SqliteContextGuidanceRepository::new(sqlite_pool.clone());
         let knowledge_relational = SqliteKnowledgeRelationalRepository::new(sqlite_pool);
         let knowledge_documents =
             DuckdbKnowledgeDocumentStore::new(backends.events.duckdb_path_or_default());
@@ -68,6 +72,8 @@ impl LocalCapabilityRuntimeResources {
             &backends,
             &provider_config,
             &inference_config.semantic_clones,
+            &inference_config.context_guidance,
+            &inference_config.architecture,
             &inference_config.inference,
         );
         let stores = LocalStoreHealthGateway;
@@ -88,6 +94,7 @@ impl LocalCapabilityRuntimeResources {
             provider_config,
             inference_config,
             relational,
+            context_guidance,
             knowledge_relational,
             knowledge_documents,
             blob_payloads,
@@ -95,6 +102,7 @@ impl LocalCapabilityRuntimeResources {
             provenance: DefaultProvenanceBuilder,
             graph: LocalCanonicalGraphGateway,
             stores,
+            git_history: LocalGitHistoryGateway,
             inference,
             test_harness,
             languages: builtin_language_services()?,
@@ -126,6 +134,7 @@ impl LocalCapabilityRuntimeResources {
             &self.config_root,
             &self.backends,
             &self.relational,
+            &self.context_guidance,
             &self.knowledge_relational,
             &self.knowledge_documents,
             &self.blob_payloads,
@@ -133,6 +142,7 @@ impl LocalCapabilityRuntimeResources {
             &self.provenance,
             &self.graph,
             &self.stores,
+            &self.git_history,
             &self.inference,
             self.test_harness.as_ref(),
             self.languages,
@@ -142,6 +152,7 @@ impl LocalCapabilityRuntimeResources {
             invoking_capability_id.and_then(|capability_id| {
                 LocalCapabilityWorkplaneGateway::new(
                     &self.repo_root,
+                    &self.repo.repo_id,
                     capability_id,
                     declared_mailboxes,
                     None,
@@ -159,6 +170,7 @@ impl LocalCapabilityRuntimeResources {
     ) -> Result<LocalCapabilityWorkplaneGateway> {
         LocalCapabilityWorkplaneGateway::new(
             &self.repo_root,
+            &self.repo.repo_id,
             capability_id,
             declared_mailboxes,
             init_session_id,
@@ -181,5 +193,73 @@ fn build_slot_bindings(
         semantic_clones.insert("summary_embeddings".to_string(), profile.clone());
     }
     bindings.insert("semantic_clones".to_string(), semantic_clones);
+    let mut context_guidance = std::collections::BTreeMap::new();
+    if let Some(profile) = config
+        .context_guidance
+        .inference
+        .guidance_generation
+        .as_ref()
+    {
+        context_guidance.insert("guidance_generation".to_string(), profile.clone());
+    }
+    bindings.insert("context_guidance".to_string(), context_guidance);
+    let mut architecture_graph = std::collections::BTreeMap::new();
+    if let Some(profile) = config.architecture.inference.fact_synthesis.as_ref() {
+        architecture_graph.insert("fact_synthesis".to_string(), profile.clone());
+    }
+    bindings.insert("architecture_graph".to_string(), architecture_graph);
     bindings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_slot_bindings;
+    use crate::config::{
+        ArchitectureConfig, ArchitectureInferenceBindings, ContextGuidanceConfig,
+        ContextGuidanceInferenceBindings, InferenceCapabilityConfig,
+    };
+
+    #[test]
+    fn build_slot_bindings_includes_context_guidance_generation_slot() {
+        let config = InferenceCapabilityConfig {
+            context_guidance: ContextGuidanceConfig {
+                inference: ContextGuidanceInferenceBindings {
+                    guidance_generation: Some("guidance_local".to_string()),
+                },
+            },
+            ..Default::default()
+        };
+
+        let bindings = build_slot_bindings(&config);
+
+        assert_eq!(
+            bindings
+                .get("context_guidance")
+                .and_then(|slots| slots.get("guidance_generation"))
+                .map(String::as_str),
+            Some("guidance_local")
+        );
+    }
+
+    #[test]
+    fn build_slot_bindings_includes_architecture_fact_synthesis_slot() {
+        let config = InferenceCapabilityConfig {
+            architecture: ArchitectureConfig {
+                inference: ArchitectureInferenceBindings {
+                    fact_synthesis: Some("local_agent".to_string()),
+                },
+            },
+            ..Default::default()
+        };
+
+        let bindings = build_slot_bindings(&config);
+
+        assert_eq!(
+            bindings
+                .get("architecture_graph")
+                .and_then(|slots| slots.get("fact_synthesis"))
+                .map(String::as_str),
+            Some("local_agent")
+        );
+    }
 }

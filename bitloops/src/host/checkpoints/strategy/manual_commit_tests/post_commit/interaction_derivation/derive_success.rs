@@ -72,6 +72,72 @@ pub(crate) fn derive_post_commit_from_event_db_turns_with_fake_sources() {
 }
 
 #[test]
+pub(crate) fn derive_post_commit_enqueues_context_guidance_history_distillation() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    seed_interaction_turn(
+        dir.path(),
+        "sess-guidance",
+        "turn-guidance",
+        &["change.txt"],
+    );
+
+    std::fs::write(dir.path().join("change.txt"), "hello from interaction\n").unwrap();
+    git_ok(dir.path(), &["add", "change.txt"]);
+    git_ok(
+        dir.path(),
+        &["commit", "-m", "derive context guidance work"],
+    );
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+
+    ManualCommitStrategy::new(dir.path())
+        .post_commit()
+        .expect("post_commit should succeed");
+
+    let checkpoint_id = read_commit_checkpoint_mappings(dir.path())
+        .expect("mappings")
+        .get(&head)
+        .cloned()
+        .expect("checkpoint mapping for derived commit");
+    let runtime_db = crate::config::resolve_repo_runtime_db_path_for_repo(dir.path())
+        .expect("resolve runtime db");
+    let conn = rusqlite::Connection::open(runtime_db).expect("open runtime db");
+    let (mailbox, dedupe_key, payload): (String, String, String) = conn
+        .query_row(
+            "SELECT mailbox_name, dedupe_key, payload
+             FROM capability_workplane_jobs
+             WHERE capability_id = 'context_guidance'
+               AND mailbox_name = 'context_guidance.history_distillation'
+               AND status = 'pending'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .expect("pending context guidance job");
+    let payload: serde_json::Value = serde_json::from_str(&payload).expect("payload json");
+
+    assert_eq!(mailbox, "context_guidance.history_distillation");
+    assert!(dedupe_key.starts_with("history_turn:sess-guidance:turn-guidance:"));
+    assert_eq!(
+        payload["historyTurn"]["checkpointId"].as_str(),
+        Some(checkpoint_id.as_str())
+    );
+    assert_eq!(
+        payload["historyTurn"]["sessionId"].as_str(),
+        Some("sess-guidance")
+    );
+    assert_eq!(
+        payload["historyTurn"]["turnId"].as_str(),
+        Some("turn-guidance")
+    );
+    assert!(
+        payload["historyTurn"]["inputHash"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+}
+
+#[test]
 pub(crate) fn derive_post_commit_keeps_partially_committed_turns_available_for_later_commits() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);

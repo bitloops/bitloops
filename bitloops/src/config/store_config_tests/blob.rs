@@ -9,8 +9,8 @@ fn blob_local_path_resolution_defaults_under_current_repo_root() {
     let rendered = resolved.to_string_lossy();
 
     assert!(
-        rendered.ends_with(".bitloops/stores/blob")
-            || rendered.ends_with(".bitloops\\stores\\blob")
+        rendered.ends_with(".bitloops-test-state/data/stores/blob")
+            || rendered.ends_with(".bitloops-test-state\\data\\stores\\blob")
     );
 }
 
@@ -34,8 +34,8 @@ fn blob_storage_local_path_or_default_uses_current_repo_root() {
 
     let rendered = resolved.to_string_lossy();
     assert!(
-        rendered.ends_with(".bitloops/stores/blob")
-            || rendered.ends_with(".bitloops\\stores\\blob")
+        rendered.ends_with(".bitloops-test-state/data/stores/blob")
+            || rendered.ends_with(".bitloops-test-state\\data\\stores\\blob")
     );
 }
 
@@ -63,7 +63,7 @@ fn blob_local_path_resolution_expands_tilde_prefix() {
 }
 
 #[test]
-fn blob_local_path_resolution_defaults_under_repo_store_directory() {
+fn blob_local_path_resolution_defaults_under_test_state_store_directory() {
     let blobs = BlobStorageConfig {
         local_path: None,
         s3_bucket: None,
@@ -79,7 +79,7 @@ fn blob_local_path_resolution_defaults_under_repo_store_directory() {
         .expect("default local blob path");
     let rendered = resolved.to_string_lossy();
     assert!(
-        rendered.ends_with(".bitloops/stores/blob")
-            || rendered.ends_with(".bitloops\\stores\\blob")
+        rendered.ends_with(".bitloops-test-state/data/stores/blob")
+            || rendered.ends_with(".bitloops-test-state\\data\\stores\\blob")
     );
 }

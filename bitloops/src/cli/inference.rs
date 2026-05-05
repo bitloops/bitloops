@@ -14,13 +14,18 @@ pub(crate) use managed::{
     managed_inference_binary_path, managed_inference_metadata_path,
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
+pub use setup::TextGenerationRuntime;
 pub(crate) use setup::{
+    ContextGuidanceSetupSelection, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
     PreparedSummarySetupAction, PreparedSummarySetupPlan, SummarySetupExecutionResult,
     SummarySetupOutcome, SummarySetupPhase, SummarySetupProgress, SummarySetupSelection,
-    configure_cloud_summary_generation, configure_local_summary_generation,
-    execute_prepared_summary_setup_with_progress, platform_summary_gateway_url_override,
+    configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
+    configure_local_context_guidance_generation, configure_local_summary_generation,
+    context_guidance_generation_configured, execute_prepared_summary_setup_with_progress,
+    platform_context_guidance_gateway_url_override, platform_summary_gateway_url_override,
     prepare_cloud_summary_generation_plan, prepare_local_summary_generation_plan,
-    prompt_summary_setup_selection, summary_generation_configured,
+    prompt_context_guidance_setup_selection, prompt_summary_setup_selection,
+    summary_generation_configured,
 };
 
 #[cfg(test)]
@@ -32,4 +37,7 @@ pub(crate) use managed::{
 pub(crate) use setup::{OllamaAvailability, with_ollama_probe_hook};
 
 #[cfg(test)]
-pub(crate) use setup::with_summary_generation_configured_hook;
+pub(crate) use setup::{
+    ContextGuidanceSetupOutcome, with_context_guidance_generation_configured_hook,
+    with_summary_generation_configured_hook,
+};

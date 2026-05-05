@@ -1,8 +1,10 @@
+pub mod architecture_graph;
 pub mod artefact;
 pub mod artefact_selection;
 pub mod chat;
 pub mod checkpoint;
 pub mod clone;
+pub mod codecity;
 pub mod commit;
 pub mod connection;
 pub mod dependency_edge;
@@ -12,6 +14,7 @@ pub mod health;
 pub mod ingestion;
 pub mod interaction;
 pub mod knowledge;
+pub mod navigation_context;
 pub mod project;
 pub mod repository;
 pub mod scalars;
@@ -20,6 +23,15 @@ pub mod telemetry;
 pub mod temporal_scope;
 pub mod test_harness;
 
+pub use architecture_graph::{
+    ArchitectureContainer, ArchitectureGraph, ArchitectureGraphAssertionAction,
+    ArchitectureGraphAssertionResult, ArchitectureGraphAssertionSummary, ArchitectureGraphEdge,
+    ArchitectureGraphEdgeKind, ArchitectureGraphFilterInput, ArchitectureGraphFlow,
+    ArchitectureGraphFlowStep, ArchitectureGraphNode, ArchitectureGraphNodeKind,
+    ArchitectureGraphRepositoryRef, ArchitectureGraphTargetKind, ArchitectureSystem,
+    ArchitectureSystemMembershipAssertionResult, AssertArchitectureGraphFactInput,
+    AssertArchitectureSystemMembershipInput, RevokeArchitectureGraphAssertionResult,
+};
 pub use artefact::LineRangeInput;
 pub use artefact::{
     Artefact, ArtefactCopyLineage, ArtefactFilterInput, ArtefactSearchScore, CanonicalKind,
@@ -32,6 +44,11 @@ pub use artefact_selection::{
 pub use chat::{ChatEntry, ChatRole};
 pub use checkpoint::{Checkpoint, CheckpointFileRelation};
 pub use clone::{CloneSummary, ClonesFilterInput, SemanticClone};
+pub use codecity::{
+    CodeCityArcConnectionResult, CodeCityArcFilterInput, CodeCityArchitectureResult,
+    CodeCityFileDetailResult, CodeCitySnapshotStatusResult, CodeCityViolationConnectionResult,
+    CodeCityViolationFilterInput, CodeCityWorldResult,
+};
 pub use commit::Commit;
 pub use connection::{
     ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CheckpointConnection,
@@ -57,6 +74,13 @@ pub use interaction::{
 pub use knowledge::{
     KnowledgeItem, KnowledgeProvider, KnowledgeRelation, KnowledgeSourceKind, KnowledgeTargetType,
     KnowledgeVersion,
+};
+pub use navigation_context::{
+    AcceptNavigationContextViewInput, AcceptNavigationContextViewResult,
+    MaterialiseNavigationContextViewInput, MaterialiseNavigationContextViewResult,
+    NavigationContextFilterInput, NavigationContextSnapshot, NavigationContextView,
+    NavigationContextViewAcceptance, NavigationContextViewDependency, NavigationContextViewStatus,
+    NavigationEdge, NavigationPrimitive, NavigationPrimitiveKind,
 };
 pub use project::Project;
 pub use repository::{Branch, Repository};

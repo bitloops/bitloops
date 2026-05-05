@@ -8,7 +8,8 @@ use super::test_support::python_test_support;
 use crate::host::extension_host::LanguagePackDescriptor;
 use crate::host::extension_host::builtins::PYTHON_LANGUAGE_PACK;
 use crate::host::language_adapter::{
-    CanonicalMapping, DependencyEdge, LanguageAdapterPack, LanguageArtefact, LanguageKind,
+    BuiltinEntryPointLanguage, BuiltinLanguageEntryPointSupport, CanonicalMapping, DependencyEdge,
+    LanguageAdapterPack, LanguageArtefact, LanguageEntryPointSupport, LanguageKind,
     LanguageTestSupport,
 };
 
@@ -46,5 +47,11 @@ impl LanguageAdapterPack for PythonLanguageAdapterPack {
 
     fn test_support(&self) -> Option<Arc<dyn LanguageTestSupport>> {
         Some(python_test_support())
+    }
+
+    fn entry_point_support(&self) -> Option<Arc<dyn LanguageEntryPointSupport>> {
+        Some(Arc::new(BuiltinLanguageEntryPointSupport::new(
+            BuiltinEntryPointLanguage::Python,
+        )))
     }
 }

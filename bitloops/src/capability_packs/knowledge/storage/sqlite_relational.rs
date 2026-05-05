@@ -93,6 +93,48 @@ impl SqliteKnowledgeRelationalRepository {
             .with_connection(|conn| insert_relation_assertion_with_conn(conn, relation))
     }
 
+    pub fn list_relation_assertions_for_knowledge_version(
+        &self,
+        repo_id: &str,
+        knowledge_item_version_id: &str,
+    ) -> Result<Vec<KnowledgeRelationAssertionRow>> {
+        self.sqlite.with_connection(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT relation_assertion_id, repo_id, knowledge_item_id,
+                            source_knowledge_item_version_id, target_type, target_id,
+                            target_knowledge_item_version_id, relation_type,
+                            association_method, confidence, provenance_json
+                     FROM knowledge_relation_assertions
+                     WHERE repo_id = ?1 AND source_knowledge_item_version_id = ?2
+                     ORDER BY created_at DESC",
+                )
+                .context("preparing knowledge relation lookup for version")?;
+            let rows = stmt
+                .query_map(params![repo_id, knowledge_item_version_id], |row| {
+                    Ok(KnowledgeRelationAssertionRow {
+                        relation_assertion_id: row.get(0)?,
+                        repo_id: row.get(1)?,
+                        knowledge_item_id: row.get(2)?,
+                        source_knowledge_item_version_id: row.get(3)?,
+                        target_type: row.get(4)?,
+                        target_id: row.get(5)?,
+                        target_knowledge_item_version_id: row.get(6)?,
+                        relation_type: row.get(7)?,
+                        association_method: row.get(8)?,
+                        confidence: row.get(9)?,
+                        provenance_json: row.get(10)?,
+                    })
+                })
+                .context("querying knowledge relations for version")?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row.map_err(anyhow::Error::from)?);
+            }
+            Ok(out)
+        })
+    }
+
     pub fn find_item(&self, repo_id: &str, source_id: &str) -> Result<Option<KnowledgeItemRow>> {
         self.sqlite.with_connection(|conn| {
             conn.query_row(
@@ -223,6 +265,18 @@ impl KnowledgeRelationalRepository for SqliteKnowledgeRelationalRepository {
 
     fn insert_relation_assertion(&self, relation: &KnowledgeRelationAssertionRow) -> Result<()> {
         SqliteKnowledgeRelationalRepository::insert_relation_assertion(self, relation)
+    }
+
+    fn list_relation_assertions_for_knowledge_version(
+        &self,
+        repo_id: &str,
+        knowledge_item_version_id: &str,
+    ) -> Result<Vec<KnowledgeRelationAssertionRow>> {
+        SqliteKnowledgeRelationalRepository::list_relation_assertions_for_knowledge_version(
+            self,
+            repo_id,
+            knowledge_item_version_id,
+        )
     }
 
     fn find_item(&self, repo_id: &str, source_id: &str) -> Result<Option<KnowledgeItemRow>> {
@@ -426,5 +480,46 @@ mod tests {
         store
             .insert_relation_assertion(&relation)
             .expect("insert relation assertion");
+    }
+
+    #[test]
+    fn sqlite_relational_store_lists_relation_assertions_for_knowledge_version() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("knowledge-relational.db");
+        let pool = SqliteConnectionPool::connect(sqlite_path).expect("sqlite pool");
+        let store = SqliteKnowledgeRelationalRepository::new(pool);
+        store.initialise_schema().expect("initialise schema");
+
+        let matching = KnowledgeRelationAssertionRow {
+            relation_assertion_id: "relation-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            knowledge_item_id: "item-1".to_string(),
+            source_knowledge_item_version_id: "version-1".to_string(),
+            target_type: "path".to_string(),
+            target_id: "src/lib.rs".to_string(),
+            target_knowledge_item_version_id: None,
+            relation_type: "associated_with".to_string(),
+            association_method: "manual_attachment".to_string(),
+            confidence: 1.0,
+            provenance_json: "{\"provider\":\"github\"}".to_string(),
+        };
+        let other = KnowledgeRelationAssertionRow {
+            relation_assertion_id: "relation-2".to_string(),
+            source_knowledge_item_version_id: "version-2".to_string(),
+            ..matching.clone()
+        };
+
+        store
+            .insert_relation_assertion(&matching)
+            .expect("insert matching relation");
+        store
+            .insert_relation_assertion(&other)
+            .expect("insert other relation");
+
+        let rows = store
+            .list_relation_assertions_for_knowledge_version("repo-1", "version-1")
+            .expect("list relations");
+
+        assert_eq!(rows, vec![matching]);
     }
 }

@@ -259,6 +259,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create a bitloops-inference CLI fixture in (\S+)$"),
+            step_fn(given_create_bitloops_inference_cli_fixture),
+        )
+        .given(
+            None,
             regex(r"^I run (?:TestHarness|TestLens) ingest-tests for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_tests),
         )
@@ -303,6 +308,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I configure semantic clones with fake embeddings runtime in (\S+)$"),
             step_fn(given_configure_semantic_clones_fake_runtime),
+        )
+        .given(
+            None,
+            regex(r"^I configure context guidance with fake text-generation runtime in (\S+)$"),
+            step_fn(given_configure_context_guidance_fake_runtime),
         )
         .given(
             None,
@@ -758,6 +768,31 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r#"^Architecture graph entry point kind \"([^\"]+)\" for path \"([^\"]+)\" is effective in (\S+)$"#),
+            step_fn(then_architecture_entry_point_effective),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph container kind \"([^\"]+)\" exposes entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_container_exposes_entry_point),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph system membership \"([^\"]+)\" includes entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_system_membership_for_entry_point),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph suppression hides entry point kind \"([^\"]+)\" for path \"([^\"]+)\" then revoke restores it in (\S+)$"#),
+            step_fn(then_architecture_suppression_revoke_roundtrip),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph assertion adds entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_manual_entry_point),
+        )
+        .then(
+            None,
             regex(r#"^DevQL selectArtefacts search for \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
             step_fn(then_devql_select_artefacts_search_returns_at_least),
         )
@@ -790,6 +825,21 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL artefacts query result count is stable across ingests in (\S+)$"),
             step_fn(then_devql_artefacts_stable),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL context guidance query for \"([^\"]+)\" returns at least (\d+) items? in (\S+)$"#),
+            step_fn(then_devql_context_guidance_returns_at_least),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL context guidance query for \"([^\"]+)\" includes kind \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_context_guidance_includes_kind),
+        )
+        .then(
+            None,
+            regex(r"^daemon enrichments eventually drain in (\S+)$"),
+            step_fn(then_daemon_enrichments_eventually_drain),
         )
         .then(
             None,

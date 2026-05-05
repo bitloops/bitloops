@@ -15,7 +15,7 @@ use super::{
     LanguageAdapterMigrationDescriptor, LanguageAdapterMigrationExecution,
     LanguageAdapterMigrationFailure, LanguageAdapterMigrationRunReport,
     LanguageAdapterMigrationStatus, LanguageAdapterMigrationStep, LanguageAdapterPack,
-    LanguageArtefact, LanguageTestSupport,
+    LanguageArtefact, LanguageEntryPointSupport, LanguageTestSupport,
 };
 
 #[derive(Debug, Default)]
@@ -122,6 +122,13 @@ impl LanguageAdapterRegistry {
         pack_id: &str,
     ) -> Option<Arc<dyn LanguageTestSupport>> {
         self.packs.get(pack_id)?.test_support()
+    }
+
+    pub(crate) fn entry_point_support_for_pack(
+        &self,
+        pack_id: &str,
+    ) -> Option<Arc<dyn LanguageEntryPointSupport>> {
+        self.packs.get(pack_id)?.entry_point_support()
     }
 
     pub(crate) fn all_test_supports(&self) -> Vec<Arc<dyn LanguageTestSupport>> {

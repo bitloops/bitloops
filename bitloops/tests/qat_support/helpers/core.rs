@@ -4013,6 +4013,757 @@ pub fn assert_devql_select_artefacts_search_returns_symbol(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArchitectureEntryPointObservation {
+    id: String,
+    path: Option<String>,
+    entry_kind: Option<String>,
+    label: String,
+    computed: bool,
+    asserted: bool,
+    suppressed: bool,
+    effective: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArchitectureContainerObservation {
+    id: String,
+    key: Option<String>,
+    kind: Option<String>,
+    label: String,
+    deployment_kinds: Vec<String>,
+    entry_points: Vec<(String, String)>,
+    component_keys: Vec<String>,
+}
+
+struct ContextGuidanceObservation {
+    total_count: usize,
+    kinds: Vec<String>,
+}
+
+fn build_architecture_entry_points_query(kind: &str) -> String {
+    format!(
+        r#"query {{
+  project(path: ".") {{
+    architectureEntryPoints(kind: "{}", first: 50) {{
+      id
+      path
+      entryKind
+      label
+      computed
+      asserted
+      suppressed
+      effective
+    }}
+  }}
+}}"#,
+        escape_devql_string(kind)
+    )
+}
+
+fn extract_architecture_entry_points(
+    value: &serde_json::Value,
+) -> Result<Vec<ArchitectureEntryPointObservation>> {
+    let nodes = value
+        .get("project")
+        .and_then(|project| project.get("architectureEntryPoints"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected project.architectureEntryPoints array"))?;
+
+    nodes
+        .iter()
+        .map(|node| {
+            Ok(ArchitectureEntryPointObservation {
+                id: node
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| anyhow!("architecture entry point missing id"))?
+                    .to_string(),
+                path: node
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                entry_kind: node
+                    .get("entryKind")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                label: node
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                computed: node
+                    .get("computed")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                asserted: node
+                    .get("asserted")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                suppressed: node
+                    .get("suppressed")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                effective: node
+                    .get("effective")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn observe_architecture_entry_points(
+    world: &mut QatWorld,
+    _repo_name: &str,
+    kind: &str,
+) -> Result<Vec<ArchitectureEntryPointObservation>> {
+    let query = build_architecture_entry_points_query(kind);
+    let value = run_devql_graphql_query(world, &query)?;
+    extract_architecture_entry_points(&value)
+}
+
+fn find_architecture_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<Option<ArchitectureEntryPointObservation>> {
+    Ok(observe_architecture_entry_points(world, repo_name, kind)?
+        .into_iter()
+        .find(|entry_point| {
+            entry_point.entry_kind.as_deref() == Some(kind)
+                && entry_point.path.as_deref() == Some(path)
+                && entry_point.effective
+        }))
+}
+
+fn build_architecture_containers_query(system_key: Option<&str>) -> String {
+    let system_key_arg = system_key
+        .map(|system_key| format!(r#"systemKey: "{}","#, escape_devql_string(system_key)))
+        .unwrap_or_default();
+
+    format!(
+        r#"query {{
+  project(path: ".") {{
+    architectureContainers({system_key_arg} first: 50) {{
+      id
+      key
+      kind
+      label
+      deploymentUnits {{
+        properties
+      }}
+      entryPoints {{
+        path
+        entryKind
+      }}
+      components {{
+        properties
+      }}
+    }}
+  }}
+}}"#
+    )
+}
+
+fn extract_architecture_containers(
+    value: &serde_json::Value,
+) -> Result<Vec<ArchitectureContainerObservation>> {
+    let containers = value
+        .get("project")
+        .and_then(|project| project.get("architectureContainers"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected project.architectureContainers array"))?;
+
+    containers
+        .iter()
+        .map(|container| {
+            let deployment_kinds = container
+                .get("deploymentUnits")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|deployment| {
+                    deployment
+                        .get("properties")
+                        .and_then(|properties| properties.get("deployment_kind"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>();
+
+            let entry_points = container
+                .get("entryPoints")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry_point| {
+                    Some((
+                        entry_point
+                            .get("entryKind")
+                            .and_then(serde_json::Value::as_str)?
+                            .to_string(),
+                        entry_point
+                            .get("path")
+                            .and_then(serde_json::Value::as_str)?
+                            .to_string(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+
+            let component_keys = container
+                .get("components")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|component| {
+                    component
+                        .get("properties")
+                        .and_then(|properties| properties.get("component_key"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>();
+
+            Ok(ArchitectureContainerObservation {
+                id: container
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| anyhow!("architecture container missing id"))?
+                    .to_string(),
+                key: container
+                    .get("key")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                kind: container
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                label: container
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                deployment_kinds,
+                entry_points,
+                component_keys,
+            })
+        })
+        .collect()
+}
+
+fn observe_architecture_containers(
+    world: &mut QatWorld,
+    system_key: Option<&str>,
+) -> Result<Vec<ArchitectureContainerObservation>> {
+    let query = build_architecture_containers_query(system_key);
+    let value = run_devql_graphql_query(world, &query)?;
+    extract_architecture_containers(&value)
+}
+
+fn find_architecture_container_for_entry_point(
+    world: &mut QatWorld,
+    entry_kind: &str,
+    path: &str,
+) -> Result<Option<ArchitectureContainerObservation>> {
+    Ok(observe_architecture_containers(world, None)?
+        .into_iter()
+        .find(|container| {
+            container
+                .entry_points
+                .iter()
+                .any(|(kind, entry_path)| kind == entry_kind && entry_path == path)
+        }))
+}
+
+fn build_context_guidance_query(path: &str, kind: Option<&str>) -> String {
+    let kind_arg = kind
+        .map(|kind| format!(r#", kind: "{}""#, escape_devql_string(kind)))
+        .unwrap_or_default();
+
+    format!(
+        r#"query {{
+  selectArtefacts(by: {{ path: "{}" }}) {{
+    contextGuidance(category: DECISION{kind_arg}) {{
+      overview
+      items(first: 10) {{
+        category
+        kind
+        guidance
+        evidenceExcerpt
+      }}
+    }}
+  }}
+}}"#,
+        escape_devql_string(path),
+        kind_arg = kind_arg
+    )
+}
+
+fn observe_context_guidance(
+    world: &mut QatWorld,
+    path: &str,
+    kind: Option<&str>,
+) -> Result<ContextGuidanceObservation> {
+    let query = build_context_guidance_query(path, kind);
+    let value = run_devql_graphql_query(world, &query)?;
+
+    let guidance = value
+        .get("selectArtefacts")
+        .and_then(|value| value.get("contextGuidance"))
+        .ok_or_else(|| {
+            anyhow!("expected selectArtefacts.contextGuidance payload in GraphQL response")
+        })?;
+
+    let total_count = guidance
+        .get("overview")
+        .and_then(|overview| overview.get("totalCount"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+
+    let kinds = match guidance.get("items").and_then(serde_json::Value::as_array) {
+        Some(items) => items
+            .iter()
+            .filter_map(|item| item.get("kind").and_then(serde_json::Value::as_str))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+
+    Ok(ContextGuidanceObservation { total_count, kinds })
+}
+
+pub fn assert_architecture_entry_point_effective(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture entry point `{kind}` at `{path}` to be effective"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        Option::is_some,
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| {
+                    format!(
+                        "id={}; label={}; computed={}; asserted={}",
+                        entry_point.id,
+                        entry_point.label,
+                        entry_point.computed,
+                        entry_point.asserted
+                    )
+                })
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?;
+
+    ensure!(
+        observation.is_some(),
+        "expected architecture entry point `{kind}` at `{path}` to be effective"
+    );
+
+    Ok(())
+}
+
+pub fn assert_architecture_container_exposes_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    container_kind: &str,
+    entry_kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let container = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture container `{container_kind}` exposing `{entry_kind}` at `{path}`"),
+        || find_architecture_container_for_entry_point(world, entry_kind, path),
+        |container| {
+            container.as_ref().is_some_and(|container| {
+                container.kind.as_deref() == Some(container_kind)
+                    && !container.deployment_kinds.is_empty()
+                    && !container.component_keys.is_empty()
+            })
+        },
+        |container| {
+            container
+                .as_ref()
+                .map(|container| {
+                    format!(
+                        "id={}; key={:?}; kind={:?}; label={}; deployment_kinds={:?}; component_keys={:?}",
+                        container.id,
+                        container.key,
+                        container.kind,
+                        container.label,
+                        container.deployment_kinds,
+                        container.component_keys
+                    )
+                })
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?;
+
+    ensure!(
+        container
+            .as_ref()
+            .is_some_and(|container| container.kind.as_deref() == Some(container_kind)),
+        "expected architecture container `{container_kind}` exposing `{entry_kind}` at `{path}`"
+    );
+
+    Ok(())
+}
+
+pub fn assert_architecture_system_membership_for_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    system_key: &str,
+    entry_kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let container = find_architecture_container_for_entry_point(world, entry_kind, path)?
+        .ok_or_else(|| anyhow!("container for `{entry_kind}` at `{path}` was not available"))?;
+
+    let mutation = format!(
+        r#"mutation {{
+  assertArchitectureSystemMembership(input: {{
+    systemKey: "{}",
+    systemLabel: "QAT Shared System",
+    containerId: "{}",
+    reason: "QAT shared architecture system membership",
+    source: "qat",
+    confidence: 0.92
+  }}) {{
+    success
+    systemId
+    containerId
+    assertionIds
+  }}
+}}"#,
+        escape_devql_string(system_key),
+        escape_devql_string(&container.id)
+    );
+
+    let value = run_devql_graphql_query(world, &mutation)?;
+
+    ensure!(
+        value
+            .get("assertArchitectureSystemMembership")
+            .and_then(|result| result.get("success"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        "expected assertArchitectureSystemMembership to succeed"
+    );
+
+    let query = format!(
+        r#"query {{
+  project(path: ".") {{
+    architectureContainers(systemKey: "{}", first: 50) {{
+      id
+      entryPoints {{
+        path
+        entryKind
+      }}
+    }}
+  }}
+}}"#,
+        escape_devql_string(system_key)
+    );
+
+    let observed = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture system `{system_key}` to include container `{}`", container.id),
+        || run_devql_graphql_query(world, &query),
+        |value| {
+            value
+                .get("project")
+                .and_then(|project| project.get("architectureContainers"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|containers| {
+                    containers.iter().any(|observed| {
+                        observed.get("id").and_then(serde_json::Value::as_str)
+                            == Some(container.id.as_str())
+                            && observed
+                                .get("entryPoints")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some_and(|entry_points| {
+                                    entry_points.iter().any(|entry_point| {
+                                        entry_point
+                                            .get("entryKind")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(entry_kind)
+                                            && entry_point
+                                                .get("path")
+                                                .and_then(serde_json::Value::as_str)
+                                                == Some(path)
+                                    })
+                                })
+                    })
+                })
+        },
+        |value| value.to_string(),
+    )?;
+
+    ensure!(
+        observed
+            .get("project")
+            .and_then(|project| project.get("architectureContainers"))
+            .is_some(),
+        "expected architecture system `{system_key}` membership to be queryable"
+    );
+
+    Ok(())
+}
+
+pub fn assert_architecture_suppression_revoke_roundtrip(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let entry_point = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture entry point `{kind}` at `{path}` before suppression"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        Option::is_some,
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| entry_point.id.clone())
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?
+    .ok_or_else(|| anyhow!("entry point `{kind}` at `{path}` was not available"))?;
+
+    let suppress_query = format!(
+        r#"mutation {{
+  assertArchitectureGraphFact(input: {{
+    action: SUPPRESS,
+    targetKind: NODE,
+    node: {{ id: "{}", kind: ENTRY_POINT }},
+    reason: "QAT suppression round-trip",
+    source: "qat"
+  }}) {{
+    success
+    assertionId
+  }}
+}}"#,
+        escape_devql_string(&entry_point.id)
+    );
+
+    let suppress_value = run_devql_graphql_query(world, &suppress_query)?;
+
+    let assertion_id = suppress_value
+        .get("assertArchitectureGraphFact")
+        .and_then(|result| result.get("assertionId"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("expected architecture suppression assertion id"))?
+        .to_string();
+
+    let hidden = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture entry point `{kind}` at `{path}` to be suppressed"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        Option::is_none,
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| format!("still effective as {}", entry_point.id))
+                .unwrap_or_else(|| "hidden".to_string())
+        },
+    )?;
+
+    ensure!(
+        hidden.is_none(),
+        "expected architecture entry point `{kind}` at `{path}` to be hidden after suppression"
+    );
+
+    let revoke_query = format!(
+        r#"mutation {{
+  revokeArchitectureGraphAssertion(id: "{}") {{
+    success
+    revoked
+    id
+  }}
+}}"#,
+        escape_devql_string(&assertion_id)
+    );
+
+    let revoke_value = run_devql_graphql_query(world, &revoke_query)?;
+
+    let revoked = revoke_value
+        .get("revokeArchitectureGraphAssertion")
+        .and_then(|result| result.get("revoked"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    ensure!(
+        revoked,
+        "expected revokeArchitectureGraphAssertion to revoke `{assertion_id}`"
+    );
+
+    assert_architecture_entry_point_effective(world, repo_name, kind, path)
+}
+
+pub fn assert_architecture_manual_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let assert_query = format!(
+        r#"mutation {{
+  assertArchitectureGraphFact(input: {{
+    action: ASSERT,
+    targetKind: NODE,
+    node: {{
+      kind: ENTRY_POINT,
+      label: "QAT manual entry point",
+      path: "{}",
+      entryKind: "{}"
+    }},
+    reason: "QAT manual architecture graph assertion",
+    source: "qat",
+    confidence: 0.91
+  }}) {{
+    success
+    assertionId
+  }}
+}}"#,
+        escape_devql_string(path),
+        escape_devql_string(kind)
+    );
+
+    let value = run_devql_graphql_query(world, &assert_query)?;
+
+    ensure!(
+        value
+            .get("assertArchitectureGraphFact")
+            .and_then(|result| result.get("success"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        "expected assertArchitectureGraphFact to succeed"
+    );
+
+    let entry_point = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("manual architecture entry point `{kind}` at `{path}` to be effective"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .is_some_and(|entry_point| entry_point.asserted && !entry_point.computed)
+        },
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| {
+                    format!(
+                        "id={}; computed={}; asserted={}; suppressed={}",
+                        entry_point.id,
+                        entry_point.computed,
+                        entry_point.asserted,
+                        entry_point.suppressed
+                    )
+                })
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?;
+
+    ensure!(
+        entry_point
+            .as_ref()
+            .is_some_and(|entry_point| entry_point.asserted && !entry_point.computed),
+        "expected manual architecture entry point `{kind}` at `{path}` to be asserted-only"
+    );
+
+    Ok(())
+}
+
+pub fn assert_devql_context_guidance_returns_at_least(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to return at least {min_count} items"),
+        || observe_context_guidance(world, path, None),
+        |observation| observation.total_count >= min_count,
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+
+    ensure!(
+        observation.total_count >= min_count,
+        "expected DevQL context guidance for `{path}` to return at least {min_count} items, got {} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+
+    Ok(())
+}
+
+pub fn assert_devql_context_guidance_includes_kind(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    expected_kind: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to include kind `{expected_kind}`"),
+        || observe_context_guidance(world, path, Some(expected_kind)),
+        |observation| observation.kinds.iter().any(|kind| kind == expected_kind),
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+
+    ensure!(
+        observation.kinds.iter().any(|kind| kind == expected_kind),
+        "expected DevQL context guidance for `{path}` to include kind `{expected_kind}`, got total_count={} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+
+    Ok(())
+}
+
 fn checkpoint_agent_candidates(agent: &str) -> Vec<String> {
     let mut candidates = vec![agent.to_string()];
     if agent == "claude" {

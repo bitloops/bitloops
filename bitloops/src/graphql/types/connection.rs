@@ -1,4 +1,5 @@
 use async_graphql::{Result, SimpleObject};
+use serde::{Deserialize, Serialize};
 
 use crate::graphql::{bad_cursor_error, bad_user_input_error};
 
@@ -8,7 +9,7 @@ use super::{
     KnowledgeVersion, SemanticClone, TelemetryEvent,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, SimpleObject)]
 pub struct PageInfo {
     pub has_next_page: bool,
     pub has_previous_page: bool,

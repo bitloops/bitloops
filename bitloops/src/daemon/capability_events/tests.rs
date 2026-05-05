@@ -186,7 +186,7 @@ fn build_execution_plan_fast_paths_forced_full_reconcile_with_affected_paths() -
         "INSERT INTO capability_workplane_cursor_mailboxes (
             repo_id, capability_id, mailbox_name, last_applied_generation_seq, last_error,
             updated_at_unix
-         ) VALUES (?1, ?2, ?3, NULL, NULL, 1)",
+         ) VALUES (?1, ?2, ?3, 1, NULL, 1)",
         params![
             repo_id,
             SEMANTIC_CLONES_CAPABILITY_ID,
@@ -228,8 +228,8 @@ fn build_execution_plan_fast_paths_forced_full_reconcile_with_affected_paths() -
         consumer_id: SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID.to_string(),
         handler_id: SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID.to_string(),
         from_generation_seq: 0,
-        to_generation_seq: 0,
-        reconcile_mode: String::new(),
+        to_generation_seq: 1,
+        reconcile_mode: "full_reconcile".to_string(),
         event_kind: "current_state_consumer".to_string(),
         lane_key: format!("{repo_id}:{SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID}"),
         event_payload_json: String::new(),
@@ -246,6 +246,8 @@ fn build_execution_plan_fast_paths_forced_full_reconcile_with_affected_paths() -
         .expect("execution plan");
 
     assert_eq!(plan.request.reconcile_mode, ReconcileMode::FullReconcile);
+    assert_eq!(plan.request.from_generation_seq_exclusive, 0);
+    assert_eq!(plan.request.to_generation_seq_inclusive, 1);
     assert_eq!(plan.request.artefact_upserts.len(), 0);
     assert_eq!(plan.request.file_upserts.len(), 0);
     assert_eq!(
