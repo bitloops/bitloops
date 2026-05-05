@@ -73,6 +73,7 @@ impl LocalCapabilityRuntimeResources {
             &provider_config,
             &inference_config.semantic_clones,
             &inference_config.context_guidance,
+            &inference_config.architecture,
             &inference_config.inference,
         );
         let stores = LocalStoreHealthGateway;
@@ -202,6 +203,11 @@ fn build_slot_bindings(
         context_guidance.insert("guidance_generation".to_string(), profile.clone());
     }
     bindings.insert("context_guidance".to_string(), context_guidance);
+    let mut architecture_graph = std::collections::BTreeMap::new();
+    if let Some(profile) = config.architecture.inference.fact_synthesis.as_ref() {
+        architecture_graph.insert("fact_synthesis".to_string(), profile.clone());
+    }
+    bindings.insert("architecture_graph".to_string(), architecture_graph);
     bindings
 }
 
@@ -209,7 +215,8 @@ fn build_slot_bindings(
 mod tests {
     use super::build_slot_bindings;
     use crate::config::{
-        ContextGuidanceConfig, ContextGuidanceInferenceBindings, InferenceCapabilityConfig,
+        ArchitectureConfig, ArchitectureInferenceBindings, ContextGuidanceConfig,
+        ContextGuidanceInferenceBindings, InferenceCapabilityConfig,
     };
 
     #[test]
@@ -231,6 +238,28 @@ mod tests {
                 .and_then(|slots| slots.get("guidance_generation"))
                 .map(String::as_str),
             Some("guidance_local")
+        );
+    }
+
+    #[test]
+    fn build_slot_bindings_includes_architecture_fact_synthesis_slot() {
+        let config = InferenceCapabilityConfig {
+            architecture: ArchitectureConfig {
+                inference: ArchitectureInferenceBindings {
+                    fact_synthesis: Some("local_agent".to_string()),
+                },
+            },
+            ..Default::default()
+        };
+
+        let bindings = build_slot_bindings(&config);
+
+        assert_eq!(
+            bindings
+                .get("architecture_graph")
+                .and_then(|slots| slots.get("fact_synthesis"))
+                .map(String::as_str),
+            Some("local_agent")
         );
     }
 }

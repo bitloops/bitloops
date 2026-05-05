@@ -147,12 +147,25 @@ pub struct ContextGuidanceConfig {
     pub inference: ContextGuidanceInferenceBindings,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArchitectureInferenceBindings {
+    #[serde(default)]
+    pub fact_synthesis: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ArchitectureConfig {
+    #[serde(default)]
+    pub inference: ArchitectureInferenceBindings,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceTask {
     #[default]
     Embeddings,
     TextGeneration,
+    StructuredGeneration,
 }
 
 impl fmt::Display for InferenceTask {
@@ -160,6 +173,7 @@ impl fmt::Display for InferenceTask {
         match self {
             Self::Embeddings => write!(f, "embeddings"),
             Self::TextGeneration => write!(f, "text_generation"),
+            Self::StructuredGeneration => write!(f, "structured_generation"),
         }
     }
 }
@@ -208,6 +222,7 @@ pub struct InferenceConfig {
 pub struct InferenceCapabilityConfig {
     pub semantic_clones: SemanticClonesConfig,
     pub context_guidance: ContextGuidanceConfig,
+    pub architecture: ArchitectureConfig,
     pub inference: InferenceConfig,
 }
 

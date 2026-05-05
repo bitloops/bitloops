@@ -375,6 +375,7 @@ fn build_capability_config_root_uses_sqlite_duckdb_labels() {
         &ProviderConfig::default(),
         &crate::config::SemanticClonesConfig::default(),
         &ContextGuidanceConfig::default(),
+        &crate::config::ArchitectureConfig::default(),
         &crate::config::EmbeddingsConfig::default(),
     );
 
@@ -391,6 +392,7 @@ fn build_capability_config_root_uses_postgres_clickhouse_labels() {
         &ProviderConfig::default(),
         &crate::config::SemanticClonesConfig::default(),
         &ContextGuidanceConfig::default(),
+        &crate::config::ArchitectureConfig::default(),
         &crate::config::EmbeddingsConfig::default(),
     );
 
@@ -415,12 +417,37 @@ fn build_capability_config_root_exposes_context_guidance_inference_binding() {
         &ProviderConfig::default(),
         &crate::config::SemanticClonesConfig::default(),
         &context_guidance,
+        &crate::config::ArchitectureConfig::default(),
         &crate::config::EmbeddingsConfig::default(),
     );
 
     assert_eq!(
         root["context_guidance"]["inference"]["guidance_generation"],
         json!("guidance_local")
+    );
+}
+
+#[test]
+fn build_capability_config_root_exposes_architecture_inference_binding() {
+    let temp = tempdir().expect("tempdir");
+    let backends = sqlite_backends(temp.path());
+    let architecture = crate::config::ArchitectureConfig {
+        inference: crate::config::ArchitectureInferenceBindings {
+            fact_synthesis: Some("local_agent".to_string()),
+        },
+    };
+    let root = build_capability_config_root(
+        &backends,
+        &ProviderConfig::default(),
+        &crate::config::SemanticClonesConfig::default(),
+        &ContextGuidanceConfig::default(),
+        &architecture,
+        &crate::config::EmbeddingsConfig::default(),
+    );
+
+    assert_eq!(
+        root["architecture_graph"]["inference"]["fact_synthesis"],
+        json!("local_agent")
     );
 }
 

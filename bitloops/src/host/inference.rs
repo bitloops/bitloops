@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use serde_json::{Map, Value};
 
 use crate::config::InferenceTask;
 
@@ -11,7 +12,10 @@ mod gateway;
 #[path = "inference/text_generation.rs"]
 mod text_generation;
 
-pub use gateway::{EmptyInferenceGateway, LocalInferenceGateway, ScopedInferenceGateway};
+pub use gateway::{
+    EmptyInferenceGateway, LocalInferenceGateway, OwnedScopedInferenceGateway,
+    ScopedInferenceGateway,
+};
 
 pub const BITLOOPS_EMBEDDINGS_IPC_DRIVER: &str = "bitloops_embeddings_ipc";
 pub const BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID: &str = "bitloops_local_embeddings";
@@ -70,9 +74,32 @@ pub trait TextGenerationService: Send + Sync {
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Result<String>;
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructuredGenerationRequest {
+    pub system_prompt: String,
+    pub user_prompt: String,
+    pub json_schema: Value,
+    pub workspace_path: Option<String>,
+    pub metadata: Map<String, Value>,
+}
+
+pub trait StructuredGenerationService: Send + Sync {
+    fn descriptor(&self) -> String;
+    fn cache_key(&self) -> String {
+        self.descriptor()
+    }
+    fn generate(&self, request: StructuredGenerationRequest) -> Result<Value>;
+}
+
 pub trait InferenceGateway: Send + Sync {
     fn embeddings(&self, slot_name: &str) -> Result<Arc<dyn EmbeddingService>>;
     fn text_generation(&self, slot_name: &str) -> Result<Arc<dyn TextGenerationService>>;
+    fn structured_generation(
+        &self,
+        slot_name: &str,
+    ) -> Result<Arc<dyn StructuredGenerationService>> {
+        anyhow::bail!("structured-generation inference is not available for slot `{slot_name}`")
+    }
 
     fn has_slot(&self, _slot_name: &str) -> bool {
         false

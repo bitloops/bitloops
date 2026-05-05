@@ -54,6 +54,6 @@ mod tests {
         assert_eq!(pack.descriptor().display_name, "Architecture Graph");
         assert_eq!(pack.migrations().len(), 1);
         assert_eq!(pack.migrations()[0].capability_id, "architecture_graph");
-        assert_eq!(pack.health_checks().len(), 2);
+        assert_eq!(pack.health_checks().len(), 3);
     }
 }

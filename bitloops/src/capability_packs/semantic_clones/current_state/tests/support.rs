@@ -136,6 +136,7 @@ pub(super) async fn test_context(
         relational: Arc::new(NoopRelationalGateway),
         language_services: Arc::new(EmptyLanguageServicesGateway),
         git_history: Arc::new(crate::host::capability_host::gateways::EmptyGitHistoryGateway),
+        inference: Arc::new(crate::host::inference::EmptyInferenceGateway),
         host_services: Arc::new(DefaultHostServicesGateway::new(request.repo_id.clone()))
             as Arc<dyn HostServicesGateway>,
         workplane: Arc::new(workplane.clone()),

@@ -90,6 +90,43 @@ max_output_tokens = 4096
 }
 
 #[test]
+fn load_daemon_settings_accepts_architecture_inference_binding() {
+    let config = NamedTempFile::new().expect("create temp config");
+    fs::write(
+        config.path(),
+        r#"
+[architecture.inference]
+fact_synthesis = "local_agent"
+
+[inference.runtimes.codex]
+command = "codex"
+args = []
+startup_timeout_secs = 5
+request_timeout_secs = 300
+
+[inference.profiles.local_agent]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 4096
+"#,
+    )
+    .expect("write temp config");
+
+    let loaded = load_daemon_settings(Some(config.path())).expect("load daemon settings");
+    assert_eq!(
+        loaded.settings.architecture,
+        Some(serde_json::json!({
+            "inference": {
+                "fact_synthesis": "local_agent"
+            }
+        }))
+    );
+}
+
+#[test]
 fn ensure_daemon_store_artifacts_creates_local_store_files_for_explicit_config() {
     let dir = tempfile::tempdir().expect("temp dir");
     let config_path = dir.path().join("config.toml");

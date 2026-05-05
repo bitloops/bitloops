@@ -54,6 +54,8 @@ struct DaemonTomlFile {
     #[serde(default)]
     context_guidance: Option<Value>,
     #[serde(default)]
+    architecture: Option<Value>,
+    #[serde(default)]
     inference: Option<Value>,
     #[serde(default)]
     dashboard: Option<Value>,
@@ -141,6 +143,7 @@ pub fn load_daemon_settings(explicit_path: Option<&Path>) -> Result<LoadedDaemon
             knowledge: file.knowledge,
             semantic_clones: file.semantic_clones,
             context_guidance: file.context_guidance,
+            architecture: file.architecture,
             inference: file.inference,
             dashboard: file.dashboard,
             watch: None,
@@ -234,6 +237,10 @@ pub fn persist_dashboard_tls_hint(enabled: bool) -> Result<PathBuf> {
 fn parse_daemon_config_text(data: &str, path: &Path) -> Result<DaemonTomlFile> {
     from_str::<DaemonTomlFile>(data)
         .with_context(|| format!("parsing Bitloops daemon config {}", path.display()))
+}
+
+pub(crate) fn validate_daemon_config_text(data: &str, path: &Path) -> Result<()> {
+    parse_daemon_config_text(data, path).map(|_| ())
 }
 
 fn persist_daemon_cli_settings_at(

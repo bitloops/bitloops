@@ -69,6 +69,8 @@ pub struct UnifiedSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_guidance: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inference: Option<Value>,
 
     // UX / tooling
@@ -234,13 +236,14 @@ pub fn settings_from_json(value: Value) -> Result<UnifiedSettings> {
 // ---------------------------------------------------------------------------
 
 use super::resolve::{
-    resolve_context_guidance_from_unified_with, resolve_inference_from_unified_with,
-    resolve_provider_config_from_value_with, resolve_semantic_clones_from_unified_with,
-    resolve_store_backend_config_with, resolve_watch_runtime_config_with,
+    resolve_architecture_from_unified_with, resolve_context_guidance_from_unified_with,
+    resolve_inference_from_unified_with, resolve_provider_config_from_value_with,
+    resolve_semantic_clones_from_unified_with, resolve_store_backend_config_with,
+    resolve_watch_runtime_config_with,
 };
 use super::types::{
-    ContextGuidanceConfig, DashboardFileConfig, InferenceCapabilityConfig, InferenceConfig,
-    ProviderConfig, SemanticClonesConfig, StoreBackendConfig, WatchRuntimeConfig,
+    ArchitectureConfig, ContextGuidanceConfig, DashboardFileConfig, InferenceCapabilityConfig,
+    InferenceConfig, ProviderConfig, SemanticClonesConfig, StoreBackendConfig, WatchRuntimeConfig,
 };
 
 /// Resolve store backend configuration (relational, events, blob) from merged
@@ -301,6 +304,13 @@ pub fn resolve_context_guidance_from_unified<F: Fn(&str) -> Option<String>>(
     resolve_context_guidance_from_unified_with(settings, env_lookup)
 }
 
+pub fn resolve_architecture_from_unified<F: Fn(&str) -> Option<String>>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> ArchitectureConfig {
+    resolve_architecture_from_unified_with(settings, env_lookup)
+}
+
 pub fn resolve_inference_from_unified<F: Fn(&str) -> Option<String>>(
     settings: &UnifiedSettings,
     config_root: &Path,
@@ -324,11 +334,13 @@ pub fn resolve_inference_capability_from_unified<F: Fn(&str) -> Option<String>>(
 ) -> InferenceCapabilityConfig {
     let semantic_clones = resolve_semantic_clones_from_unified_with(settings, &env_lookup);
     let context_guidance = resolve_context_guidance_from_unified_with(settings, &env_lookup);
+    let architecture = resolve_architecture_from_unified_with(settings, &env_lookup);
     let inference = resolve_inference_from_unified_with(settings, config_root, env_lookup);
 
     InferenceCapabilityConfig {
         semantic_clones,
         context_guidance,
+        architecture,
         inference,
     }
 }

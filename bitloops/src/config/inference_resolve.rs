@@ -121,29 +121,37 @@ where
             );
             let max_output_tokens = read_any_u64(profile_root, &["max_output_tokens"])
                 .map(|value| value.min(u32::MAX as u64) as u32);
-            if task == InferenceTask::TextGeneration
-                && runtime
-                    .as_deref()
-                    .map(str::trim)
-                    .is_none_or(|value| value.is_empty())
+            if matches!(
+                task,
+                InferenceTask::TextGeneration | InferenceTask::StructuredGeneration
+            ) && runtime
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|value| value.is_empty())
             {
                 warnings.push(format!(
-                    "inference.profiles.{name} uses task `text_generation` and should declare `runtime`"
+                    "inference.profiles.{name} uses task `{task}` and should declare `runtime`"
                 ));
             }
-            if task == InferenceTask::TextGeneration
-                && temperature
-                    .as_deref()
-                    .map(str::trim)
-                    .is_none_or(|value| value.is_empty())
+            if matches!(
+                task,
+                InferenceTask::TextGeneration | InferenceTask::StructuredGeneration
+            ) && temperature
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|value| value.is_empty())
             {
                 warnings.push(format!(
-                    "inference.profiles.{name} uses task `text_generation` and should declare `temperature`"
+                    "inference.profiles.{name} uses task `{task}` and should declare `temperature`"
                 ));
             }
-            if task == InferenceTask::TextGeneration && max_output_tokens.is_none() {
+            if matches!(
+                task,
+                InferenceTask::TextGeneration | InferenceTask::StructuredGeneration
+            ) && max_output_tokens.is_none()
+            {
                 warnings.push(format!(
-                    "inference.profiles.{name} uses task `text_generation` and should declare `max_output_tokens`"
+                    "inference.profiles.{name} uses task `{task}` and should declare `max_output_tokens`"
                 ));
             }
 
@@ -274,6 +282,7 @@ where
 fn parse_inference_task(raw: &str) -> InferenceTask {
     match raw.trim().to_ascii_lowercase().as_str() {
         "text_generation" | "text-generation" => InferenceTask::TextGeneration,
+        "structured_generation" | "structured-generation" => InferenceTask::StructuredGeneration,
         _ => InferenceTask::Embeddings,
     }
 }

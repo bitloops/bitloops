@@ -18,13 +18,13 @@ use super::store_config_utils::{
     resolve_configured_path, resolve_required_provider_string,
 };
 use super::types::{
-    AtlassianProviderConfig, BlobStorageConfig, ContextGuidanceConfig,
-    ContextGuidanceInferenceBindings, DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS, DashboardFileConfig,
-    EmbeddingCapabilityConfig, EmbeddingsConfig, EventsBackendConfig, GithubProviderConfig,
-    InferenceCapabilityConfig, InferenceConfig, MAX_SEMANTIC_CLONES_ANN_NEIGHBORS,
-    MIN_SEMANTIC_CLONES_ANN_NEIGHBORS, ProviderConfig, RelationalBackendConfig,
-    SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode, StoreBackendConfig,
-    StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
+    ArchitectureConfig, ArchitectureInferenceBindings, AtlassianProviderConfig, BlobStorageConfig,
+    ContextGuidanceConfig, ContextGuidanceInferenceBindings, DEFAULT_SEMANTIC_CLONES_ANN_NEIGHBORS,
+    DashboardFileConfig, EmbeddingCapabilityConfig, EmbeddingsConfig, EventsBackendConfig,
+    GithubProviderConfig, InferenceCapabilityConfig, InferenceConfig,
+    MAX_SEMANTIC_CLONES_ANN_NEIGHBORS, MIN_SEMANTIC_CLONES_ANN_NEIGHBORS, ProviderConfig,
+    RelationalBackendConfig, SemanticCloneEmbeddingMode, SemanticClonesConfig, SemanticSummaryMode,
+    StoreBackendConfig, StoreFileConfig, WatchFileConfig, WatchRuntimeConfig,
 };
 
 use super::unified_config::{
@@ -628,6 +628,30 @@ where
                 .or_else(|| {
                     read_non_empty_env(&env_lookup, "BITLOOPS_CONTEXT_GUIDANCE_GUIDANCE_GENERATION")
                 })
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .filter(|value| !matches!(value.to_ascii_lowercase().as_str(), "off" | "disabled")),
+        },
+    }
+}
+
+pub(crate) fn resolve_architecture_from_unified_with<F>(
+    settings: &UnifiedSettings,
+    env_lookup: F,
+) -> ArchitectureConfig
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let root = settings.architecture.as_ref().and_then(Value::as_object);
+    let inference_root = root
+        .and_then(|map| map.get("inference"))
+        .and_then(Value::as_object);
+
+    ArchitectureConfig {
+        inference: ArchitectureInferenceBindings {
+            fact_synthesis: inference_root
+                .and_then(|map| read_any_string(map, &["fact_synthesis"]))
+                .or_else(|| read_non_empty_env(&env_lookup, "BITLOOPS_ARCHITECTURE_FACT_SYNTHESIS"))
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .filter(|value| !matches!(value.to_ascii_lowercase().as_str(), "off" | "disabled")),
