@@ -2057,7 +2057,7 @@ pub fn run_devql_tasks_status_for_repo(world: &mut QatWorld, repo_name: &str) ->
 }
 
 fn devql_task_queue_status_is_idle(snapshot: &DevqlTaskQueueStatusSnapshot) -> bool {
-    snapshot.queued == 0 && snapshot.running == 0
+    snapshot.queued == 0 && snapshot.running == 0 && snapshot.failed == 0
 }
 
 pub fn wait_for_devql_task_queue_idle_for_repo(
@@ -2065,25 +2065,37 @@ pub fn wait_for_devql_task_queue_idle_for_repo(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let status = wait_for_qat_condition(
-        qat_eventual_timeout(),
-        qat_eventual_poll_interval(),
-        "DevQL task queue to become idle",
-        || {
-            run_devql_tasks_status_for_repo(world, repo_name)?;
-            parse_task_queue_status(world.last_command_stdout.as_deref().unwrap_or(""))
-        },
-        devql_task_queue_status_is_idle,
-        |snapshot| {
-            format!(
-                "queued={}, running={}, failed={}, current_repo_tasks={}",
-                snapshot.queued,
-                snapshot.running,
-                snapshot.failed,
-                snapshot.current_repo_tasks.len()
-            )
-        },
-    )?;
+    let timeout = qat_eventual_timeout();
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+
+    let status = loop {
+        attempts += 1;
+        run_devql_tasks_status_for_repo(world, repo_name)?;
+        let status =
+            parse_task_queue_status(world.last_command_stdout.as_deref().unwrap_or(""))?;
+        let observation = format!(
+            "queued={}, running={}, failed={}, current_repo_tasks={}",
+            status.queued,
+            status.running,
+            status.failed,
+            status.current_repo_tasks.len()
+        );
+        ensure!(
+            status.failed == 0,
+            "DevQL task queue has failed tasks while waiting for idle; attempts={attempts}; observation={observation}"
+        );
+        if devql_task_queue_status_is_idle(&status) {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            bail!(
+                "timed out after {}s waiting for DevQL task queue to become idle; attempts={attempts}; last observation=value: {observation}",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(qat_eventual_poll_interval());
+    };
     world.last_command_exit_code = Some(0);
     world.last_command_stdout = Some(format!(
         "DevQL task queue reached idle state: queued={}, running={}",
@@ -2447,13 +2459,7 @@ pub fn simulate_git_pull_with_changes(world: &mut QatWorld) -> Result<()> {
         "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
     )
     .with_context(|| format!("writing {}", file_path.display()))?;
-    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
-    run_git_success(
-        world,
-        &["commit", "-m", "feat: add utils module from remote"],
-        &[],
-        "git commit utils",
-    )?;
+    commit_without_hooks(world)?;
     run_git_success(
         world,
         &["checkout", "-"],

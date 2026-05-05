@@ -630,7 +630,7 @@ task task-123: kind=sync status=queued repo=bitloops\n";
 }
 
 #[test]
-fn devql_task_queue_status_is_idle_requires_zero_queued_and_running_tasks() {
+fn devql_task_queue_status_is_idle_requires_zero_queued_running_and_failed_tasks() {
     let busy = DevqlTaskQueueStatusSnapshot {
         state: "running".to_string(),
         queued: 1,
@@ -646,8 +646,15 @@ fn devql_task_queue_status_is_idle_requires_zero_queued_and_running_tasks() {
         running: 0,
         ..busy.clone()
     };
+    let failed = DevqlTaskQueueStatusSnapshot {
+        queued: 0,
+        running: 0,
+        failed: 1,
+        ..busy.clone()
+    };
 
     assert!(!devql_task_queue_status_is_idle(&busy));
+    assert!(!devql_task_queue_status_is_idle(&failed));
     assert!(devql_task_queue_status_is_idle(&idle));
 }
 
