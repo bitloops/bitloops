@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
-use crate::capability_packs::architecture_graph::roles::schema::architecture_roles_sqlite_schema_sql;
 use crate::host::capability_host::SchemaModule;
 
+use super::roles::schema::architecture_graph_roles_sqlite_schema_sql;
 use super::types::ARCHITECTURE_GRAPH_CAPABILITY_ID;
 
 pub static ARCHITECTURE_GRAPH_SCHEMA_MODULE: SchemaModule = SchemaModule {
@@ -120,7 +120,7 @@ pub fn architecture_graph_sqlite_schema_sql() -> &'static str {
             format!(
                 "{}{}",
                 ARCHITECTURE_GRAPH_CORE_SQLITE_SCHEMA_SQL,
-                architecture_roles_sqlite_schema_sql()
+                architecture_graph_roles_sqlite_schema_sql()
             )
         })
         .as_str()
@@ -138,6 +138,8 @@ mod tests {
             "architecture_graph_edges_current",
             "architecture_graph_assertions",
             "architecture_graph_runs_current",
+            "architecture_roles",
+            "architecture_role_aliases",
         ] {
             assert!(sql.contains(table), "schema should include {table}");
         }

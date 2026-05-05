@@ -1,713 +1,1217 @@
 use anyhow::{Context, Result, anyhow};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use crate::host::devql::{RelationalStorage, sql_json_value, sql_now};
+use crate::host::devql::{RelationalStorage, deterministic_uuid, esc_pg, sql_json_value, sql_now};
 
-use super::taxonomy::{
-    ArchitectureRole, ArchitectureRoleAssignment, ArchitectureRoleChangeProposal,
-    AssignmentPriority, AssignmentSource, AssignmentStatus, RoleLifecycle, RoleTarget, TargetKind,
-    assignment_history_id,
-};
-
-pub async fn upsert_role(relational: &RelationalStorage, role: &ArchitectureRole) -> Result<()> {
-    let sql = format!(
-        "INSERT INTO architecture_roles (
-            repo_id, role_id, family, slug, display_name, description, lifecycle, provenance_json, updated_at
-         ) VALUES ({repo_id}, {role_id}, {family}, {slug}, {display_name}, {description}, {lifecycle}, {provenance}, {now})
-         ON CONFLICT(repo_id, role_id) DO UPDATE SET
-            family = excluded.family,
-            slug = excluded.slug,
-            display_name = excluded.display_name,
-            description = excluded.description,
-            lifecycle = excluded.lifecycle,
-            provenance_json = excluded.provenance_json,
-            updated_at = {now};",
-        repo_id = sql_text(&role.repo_id),
-        role_id = sql_text(&role.role_id),
-        family = sql_text(&role.family),
-        slug = sql_text(&role.slug),
-        display_name = sql_text(&role.display_name),
-        description = sql_text(&role.description),
-        lifecycle = sql_text(role.lifecycle.as_db()),
-        provenance = sql_json_value(relational, &role.provenance),
-        now = sql_now(relational),
-    );
-    relational
-        .exec_serialized(&sql)
-        .await
-        .context("upserting architecture role")
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureRoleRecord {
+    pub role_id: String,
+    pub repo_id: String,
+    pub canonical_key: String,
+    pub display_name: String,
+    pub description: String,
+    pub family: Option<String>,
+    pub lifecycle_status: String,
+    pub provenance: Value,
+    pub evidence: Value,
+    pub metadata: Value,
 }
 
-pub async fn rename_role(
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureRoleAliasRecord {
+    pub alias_id: String,
+    pub repo_id: String,
+    pub role_id: String,
+    pub alias_key: String,
+    pub alias_normalized: String,
+    pub source_kind: String,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureRoleRuleRecord {
+    pub rule_id: String,
+    pub repo_id: String,
+    pub role_id: String,
+    pub version: u64,
+    pub lifecycle_status: String,
+    pub canonical_hash: String,
+    pub candidate_selector: Value,
+    pub positive_conditions: Value,
+    pub negative_conditions: Value,
+    pub score: Value,
+    pub provenance: Value,
+    pub evidence: Value,
+    pub metadata: Value,
+    pub supersedes_rule_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureRoleAssignmentRecord {
+    pub assignment_id: String,
+    pub repo_id: String,
+    pub artefact_id: String,
+    pub role_id: String,
+    pub source_kind: String,
+    pub confidence: f64,
+    pub status: String,
+    pub status_reason: String,
+    pub rule_id: Option<String>,
+    pub migration_id: Option<String>,
+    pub migrated_to_assignment_id: Option<String>,
+    pub provenance: Value,
+    pub evidence: Value,
+    pub metadata: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureRoleProposalRecord {
+    pub proposal_id: String,
+    pub repo_id: String,
+    pub proposal_type: String,
+    pub status: String,
+    pub request_payload: Value,
+    pub preview_payload: Value,
+    pub result_payload: Value,
+    pub provenance: Value,
+    pub applied_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArchitectureRoleAssignmentMigrationRecord {
+    pub migration_id: String,
+    pub repo_id: String,
+    pub proposal_id: String,
+    pub migration_type: String,
+    pub status: String,
+    pub source_role_id: Option<String>,
+    pub target_role_id: Option<String>,
+    pub summary: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AliasConflict {
+    AlreadyAssignedToDifferentRole {
+        alias: String,
+        existing_role_id: String,
+    },
+}
+
+pub fn normalize_role_key(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut previous_was_sep = false;
+    for ch in value.trim().chars() {
+        let normalized = match ch {
+            'A'..='Z' => ch.to_ascii_lowercase(),
+            'a'..='z' | '0'..='9' => ch,
+            _ => '_',
+        };
+        if normalized == '_' {
+            if previous_was_sep || out.is_empty() {
+                continue;
+            }
+            previous_was_sep = true;
+            out.push('_');
+        } else {
+            previous_was_sep = false;
+            out.push(normalized);
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+pub fn normalize_role_alias(alias: &str) -> String {
+    normalize_role_key(alias)
+}
+
+pub fn deterministic_role_id(repo_id: &str, canonical_key: &str) -> String {
+    deterministic_uuid(&format!(
+        "architecture_roles|role|{repo_id}|{}",
+        normalize_role_key(canonical_key)
+    ))
+}
+
+pub fn deterministic_alias_id(repo_id: &str, alias_key: &str) -> String {
+    deterministic_uuid(&format!(
+        "architecture_roles|alias|{repo_id}|{}",
+        normalize_role_alias(alias_key)
+    ))
+}
+
+pub fn deterministic_rule_id(
+    repo_id: &str,
+    role_id: &str,
+    version: u64,
+    canonical_hash: &str,
+) -> String {
+    deterministic_uuid(&format!(
+        "architecture_roles|rule|{repo_id}|{role_id}|{version}|{canonical_hash}"
+    ))
+}
+
+pub fn deterministic_assignment_id(repo_id: &str, artefact_id: &str, role_id: &str) -> String {
+    deterministic_uuid(&format!(
+        "architecture_roles|assignment|{repo_id}|{artefact_id}|{role_id}"
+    ))
+}
+
+pub fn deterministic_proposal_id(repo_id: &str, proposal_type: &str, request_hash: &str) -> String {
+    deterministic_uuid(&format!(
+        "architecture_roles|proposal|{repo_id}|{proposal_type}|{request_hash}"
+    ))
+}
+
+pub fn deterministic_migration_id(
+    repo_id: &str,
+    proposal_id: &str,
+    migration_type: &str,
+) -> String {
+    deterministic_uuid(&format!(
+        "architecture_roles|migration|{repo_id}|{proposal_id}|{migration_type}"
+    ))
+}
+
+pub async fn upsert_role(
+    relational: &RelationalStorage,
+    role: &ArchitectureRoleRecord,
+) -> Result<ArchitectureRoleRecord> {
+    let canonical_key = normalize_role_key(&role.canonical_key);
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO architecture_roles (
+                repo_id, role_id, canonical_key, display_name, description, family,
+                lifecycle_status, provenance_json, evidence_json, metadata_json, created_at, updated_at
+            ) VALUES (
+                {repo_id}, {role_id}, {canonical_key}, {display_name}, {description}, {family},
+                {lifecycle_status}, {provenance}, {evidence}, {metadata}, {now}, {now}
+            )
+            ON CONFLICT(repo_id, canonical_key) DO UPDATE SET
+                display_name = excluded.display_name,
+                description = excluded.description,
+                family = excluded.family,
+                lifecycle_status = excluded.lifecycle_status,
+                provenance_json = excluded.provenance_json,
+                evidence_json = excluded.evidence_json,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at;",
+            repo_id = sql_text(&role.repo_id),
+            role_id = sql_text(&role.role_id),
+            canonical_key = sql_text(&canonical_key),
+            display_name = sql_text(&role.display_name),
+            description = sql_text(&role.description),
+            family = sql_opt_text(role.family.as_deref()),
+            lifecycle_status = sql_text(&role.lifecycle_status),
+            provenance = sql_json_value(relational, &role.provenance),
+            evidence = sql_json_value(relational, &role.evidence),
+            metadata = sql_json_value(relational, &role.metadata),
+            now = sql_now(relational),
+        ))
+        .await
+        .context("upserting architecture role")?;
+
+    load_role_by_canonical_key(relational, &role.repo_id, &canonical_key)
+        .await?
+        .ok_or_else(|| anyhow!("role `{canonical_key}` was not found after upsert"))
+}
+
+pub async fn load_role_by_id(
     relational: &RelationalStorage,
     repo_id: &str,
     role_id: &str,
-    display_name: &str,
-    provenance: &Value,
-) -> Result<()> {
-    let sql = format!(
-        "UPDATE architecture_roles
-         SET display_name = {display_name}, provenance_json = {provenance}, updated_at = {now}
-         WHERE repo_id = {repo_id} AND role_id = {role_id};",
-        repo_id = sql_text(repo_id),
-        role_id = sql_text(role_id),
-        display_name = sql_text(display_name),
-        provenance = sql_json_value(relational, provenance),
-        now = sql_now(relational),
-    );
-    relational
-        .exec_serialized(&sql)
+) -> Result<Option<ArchitectureRoleRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, role_id, canonical_key, display_name, description, family, \
+                    lifecycle_status, provenance_json, evidence_json, metadata_json \
+             FROM architecture_roles \
+             WHERE repo_id = {repo_id} AND role_id = {role_id} \
+             LIMIT 1;",
+            repo_id = sql_text(repo_id),
+            role_id = sql_text(role_id),
+        ))
         .await
-        .context("renaming architecture role")
+        .context("loading architecture role by id")?;
+
+    rows.first().map(parse_role_row).transpose()
 }
 
-pub async fn set_role_lifecycle(
+pub async fn load_role_by_canonical_key(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    canonical_key: &str,
+) -> Result<Option<ArchitectureRoleRecord>> {
+    let canonical_key = normalize_role_key(canonical_key);
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, role_id, canonical_key, display_name, description, family, \
+                    lifecycle_status, provenance_json, evidence_json, metadata_json \
+             FROM architecture_roles \
+             WHERE repo_id = {repo_id} AND canonical_key = {canonical_key} \
+             LIMIT 1;",
+            repo_id = sql_text(repo_id),
+            canonical_key = sql_text(&canonical_key),
+        ))
+        .await
+        .context("loading architecture role by canonical key")?;
+
+    rows.first().map(parse_role_row).transpose()
+}
+
+pub async fn list_roles(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<ArchitectureRoleRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, role_id, canonical_key, display_name, description, family, \
+                    lifecycle_status, provenance_json, evidence_json, metadata_json \
+             FROM architecture_roles \
+             WHERE repo_id = {repo_id} \
+             ORDER BY canonical_key ASC;",
+            repo_id = sql_text(repo_id),
+        ))
+        .await
+        .context("listing architecture roles")?;
+    rows.iter().map(parse_role_row).collect()
+}
+
+pub async fn load_role_by_alias(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    alias: &str,
+) -> Result<Option<ArchitectureRoleRecord>> {
+    let alias = normalize_role_alias(alias);
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT r.repo_id, r.role_id, r.canonical_key, r.display_name, r.description, r.family, \
+                    r.lifecycle_status, r.provenance_json, r.evidence_json, r.metadata_json \
+             FROM architecture_role_aliases a \
+             JOIN architecture_roles r ON r.repo_id = a.repo_id AND r.role_id = a.role_id \
+             WHERE a.repo_id = {repo_id} AND a.alias_normalized = {alias} \
+             LIMIT 1;",
+            repo_id = sql_text(repo_id),
+            alias = sql_text(&alias),
+        ))
+        .await
+        .context("loading architecture role by alias")?;
+
+    rows.first().map(parse_role_row).transpose()
+}
+
+pub async fn list_role_aliases(
     relational: &RelationalStorage,
     repo_id: &str,
     role_id: &str,
-    lifecycle: RoleLifecycle,
-) -> Result<()> {
-    let sql = format!(
-        "UPDATE architecture_roles
-         SET lifecycle = {lifecycle}, updated_at = {now}
-         WHERE repo_id = {repo_id} AND role_id = {role_id};",
-        repo_id = sql_text(repo_id),
-        role_id = sql_text(role_id),
-        lifecycle = sql_text(lifecycle.as_db()),
-        now = sql_now(relational),
-    );
-    relational
-        .exec_serialized(&sql)
+) -> Result<Vec<ArchitectureRoleAliasRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, alias_id, role_id, alias_key, alias_normalized, source_kind, metadata_json \
+             FROM architecture_role_aliases \
+             WHERE repo_id = {repo_id} AND role_id = {role_id} \
+             ORDER BY alias_key ASC;",
+            repo_id = sql_text(repo_id),
+            role_id = sql_text(role_id),
+        ))
         .await
-        .context("updating architecture role lifecycle")
+        .context("listing architecture role aliases")?;
+    rows.iter().map(parse_alias_row).collect()
 }
 
-pub async fn load_roles(
+pub async fn create_role_alias(
     relational: &RelationalStorage,
-    repo_id: &str,
-) -> Result<Vec<ArchitectureRole>> {
-    let sql = format!(
-        "SELECT repo_id, role_id, family, slug, display_name, description, lifecycle, provenance_json
-         FROM architecture_roles
-         WHERE repo_id = {}
-         ORDER BY family ASC, slug ASC",
-        sql_text(repo_id)
-    );
-    relational
-        .query_rows(&sql)
+    alias: &ArchitectureRoleAliasRecord,
+) -> Result<std::result::Result<(), AliasConflict>> {
+    let alias_normalized = normalize_role_alias(&alias.alias_key);
+    let existing_rows = relational
+        .query_rows(&format!(
+            "SELECT role_id FROM architecture_role_aliases \
+             WHERE repo_id = {repo_id} AND alias_normalized = {alias_normalized} \
+             LIMIT 1;",
+            repo_id = sql_text(&alias.repo_id),
+            alias_normalized = sql_text(&alias_normalized),
+        ))
         .await
-        .context("loading architecture roles")?
-        .into_iter()
-        .map(role_from_row)
-        .collect()
-}
+        .context("checking existing architecture alias")?;
 
-pub async fn upsert_assignment(
-    relational: &RelationalStorage,
-    assignment: &ArchitectureRoleAssignment,
-) -> Result<()> {
-    relational
-        .exec_serialized(&insert_assignment_sql(relational, assignment))
-        .await
-        .context("upserting architecture role assignment")
-}
+    if let Some(existing_role_id) = existing_rows
+        .first()
+        .and_then(|row| row.get("role_id"))
+        .and_then(Value::as_str)
+    {
+        if existing_role_id == alias.role_id {
+            relational
+                .exec_serialized(&format!(
+                    "UPDATE architecture_role_aliases SET \
+                        alias_key = {alias_key}, source_kind = {source_kind}, metadata_json = {metadata}, updated_at = {now} \
+                     WHERE repo_id = {repo_id} AND alias_normalized = {alias_normalized};",
+                    alias_key = sql_text(&alias.alias_key),
+                    source_kind = sql_text(&alias.source_kind),
+                    metadata = sql_json_value(relational, &alias.metadata),
+                    now = sql_now(relational),
+                    repo_id = sql_text(&alias.repo_id),
+                    alias_normalized = sql_text(&alias_normalized),
+                ))
+                .await
+                .context("updating existing architecture alias")?;
+            return Ok(Ok(()));
+        }
 
-pub async fn load_assignments_for_path(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    path: &str,
-) -> Result<Vec<ArchitectureRoleAssignment>> {
-    let sql = format!(
-        "SELECT repo_id, assignment_id, role_id, target_kind, artefact_id, symbol_id, path,
-                priority, status, source, confidence, evidence_json, provenance_json,
-                classifier_version, rule_version, generation_seq
-         FROM architecture_role_assignments_current
-         WHERE repo_id = {} AND path = {}
-         ORDER BY priority ASC, confidence DESC, assignment_id ASC",
-        sql_text(repo_id),
-        sql_text(path)
-    );
-    relational
-        .query_rows(&sql)
-        .await
-        .context("loading architecture role assignments for path")?
-        .into_iter()
-        .map(assignment_from_row)
-        .collect()
-}
-
-pub async fn retire_role_and_mark_assignments(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    role_id: &str,
-    lifecycle: RoleLifecycle,
-    assignment_status: AssignmentStatus,
-) -> Result<()> {
-    let active_assignments =
-        load_assignments_for_role_status(relational, repo_id, role_id, AssignmentStatus::Active)
-            .await?;
-    let mut statements = Vec::with_capacity(active_assignments.len() + 2);
-    statements.push(format!(
-        "UPDATE architecture_roles
-         SET lifecycle = {lifecycle}, updated_at = {now}
-         WHERE repo_id = {repo_id} AND role_id = {role_id};",
-        repo_id = sql_text(repo_id),
-        role_id = sql_text(role_id),
-        lifecycle = sql_text(lifecycle.as_db()),
-        now = sql_now(relational),
-    ));
-
-    for previous in &active_assignments {
-        let mut next = previous.clone();
-        next.status = assignment_status;
-        statements.push(insert_assignment_history_sql(
-            relational,
-            Some(previous),
-            &next,
-            "role_lifecycle_changed",
-        ));
+        return Ok(Err(AliasConflict::AlreadyAssignedToDifferentRole {
+            alias: alias_normalized,
+            existing_role_id: existing_role_id.to_string(),
+        }));
     }
 
-    statements.push(format!(
-        "UPDATE architecture_role_assignments_current
-         SET status = {assignment_status}, updated_at = {now}
-         WHERE repo_id = {repo_id} AND role_id = {role_id} AND status = 'active';",
-        repo_id = sql_text(repo_id),
-        role_id = sql_text(role_id),
-        assignment_status = sql_text(assignment_status.as_db()),
-        now = sql_now(relational),
-    ));
     relational
-        .exec_serialized_batch_transactional(&statements)
+        .exec_serialized(&format!(
+            "INSERT INTO architecture_role_aliases (
+                repo_id, alias_id, role_id, alias_key, alias_normalized, source_kind, metadata_json, created_at, updated_at
+            ) VALUES (
+                {repo_id}, {alias_id}, {role_id}, {alias_key}, {alias_normalized}, {source_kind}, {metadata}, {now}, {now}
+            );",
+            repo_id = sql_text(&alias.repo_id),
+            alias_id = sql_text(&alias.alias_id),
+            role_id = sql_text(&alias.role_id),
+            alias_key = sql_text(&alias.alias_key),
+            alias_normalized = sql_text(&alias_normalized),
+            source_kind = sql_text(&alias.source_kind),
+            metadata = sql_json_value(relational, &alias.metadata),
+            now = sql_now(relational),
+        ))
         .await
-        .context("retiring architecture role and marking assignments")
+        .context("creating architecture role alias")?;
+    Ok(Ok(()))
 }
 
-async fn load_assignments_for_role_status(
+pub async fn insert_role_rule(
+    relational: &RelationalStorage,
+    rule: &ArchitectureRoleRuleRecord,
+) -> Result<()> {
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO architecture_role_detection_rules (
+                repo_id, rule_id, role_id, version, lifecycle_status, canonical_hash,
+                candidate_selector_json, positive_conditions_json, negative_conditions_json, score_json,
+                provenance_json, evidence_json, metadata_json, supersedes_rule_id, created_at, updated_at
+            ) VALUES (
+                {repo_id}, {rule_id}, {role_id}, {version}, {lifecycle_status}, {canonical_hash},
+                {candidate_selector}, {positive_conditions}, {negative_conditions}, {score},
+                {provenance}, {evidence}, {metadata}, {supersedes_rule_id}, {now}, {now}
+            )
+            ON CONFLICT(repo_id, rule_id) DO UPDATE SET
+                role_id = excluded.role_id,
+                version = excluded.version,
+                lifecycle_status = excluded.lifecycle_status,
+                canonical_hash = excluded.canonical_hash,
+                candidate_selector_json = excluded.candidate_selector_json,
+                positive_conditions_json = excluded.positive_conditions_json,
+                negative_conditions_json = excluded.negative_conditions_json,
+                score_json = excluded.score_json,
+                provenance_json = excluded.provenance_json,
+                evidence_json = excluded.evidence_json,
+                metadata_json = excluded.metadata_json,
+                supersedes_rule_id = excluded.supersedes_rule_id,
+                updated_at = excluded.updated_at;",
+            repo_id = sql_text(&rule.repo_id),
+            rule_id = sql_text(&rule.rule_id),
+            role_id = sql_text(&rule.role_id),
+            version = rule.version,
+            lifecycle_status = sql_text(&rule.lifecycle_status),
+            canonical_hash = sql_text(&rule.canonical_hash),
+            candidate_selector = sql_json_value(relational, &rule.candidate_selector),
+            positive_conditions = sql_json_value(relational, &rule.positive_conditions),
+            negative_conditions = sql_json_value(relational, &rule.negative_conditions),
+            score = sql_json_value(relational, &rule.score),
+            provenance = sql_json_value(relational, &rule.provenance),
+            evidence = sql_json_value(relational, &rule.evidence),
+            metadata = sql_json_value(relational, &rule.metadata),
+            supersedes_rule_id = sql_opt_text(rule.supersedes_rule_id.as_deref()),
+            now = sql_now(relational),
+        ))
+        .await
+        .context("inserting architecture role rule")
+}
+
+pub async fn load_role_rule_by_id(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    rule_id: &str,
+) -> Result<Option<ArchitectureRoleRuleRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, rule_id, role_id, version, lifecycle_status, canonical_hash,
+                    candidate_selector_json, positive_conditions_json, negative_conditions_json, score_json,
+                    provenance_json, evidence_json, metadata_json, supersedes_rule_id \
+             FROM architecture_role_detection_rules \
+             WHERE repo_id = {repo_id} AND rule_id = {rule_id} \
+             LIMIT 1;",
+            repo_id = sql_text(repo_id),
+            rule_id = sql_text(rule_id),
+        ))
+        .await
+        .context("loading architecture role rule by id")?;
+    rows.first().map(parse_rule_row).transpose()
+}
+
+pub async fn load_role_rules(
     relational: &RelationalStorage,
     repo_id: &str,
     role_id: &str,
-    status: AssignmentStatus,
-) -> Result<Vec<ArchitectureRoleAssignment>> {
-    let sql = format!(
-        "SELECT repo_id, assignment_id, role_id, target_kind, artefact_id, symbol_id, path,
-                priority, status, source, confidence, evidence_json, provenance_json,
-                classifier_version, rule_version, generation_seq
-         FROM architecture_role_assignments_current
-         WHERE repo_id = {repo_id} AND role_id = {role_id} AND status = {status}
-         ORDER BY assignment_id ASC",
-        repo_id = sql_text(repo_id),
-        role_id = sql_text(role_id),
-        status = sql_text(status.as_db()),
-    );
-    relational
-        .query_rows(&sql)
+) -> Result<Vec<ArchitectureRoleRuleRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, rule_id, role_id, version, lifecycle_status, canonical_hash,
+                    candidate_selector_json, positive_conditions_json, negative_conditions_json, score_json,
+                    provenance_json, evidence_json, metadata_json, supersedes_rule_id \
+             FROM architecture_role_detection_rules \
+             WHERE repo_id = {repo_id} AND role_id = {role_id} \
+             ORDER BY version ASC, rule_id ASC;",
+            repo_id = sql_text(repo_id),
+            role_id = sql_text(role_id),
+        ))
         .await
-        .context("loading architecture role assignments for role status")?
-        .into_iter()
-        .map(assignment_from_row)
-        .collect()
+        .context("loading architecture role rules")?;
+    rows.iter().map(parse_rule_row).collect()
 }
 
-pub async fn record_assignment_history(
+pub async fn next_role_rule_version(
     relational: &RelationalStorage,
-    previous: Option<&ArchitectureRoleAssignment>,
-    next: &ArchitectureRoleAssignment,
-    change_kind: &str,
+    repo_id: &str,
+    role_id: &str,
+) -> Result<u64> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT COALESCE(MAX(version), 0) AS max_version \
+             FROM architecture_role_detection_rules \
+             WHERE repo_id = {repo_id} AND role_id = {role_id};",
+            repo_id = sql_text(repo_id),
+            role_id = sql_text(role_id),
+        ))
+        .await
+        .context("loading next rule version")?;
+    let max = rows
+        .first()
+        .and_then(|row| row.get("max_version"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Ok(max + 1)
+}
+
+pub async fn update_role_rule_lifecycle(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    rule_id: &str,
+    lifecycle_status: &str,
+) -> Result<bool> {
+    let before = load_role_rule_by_id(relational, repo_id, rule_id).await?;
+    if before.is_none() {
+        return Ok(false);
+    }
+    relational
+        .exec_serialized(&format!(
+            "UPDATE architecture_role_detection_rules SET \
+                lifecycle_status = {lifecycle_status}, updated_at = {now} \
+             WHERE repo_id = {repo_id} AND rule_id = {rule_id};",
+            lifecycle_status = sql_text(lifecycle_status),
+            now = sql_now(relational),
+            repo_id = sql_text(repo_id),
+            rule_id = sql_text(rule_id),
+        ))
+        .await
+        .context("updating architecture role rule lifecycle")?;
+    Ok(true)
+}
+
+pub async fn insert_role_assignment(
+    relational: &RelationalStorage,
+    assignment: &ArchitectureRoleAssignmentRecord,
 ) -> Result<()> {
-    let sql = insert_assignment_history_sql(relational, previous, next, change_kind);
     relational
-        .exec_serialized(&sql)
+        .exec_serialized(&format!(
+            "INSERT INTO architecture_role_assignments (
+                repo_id, assignment_id, artefact_id, role_id, source_kind, confidence, status,
+                status_reason, rule_id, migration_id, migrated_to_assignment_id,
+                provenance_json, evidence_json, metadata_json, created_at, updated_at
+            ) VALUES (
+                {repo_id}, {assignment_id}, {artefact_id}, {role_id}, {source_kind}, {confidence}, {status},
+                {status_reason}, {rule_id}, {migration_id}, {migrated_to_assignment_id},
+                {provenance}, {evidence}, {metadata}, {now}, {now}
+            )
+            ON CONFLICT(repo_id, assignment_id) DO UPDATE SET
+                artefact_id = excluded.artefact_id,
+                role_id = excluded.role_id,
+                source_kind = excluded.source_kind,
+                confidence = excluded.confidence,
+                status = excluded.status,
+                status_reason = excluded.status_reason,
+                rule_id = excluded.rule_id,
+                migration_id = excluded.migration_id,
+                migrated_to_assignment_id = excluded.migrated_to_assignment_id,
+                provenance_json = excluded.provenance_json,
+                evidence_json = excluded.evidence_json,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at;",
+            repo_id = sql_text(&assignment.repo_id),
+            assignment_id = sql_text(&assignment.assignment_id),
+            artefact_id = sql_text(&assignment.artefact_id),
+            role_id = sql_text(&assignment.role_id),
+            source_kind = sql_text(&assignment.source_kind),
+            confidence = assignment.confidence,
+            status = sql_text(&assignment.status),
+            status_reason = sql_text(&assignment.status_reason),
+            rule_id = sql_opt_text(assignment.rule_id.as_deref()),
+            migration_id = sql_opt_text(assignment.migration_id.as_deref()),
+            migrated_to_assignment_id = sql_opt_text(assignment.migrated_to_assignment_id.as_deref()),
+            provenance = sql_json_value(relational, &assignment.provenance),
+            evidence = sql_json_value(relational, &assignment.evidence),
+            metadata = sql_json_value(relational, &assignment.metadata),
+            now = sql_now(relational),
+        ))
         .await
-        .context("recording architecture role assignment history")
+        .context("inserting architecture role assignment")
 }
 
-fn insert_assignment_history_sql(
+pub async fn load_assignment_by_id(
     relational: &RelationalStorage,
-    previous: Option<&ArchitectureRoleAssignment>,
-    next: &ArchitectureRoleAssignment,
-    change_kind: &str,
-) -> String {
-    let history_id = assignment_history_id(
-        &next.repo_id,
-        &next.assignment_id,
-        next.generation_seq,
-        change_kind,
-    );
-    format!(
-        "INSERT INTO architecture_role_assignment_history (
-            repo_id, history_id, assignment_id, role_id, target_kind, artefact_id, symbol_id, path,
-            previous_status, new_status, previous_confidence, new_confidence, change_kind,
-            evidence_json, provenance_json, generation_seq
-         ) VALUES (
-            {repo_id}, {history_id}, {assignment_id}, {role_id}, {target_kind}, {artefact_id}, {symbol_id}, {path},
-            {previous_status}, {new_status}, {previous_confidence}, {new_confidence}, {change_kind},
-            {evidence}, {provenance}, {generation_seq}
-         )
-         ON CONFLICT(repo_id, history_id) DO NOTHING;",
-        repo_id = sql_text(&next.repo_id),
-        history_id = sql_text(&history_id),
-        assignment_id = sql_text(&next.assignment_id),
-        role_id = sql_text(&next.role_id),
-        target_kind = sql_text(next.target.target_kind.as_db()),
-        artefact_id = sql_opt_text(next.target.artefact_id.as_deref()),
-        symbol_id = sql_opt_text(next.target.symbol_id.as_deref()),
-        path = sql_text(&next.target.path),
-        previous_status = previous
-            .map(|assignment| sql_text(assignment.status.as_db()))
-            .unwrap_or_else(|| "NULL".to_string()),
-        new_status = sql_text(next.status.as_db()),
-        previous_confidence = previous
-            .map(|assignment| assignment.confidence.to_string())
-            .unwrap_or_else(|| "NULL".to_string()),
-        new_confidence = next.confidence,
-        change_kind = sql_text(change_kind),
-        evidence = sql_json_value(relational, &next.evidence),
-        provenance = sql_json_value(relational, &next.provenance),
-        generation_seq = next.generation_seq,
+    repo_id: &str,
+    assignment_id: &str,
+) -> Result<Option<ArchitectureRoleAssignmentRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, assignment_id, artefact_id, role_id, source_kind, confidence, status, \
+                    status_reason, rule_id, migration_id, migrated_to_assignment_id, provenance_json, evidence_json, metadata_json \
+             FROM architecture_role_assignments \
+             WHERE repo_id = {repo_id} AND assignment_id = {assignment_id} \
+             LIMIT 1;",
+            repo_id = sql_text(repo_id),
+            assignment_id = sql_text(assignment_id),
+        ))
+        .await
+        .context("loading architecture role assignment by id")?;
+    rows.first().map(parse_assignment_row).transpose()
+}
+
+pub async fn list_assignments_for_role(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    role_id: &str,
+) -> Result<Vec<ArchitectureRoleAssignmentRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, assignment_id, artefact_id, role_id, source_kind, confidence, status, \
+                    status_reason, rule_id, migration_id, migrated_to_assignment_id, provenance_json, evidence_json, metadata_json \
+             FROM architecture_role_assignments \
+             WHERE repo_id = {repo_id} AND role_id = {role_id} \
+             ORDER BY assignment_id ASC;",
+            repo_id = sql_text(repo_id),
+            role_id = sql_text(role_id),
+        ))
+        .await
+        .context("listing assignments for role")?;
+    rows.iter().map(parse_assignment_row).collect()
+}
+
+pub async fn update_assignment_status(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    assignment_id: &str,
+    status: &str,
+    reason: &str,
+    migration_id: Option<&str>,
+) -> Result<bool> {
+    if load_assignment_by_id(relational, repo_id, assignment_id)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    relational
+        .exec_serialized(&format!(
+            "UPDATE architecture_role_assignments SET \
+                status = {status}, status_reason = {reason}, migration_id = {migration_id}, updated_at = {now} \
+             WHERE repo_id = {repo_id} AND assignment_id = {assignment_id};",
+            status = sql_text(status),
+            reason = sql_text(reason),
+            migration_id = sql_opt_text(migration_id),
+            now = sql_now(relational),
+            repo_id = sql_text(repo_id),
+            assignment_id = sql_text(assignment_id),
+        ))
+        .await
+        .context("updating assignment status")?;
+    Ok(true)
+}
+
+pub async fn mark_assignment_invalidated(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    assignment_id: &str,
+    reason: &str,
+) -> Result<bool> {
+    update_assignment_status(
+        relational,
+        repo_id,
+        assignment_id,
+        "needs_review",
+        reason,
+        None,
     )
+    .await
 }
 
-pub async fn insert_change_proposal(
+pub async fn mark_assignment_migrated(
     relational: &RelationalStorage,
-    proposal: &ArchitectureRoleChangeProposal,
+    repo_id: &str,
+    assignment_id: &str,
+    migrated_to_assignment_id: &str,
+    migration_id: Option<&str>,
+) -> Result<bool> {
+    if load_assignment_by_id(relational, repo_id, assignment_id)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    relational
+        .exec_serialized(&format!(
+            "UPDATE architecture_role_assignments SET \
+                status = 'migrated', status_reason = 'migrated by proposal', \
+                migration_id = {migration_id}, migrated_to_assignment_id = {migrated_to_assignment_id}, updated_at = {now} \
+             WHERE repo_id = {repo_id} AND assignment_id = {assignment_id};",
+            migration_id = sql_opt_text(migration_id),
+            migrated_to_assignment_id = sql_text(migrated_to_assignment_id),
+            now = sql_now(relational),
+            repo_id = sql_text(repo_id),
+            assignment_id = sql_text(assignment_id),
+        ))
+        .await
+        .context("marking assignment migrated")?;
+    Ok(true)
+}
+
+pub async fn insert_role_proposal(
+    relational: &RelationalStorage,
+    proposal: &ArchitectureRoleProposalRecord,
 ) -> Result<()> {
-    let sql = format!(
-        "INSERT INTO architecture_role_change_proposals (
-            repo_id, proposal_id, proposal_kind, status, payload_json, impact_preview_json, provenance_json
-         ) VALUES ({repo_id}, {proposal_id}, {proposal_kind}, {status}, {payload}, {impact_preview}, {provenance})
-         ON CONFLICT(repo_id, proposal_id) DO UPDATE SET
-            status = excluded.status,
-            payload_json = excluded.payload_json,
-            impact_preview_json = excluded.impact_preview_json,
-            provenance_json = excluded.provenance_json;",
-        repo_id = sql_text(&proposal.repo_id),
-        proposal_id = sql_text(&proposal.proposal_id),
-        proposal_kind = sql_text(&proposal.proposal_kind),
-        status = sql_text(proposal.status.as_db()),
-        payload = sql_json_value(relational, &proposal.payload),
-        impact_preview = sql_json_value(relational, &proposal.impact_preview),
-        provenance = sql_json_value(relational, &proposal.provenance),
-    );
     relational
-        .exec_serialized(&sql)
+        .exec_serialized(&format!(
+            "INSERT INTO architecture_role_change_proposals (
+                repo_id, proposal_id, proposal_type, status, request_payload_json, preview_payload_json,
+                result_payload_json, provenance_json, created_at, updated_at, applied_at
+            ) VALUES (
+                {repo_id}, {proposal_id}, {proposal_type}, {status}, {request_payload}, {preview_payload},
+                {result_payload}, {provenance}, {now}, {now}, {applied_at}
+            )
+            ON CONFLICT(repo_id, proposal_id) DO UPDATE SET
+                proposal_type = excluded.proposal_type,
+                status = excluded.status,
+                request_payload_json = excluded.request_payload_json,
+                preview_payload_json = excluded.preview_payload_json,
+                result_payload_json = excluded.result_payload_json,
+                provenance_json = excluded.provenance_json,
+                updated_at = excluded.updated_at,
+                applied_at = excluded.applied_at;",
+            repo_id = sql_text(&proposal.repo_id),
+            proposal_id = sql_text(&proposal.proposal_id),
+            proposal_type = sql_text(&proposal.proposal_type),
+            status = sql_text(&proposal.status),
+            request_payload = sql_json_value(relational, &proposal.request_payload),
+            preview_payload = sql_json_value(relational, &proposal.preview_payload),
+            result_payload = sql_json_value(relational, &proposal.result_payload),
+            provenance = sql_json_value(relational, &proposal.provenance),
+            now = sql_now(relational),
+            applied_at = sql_opt_text(proposal.applied_at.as_deref()),
+        ))
         .await
-        .context("inserting architecture role change proposal")
+        .context("inserting architecture role proposal")
 }
 
-fn insert_assignment_sql(
+pub async fn load_role_proposal_by_id(
     relational: &RelationalStorage,
-    assignment: &ArchitectureRoleAssignment,
-) -> String {
-    format!(
-        "INSERT INTO architecture_role_assignments_current (
-            repo_id, assignment_id, role_id, target_kind, artefact_id, symbol_id, path,
-            priority, status, source, confidence, evidence_json, provenance_json,
-            classifier_version, rule_version, generation_seq, updated_at
-         ) VALUES (
-            {repo_id}, {assignment_id}, {role_id}, {target_kind}, {artefact_id}, {symbol_id}, {path},
-            {priority}, {status}, {source}, {confidence}, {evidence}, {provenance},
-            {classifier_version}, {rule_version}, {generation_seq}, {now}
-         )
-         ON CONFLICT(repo_id, assignment_id) DO UPDATE SET
-            priority = excluded.priority,
-            status = excluded.status,
-            source = excluded.source,
-            confidence = excluded.confidence,
-            evidence_json = excluded.evidence_json,
-            provenance_json = excluded.provenance_json,
-            classifier_version = excluded.classifier_version,
-            rule_version = excluded.rule_version,
-            generation_seq = excluded.generation_seq,
-            updated_at = {now};",
-        repo_id = sql_text(&assignment.repo_id),
-        assignment_id = sql_text(&assignment.assignment_id),
-        role_id = sql_text(&assignment.role_id),
-        target_kind = sql_text(assignment.target.target_kind.as_db()),
-        artefact_id = sql_opt_text(assignment.target.artefact_id.as_deref()),
-        symbol_id = sql_opt_text(assignment.target.symbol_id.as_deref()),
-        path = sql_text(&assignment.target.path),
-        priority = sql_text(assignment.priority.as_db()),
-        status = sql_text(assignment.status.as_db()),
-        source = sql_text(assignment.source.as_db()),
-        confidence = assignment.confidence,
-        evidence = sql_json_value(relational, &assignment.evidence),
-        provenance = sql_json_value(relational, &assignment.provenance),
-        classifier_version = sql_text(&assignment.classifier_version),
-        rule_version = sql_opt_i64(assignment.rule_version),
-        generation_seq = assignment.generation_seq,
-        now = sql_now(relational),
-    )
+    repo_id: &str,
+    proposal_id: &str,
+) -> Result<Option<ArchitectureRoleProposalRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, proposal_id, proposal_type, status, request_payload_json, preview_payload_json,
+                    result_payload_json, provenance_json, applied_at \
+             FROM architecture_role_change_proposals \
+             WHERE repo_id = {repo_id} AND proposal_id = {proposal_id} \
+             LIMIT 1;",
+            repo_id = sql_text(repo_id),
+            proposal_id = sql_text(proposal_id),
+        ))
+        .await
+        .context("loading architecture role proposal")?;
+    rows.first().map(parse_proposal_row).transpose()
 }
 
-fn role_from_row(row: Value) -> Result<ArchitectureRole> {
-    let provenance = row_json(&row, "provenance_json", json!({}))?;
-    Ok(ArchitectureRole {
-        repo_id: row_string(&row, "repo_id")?,
-        role_id: row_string(&row, "role_id")?,
-        family: row_string(&row, "family")?,
-        slug: row_string(&row, "slug")?,
-        display_name: row_string(&row, "display_name")?,
-        description: row_string(&row, "description")?,
-        lifecycle: role_lifecycle_from_db(&row_string(&row, "lifecycle")?)?,
-        provenance,
+pub async fn update_role_proposal_preview(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    proposal_id: &str,
+    preview_payload: &Value,
+) -> Result<bool> {
+    if load_role_proposal_by_id(relational, repo_id, proposal_id)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    relational
+        .exec_serialized(&format!(
+            "UPDATE architecture_role_change_proposals SET \
+                preview_payload_json = {preview_payload}, updated_at = {now} \
+             WHERE repo_id = {repo_id} AND proposal_id = {proposal_id};",
+            preview_payload = sql_json_value(relational, preview_payload),
+            now = sql_now(relational),
+            repo_id = sql_text(repo_id),
+            proposal_id = sql_text(proposal_id),
+        ))
+        .await
+        .context("updating proposal preview")?;
+    Ok(true)
+}
+
+pub async fn mark_role_proposal_applied(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    proposal_id: &str,
+    result_payload: &Value,
+) -> Result<bool> {
+    if load_role_proposal_by_id(relational, repo_id, proposal_id)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    relational
+        .exec_serialized(&format!(
+            "UPDATE architecture_role_change_proposals SET \
+                status = 'applied', result_payload_json = {result_payload}, applied_at = {now}, updated_at = {now} \
+             WHERE repo_id = {repo_id} AND proposal_id = {proposal_id};",
+            result_payload = sql_json_value(relational, result_payload),
+            now = sql_now(relational),
+            repo_id = sql_text(repo_id),
+            proposal_id = sql_text(proposal_id),
+        ))
+        .await
+        .context("marking proposal applied")?;
+    Ok(true)
+}
+
+pub async fn insert_assignment_migration_record(
+    relational: &RelationalStorage,
+    migration: &ArchitectureRoleAssignmentMigrationRecord,
+) -> Result<()> {
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO architecture_role_assignment_migrations (
+                repo_id, migration_id, proposal_id, migration_type, status, source_role_id,
+                target_role_id, summary_json, created_at, updated_at
+            ) VALUES (
+                {repo_id}, {migration_id}, {proposal_id}, {migration_type}, {status}, {source_role_id},
+                {target_role_id}, {summary}, {now}, {now}
+            )
+            ON CONFLICT(repo_id, migration_id) DO UPDATE SET
+                proposal_id = excluded.proposal_id,
+                migration_type = excluded.migration_type,
+                status = excluded.status,
+                source_role_id = excluded.source_role_id,
+                target_role_id = excluded.target_role_id,
+                summary_json = excluded.summary_json,
+                updated_at = excluded.updated_at;",
+            repo_id = sql_text(&migration.repo_id),
+            migration_id = sql_text(&migration.migration_id),
+            proposal_id = sql_text(&migration.proposal_id),
+            migration_type = sql_text(&migration.migration_type),
+            status = sql_text(&migration.status),
+            source_role_id = sql_opt_text(migration.source_role_id.as_deref()),
+            target_role_id = sql_opt_text(migration.target_role_id.as_deref()),
+            summary = sql_json_value(relational, &migration.summary),
+            now = sql_now(relational),
+        ))
+        .await
+        .context("inserting assignment migration record")
+}
+
+pub async fn list_assignment_migrations_for_proposal(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    proposal_id: &str,
+) -> Result<Vec<ArchitectureRoleAssignmentMigrationRecord>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT repo_id, migration_id, proposal_id, migration_type, status, source_role_id, target_role_id, summary_json \
+             FROM architecture_role_assignment_migrations \
+             WHERE repo_id = {repo_id} AND proposal_id = {proposal_id} \
+             ORDER BY migration_id ASC;",
+            repo_id = sql_text(repo_id),
+            proposal_id = sql_text(proposal_id),
+        ))
+        .await
+        .context("listing assignment migrations for proposal")?;
+    rows.iter().map(parse_migration_row).collect()
+}
+
+fn parse_role_row(row: &Value) -> Result<ArchitectureRoleRecord> {
+    Ok(ArchitectureRoleRecord {
+        role_id: string_field(row, "role_id")?,
+        repo_id: string_field(row, "repo_id")?,
+        canonical_key: string_field(row, "canonical_key")?,
+        display_name: string_field(row, "display_name")?,
+        description: string_field(row, "description")?,
+        family: optional_string_field(row, "family"),
+        lifecycle_status: string_field(row, "lifecycle_status")?,
+        provenance: json_text_field(row, "provenance_json")?,
+        evidence: json_text_field(row, "evidence_json")?,
+        metadata: json_text_field(row, "metadata_json")?,
     })
 }
 
-fn assignment_from_row(row: Value) -> Result<ArchitectureRoleAssignment> {
-    let target = RoleTarget {
-        target_kind: target_kind_from_db(&row_string(&row, "target_kind")?)?,
-        artefact_id: row_opt_string(&row, "artefact_id"),
-        symbol_id: row_opt_string(&row, "symbol_id"),
-        path: row_string(&row, "path")?,
-    };
-    Ok(ArchitectureRoleAssignment {
-        repo_id: row_string(&row, "repo_id")?,
-        assignment_id: row_string(&row, "assignment_id")?,
-        role_id: row_string(&row, "role_id")?,
-        target,
-        priority: assignment_priority_from_db(&row_string(&row, "priority")?)?,
-        status: assignment_status_from_db(&row_string(&row, "status")?)?,
-        source: assignment_source_from_db(&row_string(&row, "source")?)?,
-        confidence: row_f64(&row, "confidence")?,
-        evidence: row_json(&row, "evidence_json", json!([]))?,
-        provenance: row_json(&row, "provenance_json", json!({}))?,
-        classifier_version: row_string(&row, "classifier_version")?,
-        rule_version: row.get("rule_version").and_then(Value::as_i64),
-        generation_seq: row_u64(&row, "generation_seq")?,
+fn parse_alias_row(row: &Value) -> Result<ArchitectureRoleAliasRecord> {
+    Ok(ArchitectureRoleAliasRecord {
+        alias_id: string_field(row, "alias_id")?,
+        repo_id: string_field(row, "repo_id")?,
+        role_id: string_field(row, "role_id")?,
+        alias_key: string_field(row, "alias_key")?,
+        alias_normalized: string_field(row, "alias_normalized")?,
+        source_kind: string_field(row, "source_kind")?,
+        metadata: json_text_field(row, "metadata_json")?,
     })
 }
 
-fn assignment_priority_from_db(value: &str) -> Result<AssignmentPriority> {
-    match value {
-        "primary" => Ok(AssignmentPriority::Primary),
-        "secondary" => Ok(AssignmentPriority::Secondary),
-        other => Err(anyhow!(
-            "unknown architecture role assignment priority `{other}`"
-        )),
-    }
+fn parse_rule_row(row: &Value) -> Result<ArchitectureRoleRuleRecord> {
+    Ok(ArchitectureRoleRuleRecord {
+        rule_id: string_field(row, "rule_id")?,
+        repo_id: string_field(row, "repo_id")?,
+        role_id: string_field(row, "role_id")?,
+        version: u64_field(row, "version")?,
+        lifecycle_status: string_field(row, "lifecycle_status")?,
+        canonical_hash: string_field(row, "canonical_hash")?,
+        candidate_selector: json_text_field(row, "candidate_selector_json")?,
+        positive_conditions: json_text_field(row, "positive_conditions_json")?,
+        negative_conditions: json_text_field(row, "negative_conditions_json")?,
+        score: json_text_field(row, "score_json")?,
+        provenance: json_text_field(row, "provenance_json")?,
+        evidence: json_text_field(row, "evidence_json")?,
+        metadata: json_text_field(row, "metadata_json")?,
+        supersedes_rule_id: optional_string_field(row, "supersedes_rule_id"),
+    })
 }
 
-fn assignment_source_from_db(value: &str) -> Result<AssignmentSource> {
-    match value {
-        "rule" => Ok(AssignmentSource::Rule),
-        "llm" => Ok(AssignmentSource::Llm),
-        "human" => Ok(AssignmentSource::Human),
-        "migration" => Ok(AssignmentSource::Migration),
-        other => Err(anyhow!(
-            "unknown architecture role assignment source `{other}`"
-        )),
-    }
+fn parse_assignment_row(row: &Value) -> Result<ArchitectureRoleAssignmentRecord> {
+    Ok(ArchitectureRoleAssignmentRecord {
+        assignment_id: string_field(row, "assignment_id")?,
+        repo_id: string_field(row, "repo_id")?,
+        artefact_id: string_field(row, "artefact_id")?,
+        role_id: string_field(row, "role_id")?,
+        source_kind: string_field(row, "source_kind")?,
+        confidence: f64_field(row, "confidence")?,
+        status: string_field(row, "status")?,
+        status_reason: string_field(row, "status_reason")?,
+        rule_id: optional_string_field(row, "rule_id"),
+        migration_id: optional_string_field(row, "migration_id"),
+        migrated_to_assignment_id: optional_string_field(row, "migrated_to_assignment_id"),
+        provenance: json_text_field(row, "provenance_json")?,
+        evidence: json_text_field(row, "evidence_json")?,
+        metadata: json_text_field(row, "metadata_json")?,
+    })
 }
 
-fn assignment_status_from_db(value: &str) -> Result<AssignmentStatus> {
-    match value {
-        "active" => Ok(AssignmentStatus::Active),
-        "stale" => Ok(AssignmentStatus::Stale),
-        "needs_review" => Ok(AssignmentStatus::NeedsReview),
-        "rejected" => Ok(AssignmentStatus::Rejected),
-        other => Err(anyhow!(
-            "unknown architecture role assignment status `{other}`"
-        )),
-    }
+fn parse_proposal_row(row: &Value) -> Result<ArchitectureRoleProposalRecord> {
+    Ok(ArchitectureRoleProposalRecord {
+        proposal_id: string_field(row, "proposal_id")?,
+        repo_id: string_field(row, "repo_id")?,
+        proposal_type: string_field(row, "proposal_type")?,
+        status: string_field(row, "status")?,
+        request_payload: json_text_field(row, "request_payload_json")?,
+        preview_payload: json_text_field(row, "preview_payload_json")?,
+        result_payload: json_text_field(row, "result_payload_json")?,
+        provenance: json_text_field(row, "provenance_json")?,
+        applied_at: optional_string_field(row, "applied_at"),
+    })
 }
 
-fn role_lifecycle_from_db(value: &str) -> Result<RoleLifecycle> {
-    match value {
-        "active" => Ok(RoleLifecycle::Active),
-        "deprecated" => Ok(RoleLifecycle::Deprecated),
-        "removed" => Ok(RoleLifecycle::Removed),
-        other => Err(anyhow!("unknown architecture role lifecycle `{other}`")),
-    }
+fn parse_migration_row(row: &Value) -> Result<ArchitectureRoleAssignmentMigrationRecord> {
+    Ok(ArchitectureRoleAssignmentMigrationRecord {
+        migration_id: string_field(row, "migration_id")?,
+        repo_id: string_field(row, "repo_id")?,
+        proposal_id: string_field(row, "proposal_id")?,
+        migration_type: string_field(row, "migration_type")?,
+        status: string_field(row, "status")?,
+        source_role_id: optional_string_field(row, "source_role_id"),
+        target_role_id: optional_string_field(row, "target_role_id"),
+        summary: json_text_field(row, "summary_json")?,
+    })
 }
 
-fn target_kind_from_db(value: &str) -> Result<TargetKind> {
-    match value {
-        "file" => Ok(TargetKind::File),
-        "artefact" => Ok(TargetKind::Artefact),
-        "symbol" => Ok(TargetKind::Symbol),
-        other => Err(anyhow!("unknown architecture role target kind `{other}`")),
+fn string_field(row: &Value, key: &str) -> Result<String> {
+    row.get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .ok_or_else(|| anyhow!("row missing string field `{key}`"))
+}
+
+fn optional_string_field(row: &Value, key: &str) -> Option<String> {
+    row.get(key)
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .filter(|value| !value.is_empty())
+}
+
+fn u64_field(row: &Value, key: &str) -> Result<u64> {
+    row.get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow!("row missing numeric field `{key}`"))
+}
+
+fn f64_field(row: &Value, key: &str) -> Result<f64> {
+    row.get(key)
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            row.get(key)
+                .and_then(Value::as_i64)
+                .map(|value| value as f64)
+        })
+        .ok_or_else(|| anyhow!("row missing float field `{key}`"))
+}
+
+fn json_text_field(row: &Value, key: &str) -> Result<Value> {
+    match row.get(key) {
+        Some(Value::String(text)) => {
+            serde_json::from_str(text).with_context(|| format!("parsing JSON field `{key}`"))
+        }
+        Some(Value::Null) | None => Ok(Value::Null),
+        Some(other) => Ok(other.clone()),
     }
 }
 
 fn sql_text(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+    format!("'{}'", esc_pg(value))
 }
 
 fn sql_opt_text(value: Option<&str>) -> String {
     value.map(sql_text).unwrap_or_else(|| "NULL".to_string())
 }
 
-fn sql_opt_i64(value: Option<i64>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "NULL".to_string())
-}
-
-fn row_string(row: &Value, key: &str) -> Result<String> {
-    row.get(key)
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("architecture role row missing string field `{key}`"))
-}
-
-fn row_opt_string(row: &Value, key: &str) -> Option<String> {
-    row.get(key)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn row_f64(row: &Value, key: &str) -> Result<f64> {
-    row.get(key)
-        .and_then(Value::as_f64)
-        .ok_or_else(|| anyhow!("architecture role row missing numeric field `{key}`"))
-}
-
-fn row_u64(row: &Value, key: &str) -> Result<u64> {
-    row.get(key)
-        .and_then(Value::as_i64)
-        .and_then(|value| u64::try_from(value).ok())
-        .ok_or_else(|| anyhow!("architecture role row missing unsigned integer field `{key}`"))
-}
-
-fn row_json(row: &Value, key: &str, default: Value) -> Result<Value> {
-    match row.get(key) {
-        Some(Value::String(raw)) if !raw.trim().is_empty() => serde_json::from_str(raw)
-            .with_context(|| format!("parsing architecture role JSON field `{key}`")),
-        Some(Value::String(_)) | Some(Value::Null) | None => Ok(default),
-        Some(value) => Ok(value.clone()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+    use serde_json::json;
+    use tempfile::tempdir;
+
     use super::*;
-    use crate::capability_packs::architecture_graph::roles::taxonomy::{
-        ArchitectureRole, ArchitectureRoleAssignment, ArchitectureRoleChangeProposal,
-        AssignmentPriority, AssignmentSource, AssignmentStatus, ProposalStatus, RoleTarget,
-        proposal_id, stable_role_id,
-    };
     use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
-    use tempfile::TempDir;
 
-    fn test_relational() -> anyhow::Result<(TempDir, RelationalStorage)> {
-        let temp = TempDir::new()?;
-        let sqlite_path = temp.path().join("devql.sqlite");
-        let conn = rusqlite::Connection::open(&sqlite_path)?;
-        conn.execute_batch(architecture_graph_sqlite_schema_sql())?;
-        drop(conn);
-        Ok((temp, RelationalStorage::local_only(sqlite_path)))
-    }
-
-    fn role_fixture(
-        repo_id: &str,
-        family: &str,
-        slug: &str,
-        display_name: &str,
-    ) -> ArchitectureRole {
-        ArchitectureRole {
-            repo_id: repo_id.to_string(),
-            role_id: stable_role_id(repo_id, family, slug),
-            family: family.to_string(),
-            slug: slug.to_string(),
-            display_name: display_name.to_string(),
-            description: "Test role".to_string(),
-            lifecycle: RoleLifecycle::Active,
-            provenance: serde_json::json!({"source": "test"}),
-        }
-    }
-
-    fn assignment_fixture(role: &ArchitectureRole, path: &str) -> ArchitectureRoleAssignment {
-        let target = RoleTarget::artefact("art-1", "sym-1", path);
-        ArchitectureRoleAssignment {
-            repo_id: role.repo_id.clone(),
-            assignment_id: super::super::taxonomy::assignment_id(
-                &role.repo_id,
-                &role.role_id,
-                &target,
-            ),
-            role_id: role.role_id.clone(),
-            target,
-            priority: AssignmentPriority::Primary,
-            status: AssignmentStatus::Active,
-            source: AssignmentSource::Rule,
-            confidence: 0.91,
-            evidence: serde_json::json!([{ "fact": "path:suffix:main.rs" }]),
-            provenance: serde_json::json!({ "classifier": "test" }),
-            classifier_version: "test.classifier.v1".to_string(),
-            rule_version: Some(3),
-            generation_seq: 7,
-        }
-    }
-
-    async fn assignment_history_count(
-        relational: &RelationalStorage,
-        repo_id: &str,
-        assignment_id: &str,
-    ) -> Result<usize> {
-        let sql = format!(
-            "SELECT COUNT(*) AS count
-             FROM architecture_role_assignment_history
-             WHERE repo_id = {} AND assignment_id = {}",
-            sql_text(repo_id),
-            sql_text(assignment_id)
-        );
-        let rows = relational.query_rows(&sql).await?;
-        let count = rows
-            .first()
-            .and_then(|row| row.get("count"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
-        Ok(usize::try_from(count).unwrap_or(0))
-    }
-
-    #[tokio::test]
-    async fn upsert_and_load_role_preserves_stable_id_and_display_name() -> anyhow::Result<()> {
-        let (_temp, relational) = test_relational()?;
-        let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
-
-        upsert_role(&relational, &role).await?;
-
-        let roles = load_roles(&relational, "repo-1").await?;
-        assert_eq!(roles.len(), 1);
-        assert_eq!(roles[0].role_id, role.role_id);
-        assert_eq!(roles[0].display_name, "Entrypoint");
-        assert_eq!(roles[0].lifecycle, RoleLifecycle::Active);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rename_role_keeps_stable_role_id() -> anyhow::Result<()> {
-        let (_temp, relational) = test_relational()?;
-        let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
-        upsert_role(&relational, &role).await?;
-
-        rename_role(
-            &relational,
-            "repo-1",
-            &role.role_id,
-            "Process Entrypoint",
-            &serde_json::json!({"source": "rename-test"}),
-        )
-        .await?;
-
-        let roles = load_roles(&relational, "repo-1").await?;
-        assert_eq!(roles[0].role_id, role.role_id);
-        assert_eq!(roles[0].display_name, "Process Entrypoint");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn assignment_persistence_preserves_contract_fields() -> anyhow::Result<()> {
-        let (_temp, relational) = test_relational()?;
-        let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
-        upsert_role(&relational, &role).await?;
-        let assignment = assignment_fixture(&role, "src/main.rs");
-
-        upsert_assignment(&relational, &assignment).await?;
-
-        let loaded = load_assignments_for_path(&relational, "repo-1", "src/main.rs").await?;
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].role_id, role.role_id);
-        assert_eq!(loaded[0].source, AssignmentSource::Rule);
-        assert_eq!(loaded[0].confidence, 0.91);
-        assert_eq!(loaded[0].classifier_version, "test.classifier.v1");
-        assert_eq!(loaded[0].rule_version, Some(3));
-        assert_eq!(loaded[0].generation_seq, 7);
-        assert_eq!(loaded[0].evidence[0]["fact"], "path:suffix:main.rs");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn removing_role_marks_active_assignments_needs_review() -> anyhow::Result<()> {
-        let (_temp, relational) = test_relational()?;
-        let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
-        upsert_role(&relational, &role).await?;
-        upsert_assignment(&relational, &assignment_fixture(&role, "src/main.rs")).await?;
-
-        retire_role_and_mark_assignments(
-            &relational,
-            "repo-1",
-            &role.role_id,
-            RoleLifecycle::Removed,
-            AssignmentStatus::NeedsReview,
-        )
-        .await?;
-
-        let roles = load_roles(&relational, "repo-1").await?;
-        assert_eq!(roles[0].lifecycle, RoleLifecycle::Removed);
-
-        let assignments = load_assignments_for_path(&relational, "repo-1", "src/main.rs").await?;
-        assert_eq!(assignments[0].status, AssignmentStatus::NeedsReview);
-        assert_eq!(assignments[0].role_id, role.role_id);
-        assert_eq!(
-            assignment_history_count(&relational, "repo-1", &assignments[0].assignment_id).await?,
-            1
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn assignment_history_records_meaningful_status_change() -> anyhow::Result<()> {
-        let (_temp, relational) = test_relational()?;
-        let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
-        upsert_role(&relational, &role).await?;
-        let previous = assignment_fixture(&role, "src/main.rs");
-        upsert_assignment(&relational, &previous).await?;
-
-        let mut next = previous.clone();
-        next.status = AssignmentStatus::NeedsReview;
-        next.confidence = 0.62;
-        next.generation_seq = 8;
-        record_assignment_history(&relational, Some(&previous), &next, "status_changed").await?;
-
-        assert_eq!(
-            assignment_history_count(&relational, "repo-1", &next.assignment_id).await?,
-            1
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn change_proposal_persists_payload_and_preview() -> anyhow::Result<()> {
-        let (_temp, relational) = test_relational()?;
-        let payload = serde_json::json!({
-            "roleId": "role-1",
-            "displayName": "New Name"
-        });
-        let proposal = ArchitectureRoleChangeProposal {
+    fn test_role() -> ArchitectureRoleRecord {
+        ArchitectureRoleRecord {
+            role_id: deterministic_role_id("repo-1", "domain_owner"),
             repo_id: "repo-1".to_string(),
-            proposal_id: proposal_id("repo-1", "role_rename", &payload),
-            proposal_kind: "role_rename".to_string(),
-            status: ProposalStatus::Previewed,
-            payload,
-            impact_preview: serde_json::json!({ "affectedAssignments": 0 }),
-            provenance: serde_json::json!({ "source": "test" }),
-        };
+            canonical_key: "domain_owner".to_string(),
+            display_name: "Domain Owner".to_string(),
+            description: "Owns the domain".to_string(),
+            family: Some("domain".to_string()),
+            lifecycle_status: "active".to_string(),
+            provenance: json!({"source": "test"}),
+            evidence: json!([{ "path": "src/payments" }]),
+            metadata: json!({"scope": "payments"}),
+        }
+    }
 
-        insert_change_proposal(&relational, &proposal).await?;
+    fn test_alias(role_id: &str, alias: &str) -> ArchitectureRoleAliasRecord {
+        ArchitectureRoleAliasRecord {
+            alias_id: deterministic_alias_id("repo-1", alias),
+            repo_id: "repo-1".to_string(),
+            role_id: role_id.to_string(),
+            alias_key: alias.to_string(),
+            alias_normalized: normalize_role_alias(alias),
+            source_kind: "manual".to_string(),
+            metadata: json!({"source": "test"}),
+        }
+    }
 
-        let rows = relational
-            .query_rows(
-                "SELECT proposal_kind, status, payload_json, impact_preview_json FROM architecture_role_change_proposals",
-            )
+    fn test_rule(role_id: &str) -> ArchitectureRoleRuleRecord {
+        let version = 1;
+        let canonical_hash = "rule-hash-1";
+        ArchitectureRoleRuleRecord {
+            rule_id: deterministic_rule_id("repo-1", role_id, version, canonical_hash),
+            repo_id: "repo-1".to_string(),
+            role_id: role_id.to_string(),
+            version,
+            lifecycle_status: "draft".to_string(),
+            canonical_hash: canonical_hash.to_string(),
+            candidate_selector: json!({"path_prefixes": ["src/payments"]}),
+            positive_conditions: json!([{ "kind": "path_contains", "value": "payments" }]),
+            negative_conditions: json!([]),
+            score: json!({ "base_confidence": 0.82 }),
+            provenance: json!({"source": "seed"}),
+            evidence: json!(["src/payments/service.rs"]),
+            metadata: json!({"reviewable": true}),
+            supersedes_rule_id: None,
+        }
+    }
+
+    fn test_assignment(role_id: &str) -> ArchitectureRoleAssignmentRecord {
+        ArchitectureRoleAssignmentRecord {
+            assignment_id: deterministic_assignment_id("repo-1", "artefact-1", role_id),
+            repo_id: "repo-1".to_string(),
+            artefact_id: "artefact-1".to_string(),
+            role_id: role_id.to_string(),
+            source_kind: "deterministic_rule".to_string(),
+            confidence: 0.91,
+            status: "active".to_string(),
+            status_reason: String::new(),
+            rule_id: Some("rule-1".to_string()),
+            migration_id: None,
+            migrated_to_assignment_id: None,
+            provenance: json!({"source": "test"}),
+            evidence: json!(["src/payments/service.rs"]),
+            metadata: json!({"ticket": "ARCH-1"}),
+        }
+    }
+
+    fn test_proposal() -> ArchitectureRoleProposalRecord {
+        ArchitectureRoleProposalRecord {
+            proposal_id: "proposal-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            proposal_type: "rename_role".to_string(),
+            status: "draft".to_string(),
+            request_payload: json!({"role_id": "role-1", "display_name": "Payments Domain Owner"}),
+            preview_payload: json!({"affected_assignments": 1}),
+            result_payload: json!({}),
+            provenance: json!({"source": "cli"}),
+            applied_at: None,
+        }
+    }
+
+    fn test_migration(proposal_id: &str) -> ArchitectureRoleAssignmentMigrationRecord {
+        ArchitectureRoleAssignmentMigrationRecord {
+            migration_id: deterministic_migration_id("repo-1", proposal_id, "merge_roles"),
+            repo_id: "repo-1".to_string(),
+            proposal_id: proposal_id.to_string(),
+            migration_type: "merge_roles".to_string(),
+            status: "applied".to_string(),
+            source_role_id: Some("role-1".to_string()),
+            target_role_id: Some("role-2".to_string()),
+            summary: json!({"migrated_assignments": 1}),
+        }
+    }
+
+    async fn sqlite_relational_with_schema() -> Result<RelationalStorage> {
+        let temp = tempdir()?;
+        let sqlite_path = temp.path().join("roles.sqlite");
+        rusqlite::Connection::open(&sqlite_path)?;
+        let relational = RelationalStorage::local_only(sqlite_path);
+        relational
+            .exec(&architecture_graph_sqlite_schema_sql())
             .await?;
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["proposal_kind"], "role_rename");
-        assert_eq!(rows[0]["status"], "previewed");
-        let payload: serde_json::Value = serde_json::from_str(
-            rows[0]["payload_json"]
-                .as_str()
-                .expect("payload JSON should be stored as text"),
-        )?;
-        let impact_preview: serde_json::Value = serde_json::from_str(
-            rows[0]["impact_preview_json"]
-                .as_str()
-                .expect("impact preview JSON should be stored as text"),
-        )?;
-        assert_eq!(payload["displayName"], "New Name");
-        assert_eq!(impact_preview["affectedAssignments"], 0);
+        std::mem::forget(temp);
+        Ok(relational)
+    }
+
+    #[tokio::test]
+    async fn role_and_alias_round_trip_and_conflict_detection() -> Result<()> {
+        let relational = sqlite_relational_with_schema().await?;
+        let role = test_role();
+        let persisted = upsert_role(&relational, &role).await?;
+        assert_eq!(persisted, role);
+
+        let loaded = load_role_by_canonical_key(&relational, "repo-1", "domain_owner")
+            .await?
+            .expect("role");
+        assert_eq!(loaded, role);
+
+        let alias = test_alias(&role.role_id, "Domain Owner");
+        assert_eq!(create_role_alias(&relational, &alias).await?, Ok(()));
+
+        let by_alias = load_role_by_alias(&relational, "repo-1", "domain owner")
+            .await?
+            .expect("role by alias");
+        assert_eq!(by_alias.role_id, role.role_id);
+
+        let conflicting = ArchitectureRoleAliasRecord {
+            alias_id: "alias-conflict".to_string(),
+            role_id: "role-2".to_string(),
+            ..alias.clone()
+        };
+        assert_eq!(
+            create_role_alias(&relational, &conflicting).await?,
+            Err(AliasConflict::AlreadyAssignedToDifferentRole {
+                alias: alias.alias_normalized,
+                existing_role_id: role.role_id,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn role_rule_assignment_proposal_and_migration_round_trip() -> Result<()> {
+        let relational = sqlite_relational_with_schema().await?;
+        let role = test_role();
+        upsert_role(&relational, &role).await?;
+
+        let rule = test_rule(&role.role_id);
+        insert_role_rule(&relational, &rule).await?;
+        let rules = load_role_rules(&relational, "repo-1", &role.role_id).await?;
+        assert_eq!(rules, vec![rule.clone()]);
+
+        let assignment = test_assignment(&role.role_id);
+        insert_role_assignment(&relational, &assignment).await?;
+        assert!(
+            mark_assignment_invalidated(
+                &relational,
+                "repo-1",
+                &assignment.assignment_id,
+                "needs review after role change",
+            )
+            .await?
+        );
+        assert!(
+            mark_assignment_migrated(
+                &relational,
+                "repo-1",
+                &assignment.assignment_id,
+                "assignment-2",
+                Some("migration-1"),
+            )
+            .await?
+        );
+
+        let loaded_assignment =
+            load_assignment_by_id(&relational, "repo-1", &assignment.assignment_id)
+                .await?
+                .expect("assignment");
+        assert_eq!(loaded_assignment.status, "migrated");
+        assert_eq!(
+            loaded_assignment.migrated_to_assignment_id.as_deref(),
+            Some("assignment-2")
+        );
+
+        let proposal = test_proposal();
+        insert_role_proposal(&relational, &proposal).await?;
+        let loaded_proposal =
+            load_role_proposal_by_id(&relational, "repo-1", &proposal.proposal_id)
+                .await?
+                .expect("proposal");
+        assert_eq!(loaded_proposal.preview_payload, proposal.preview_payload);
+
+        assert!(
+            mark_role_proposal_applied(
+                &relational,
+                "repo-1",
+                &proposal.proposal_id,
+                &json!({"applied": true}),
+            )
+            .await?
+        );
+
+        let migration = test_migration(&proposal.proposal_id);
+        insert_assignment_migration_record(&relational, &migration).await?;
+        let migrations =
+            list_assignment_migrations_for_proposal(&relational, "repo-1", &proposal.proposal_id)
+                .await?;
+        assert_eq!(migrations, vec![migration]);
         Ok(())
     }
 }

@@ -9,11 +9,9 @@ pub mod taxonomy;
 
 pub use classifier::ARCHITECTURE_ROLE_CLASSIFIER_VERSION;
 pub use taxonomy::{
-    ArchitectureArtefactFact, ArchitectureRole, ArchitectureRoleAssignment,
-    ArchitectureRoleAssignmentHistory, ArchitectureRoleChangeProposal,
-    ArchitectureRoleDetectionRule, ArchitectureRoleRuleSignal, AssignmentPriority,
-    AssignmentSource, AssignmentStatus, ProposalStatus, RoleLifecycle, RoleRuleLifecycle,
-    RoleSignalPolarity, RoleTarget, TargetKind,
+    RoleRuleCandidateSelector, RoleRuleCondition, RoleRuleScore, RoleSplitSpecFile,
+    RoleSplitTargetRole, RuleSpecFile, SeededArchitectureRole, SeededArchitectureRuleCandidate,
+    SeededArchitectureTaxonomy,
 };
 
 #[cfg(test)]

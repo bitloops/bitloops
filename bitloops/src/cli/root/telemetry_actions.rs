@@ -697,6 +697,9 @@ fn devql_action(
             );
             Some(new_action("bitloops devql packs", props))
         }
+        crate::cli::devql::DevqlCommand::Architecture(_) => {
+            Some(new_action("bitloops devql architecture", HashMap::new()))
+        }
         crate::cli::devql::DevqlCommand::Knowledge(args) => match &args.command {
             crate::cli::devql::DevqlKnowledgeCommand::Add(args) => {
                 let mut props = HashMap::new();

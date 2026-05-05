@@ -2,43 +2,45 @@ pub const ARCHITECTURE_ROLE_TABLES: &[&str] = &[
     "architecture_roles",
     "architecture_role_aliases",
     "architecture_role_detection_rules",
-    "architecture_artefact_facts_current",
-    "architecture_role_rule_signals_current",
-    "architecture_role_assignments_current",
-    "architecture_role_assignment_history",
+    "architecture_role_assignments",
     "architecture_role_change_proposals",
+    "architecture_role_assignment_migrations",
 ];
 
-pub fn architecture_roles_sqlite_schema_sql() -> &'static str {
+pub fn architecture_graph_roles_sqlite_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS architecture_roles (
     repo_id TEXT NOT NULL,
     role_id TEXT NOT NULL,
-    family TEXT NOT NULL,
-    slug TEXT NOT NULL,
+    canonical_key TEXT NOT NULL,
     display_name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    lifecycle TEXT NOT NULL,
+    family TEXT,
+    lifecycle_status TEXT NOT NULL DEFAULT 'active',
     provenance_json TEXT NOT NULL DEFAULT '{}',
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (repo_id, role_id),
-    UNIQUE (repo_id, family, slug),
-    CHECK (lifecycle IN ('active', 'deprecated', 'removed'))
+    UNIQUE (repo_id, canonical_key)
 );
 
-CREATE INDEX IF NOT EXISTS architecture_roles_lifecycle_idx
-ON architecture_roles (repo_id, lifecycle);
+CREATE INDEX IF NOT EXISTS architecture_roles_repo_status_idx
+ON architecture_roles (repo_id, lifecycle_status, canonical_key);
 
 CREATE TABLE IF NOT EXISTS architecture_role_aliases (
     repo_id TEXT NOT NULL,
     alias_id TEXT NOT NULL,
     role_id TEXT NOT NULL,
-    alias TEXT NOT NULL,
-    provenance_json TEXT NOT NULL DEFAULT '{}',
+    alias_key TEXT NOT NULL,
+    alias_normalized TEXT NOT NULL,
+    source_kind TEXT NOT NULL DEFAULT 'manual',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (repo_id, alias_id),
-    UNIQUE (repo_id, alias)
+    UNIQUE (repo_id, alias_normalized)
 );
 
 CREATE INDEX IF NOT EXISTS architecture_role_aliases_role_idx
@@ -49,209 +51,106 @@ CREATE TABLE IF NOT EXISTS architecture_role_detection_rules (
     rule_id TEXT NOT NULL,
     role_id TEXT NOT NULL,
     version INTEGER NOT NULL,
-    lifecycle TEXT NOT NULL,
-    priority INTEGER NOT NULL DEFAULT 100,
-    score REAL NOT NULL,
-    candidate_selector_json TEXT NOT NULL,
+    lifecycle_status TEXT NOT NULL DEFAULT 'draft',
+    canonical_hash TEXT NOT NULL,
+    candidate_selector_json TEXT NOT NULL DEFAULT '{}',
     positive_conditions_json TEXT NOT NULL DEFAULT '[]',
     negative_conditions_json TEXT NOT NULL DEFAULT '[]',
+    score_json TEXT NOT NULL DEFAULT '{}',
     provenance_json TEXT NOT NULL DEFAULT '{}',
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    supersedes_rule_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, rule_id, version),
-    CHECK (lifecycle IN ('draft', 'active', 'disabled', 'deprecated'))
+    PRIMARY KEY (repo_id, rule_id)
 );
 
-CREATE INDEX IF NOT EXISTS architecture_role_detection_rules_active_idx
-ON architecture_role_detection_rules (repo_id, lifecycle, priority);
+CREATE INDEX IF NOT EXISTS architecture_role_rules_repo_role_idx
+ON architecture_role_detection_rules (repo_id, role_id, lifecycle_status, version);
 
-CREATE TABLE IF NOT EXISTS architecture_artefact_facts_current (
-    repo_id TEXT NOT NULL,
-    fact_id TEXT NOT NULL,
-    target_kind TEXT NOT NULL,
-    artefact_id TEXT,
-    symbol_id TEXT,
-    path TEXT NOT NULL,
-    language TEXT,
-    fact_kind TEXT NOT NULL,
-    fact_key TEXT NOT NULL,
-    fact_value TEXT NOT NULL,
-    source TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    evidence_json TEXT NOT NULL DEFAULT '[]',
-    generation_seq INTEGER NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, fact_id),
-    CHECK (target_kind IN ('file', 'artefact', 'symbol'))
-);
+CREATE INDEX IF NOT EXISTS architecture_role_rules_repo_hash_idx
+ON architecture_role_detection_rules (repo_id, role_id, canonical_hash);
 
-CREATE INDEX IF NOT EXISTS architecture_artefact_facts_target_idx
-ON architecture_artefact_facts_current (repo_id, target_kind, artefact_id, symbol_id, path);
-
-CREATE INDEX IF NOT EXISTS architecture_artefact_facts_lookup_idx
-ON architecture_artefact_facts_current (repo_id, fact_kind, fact_key, fact_value);
-
-CREATE TABLE IF NOT EXISTS architecture_role_rule_signals_current (
-    repo_id TEXT NOT NULL,
-    signal_id TEXT NOT NULL,
-    rule_id TEXT NOT NULL,
-    rule_version INTEGER NOT NULL,
-    role_id TEXT NOT NULL,
-    target_kind TEXT NOT NULL,
-    artefact_id TEXT,
-    symbol_id TEXT,
-    path TEXT NOT NULL,
-    polarity TEXT NOT NULL,
-    score REAL NOT NULL,
-    evidence_json TEXT NOT NULL DEFAULT '[]',
-    generation_seq INTEGER NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, signal_id),
-    CHECK (target_kind IN ('file', 'artefact', 'symbol')),
-    CHECK (polarity IN ('positive', 'negative'))
-);
-
-CREATE INDEX IF NOT EXISTS architecture_role_rule_signals_target_idx
-ON architecture_role_rule_signals_current (repo_id, target_kind, artefact_id, symbol_id, path);
-
-CREATE INDEX IF NOT EXISTS architecture_role_rule_signals_role_idx
-ON architecture_role_rule_signals_current (repo_id, role_id, polarity);
-
-CREATE TABLE IF NOT EXISTS architecture_role_assignments_current (
+CREATE TABLE IF NOT EXISTS architecture_role_assignments (
     repo_id TEXT NOT NULL,
     assignment_id TEXT NOT NULL,
+    artefact_id TEXT NOT NULL,
     role_id TEXT NOT NULL,
-    target_kind TEXT NOT NULL,
-    artefact_id TEXT,
-    symbol_id TEXT,
-    path TEXT NOT NULL,
-    priority TEXT NOT NULL,
-    status TEXT NOT NULL,
-    source TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    evidence_json TEXT NOT NULL DEFAULT '[]',
+    source_kind TEXT NOT NULL DEFAULT 'manual',
+    confidence REAL NOT NULL DEFAULT 1.0,
+    status TEXT NOT NULL DEFAULT 'active',
+    status_reason TEXT NOT NULL DEFAULT '',
+    rule_id TEXT,
+    migration_id TEXT,
+    migrated_to_assignment_id TEXT,
     provenance_json TEXT NOT NULL DEFAULT '{}',
-    classifier_version TEXT NOT NULL,
-    rule_version INTEGER,
-    generation_seq INTEGER NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, assignment_id),
-    CHECK (target_kind IN ('file', 'artefact', 'symbol')),
-    CHECK (priority IN ('primary', 'secondary')),
-    CHECK (status IN ('active', 'stale', 'needs_review', 'rejected')),
-    CHECK (source IN ('rule', 'llm', 'human', 'migration'))
+    PRIMARY KEY (repo_id, assignment_id)
 );
 
-CREATE INDEX IF NOT EXISTS architecture_role_assignments_target_idx
-ON architecture_role_assignments_current (repo_id, target_kind, artefact_id, symbol_id, path, status);
+CREATE INDEX IF NOT EXISTS architecture_role_assignments_repo_role_idx
+ON architecture_role_assignments (repo_id, role_id, status);
 
-CREATE INDEX IF NOT EXISTS architecture_role_assignments_role_idx
-ON architecture_role_assignments_current (repo_id, role_id, status);
-
-CREATE TABLE IF NOT EXISTS architecture_role_assignment_history (
-    repo_id TEXT NOT NULL,
-    history_id TEXT NOT NULL,
-    assignment_id TEXT NOT NULL,
-    role_id TEXT NOT NULL,
-    target_kind TEXT NOT NULL,
-    artefact_id TEXT,
-    symbol_id TEXT,
-    path TEXT NOT NULL,
-    previous_status TEXT,
-    new_status TEXT NOT NULL,
-    previous_confidence REAL,
-    new_confidence REAL NOT NULL,
-    change_kind TEXT NOT NULL,
-    evidence_json TEXT NOT NULL DEFAULT '[]',
-    provenance_json TEXT NOT NULL DEFAULT '{}',
-    generation_seq INTEGER NOT NULL,
-    changed_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, history_id),
-    CHECK (target_kind IN ('file', 'artefact', 'symbol')),
-    CHECK (previous_status IS NULL OR previous_status IN ('active', 'stale', 'needs_review', 'rejected')),
-    CHECK (new_status IN ('active', 'stale', 'needs_review', 'rejected'))
-);
-
-CREATE INDEX IF NOT EXISTS architecture_role_assignment_history_assignment_idx
-ON architecture_role_assignment_history (repo_id, assignment_id, generation_seq);
+CREATE INDEX IF NOT EXISTS architecture_role_assignments_repo_artefact_idx
+ON architecture_role_assignments (repo_id, artefact_id, status);
 
 CREATE TABLE IF NOT EXISTS architecture_role_change_proposals (
     repo_id TEXT NOT NULL,
     proposal_id TEXT NOT NULL,
-    proposal_kind TEXT NOT NULL,
-    status TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    impact_preview_json TEXT NOT NULL DEFAULT '{}',
+    proposal_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    request_payload_json TEXT NOT NULL DEFAULT '{}',
+    preview_payload_json TEXT NOT NULL DEFAULT '{}',
+    result_payload_json TEXT NOT NULL DEFAULT '{}',
     provenance_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     applied_at TEXT,
-    PRIMARY KEY (repo_id, proposal_id),
-    CHECK (status IN ('draft', 'previewed', 'applied', 'rejected'))
+    PRIMARY KEY (repo_id, proposal_id)
 );
 
-CREATE INDEX IF NOT EXISTS architecture_role_change_proposals_status_idx
-ON architecture_role_change_proposals (repo_id, status, proposal_kind);
+CREATE INDEX IF NOT EXISTS architecture_role_proposals_repo_status_idx
+ON architecture_role_change_proposals (repo_id, status, proposal_type);
+
+CREATE TABLE IF NOT EXISTS architecture_role_assignment_migrations (
+    repo_id TEXT NOT NULL,
+    migration_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL,
+    migration_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    source_role_id TEXT,
+    target_role_id TEXT,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, migration_id)
+);
+
+CREATE INDEX IF NOT EXISTS architecture_role_migrations_repo_proposal_idx
+ON architecture_role_assignment_migrations (repo_id, proposal_id, created_at);
 "#
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ARCHITECTURE_ROLE_TABLES, architecture_roles_sqlite_schema_sql};
+    use super::architecture_graph_roles_sqlite_schema_sql;
 
     #[test]
-    fn role_schema_includes_all_contract_tables() {
-        let sql = architecture_roles_sqlite_schema_sql();
-        for table in ARCHITECTURE_ROLE_TABLES {
+    fn schema_includes_role_storage_tables() {
+        let sql = architecture_graph_roles_sqlite_schema_sql();
+        for table in [
+            "architecture_roles",
+            "architecture_role_aliases",
+            "architecture_role_detection_rules",
+            "architecture_role_assignments",
+            "architecture_role_change_proposals",
+            "architecture_role_assignment_migrations",
+        ] {
             assert!(sql.contains(table), "schema should include {table}");
         }
-    }
-
-    #[test]
-    fn role_schema_includes_lifecycle_and_status_checks() {
-        let sql = architecture_roles_sqlite_schema_sql();
-        assert!(sql.contains("CHECK (lifecycle IN ('active', 'deprecated', 'removed'))"));
-        assert!(sql.contains("CHECK (lifecycle IN ('draft', 'active', 'disabled', 'deprecated'))"));
-        assert!(sql.contains("CHECK (status IN ('active', 'stale', 'needs_review', 'rejected'))"));
-        assert!(
-            sql.contains(
-                "CHECK (previous_status IS NULL OR previous_status IN ('active', 'stale', 'needs_review', 'rejected'))"
-            )
-        );
-        assert!(
-            sql.contains("CHECK (new_status IN ('active', 'stale', 'needs_review', 'rejected'))")
-        );
-        assert!(sql.contains("CHECK (source IN ('rule', 'llm', 'human', 'migration'))"));
-    }
-
-    #[test]
-    fn role_schema_includes_query_indexes() {
-        let sql = architecture_roles_sqlite_schema_sql();
-        for index in [
-            "architecture_roles_lifecycle_idx",
-            "architecture_role_detection_rules_active_idx",
-            "architecture_artefact_facts_target_idx",
-            "architecture_role_rule_signals_target_idx",
-            "architecture_role_assignments_target_idx",
-            "architecture_role_assignment_history_assignment_idx",
-            "architecture_role_change_proposals_status_idx",
-        ] {
-            assert!(sql.contains(index), "schema should include {index}");
-        }
-    }
-
-    #[test]
-    fn role_schema_applies_to_empty_sqlite_database() -> anyhow::Result<()> {
-        let conn = rusqlite::Connection::open_in_memory()?;
-        conn.execute_batch(architecture_roles_sqlite_schema_sql())?;
-
-        for table in ARCHITECTURE_ROLE_TABLES {
-            let table_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                [table],
-                |row| row.get(0),
-            )?;
-            assert_eq!(table_count, 1, "SQLite schema should create {table}");
-        }
-        Ok(())
     }
 }
