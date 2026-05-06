@@ -1,4 +1,4 @@
-use super::world::QatWorld;
+use super::world::{ArchitectureRoleAssignmentSnapshot, QatWorld};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use bitloops::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
@@ -151,6 +151,7 @@ include!("core.rs");
 include!("daemon_harness.rs");
 include!("capability_runtime.rs");
 include!("deps_and_testlens.rs");
+include!("architecture_roles.rs");
 include!("semantic_clones.rs");
 include!("knowledge_stub.rs");
 include!("knowledge.rs");
