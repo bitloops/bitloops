@@ -138,7 +138,7 @@ fn load_workplane_claim_candidates(
             for row in rows {
                 let job = row?;
                 if job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX
-                    || is_generic_text_generation_job(runtime_store, readiness_cache, &job)?
+                    || is_generic_inference_job(runtime_store, readiness_cache, &job)?
                 {
                     values.push(job);
                 }
@@ -217,7 +217,7 @@ fn load_workplane_claim_candidates(
     Ok(values)
 }
 
-fn is_generic_text_generation_job(
+fn is_generic_inference_job(
     runtime_store: &DaemonSqliteRuntimeStore,
     readiness_cache: &mut BTreeMap<(PathBuf, String, String), WorkplaneMailboxReadiness>,
     job: &WorkplaneJobRecord,
@@ -236,11 +236,7 @@ fn is_generic_text_generation_job(
     if !matches!(registration.handler, CapabilityMailboxHandler::Ingester(_)) {
         return Ok(false);
     }
-    if !matches!(
-        registration.readiness_policy,
-        CapabilityMailboxReadinessPolicy::TextGenerationSlot(_)
-            | CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(_)
-    ) {
+    if !is_generic_inference_readiness_policy(registration.readiness_policy) {
         return Ok(false);
     }
     Ok(!mailbox_claim_readiness_for_registration(
@@ -252,6 +248,16 @@ fn is_generic_text_generation_job(
     .blocked)
 }
 
+const fn is_generic_inference_readiness_policy(policy: CapabilityMailboxReadinessPolicy) -> bool {
+    matches!(
+        policy,
+        CapabilityMailboxReadinessPolicy::TextGenerationSlot(_)
+            | CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot(_)
+            | CapabilityMailboxReadinessPolicy::StructuredGenerationSlot(_)
+            | CapabilityMailboxReadinessPolicy::OptionalStructuredGenerationSlot(_)
+    )
+}
+
 fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str) -> bool {
     match mailbox_name {
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => state.paused_semantic,
@@ -259,5 +265,37 @@ fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str)
         | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => state.paused_embeddings,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_generic_inference_readiness_policy;
+    use crate::host::capability_host::CapabilityMailboxReadinessPolicy;
+
+    #[test]
+    fn generic_inference_readiness_policy_accepts_text_and_structured_generation() {
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::TextGenerationSlot("slot")
+        ));
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::OptionalTextGenerationSlot("slot")
+        ));
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::StructuredGenerationSlot("slot")
+        ));
+        assert!(is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::OptionalStructuredGenerationSlot("slot")
+        ));
+    }
+
+    #[test]
+    fn generic_inference_readiness_policy_rejects_none_and_embeddings() {
+        assert!(!is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::None
+        ));
+        assert!(!is_generic_inference_readiness_policy(
+            CapabilityMailboxReadinessPolicy::EmbeddingsSlot("slot")
+        ));
     }
 }

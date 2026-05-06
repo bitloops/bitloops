@@ -199,6 +199,10 @@ pub fn generic_role_family_examples() -> Value {
 }
 
 pub fn architecture_roles_seed_schema() -> Value {
+    let strict_object = json!({
+        "type": "object",
+        "additionalProperties": false
+    });
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -217,8 +221,8 @@ pub fn architecture_roles_seed_schema() -> Value {
                         "description": { "type": "string" },
                         "family": { "type": ["string", "null"] },
                         "lifecycle_status": { "type": ["string", "null"] },
-                        "provenance": {},
-                        "evidence": {}
+                        "provenance": strict_object.clone(),
+                        "evidence": strict_object.clone()
                     }
                 }
             },
@@ -250,7 +254,7 @@ pub fn architecture_roles_seed_schema() -> Value {
                                 "required": ["kind", "value"],
                                 "properties": {
                                     "kind": { "type": "string", "minLength": 1 },
-                                    "value": {}
+                                    "value": { "type": "string", "minLength": 1 }
                                 }
                             }
                         },
@@ -262,7 +266,7 @@ pub fn architecture_roles_seed_schema() -> Value {
                                 "required": ["kind", "value"],
                                 "properties": {
                                     "kind": { "type": "string", "minLength": 1 },
-                                    "value": {}
+                                    "value": { "type": "string", "minLength": 1 }
                                 }
                             }
                         },
@@ -274,8 +278,8 @@ pub fn architecture_roles_seed_schema() -> Value {
                                 "weight": { "type": "number" }
                             }
                         },
-                        "evidence": {},
-                        "metadata": {}
+                        "evidence": strict_object.clone(),
+                        "metadata": strict_object.clone()
                     }
                 }
             }

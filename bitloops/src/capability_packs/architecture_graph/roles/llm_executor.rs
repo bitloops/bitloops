@@ -72,6 +72,10 @@ fn adjudication_user_prompt(packet: &RoleEvidencePacket) -> String {
 }
 
 fn adjudication_response_schema() -> Value {
+    let strict_object = json!({
+        "type": "object",
+        "additionalProperties": false
+    });
     json!({
         "type": "object",
         "properties": {
@@ -87,14 +91,14 @@ fn adjudication_response_schema() -> Value {
                         "role_id": { "type": "string", "minLength": 1 },
                         "primary": { "type": "boolean" },
                         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                        "evidence": {}
+                        "evidence": strict_object.clone()
                     },
                     "required": ["role_id", "confidence"],
                     "additionalProperties": false
                 }
             },
             "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-            "evidence": {},
+            "evidence": strict_object,
             "reasoning_summary": { "type": "string", "minLength": 1 },
             "rule_suggestions": {
                 "type": "array",
