@@ -613,6 +613,158 @@ pub(super) fn then_architecture_role_assignment_history_status(
     })
 }
 
+pub(super) fn then_architecture_role_proposal_output_includes_text(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let text = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "architecture role proposal output includes text",
+            helpers::assert_architecture_role_proposal_output_includes_text(
+                world, &text, &repo_name,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_architecture_role_status_json_review_item_status_for_role(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let status = ctx.matches[1].1.clone();
+        let role_key = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "architecture role status JSON includes review item for role",
+            helpers::assert_architecture_role_status_json_review_item_status_for_role(
+                world, &status, &role_key, &repo_name,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_architecture_role_status_json_queue_item_for_path(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let path = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "architecture role status JSON includes queue item for path",
+            helpers::assert_architecture_role_status_json_queue_item_for_path(
+                world, &path, &repo_name,
+            ),
+        );
+    })
+}
+
+pub(super) fn then_architecture_role_classification_json_adjudication_candidates_at_least(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let minimum_raw = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        let result = minimum_raw
+            .parse::<u64>()
+            .with_context(|| format!("parsing adjudication candidate minimum `{minimum_raw}`"))
+            .and_then(|minimum| {
+                helpers::assert_architecture_role_classification_json_adjudication_candidates_at_least(
+                    world, minimum, &repo_name,
+                )
+            });
+        run_step(
+            "architecture role classification JSON reports adjudication candidates",
+            result,
+        );
+    })
+}
+
+pub(super) fn then_architecture_role_classification_json_enqueued_adjudication_jobs(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_raw = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        let result = expected_raw
+            .parse::<u64>()
+            .with_context(|| format!("parsing enqueued adjudication job count `{expected_raw}`"))
+            .and_then(|expected| {
+                helpers::assert_architecture_role_classification_json_enqueued_adjudication_jobs(
+                    world, expected, &repo_name,
+                )
+            });
+        run_step(
+            "architecture role classification JSON reports enqueued adjudication jobs",
+            result,
+        );
+    })
+}
+
+pub(super) fn then_architecture_role_classification_json_full_reconcile(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_raw = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        let result = expected_raw
+            .parse::<bool>()
+            .with_context(|| format!("parsing full_reconcile bool `{expected_raw}`"))
+            .and_then(|expected| {
+                helpers::assert_architecture_role_classification_json_full_reconcile(
+                    world, expected, &repo_name,
+                )
+            });
+        run_step(
+            "architecture role classification JSON reports full_reconcile",
+            result,
+        );
+    })
+}
+
+pub(super) fn then_architecture_role_classification_json_affected_path_count(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_raw = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        let result = expected_raw
+            .parse::<u64>()
+            .with_context(|| format!("parsing affected path count `{expected_raw}`"))
+            .and_then(|expected| {
+                helpers::assert_architecture_role_classification_json_affected_path_count(
+                    world, expected, &repo_name,
+                )
+            });
+        run_step(
+            "architecture role classification JSON reports affected path count",
+            result,
+        );
+    })
+}
+
+pub(super) fn then_architecture_role_classification_json_includes_stale_assignment_metric(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "architecture role classification JSON includes stale assignment metric",
+            helpers::assert_architecture_role_classification_json_includes_stale_assignment_metric(
+                world, &repo_name,
+            ),
+        );
+    })
+}
+
 pub(super) fn then_captured_commit_history_is_ordered(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

@@ -760,6 +760,26 @@ pub(super) fn given_rename_architecture_role_and_apply_proposal(
     })
 }
 
+pub(super) fn given_rename_architecture_role_and_show_proposal(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let role_key = ctx.matches[1].1.clone();
+        let display_name = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I rename architecture role and show the proposal",
+            helpers::rename_architecture_role_and_show_proposal(
+                world,
+                &role_key,
+                &display_name,
+                &repo_name,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_deprecate_architecture_role_without_replacement_and_apply_proposal(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -772,6 +792,48 @@ pub(super) fn given_deprecate_architecture_role_without_replacement_and_apply_pr
             helpers::deprecate_architecture_role_without_replacement_and_apply_proposal(
                 world, &role_key, &repo_name,
             ),
+        );
+    })
+}
+
+pub(super) fn given_deprecate_architecture_role_without_replacement_and_show_proposal(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let role_key = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I deprecate architecture role without replacement and show the proposal",
+            helpers::deprecate_architecture_role_without_replacement_and_show_proposal(
+                world, &role_key, &repo_name,
+            ),
+        );
+    })
+}
+
+pub(super) fn given_show_latest_architecture_role_proposal(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I show the latest architecture role proposal",
+            helpers::show_latest_architecture_role_proposal(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_apply_latest_architecture_role_proposal(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I apply the latest architecture role proposal",
+            helpers::apply_latest_architecture_role_proposal(world, &repo_name),
         );
     })
 }
@@ -867,6 +929,62 @@ pub(super) fn given_snapshot_architecture_role_assignment_ids_except_path(
             helpers::snapshot_architecture_role_assignment_ids_except_path(
                 world, &path, &repo_name,
             ),
+        );
+    })
+}
+
+pub(super) fn given_run_architecture_roles_status_json(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run architecture role status as JSON",
+            helpers::run_architecture_roles_status_json(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_run_architecture_role_classification_paths_json(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let paths = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I run architecture role classification for paths as JSON",
+            helpers::run_architecture_role_classification_paths_json(world, &paths, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_run_architecture_role_classification_paths_json_with_adjudication_disabled(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let paths = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I run architecture role classification for paths with adjudication disabled as JSON",
+            helpers::run_architecture_role_classification_paths_json_with_adjudication_disabled(
+                world, &paths, &repo_name,
+            ),
+        );
+    })
+}
+
+pub(super) fn given_run_architecture_role_classification_repair_stale_json(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run architecture role classification repair-stale as JSON",
+            helpers::run_architecture_role_classification_repair_stale_json(world, &repo_name),
         );
     })
 }

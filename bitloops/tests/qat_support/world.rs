@@ -134,6 +134,7 @@ pub struct QatWorld {
     pub architecture_role_assignment_set_snapshots:
         HashMap<String, Vec<ArchitectureRoleAssignmentSnapshot>>,
     pub architecture_role_fact_generation_snapshots: HashMap<String, u64>,
+    pub last_architecture_role_proposal_id: Option<String>,
     pub last_architecture_role_rule_edit_proposal_id: Option<String>,
 }
 
@@ -197,6 +198,7 @@ impl QatWorld {
         self.architecture_role_assignment_id_snapshots = HashMap::new();
         self.architecture_role_assignment_set_snapshots = HashMap::new();
         self.architecture_role_fact_generation_snapshots = HashMap::new();
+        self.last_architecture_role_proposal_id = None;
         self.last_architecture_role_rule_edit_proposal_id = None;
     }
 

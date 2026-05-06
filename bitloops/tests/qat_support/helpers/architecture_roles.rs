@@ -253,6 +253,32 @@ pub fn rename_architecture_role_and_apply_proposal(
     apply_architecture_role_proposal(world, &proposal_id)
 }
 
+pub fn rename_architecture_role_and_show_proposal(
+    world: &mut QatWorld,
+    role_key: &str,
+    display_name: &str,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let role_ref = format!("role:{role_key}");
+    let output = run_architecture_role_command(
+        world,
+        &[
+            "devql",
+            "architecture",
+            "roles",
+            "rename",
+            &role_ref,
+            "--display-name",
+            display_name,
+        ],
+        "bitloops devql architecture roles rename",
+    )?;
+    let proposal_id = parse_architecture_role_proposal_id(&output)?;
+    world.last_architecture_role_proposal_id = Some(proposal_id);
+    show_latest_architecture_role_proposal(world, repo_name)
+}
+
 pub fn deprecate_architecture_role_without_replacement_and_apply_proposal(
     world: &mut QatWorld,
     role_key: &str,
@@ -266,6 +292,53 @@ pub fn deprecate_architecture_role_without_replacement_and_apply_proposal(
         "bitloops devql architecture roles deprecate",
     )?;
     let proposal_id = parse_architecture_role_proposal_id(&output)?;
+    apply_architecture_role_proposal(world, &proposal_id)
+}
+
+pub fn deprecate_architecture_role_without_replacement_and_show_proposal(
+    world: &mut QatWorld,
+    role_key: &str,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let role_ref = format!("role:{role_key}");
+    let output = run_architecture_role_command(
+        world,
+        &["devql", "architecture", "roles", "deprecate", &role_ref],
+        "bitloops devql architecture roles deprecate",
+    )?;
+    let proposal_id = parse_architecture_role_proposal_id(&output)?;
+    world.last_architecture_role_proposal_id = Some(proposal_id);
+    show_latest_architecture_role_proposal(world, repo_name)
+}
+
+pub fn show_latest_architecture_role_proposal(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let proposal_id = latest_architecture_role_proposal_id(world)?;
+    run_architecture_role_command(
+        world,
+        &[
+            "devql",
+            "architecture",
+            "roles",
+            "proposal",
+            "show",
+            &proposal_id,
+        ],
+        "bitloops devql architecture roles proposal show",
+    )
+    .map(|_| ())
+}
+
+pub fn apply_latest_architecture_role_proposal(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let proposal_id = latest_architecture_role_proposal_id(world)?;
     apply_architecture_role_proposal(world, &proposal_id)
 }
 
@@ -364,8 +437,84 @@ pub fn preview_architecture_role_rule_edit(
         "bitloops devql architecture roles rules edit",
     )?;
     let proposal_id = parse_architecture_role_proposal_id(&output)?;
+    world.last_architecture_role_proposal_id = Some(proposal_id.clone());
     world.last_architecture_role_rule_edit_proposal_id = Some(proposal_id);
     Ok(())
+}
+
+pub fn run_architecture_roles_status_json(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_architecture_role_command(
+        world,
+        &["devql", "architecture", "roles", "status", "--json"],
+        "bitloops devql architecture roles status --json",
+    )
+    .map(|_| ())
+}
+
+pub fn run_architecture_role_classification_paths_json(
+    world: &mut QatWorld,
+    paths: &str,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_architecture_role_command(
+        world,
+        &[
+            "devql",
+            "architecture",
+            "roles",
+            "classify",
+            "--paths",
+            paths,
+            "--json",
+        ],
+        "bitloops devql architecture roles classify --paths --json",
+    )
+    .map(|_| ())
+}
+
+pub fn run_architecture_role_classification_paths_json_with_adjudication_disabled(
+    world: &mut QatWorld,
+    paths: &str,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_architecture_role_command(
+        world,
+        &[
+            "devql",
+            "architecture",
+            "roles",
+            "classify",
+            "--paths",
+            paths,
+            "--enqueue-adjudication=false",
+            "--json",
+        ],
+        "bitloops devql architecture roles classify --paths --enqueue-adjudication=false --json",
+    )
+    .map(|_| ())
+}
+
+pub fn run_architecture_role_classification_repair_stale_json(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_architecture_role_command(
+        world,
+        &[
+            "devql",
+            "architecture",
+            "roles",
+            "classify",
+            "--repair-stale",
+            "--json",
+        ],
+        "bitloops devql architecture roles classify --repair-stale --json",
+    )
+    .map(|_| ())
 }
 
 pub fn create_ambiguous_architecture_role_fixture_path(
@@ -912,6 +1061,161 @@ pub fn assert_architecture_role_assignment_history_status(
     Ok(())
 }
 
+pub fn assert_architecture_role_proposal_output_includes_text(
+    world: &QatWorld,
+    text: &str,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let stdout = latest_command_stdout(world, "architecture role proposal output")?;
+    ensure!(
+        stdout.contains(text),
+        "expected architecture role proposal output to include `{text}`\nstdout:\n{stdout}"
+    );
+    Ok(())
+}
+
+pub fn assert_architecture_role_status_json_review_item_status_for_role(
+    world: &QatWorld,
+    status: &str,
+    role_key: &str,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let role_id = architecture_role_id_for_key(world, role_key)?;
+    let output = latest_architecture_role_json_output(world, "architecture roles status JSON")?;
+    let review_items = output
+        .get("review_items")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("status JSON missing review_items array: {output}"))?;
+    ensure!(
+        review_items.iter().any(|item| {
+            item.get("role_id").and_then(serde_json::Value::as_str) == Some(role_id.as_str())
+                && item.get("status").and_then(serde_json::Value::as_str) == Some(status)
+        }),
+        "expected status JSON review_items to include role `{role_key}` ({role_id}) with status `{status}`; output={output}"
+    );
+    Ok(())
+}
+
+pub fn assert_architecture_role_status_json_queue_item_for_path(
+    world: &QatWorld,
+    path: &str,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output = latest_architecture_role_json_output(world, "architecture roles status JSON")?;
+    let queue_items = output
+        .get("queue_items")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("status JSON missing queue_items array: {output}"))?;
+    ensure!(
+        queue_items
+            .iter()
+            .any(|item| item.get("path").and_then(serde_json::Value::as_str) == Some(path)),
+        "expected status JSON queue_items to include path `{path}`; output={output}"
+    );
+    Ok(())
+}
+
+pub fn assert_architecture_role_classification_json_adjudication_candidates_at_least(
+    world: &QatWorld,
+    minimum: u64,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output =
+        latest_architecture_role_json_output(world, "architecture roles classification JSON")?;
+    let actual = output
+        .get("roles")
+        .and_then(|roles| roles.get("adjudication_candidates"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            anyhow!("classification JSON missing roles.adjudication_candidates: {output}")
+        })?;
+    ensure!(
+        actual >= minimum,
+        "expected classification JSON roles.adjudication_candidates >= {minimum}, got {actual}; output={output}"
+    );
+    Ok(())
+}
+
+pub fn assert_architecture_role_classification_json_enqueued_adjudication_jobs(
+    world: &QatWorld,
+    expected: u64,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output =
+        latest_architecture_role_json_output(world, "architecture roles classification JSON")?;
+    let actual = output
+        .get("role_adjudication_enqueued")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow!("classification JSON missing role_adjudication_enqueued: {output}"))?;
+    ensure!(
+        actual == expected,
+        "expected classification JSON role_adjudication_enqueued={expected}, got {actual}; output={output}"
+    );
+    Ok(())
+}
+
+pub fn assert_architecture_role_classification_json_full_reconcile(
+    world: &QatWorld,
+    expected: bool,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output =
+        latest_architecture_role_json_output(world, "architecture roles classification JSON")?;
+    let actual = output
+        .get("roles")
+        .and_then(|roles| roles.get("full_reconcile"))
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| anyhow!("classification JSON missing roles.full_reconcile: {output}"))?;
+    ensure!(
+        actual == expected,
+        "expected classification JSON roles.full_reconcile={expected}, got {actual}; output={output}"
+    );
+    Ok(())
+}
+
+pub fn assert_architecture_role_classification_json_affected_path_count(
+    world: &QatWorld,
+    expected: u64,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output =
+        latest_architecture_role_json_output(world, "architecture roles classification JSON")?;
+    let actual = output
+        .get("roles")
+        .and_then(|roles| roles.get("affected_paths"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow!("classification JSON missing roles.affected_paths: {output}"))?;
+    ensure!(
+        actual == expected,
+        "expected classification JSON roles.affected_paths={expected}, got {actual}; output={output}"
+    );
+    Ok(())
+}
+
+pub fn assert_architecture_role_classification_json_includes_stale_assignment_metric(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let output =
+        latest_architecture_role_json_output(world, "architecture roles classification JSON")?;
+    output
+        .get("roles")
+        .and_then(|roles| roles.get("assignments_marked_stale"))
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            anyhow!("classification JSON missing roles.assignments_marked_stale: {output}")
+        })?;
+    Ok(())
+}
+
 fn run_architecture_role_command(
     world: &mut QatWorld,
     args: &[&str],
@@ -939,6 +1243,25 @@ fn apply_architecture_role_proposal(world: &mut QatWorld, proposal_id: &str) -> 
         "bitloops devql architecture roles proposal apply",
     )
     .map(|_| ())
+}
+
+fn latest_architecture_role_proposal_id(world: &QatWorld) -> Result<String> {
+    world
+        .last_architecture_role_proposal_id
+        .clone()
+        .ok_or_else(|| anyhow!("missing latest architecture role proposal id"))
+}
+
+fn latest_command_stdout<'a>(world: &'a QatWorld, label: &str) -> Result<&'a str> {
+    world
+        .last_command_stdout
+        .as_deref()
+        .ok_or_else(|| anyhow!("missing last command stdout for {label}"))
+}
+
+fn latest_architecture_role_json_output(world: &QatWorld, label: &str) -> Result<serde_json::Value> {
+    let stdout = latest_command_stdout(world, label)?;
+    serde_json::from_str(stdout.trim()).with_context(|| format!("parsing {label}:\n{stdout}"))
 }
 
 fn parse_architecture_role_proposal_id(stdout: &str) -> Result<String> {
@@ -1475,6 +1798,7 @@ fn all_architecture_role_assignments(
                ON role.repo_id = assignment.repo_id AND role.role_id = assignment.role_id
              WHERE assignment.repo_id = ?1
                AND (?2 IS NULL OR assignment.path != ?2)
+               AND assignment.source = 'rule'
              ORDER BY assignment.path ASC, role.canonical_key ASC, assignment.assignment_id ASC",
         )
         .context("preparing all architecture role assignments query")?;
