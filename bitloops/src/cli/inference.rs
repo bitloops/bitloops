@@ -25,11 +25,15 @@ pub(crate) use setup::{
     configure_local_context_guidance_generation, configure_local_summary_generation,
     context_guidance_generation_configured,
     execute_prepared_bitloops_inference_setup_with_progress,
-    execute_prepared_summary_setup_with_progress, platform_context_guidance_gateway_url_override,
-    platform_summary_gateway_url_override, prepare_cloud_bitloops_inference_plan,
-    prepare_cloud_summary_generation_plan, prepare_local_bitloops_inference_plan,
+    platform_context_guidance_gateway_url_override, platform_summary_gateway_url_override,
+    prepare_cloud_bitloops_inference_plan, prepare_local_bitloops_inference_plan,
     prompt_bitloops_inference_setup_selection, prompt_context_guidance_setup_selection,
     prompt_summary_setup_selection, summary_generation_configured,
+};
+
+#[cfg(test)]
+pub(crate) use setup::{
+    execute_prepared_summary_setup_with_progress, prepare_cloud_summary_generation_plan,
 };
 
 #[cfg(test)]

@@ -393,6 +393,7 @@ fn prepare_local_context_guidance_generation_plan(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn execute_prepared_summary_setup_with_progress<R>(
     repo_root: &Path,
     plan: PreparedSummarySetupPlan,
@@ -674,6 +675,7 @@ where
     }
 }
 
+#[cfg(test)]
 fn apply_prepared_summary_setup_with_progress<R>(
     repo_root: &Path,
     plan: PreparedSummarySetupPlan,

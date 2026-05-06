@@ -888,8 +888,7 @@ fn choose_bitloops_inference_setup_during_init_requires_explicit_noninteractive_
             },
         )
     })
-    .err()
-    .expect("noninteractive bitloops inference selection should fail");
+    .expect_err("noninteractive bitloops inference selection should fail");
 
     assert_eq!(
         err.to_string(),
