@@ -9,8 +9,7 @@ use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
 pub const COPILOT_SKILL_RELATIVE_PATH: &str =
     ".github/skills/bitloops/devql-explore-first/SKILL.md";
-pub const LEGACY_COPILOT_SKILL_RELATIVE_PATH: &str =
-    ".github/skills/bitloops/using-devql/SKILL.md";
+pub const LEGACY_COPILOT_SKILL_RELATIVE_PATH: &str = ".github/skills/bitloops/using-devql/SKILL.md";
 
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
     repo_root.join(COPILOT_SKILL_RELATIVE_PATH)

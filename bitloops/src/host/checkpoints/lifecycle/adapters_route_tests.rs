@@ -978,7 +978,10 @@ fn route_cursor_session_start_returns_direct_context_when_rule_exists() -> Resul
         let context = json["additional_context"]
             .as_str()
             .expect("additional_context");
-        assert_direct_session_start_context(context, ".cursor/rules/bitloops-devql-explore-first.mdc");
+        assert_direct_session_start_context(
+            context,
+            ".cursor/rules/bitloops-devql-explore-first.mdc",
+        );
         Ok(())
     })
 }

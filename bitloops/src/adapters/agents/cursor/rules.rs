@@ -7,8 +7,7 @@ use crate::adapters::agents::skill_install::{
 };
 use crate::host::hooks::augmentation::skill_content::devql_explore_first_skill_body;
 
-pub const CURSOR_RULE_RELATIVE_PATH: &str =
-    ".cursor/rules/bitloops-devql-explore-first.mdc";
+pub const CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/bitloops-devql-explore-first.mdc";
 pub const LEGACY_CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/bitloops-using-devql.mdc";
 
 pub fn repo_rule_path(repo_root: &Path) -> PathBuf {

@@ -9,10 +9,8 @@ use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
 const GEMINI_DIR_NAME: &str = ".gemini";
 const GEMINI_MD_FILE_NAME: &str = "GEMINI.md";
-pub const GEMINI_SKILL_RELATIVE_PATH: &str =
-    ".gemini/skills/bitloops/devql-explore-first/SKILL.md";
-pub const LEGACY_GEMINI_SKILL_RELATIVE_PATH: &str =
-    ".gemini/skills/bitloops/using-devql/SKILL.md";
+pub const GEMINI_SKILL_RELATIVE_PATH: &str = ".gemini/skills/bitloops/devql-explore-first/SKILL.md";
+pub const LEGACY_GEMINI_SKILL_RELATIVE_PATH: &str = ".gemini/skills/bitloops/using-devql/SKILL.md";
 
 const MANAGED_BLOCK_START: &str = "<!-- bitloops-managed-start -->";
 const MANAGED_BLOCK_END: &str = "<!-- bitloops-managed-end -->";

@@ -81,7 +81,8 @@ mod tests {
 
     #[test]
     fn build_session_bootstrap_mentions_search_modes_overview_and_response_hints() {
-        let text = build_session_bootstrap(".opencode/skills/bitloops/devql-explore-first/SKILL.md");
+        let text =
+            build_session_bootstrap(".opencode/skills/bitloops/devql-explore-first/SKILL.md");
 
         assert!(text.contains("This repo has DevQL guidance available."));
         assert!(text.contains("DevQL-capable guidance surface"));
