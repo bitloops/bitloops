@@ -2213,12 +2213,12 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
         assert!(repo.path().join(".opencode/plugins/bitloops.ts").exists());
         assert!(
             repo.path()
-                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let exclude =
             std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".opencode/skills/bitloops/using-devql/SKILL.md"));
+        assert!(exclude.contains(".opencode/skills/bitloops/devql-explore-first/SKILL.md"));
     });
 }
 
@@ -2308,7 +2308,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         assert!(
             !repo
                 .path()
-                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let local_policy =
@@ -2346,7 +2346,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
 
         let plugin = std::fs::read_to_string(repo.path().join(".opencode/plugins/bitloops.ts"))
             .expect("read OpenCode plugin");
-        assert!(!plugin.contains("name: using-devql"));
+        assert!(!plugin.contains("name: devql-explore-first"));
         assert!(!plugin.contains("bitloops devql query"));
     });
 }

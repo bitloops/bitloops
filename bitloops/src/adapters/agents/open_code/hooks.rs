@@ -142,7 +142,7 @@ enabled = true
             "bootstrap text should not inline DevQL query suggestions"
         );
         assert!(
-            !rendered.contains("name: using-devql"),
+            !rendered.contains("name: devql-explore-first"),
             "bootstrap text should not inline the managed skill body"
         );
         assert!(
