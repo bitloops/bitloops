@@ -176,13 +176,6 @@ pub fn deterministic_migration_id(
     ))
 }
 
-fn role_rule_score_value(score: &Value) -> f64 {
-    score
-        .get("base_confidence")
-        .and_then(Value::as_f64)
-        .unwrap_or(1.0)
-}
-
 pub async fn upsert_role(
     relational: &RelationalStorage,
     role: &ArchitectureRoleRecord,
@@ -197,20 +190,18 @@ pub async fn upsert_role(
     relational
         .exec_serialized(&format!(
             "INSERT INTO architecture_roles (
-                repo_id, role_id, family, slug, canonical_key, display_name, description,
-                lifecycle, lifecycle_status, provenance_json, evidence_json, metadata_json,
+                repo_id, role_id, family, canonical_key, display_name, description,
+                lifecycle_status, provenance_json, evidence_json, metadata_json,
                 created_at, updated_at
             ) VALUES (
-                {repo_id}, {role_id}, {family}, {slug}, {canonical_key}, {display_name}, {description},
-                {lifecycle_status}, {lifecycle_status}, {provenance}, {evidence}, {metadata},
+                {repo_id}, {role_id}, {family}, {canonical_key}, {display_name}, {description},
+                {lifecycle_status}, {provenance}, {evidence}, {metadata},
                 {now}, {now}
             )
             ON CONFLICT(repo_id, canonical_key) DO UPDATE SET
                 family = excluded.family,
-                slug = excluded.slug,
                 display_name = excluded.display_name,
                 description = excluded.description,
-                lifecycle = excluded.lifecycle,
                 lifecycle_status = excluded.lifecycle_status,
                 provenance_json = excluded.provenance_json,
                 evidence_json = excluded.evidence_json,
@@ -219,7 +210,6 @@ pub async fn upsert_role(
             repo_id = sql_text(&role.repo_id),
             role_id = sql_text(&role.role_id),
             family = sql_text(family),
-            slug = sql_text(&canonical_key),
             canonical_key = sql_text(&canonical_key),
             display_name = sql_text(&role.display_name),
             description = sql_text(&role.description),
@@ -365,7 +355,7 @@ pub async fn create_role_alias(
             relational
                 .exec_serialized(&format!(
                     "UPDATE architecture_role_aliases SET \
-                        alias = {alias_key}, alias_key = {alias_key}, source_kind = {source_kind}, metadata_json = {metadata}, updated_at = {now} \
+                        alias_key = {alias_key}, source_kind = {source_kind}, metadata_json = {metadata}, updated_at = {now} \
                      WHERE repo_id = {repo_id} AND alias_normalized = {alias_normalized};",
                     alias_key = sql_text(&alias.alias_key),
                     source_kind = sql_text(&alias.source_kind),
@@ -388,9 +378,9 @@ pub async fn create_role_alias(
     relational
         .exec_serialized(&format!(
             "INSERT INTO architecture_role_aliases (
-                repo_id, alias_id, role_id, alias, alias_key, alias_normalized, source_kind, metadata_json, created_at, updated_at
+                repo_id, alias_id, role_id, alias_key, alias_normalized, source_kind, metadata_json, created_at, updated_at
             ) VALUES (
-                {repo_id}, {alias_id}, {role_id}, {alias_key}, {alias_key}, {alias_normalized}, {source_kind}, {metadata}, {now}, {now}
+                {repo_id}, {alias_id}, {role_id}, {alias_key}, {alias_normalized}, {source_kind}, {metadata}, {now}, {now}
             );",
             repo_id = sql_text(&alias.repo_id),
             alias_id = sql_text(&alias.alias_id),
@@ -413,20 +403,17 @@ pub async fn insert_role_rule(
     relational
         .exec_serialized(&format!(
             "INSERT INTO architecture_role_detection_rules (
-                repo_id, rule_id, role_id, version, lifecycle, lifecycle_status, priority, score,
+                repo_id, rule_id, role_id, version, lifecycle_status,
                 canonical_hash, candidate_selector_json, positive_conditions_json, negative_conditions_json, score_json,
                 provenance_json, evidence_json, metadata_json, supersedes_rule_id, created_at, updated_at
             ) VALUES (
-                {repo_id}, {rule_id}, {role_id}, {version}, {lifecycle_status}, {lifecycle_status}, {priority}, {score_value},
+                {repo_id}, {rule_id}, {role_id}, {version}, {lifecycle_status},
                 {canonical_hash}, {candidate_selector}, {positive_conditions}, {negative_conditions}, {score},
                 {provenance}, {evidence}, {metadata}, {supersedes_rule_id}, {now}, {now}
             )
             ON CONFLICT(repo_id, rule_id, version) DO UPDATE SET
                 role_id = excluded.role_id,
-                lifecycle = excluded.lifecycle,
                 lifecycle_status = excluded.lifecycle_status,
-                priority = excluded.priority,
-                score = excluded.score,
                 canonical_hash = excluded.canonical_hash,
                 candidate_selector_json = excluded.candidate_selector_json,
                 positive_conditions_json = excluded.positive_conditions_json,
@@ -442,8 +429,6 @@ pub async fn insert_role_rule(
             role_id = sql_text(&rule.role_id),
             version = rule.version,
             lifecycle_status = sql_text(&rule.lifecycle_status),
-            priority = 100,
-            score_value = role_rule_score_value(&rule.score),
             canonical_hash = sql_text(&rule.canonical_hash),
             candidate_selector = sql_json_value(relational, &rule.candidate_selector),
             positive_conditions = sql_json_value(relational, &rule.positive_conditions),
@@ -537,7 +522,7 @@ pub async fn update_role_rule_lifecycle(
     relational
         .exec_serialized(&format!(
             "UPDATE architecture_role_detection_rules SET \
-                lifecycle = {lifecycle_status}, lifecycle_status = {lifecycle_status}, updated_at = {now} \
+                lifecycle_status = {lifecycle_status}, updated_at = {now} \
              WHERE repo_id = {repo_id} AND rule_id = {rule_id};",
             lifecycle_status = sql_text(lifecycle_status),
             now = sql_now(relational),
@@ -723,21 +708,18 @@ pub async fn insert_role_proposal(
     relational
         .exec_serialized(&format!(
             "INSERT INTO architecture_role_change_proposals (
-                repo_id, proposal_id, proposal_kind, proposal_type, status, payload_json,
-                request_payload_json, impact_preview_json, preview_payload_json,
+                repo_id, proposal_id, proposal_type, status,
+                request_payload_json, preview_payload_json,
                 result_payload_json, provenance_json, created_at, updated_at, applied_at
             ) VALUES (
-                {repo_id}, {proposal_id}, {proposal_type}, {proposal_type}, {status}, {request_payload},
-                {request_payload}, {preview_payload}, {preview_payload},
+                {repo_id}, {proposal_id}, {proposal_type}, {status},
+                {request_payload}, {preview_payload},
                 {result_payload}, {provenance}, {now}, {now}, {applied_at}
             )
             ON CONFLICT(repo_id, proposal_id) DO UPDATE SET
-                proposal_kind = excluded.proposal_kind,
                 proposal_type = excluded.proposal_type,
                 status = excluded.status,
-                payload_json = excluded.payload_json,
                 request_payload_json = excluded.request_payload_json,
-                impact_preview_json = excluded.impact_preview_json,
                 preview_payload_json = excluded.preview_payload_json,
                 result_payload_json = excluded.result_payload_json,
                 provenance_json = excluded.provenance_json,
@@ -793,7 +775,7 @@ pub async fn update_role_proposal_preview(
     relational
         .exec_serialized(&format!(
             "UPDATE architecture_role_change_proposals SET \
-                impact_preview_json = {preview_payload}, preview_payload_json = {preview_payload}, updated_at = {now} \
+                preview_payload_json = {preview_payload}, updated_at = {now} \
              WHERE repo_id = {repo_id} AND proposal_id = {proposal_id};",
             preview_payload = sql_json_value(relational, preview_payload),
             now = sql_now(relational),

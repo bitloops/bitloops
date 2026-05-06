@@ -15,23 +15,23 @@ pub async fn upsert_classification_role(
     let canonical_key = format!("{}:{}", role.family, role.slug);
     let sql = format!(
         "INSERT INTO architecture_roles (
-            repo_id, role_id, family, slug, canonical_key, display_name, description,
-            lifecycle, lifecycle_status, provenance_json, updated_at
+            repo_id, role_id, family, canonical_key, display_name, description,
+            lifecycle_status, provenance_json, updated_at
          ) VALUES (
-            {repo_id}, {role_id}, {family}, {slug}, {canonical_key}, {display_name}, {description},
-            {lifecycle}, {lifecycle}, {provenance}, {now}
+            {repo_id}, {role_id}, {family}, {canonical_key}, {display_name}, {description},
+            {lifecycle}, {provenance}, {now}
          )
          ON CONFLICT(repo_id, role_id) DO UPDATE SET
+            family = excluded.family,
+            canonical_key = excluded.canonical_key,
             display_name = excluded.display_name,
             description = excluded.description,
-            lifecycle = excluded.lifecycle,
             lifecycle_status = excluded.lifecycle_status,
             provenance_json = excluded.provenance_json,
             updated_at = {now};",
         repo_id = sql_text(&role.repo_id),
         role_id = sql_text(&role.role_id),
         family = sql_text(&role.family),
-        slug = sql_text(&role.slug),
         canonical_key = sql_text(&canonical_key),
         display_name = sql_text(&role.display_name),
         description = sql_text(&role.description),
@@ -76,7 +76,7 @@ pub async fn set_role_lifecycle(
 ) -> Result<()> {
     let sql = format!(
         "UPDATE architecture_roles
-         SET lifecycle = {lifecycle}, lifecycle_status = {lifecycle}, updated_at = {now}
+         SET lifecycle_status = {lifecycle}, updated_at = {now}
          WHERE repo_id = {repo_id} AND role_id = {role_id};",
         repo_id = sql_text(repo_id),
         role_id = sql_text(role_id),
@@ -94,10 +94,20 @@ pub async fn load_roles(
     repo_id: &str,
 ) -> Result<Vec<ArchitectureRole>> {
     let sql = format!(
-        "SELECT repo_id, role_id, family, slug, display_name, description, lifecycle, provenance_json
+        "SELECT repo_id,
+                role_id,
+                family,
+                CASE
+                    WHEN instr(canonical_key, ':') > 0 THEN substr(canonical_key, instr(canonical_key, ':') + 1)
+                    ELSE canonical_key
+                END AS slug,
+                display_name,
+                description,
+                lifecycle_status AS lifecycle,
+                provenance_json
          FROM architecture_roles
          WHERE repo_id = {}
-         ORDER BY family ASC, slug ASC",
+         ORDER BY family ASC, canonical_key ASC",
         sql_text(repo_id)
     );
     relational

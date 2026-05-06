@@ -17,11 +17,9 @@ CREATE TABLE IF NOT EXISTS architecture_roles (
     repo_id TEXT NOT NULL,
     role_id TEXT NOT NULL,
     family TEXT NOT NULL DEFAULT 'unclassified',
-    slug TEXT NOT NULL,
     canonical_key TEXT NOT NULL,
     display_name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    lifecycle TEXT NOT NULL DEFAULT 'active',
     lifecycle_status TEXT NOT NULL DEFAULT 'active',
     provenance_json TEXT NOT NULL DEFAULT '{}',
     evidence_json TEXT NOT NULL DEFAULT '[]',
@@ -29,12 +27,11 @@ CREATE TABLE IF NOT EXISTS architecture_roles (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (repo_id, role_id),
-    UNIQUE (repo_id, family, slug),
     UNIQUE (repo_id, canonical_key)
 );
 
 CREATE INDEX IF NOT EXISTS architecture_roles_repo_lifecycle_idx
-ON architecture_roles (repo_id, lifecycle, family, slug);
+ON architecture_roles (repo_id, lifecycle_status, family, canonical_key);
 
 CREATE INDEX IF NOT EXISTS architecture_roles_repo_status_idx
 ON architecture_roles (repo_id, lifecycle_status, canonical_key);
@@ -43,7 +40,6 @@ CREATE TABLE IF NOT EXISTS architecture_role_aliases (
     repo_id TEXT NOT NULL,
     alias_id TEXT NOT NULL,
     role_id TEXT NOT NULL,
-    alias TEXT NOT NULL DEFAULT '',
     alias_key TEXT NOT NULL DEFAULT '',
     alias_normalized TEXT NOT NULL,
     source_kind TEXT NOT NULL DEFAULT 'manual',
@@ -63,10 +59,7 @@ CREATE TABLE IF NOT EXISTS architecture_role_detection_rules (
     rule_id TEXT NOT NULL,
     role_id TEXT NOT NULL,
     version INTEGER NOT NULL,
-    lifecycle TEXT NOT NULL DEFAULT 'draft',
     lifecycle_status TEXT NOT NULL DEFAULT 'draft',
-    priority INTEGER NOT NULL DEFAULT 100,
-    score REAL NOT NULL DEFAULT 1.0,
     canonical_hash TEXT NOT NULL DEFAULT '',
     candidate_selector_json TEXT NOT NULL DEFAULT '{}',
     positive_conditions_json TEXT NOT NULL DEFAULT '[]',
@@ -82,7 +75,7 @@ CREATE TABLE IF NOT EXISTS architecture_role_detection_rules (
 );
 
 CREATE INDEX IF NOT EXISTS architecture_role_rules_repo_role_idx
-ON architecture_role_detection_rules (repo_id, role_id, lifecycle, version);
+ON architecture_role_detection_rules (repo_id, role_id, version);
 
 CREATE INDEX IF NOT EXISTS architecture_role_rules_repo_status_idx
 ON architecture_role_detection_rules (repo_id, role_id, lifecycle_status, version);
@@ -213,12 +206,9 @@ ON architecture_role_assignments (repo_id, artefact_id, status);
 CREATE TABLE IF NOT EXISTS architecture_role_change_proposals (
     repo_id TEXT NOT NULL,
     proposal_id TEXT NOT NULL,
-    proposal_kind TEXT NOT NULL DEFAULT '',
     proposal_type TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'draft',
-    payload_json TEXT NOT NULL DEFAULT '{}',
     request_payload_json TEXT NOT NULL DEFAULT '{}',
-    impact_preview_json TEXT NOT NULL DEFAULT '{}',
     preview_payload_json TEXT NOT NULL DEFAULT '{}',
     result_payload_json TEXT NOT NULL DEFAULT '{}',
     provenance_json TEXT NOT NULL DEFAULT '{}',
@@ -229,7 +219,7 @@ CREATE TABLE IF NOT EXISTS architecture_role_change_proposals (
 );
 
 CREATE INDEX IF NOT EXISTS architecture_role_proposals_repo_status_idx
-ON architecture_role_change_proposals (repo_id, status, proposal_kind, proposal_type);
+ON architecture_role_change_proposals (repo_id, status, proposal_type);
 
 CREATE TABLE IF NOT EXISTS architecture_role_assignment_migrations (
     repo_id TEXT NOT NULL,
