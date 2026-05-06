@@ -600,13 +600,13 @@ supported = ["cursor", "gemini"]
         assert!(crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
                 .exists()
         );
         assert!(GeminiCliAgent.are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(!dir.path().join("GEMINI.md").exists());
@@ -1819,16 +1819,16 @@ supported = ["cursor", "gemini"]
     assert!(dir.path().join(".cursor/hooks.json").exists());
     assert!(
         dir.path()
-            .join(".cursor/rules/bitloops-using-devql.mdc")
+            .join(".cursor/rules/bitloops-devql-explore-first.mdc")
             .exists()
     );
     assert!(
         dir.path()
-            .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+            .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
             .exists()
     );
     let gemini_md = std::fs::read_to_string(dir.path().join("GEMINI.md")).unwrap();
-    assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+    assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
     assert!(git_hooks::is_git_hook_installed(dir.path()));
 }
 
@@ -1865,7 +1865,7 @@ devql_guidance_enabled = false
     );
     assert!(
         !dir.path()
-            .join(".cursor/rules/bitloops-using-devql.mdc")
+            .join(".cursor/rules/bitloops-devql-explore-first.mdc")
             .exists()
     );
 }

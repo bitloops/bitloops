@@ -636,7 +636,7 @@ devql_guidance_enabled = false
     let transcript_path_str = transcript_path.to_string_lossy().to_string();
     let skill_path = repo
         .path()
-        .join(".claude/skills/bitloops/using-devql/SKILL.md");
+        .join(".claude/skills/bitloops/devql-explore-first/SKILL.md");
     let settings_path = repo.path().join(".claude/settings.json");
     std::fs::write(
         &transcript_path,
@@ -722,7 +722,7 @@ fn route_claude_session_start_returns_direct_context_when_skill_exists() -> Resu
         );
         assert_direct_session_start_context(
             context,
-            ".claude/skills/bitloops/using-devql/SKILL.md",
+            ".claude/skills/bitloops/devql-explore-first/SKILL.md",
         );
         Ok(())
     })
@@ -944,7 +944,7 @@ fn route_gemini_session_start_returns_direct_context_when_skill_exists() -> Resu
         );
         assert_direct_session_start_context(
             context,
-            ".gemini/skills/bitloops/using-devql/SKILL.md",
+            ".gemini/skills/bitloops/devql-explore-first/SKILL.md",
         );
         Ok(())
     })
@@ -978,7 +978,7 @@ fn route_cursor_session_start_returns_direct_context_when_rule_exists() -> Resul
         let context = json["additional_context"]
             .as_str()
             .expect("additional_context");
-        assert_direct_session_start_context(context, ".cursor/rules/bitloops-using-devql.mdc");
+        assert_direct_session_start_context(context, ".cursor/rules/bitloops-devql-explore-first.mdc");
         Ok(())
     })
 }
@@ -1020,7 +1020,7 @@ fn route_copilot_session_start_returns_direct_context_when_skill_exists() -> Res
                 .expect("additionalContext");
             assert_direct_session_start_context(
                 context,
-                ".github/skills/bitloops/using-devql/SKILL.md",
+                ".github/skills/bitloops/devql-explore-first/SKILL.md",
             );
             Ok(())
         },

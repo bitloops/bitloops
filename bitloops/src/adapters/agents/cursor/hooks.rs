@@ -385,7 +385,7 @@ mod tests {
     fn rule_file(path: &Path) -> PathBuf {
         path.join(".cursor")
             .join("rules")
-            .join("bitloops-using-devql.mdc")
+            .join("bitloops-devql-explore-first.mdc")
     }
 
     fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
