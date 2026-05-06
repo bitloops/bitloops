@@ -113,7 +113,13 @@ pub struct InitArgs {
     pub no_embeddings: bool,
 
     /// Skip semantic summaries setup during init.
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        conflicts_with = "bitloops_inference_runtime",
+        conflicts_with = "bitloops_inference_gateway_url",
+        conflicts_with = "bitloops_inference_api_key_env"
+    )]
     pub no_summaries: bool,
 
     /// Select which text-generation runtime to configure for context guidance during init.
@@ -126,9 +132,34 @@ pub struct InitArgs {
         default_value_t = false,
         conflicts_with = "context_guidance_runtime",
         conflicts_with = "context_guidance_gateway_url",
-        conflicts_with = "context_guidance_api_key_env"
+        conflicts_with = "context_guidance_api_key_env",
+        conflicts_with = "bitloops_inference_runtime",
+        conflicts_with = "bitloops_inference_gateway_url",
+        conflicts_with = "bitloops_inference_api_key_env"
     )]
     pub no_context_guidance: bool,
+
+    /// Select which generation runtime to configure for Bitloops inference capabilities during init.
+    #[arg(long = "bitloops-inference-runtime", value_enum)]
+    pub bitloops_inference_runtime: Option<TextGenerationRuntime>,
+
+    /// Skip Bitloops inference setup during init.
+    #[arg(
+        long = "no-bitloops-inference",
+        default_value_t = false,
+        conflicts_with = "bitloops_inference_runtime",
+        conflicts_with = "bitloops_inference_gateway_url",
+        conflicts_with = "bitloops_inference_api_key_env"
+    )]
+    pub no_bitloops_inference: bool,
+
+    /// Public platform chat completions endpoint used when `--bitloops-inference-runtime platform` is selected.
+    #[arg(long = "bitloops-inference-gateway-url")]
+    pub bitloops_inference_gateway_url: Option<String>,
+
+    /// Environment variable that contains the platform gateway bearer token for Bitloops inference.
+    #[arg(long = "bitloops-inference-api-key-env")]
+    pub bitloops_inference_api_key_env: Option<String>,
 
     /// Public platform embeddings endpoint used when `--embeddings-runtime platform` is selected.
     #[arg(long)]

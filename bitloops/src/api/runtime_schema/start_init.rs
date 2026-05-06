@@ -120,6 +120,8 @@ pub(crate) struct SummaryBootstrapRequestInput {
     pub model_name: Option<String>,
     #[graphql(name = "gatewayUrlOverride")]
     pub gateway_url_override: Option<String>,
+    #[graphql(name = "apiKeyEnv")]
+    pub api_key_env: Option<String>,
 }
 
 impl From<SummaryBootstrapRequestInput> for SummaryBootstrapRequest {
@@ -129,6 +131,7 @@ impl From<SummaryBootstrapRequestInput> for SummaryBootstrapRequest {
             message: value.message,
             model_name: value.model_name,
             gateway_url_override: value.gateway_url_override,
+            api_key_env: value.api_key_env,
         }
     }
 }

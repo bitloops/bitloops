@@ -747,6 +747,7 @@ fn runtime_summary_bootstrap_input_json(
         "message": input.message,
         "modelName": input.model_name,
         "gatewayUrlOverride": input.gateway_url_override,
+        "apiKeyEnv": input.api_key_env,
     })
 }
 

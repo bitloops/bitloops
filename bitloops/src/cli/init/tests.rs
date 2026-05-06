@@ -10,7 +10,8 @@ use crate::cli::embeddings::{
     with_managed_platform_embeddings_install_hook,
 };
 use crate::cli::inference::{
-    OllamaAvailability, with_context_guidance_generation_configured_hook, with_ollama_probe_hook,
+    OllamaAvailability, with_bitloops_inference_generation_configured_hook,
+    with_context_guidance_generation_configured_hook, with_ollama_probe_hook,
     with_summary_generation_configured_hook,
 };
 use crate::cli::login::with_ensure_logged_in_hook;
@@ -140,14 +141,19 @@ fn with_temp_app_dirs_and_summary_configured<T>(
     with_summary_generation_configured_hook(
         move |_| summary_configured,
         || {
-            with_context_guidance_generation_configured_hook(
-                |_| true,
+            with_bitloops_inference_generation_configured_hook(
+                move |_| summary_configured,
                 || {
-                    with_test_platform_dir_overrides(app_dir_overrides(temp), || {
-                        with_test_tty_override(tty, || {
-                            with_test_assume_daemon_running(assume_daemon_running, f)
-                        })
-                    })
+                    with_context_guidance_generation_configured_hook(
+                        |_| true,
+                        || {
+                            with_test_platform_dir_overrides(app_dir_overrides(temp), || {
+                                with_test_tty_override(tty, || {
+                                    with_test_assume_daemon_running(assume_daemon_running, f)
+                                })
+                            })
+                        },
+                    )
                 },
             )
         },
@@ -183,6 +189,10 @@ fn init_status_command_args(status_args: InitStatusArgs) -> InitArgs {
         no_context_guidance: false,
         context_guidance_gateway_url: None,
         context_guidance_api_key_env: None,
+        bitloops_inference_runtime: None,
+        no_bitloops_inference: false,
+        bitloops_inference_gateway_url: None,
+        bitloops_inference_api_key_env: None,
         embeddings_gateway_url: None,
         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
     }
@@ -260,6 +270,10 @@ fn render_install_default_daemon_handoff_with_mkcert(
                                         no_context_guidance: false,
                                         context_guidance_gateway_url: None,
                                         context_guidance_api_key_env: None,
+                                        bitloops_inference_runtime: None,
+                                        no_bitloops_inference: false,
+                                        bitloops_inference_gateway_url: None,
+                                        bitloops_inference_api_key_env: None,
                                         embeddings_gateway_url: None,
                                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                             .to_string(),
@@ -733,6 +747,77 @@ fn init_args_support_context_guidance_runtime_flags() {
 }
 
 #[test]
+fn init_args_support_bitloops_inference_runtime_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--install-default-daemon",
+        "--bitloops-inference-runtime",
+        "platform",
+        "--bitloops-inference-api-key-env",
+        "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+    ])
+    .expect("parse init bitloops inference flags");
+
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    assert_eq!(
+        args.bitloops_inference_runtime,
+        Some(crate::cli::inference::TextGenerationRuntime::Platform)
+    );
+    assert_eq!(
+        args.bitloops_inference_api_key_env.as_deref(),
+        Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN")
+    );
+}
+
+#[test]
+fn init_args_reject_conflicting_no_bitloops_inference_and_runtime_flags() {
+    let err = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--no-bitloops-inference",
+        "--bitloops-inference-runtime",
+        "local",
+    ])
+    .err()
+    .expect("conflicting bitloops inference flags should fail");
+
+    assert!(err.to_string().contains("--no-bitloops-inference"));
+}
+
+#[test]
+fn init_args_reject_conflicting_no_summaries_and_bitloops_inference_runtime() {
+    let err = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--no-summaries",
+        "--bitloops-inference-runtime",
+        "platform",
+    ])
+    .err()
+    .expect("conflicting summary and bitloops inference flags should fail");
+
+    assert!(err.to_string().contains("--no-summaries"));
+}
+
+#[test]
+fn init_args_reject_conflicting_no_context_guidance_and_bitloops_inference_runtime() {
+    let err = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--no-context-guidance",
+        "--bitloops-inference-runtime",
+        "local",
+    ])
+    .err()
+    .expect("conflicting context guidance and bitloops inference flags should fail");
+
+    assert!(err.to_string().contains("--no-context-guidance"));
+}
+
+#[test]
 fn init_args_reject_conflicting_no_context_guidance_and_runtime_flags() {
     let err = Cli::try_parse_from([
         "bitloops",
@@ -777,6 +862,73 @@ fn choose_context_guidance_setup_during_init_skips_noninteractive_without_explic
         selection,
         crate::cli::inference::ContextGuidanceSetupSelection::Skip
     );
+}
+
+#[test]
+fn choose_bitloops_inference_setup_during_init_requires_explicit_noninteractive_choice() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let parsed =
+        Cli::try_parse_from(["bitloops", "init", "--install-default-daemon"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let mut out = Vec::new();
+    let mut input = Cursor::new("");
+
+    let err = with_test_tty_override(false, || {
+        with_summary_generation_configured_hook(
+            |_| false,
+            || {
+                test_runtime().block_on(choose_bitloops_inference_setup_during_init(
+                    repo.path(),
+                    &args,
+                    &mut out,
+                    &mut input,
+                ))
+            },
+        )
+    })
+    .err()
+    .expect("noninteractive bitloops inference selection should fail");
+
+    assert_eq!(
+        err.to_string(),
+        NON_INTERACTIVE_INIT_BITLOOPS_INFERENCE_SELECTION_ERROR
+    );
+}
+
+#[test]
+fn choose_bitloops_inference_setup_during_init_honours_legacy_skip_flags() {
+    for flag in ["--no-summaries", "--no-context-guidance"] {
+        let repo = tempfile::tempdir().expect("tempdir");
+        let parsed = Cli::try_parse_from(["bitloops", "init", "--install-default-daemon", flag])
+            .expect("parse init");
+        let Some(Commands::Init(args)) = parsed.command else {
+            panic!("expected init command");
+        };
+        let mut out = Vec::new();
+        let mut input = Cursor::new("");
+
+        let selection = with_test_tty_override(false, || {
+            with_summary_generation_configured_hook(
+                |_| false,
+                || {
+                    test_runtime().block_on(choose_bitloops_inference_setup_during_init(
+                        repo.path(),
+                        &args,
+                        &mut out,
+                        &mut input,
+                    ))
+                },
+            )
+        })
+        .expect("choose bitloops inference setup");
+
+        assert_eq!(
+            selection,
+            crate::cli::inference::BitloopsInferenceSetupSelection::Skip
+        );
+    }
 }
 
 #[test]
@@ -1327,6 +1479,10 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1402,6 +1558,10 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1462,6 +1622,10 @@ keep = true
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1522,6 +1686,10 @@ fn run_init_binds_repo_to_running_daemon_config() {
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1593,6 +1761,10 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
                         context_guidance_api_key_env: None,
+                        bitloops_inference_runtime: None,
+                        no_bitloops_inference: false,
+                        bitloops_inference_gateway_url: None,
+                        bitloops_inference_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1661,6 +1833,10 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
                         context_guidance_api_key_env: None,
+                        bitloops_inference_runtime: None,
+                        no_bitloops_inference: false,
+                        bitloops_inference_gateway_url: None,
+                        bitloops_inference_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1728,6 +1904,10 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
                         context_guidance_api_key_env: None,
+                        bitloops_inference_runtime: None,
+                        no_bitloops_inference: false,
+                        bitloops_inference_gateway_url: None,
+                        bitloops_inference_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1798,6 +1978,10 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
                         context_guidance_api_key_env: None,
+                        bitloops_inference_runtime: None,
+                        no_bitloops_inference: false,
+                        bitloops_inference_gateway_url: None,
+                        bitloops_inference_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1856,6 +2040,10 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1912,6 +2100,10 @@ fn run_init_rewrites_existing_daemon_binding() {
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1976,6 +2168,10 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2036,6 +2232,10 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                         no_context_guidance: false,
                         context_guidance_gateway_url: None,
                         context_guidance_api_key_env: None,
+                        bitloops_inference_runtime: None,
+                        no_bitloops_inference: false,
+                        bitloops_inference_gateway_url: None,
+                        bitloops_inference_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -2096,6 +2296,10 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
                     context_guidance_api_key_env: None,
+                    bitloops_inference_runtime: None,
+                    no_bitloops_inference: false,
+                    bitloops_inference_gateway_url: None,
+                    bitloops_inference_api_key_env: None,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -2150,6 +2354,10 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2201,6 +2409,10 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2259,6 +2471,10 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2381,6 +2597,10 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2461,6 +2681,10 @@ fn run_init_with_invalid_explicit_agent_errors() {
                 no_context_guidance: false,
                 context_guidance_gateway_url: None,
                 context_guidance_api_key_env: None,
+                bitloops_inference_runtime: None,
+                no_bitloops_inference: false,
+                bitloops_inference_gateway_url: None,
+                bitloops_inference_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2842,6 +3066,10 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
                             context_guidance_api_key_env: None,
+                            bitloops_inference_runtime: None,
+                            no_bitloops_inference: false,
+                            bitloops_inference_gateway_url: None,
+                            bitloops_inference_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -2908,6 +3136,10 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
                             context_guidance_api_key_env: None,
+                            bitloops_inference_runtime: None,
+                            no_bitloops_inference: false,
+                            bitloops_inference_gateway_url: None,
+                            bitloops_inference_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -2958,6 +3190,10 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
                     context_guidance_api_key_env: None,
+                    bitloops_inference_runtime: None,
+                    no_bitloops_inference: false,
+                    bitloops_inference_gateway_url: None,
+                    bitloops_inference_api_key_env: None,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -3054,6 +3290,10 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                                 no_context_guidance: false,
                                                                 context_guidance_gateway_url: None,
                                                                 context_guidance_api_key_env: None,
+                                                                bitloops_inference_runtime: None,
+                                                                no_bitloops_inference: true,
+                                                                bitloops_inference_gateway_url: None,
+                                                                bitloops_inference_api_key_env: None,
                                                                 embeddings_gateway_url: None,
                                                                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                                                     .to_string(),
@@ -3194,6 +3434,10 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
                             context_guidance_api_key_env: None,
+                            bitloops_inference_runtime: None,
+                            no_bitloops_inference: false,
+                            bitloops_inference_gateway_url: None,
+                            bitloops_inference_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -3275,6 +3519,10 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
                                     context_guidance_api_key_env: None,
+                                    bitloops_inference_runtime: None,
+                                    no_bitloops_inference: false,
+                                    bitloops_inference_gateway_url: None,
+                                    bitloops_inference_api_key_env: None,
                                     embeddings_gateway_url: None,
                                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                         .to_string(),
@@ -3588,7 +3836,7 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                             || {
                                                                 let mut out = Vec::new();
                                                                 let mut input =
-                                                                    Cursor::new("3\n\n");
+                                                                    Cursor::new("2\n\n");
                                                                 let select = |_items: &[String],
                                                                               enable_devql_guidance: bool| {
                                                                     Ok(InitAgentSelection {
@@ -3623,6 +3871,10 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             no_context_guidance: false,
                                                                             context_guidance_gateway_url: None,
                                                                             context_guidance_api_key_env: None,
+                                                                            bitloops_inference_runtime: None,
+                                                                            no_bitloops_inference: false,
+                                                                            bitloops_inference_gateway_url: None,
+                                                                            bitloops_inference_api_key_env: None,
                                                                             embeddings_gateway_url: None,
                                                                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                         },
@@ -3640,25 +3892,23 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                     "Sign in to Bitloops"
                                                                 ));
                                                                 assert!(rendered.contains(
-                                                                    "Configure semantic summaries"
-                                                                ));
-                                                                assert!(rendered.contains(
-                                                                    "1. Skip for now (recommended)"
+                                                                    "Enable Bitloops inference"
                                                                 ));
                                                                 assert!(
                                                                     rendered.contains(
-                                                                        "2. Bitloops Cloud (limited availability)"
+                                                                        "1. Bitloops Cloud"
                                                                     )
                                                                 );
                                                                 assert!(
                                                                     rendered.contains(
-                                                                        "3. Local (Ollama)"
+                                                                        "2. Local (Ollama)"
                                                                     )
                                                                 );
                                                                 assert!(
-                                                                    rendered.contains("Summaries")
+                                                                    rendered.contains(
+                                                                        "3. Skip for now"
+                                                                    )
                                                                 );
-
                                                                 let daemon_config_path =
                                                                     ensure_daemon_config_exists()
                                                                         .expect(
@@ -3803,6 +4053,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
                                             context_guidance_api_key_env: None,
+                                            bitloops_inference_runtime: None,
+                                            no_bitloops_inference: false,
+                                            bitloops_inference_gateway_url: None,
+                                            bitloops_inference_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -3911,6 +4165,10 @@ fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when
                                     no_context_guidance: false,
                                     context_guidance_gateway_url: None,
                                     context_guidance_api_key_env: None,
+                                    bitloops_inference_runtime: None,
+                                    no_bitloops_inference: false,
+                                    bitloops_inference_gateway_url: None,
+                                    bitloops_inference_api_key_env: None,
                                     embeddings_gateway_url: None,
                                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                         .to_string(),
@@ -3985,6 +4243,10 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                                 no_context_guidance: false,
                                 context_guidance_gateway_url: None,
                                 context_guidance_api_key_env: None,
+                                bitloops_inference_runtime: None,
+                                no_bitloops_inference: false,
+                                bitloops_inference_gateway_url: None,
+                                bitloops_inference_api_key_env: None,
                                 embeddings_gateway_url: None,
                                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                     .to_string(),
@@ -4191,7 +4453,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                     },
                                                     || {
                                                         let mut out = Vec::new();
-                                                        let mut input = Cursor::new("1\n1\n");
+                                                        let mut input = Cursor::new("1\n3\n");
                                                         let runtime = test_runtime();
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
@@ -4216,6 +4478,10 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                     no_context_guidance: false,
                                                                     context_guidance_gateway_url: None,
                                                                     context_guidance_api_key_env: None,
+                                                                    bitloops_inference_runtime: None,
+                                                                    no_bitloops_inference: false,
+                                                                    bitloops_inference_gateway_url: None,
+                                                                    bitloops_inference_api_key_env: None,
                                                                     embeddings_gateway_url: None,
                                                                     embeddings_api_key_env:
                                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -4389,7 +4655,7 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                 },
                                                 || {
                                                     let mut out = Vec::new();
-                                                    let mut input = Cursor::new("1\n1\n");
+                                                    let mut input = Cursor::new("1\n3\n");
                                                     let runtime = test_runtime();
                                                     runtime
                                                         .block_on(run_with_io_async_for_project_root(
@@ -4414,6 +4680,10 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                                 no_context_guidance: false,
                                                                 context_guidance_gateway_url: None,
                                                                 context_guidance_api_key_env: None,
+                                                                bitloops_inference_runtime: None,
+                                                                no_bitloops_inference: false,
+                                                                bitloops_inference_gateway_url: None,
+                                                                bitloops_inference_api_key_env: None,
                                                                 embeddings_gateway_url: None,
                                                                 embeddings_api_key_env:
                                                                     "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -4580,7 +4850,7 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                     },
                                                     || {
                                                         let mut out = Vec::new();
-                                                        let mut input = Cursor::new("1\n2\n");
+                                                        let mut input = Cursor::new("1\n1\n");
                                                         let runtime = test_runtime();
                                                         runtime
                                                             .block_on(run_with_io_async_for_project_root(
@@ -4605,6 +4875,10 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                                     no_context_guidance: false,
                                                                     context_guidance_gateway_url: None,
                                                                     context_guidance_api_key_env: None,
+                                                                    bitloops_inference_runtime: None,
+                                                                    no_bitloops_inference: false,
+                                                                    bitloops_inference_gateway_url: None,
+                                                                    bitloops_inference_api_key_env: None,
                                                                     embeddings_gateway_url: None,
                                                                     embeddings_api_key_env:
                                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -4768,6 +5042,10 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                 no_context_guidance: false,
                                                 context_guidance_gateway_url: None,
                                                 context_guidance_api_key_env: None,
+                                                bitloops_inference_runtime: None,
+                                                no_bitloops_inference: false,
+                                                bitloops_inference_gateway_url: None,
+                                                bitloops_inference_api_key_env: None,
                                                 embeddings_gateway_url: None,
                                                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                 },
@@ -4938,6 +5216,10 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                                     no_context_guidance: false,
                                                     context_guidance_gateway_url: None,
                                                     context_guidance_api_key_env: None,
+                                                    bitloops_inference_runtime: None,
+                                                    no_bitloops_inference: false,
+                                                    bitloops_inference_gateway_url: None,
+                                                    bitloops_inference_api_key_env: None,
                                                     embeddings_gateway_url: None,
                                                     embeddings_api_key_env:
                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -5102,6 +5384,10 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                     no_context_guidance: false,
                                                     context_guidance_gateway_url: None,
                                                     context_guidance_api_key_env: None,
+                                                    bitloops_inference_runtime: None,
+                                                    no_bitloops_inference: false,
+                                                    bitloops_inference_gateway_url: None,
+                                                    bitloops_inference_api_key_env: None,
                                                     embeddings_gateway_url: None,
                                                     embeddings_api_key_env:
                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -5253,6 +5539,10 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                             no_context_guidance: false,
                                                                             context_guidance_gateway_url: None,
                                                                             context_guidance_api_key_env: None,
+                                                                            bitloops_inference_runtime: Some(crate::cli::inference::TextGenerationRuntime::Local),
+                                                                            no_bitloops_inference: false,
+                                                                            bitloops_inference_gateway_url: None,
+                                                                            bitloops_inference_api_key_env: None,
                                                                             embeddings_gateway_url: None,
                                                                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                         },
@@ -5346,6 +5636,10 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             no_context_guidance: false,
                             context_guidance_gateway_url: None,
                             context_guidance_api_key_env: None,
+                            bitloops_inference_runtime: None,
+                            no_bitloops_inference: false,
+                            bitloops_inference_gateway_url: None,
+                            bitloops_inference_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -5535,6 +5829,10 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
                                             context_guidance_api_key_env: None,
+                                            bitloops_inference_runtime: None,
+                                            no_bitloops_inference: false,
+                                            bitloops_inference_gateway_url: None,
+                                            bitloops_inference_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -5633,6 +5931,10 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
                                             context_guidance_api_key_env: None,
+                                            bitloops_inference_runtime: None,
+                                            no_bitloops_inference: false,
+                                            bitloops_inference_gateway_url: None,
+                                            bitloops_inference_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -5690,6 +5992,10 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     no_context_guidance: false,
                     context_guidance_gateway_url: None,
                     context_guidance_api_key_env: None,
+                    bitloops_inference_runtime: None,
+                    no_bitloops_inference: false,
+                    bitloops_inference_gateway_url: None,
+                    bitloops_inference_api_key_env: None,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -5818,6 +6124,10 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
                                             context_guidance_api_key_env: None,
+                                            bitloops_inference_runtime: None,
+                                            no_bitloops_inference: false,
+                                            bitloops_inference_gateway_url: None,
+                                            bitloops_inference_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -5969,6 +6279,10 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             no_context_guidance: false,
                                             context_guidance_gateway_url: None,
                                             context_guidance_api_key_env: None,
+                                            bitloops_inference_runtime: None,
+                                            no_bitloops_inference: false,
+                                            bitloops_inference_gateway_url: None,
+                                            bitloops_inference_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),

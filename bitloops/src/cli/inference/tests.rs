@@ -7,15 +7,113 @@ use toml_edit::{DocumentMut, Item};
 use crate::cli::inference::{
     ContextGuidanceSetupOutcome, ContextGuidanceSetupSelection, OllamaAvailability,
     SummarySetupOutcome, SummarySetupPhase, SummarySetupSelection,
+    bitloops_inference_generation_configured, configure_cloud_bitloops_inference,
     configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
-    configure_local_context_guidance_generation, configure_local_summary_generation,
-    context_guidance_generation_configured, execute_prepared_summary_setup_with_progress,
-    prepare_cloud_summary_generation_plan, prompt_context_guidance_setup_selection,
-    prompt_summary_setup_selection, summary_generation_configured,
-    with_managed_inference_install_hook, with_ollama_probe_hook,
+    configure_local_bitloops_inference, configure_local_context_guidance_generation,
+    configure_local_summary_generation, context_guidance_generation_configured,
+    execute_prepared_summary_setup_with_progress, prepare_cloud_summary_generation_plan,
+    prompt_context_guidance_setup_selection, prompt_summary_setup_selection,
+    summary_generation_configured, with_managed_inference_install_hook, with_ollama_probe_hook,
 };
 use crate::cli::terminal_picker::with_single_select_hook;
 use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_inference_capability_config_for_repo};
+
+#[test]
+fn cloud_bitloops_inference_setup_configures_all_generation_slots() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+
+    let message = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            configure_cloud_bitloops_inference(
+                &configure_root,
+                None,
+                Some("BITLOOPS_PLATFORM_GATEWAY_TOKEN"),
+            )
+        },
+    )
+    .expect("configure cloud bitloops inference");
+
+    assert_eq!(
+        message,
+        "Configured Bitloops inference to use Bitloops cloud."
+    );
+    assert!(bitloops_inference_generation_configured(&repo_root));
+
+    let rendered = std::fs::read_to_string(repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+        .expect("read config");
+    assert!(rendered.contains("summary_generation = \"summary_llm\""));
+    assert!(rendered.contains("guidance_generation = \"guidance_llm\""));
+    assert!(rendered.contains("fact_synthesis = \"architecture_fact_synthesis\""));
+    assert!(rendered.contains("role_adjudication = \"architecture_role_adjudication\""));
+    assert!(rendered.contains("task = \"structured_generation\""));
+    assert!(rendered.contains("max_output_tokens = 1024"));
+}
+
+#[test]
+fn local_bitloops_inference_setup_configures_all_generation_slots() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::write(&config_path, "").expect("write config");
+    let install_root = repo_root.clone();
+    let configure_root = repo_root.clone();
+    let mut out = Vec::new();
+    let mut input = Cursor::new(Vec::<u8>::new());
+
+    let outcome = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_root.join("bitloops-inference"),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || {
+            with_ollama_probe_hook(
+                || {
+                    Ok(OllamaAvailability::Running {
+                        models: vec!["ministral-3:3b".to_string()],
+                    })
+                },
+                || configure_local_bitloops_inference(&configure_root, &mut out, &mut input, false),
+            )
+        },
+    )
+    .expect("configure local bitloops inference");
+
+    assert_eq!(
+        outcome,
+        SummarySetupOutcome::Configured {
+            model_name: "ministral-3:3b".to_string()
+        }
+    );
+    assert!(bitloops_inference_generation_configured(&repo_root));
+
+    let rendered = std::fs::read_to_string(repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+        .expect("read config");
+    assert!(rendered.contains("summary_generation = \"summary_local\""));
+    assert!(rendered.contains("guidance_generation = \"guidance_local\""));
+    assert!(rendered.contains("fact_synthesis = \"architecture_fact_synthesis_local\""));
+    assert!(rendered.contains("role_adjudication = \"architecture_role_adjudication_local\""));
+    assert!(rendered.contains("driver = \"ollama_chat\""));
+    assert!(rendered.contains("base_url = \"http://127.0.0.1:11434/api/chat\""));
+}
 
 #[test]
 fn summary_setup_skips_profile_when_ollama_is_missing() {

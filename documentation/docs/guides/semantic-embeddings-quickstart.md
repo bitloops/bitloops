@@ -7,6 +7,7 @@ title: Semantic + Embeddings Quickstart
 This guide shows the quickest way to try:
 
 - semantic summaries through a configured text-generation inference profile
+- context guidance and architecture intelligence through Bitloops inference generation profiles
 - local embeddings through the standalone `bitloops-local-embeddings` binary over stdio IPC
 - hosted embeddings through the standalone `bitloops-platform-embeddings` binary over stdio IPC
 - the daemon-owned enrichment queue and health checks
@@ -17,7 +18,7 @@ Run the repo-scoped commands below from inside a Git repository or Bitloops proj
 
 - `bitloops`
 - either the Bitloops-managed embeddings install flow or a manually installed `bitloops-local-embeddings` / `bitloops-platform-embeddings` binary
-- a text-generation provider API key if you want LLM semantic summaries
+- a generation provider API key if you want hosted semantic summaries, context guidance, and architecture intelligence
 
 In a source checkout, build and install `bitloops`. For the default local Bitloops-managed runtime, explicit setup flows such as `bitloops init --install-default-daemon`, `bitloops enable --install-embeddings`, and `bitloops embeddings install` can install the standalone `bitloops-local-embeddings` binary for you. If you are wiring a custom runtime manually, install the matching standalone binary from the `bitloops/bitloops-embeddings` GitHub releases for your platform:
 
@@ -47,6 +48,8 @@ When embeddings are not already configured, `bitloops init --install-default-dae
 - in interactive terminals, asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now
 - recommends Bitloops cloud in that prompt
 - configures the selected embeddings runtime before init-triggered sync, except for the local managed runtime bootstrap which still downloads and warms asynchronously
+
+When Bitloops inference is not already configured, the same init flow asks whether to enable it with Bitloops cloud, local Ollama, or skip it. That one choice binds semantic summaries, context guidance, architecture fact synthesis, and architecture role adjudication. For non-interactive init, pass `--bitloops-inference-runtime local`, `--bitloops-inference-runtime platform`, or `--no-bitloops-inference`.
 
 If the repo is already initialised and you just want to add embeddings:
 
@@ -146,13 +149,20 @@ model = "bge-m3"
 
 The hosted runtime keeps the same daemon-facing IPC contract as the local runtime. Only the implementation behind the runtime command changes.
 
-## Optional Semantic Summaries
+## Optional Bitloops Inference
 
-If you also want semantic summaries, bind the `summary_generation` slot to a text-generation profile:
+If you also want semantic summaries, context guidance, and architecture intelligence, bind the generation slots to `bitloops_inference` profiles:
 
 ```toml
 [semantic_clones.inference]
 summary_generation = "summary_llm"
+
+[context_guidance.inference]
+guidance_generation = "guidance_llm"
+
+[architecture.inference]
+fact_synthesis = "architecture_fact_synthesis"
+role_adjudication = "architecture_role_adjudication"
 
 [inference.runtimes.bitloops_inference]
 command = "bitloops-inference"
@@ -169,13 +179,40 @@ api_key = "${OPENAI_API_KEY}"
 base_url = "https://api.openai.com/v1/chat/completions"
 temperature = "0.1"
 max_output_tokens = 200
+
+[inference.profiles.guidance_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
+temperature = "0.1"
+max_output_tokens = 4096
+
+[inference.profiles.architecture_fact_synthesis]
+task = "structured_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
+temperature = "0.1"
+max_output_tokens = 4096
+
+[inference.profiles.architecture_role_adjudication]
+task = "structured_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
+temperature = "0.1"
+max_output_tokens = 1024
 ```
 
 Notes:
 
 - `summary_generation` is optional when `summary_mode = "auto"`. If it is unset or unavailable, Bitloops falls back to deterministic summaries.
-- `task = "text_generation"` profiles must declare `runtime`, `temperature`, and `max_output_tokens`, and `driver` is interpreted by `bitloops-inference`.
-- `bitloops inference install` installs or repairs the managed summary runtime. Interactive `bitloops enable` and `bitloops init --install-default-daemon` can bind summaries to a local Ollama model automatically when it is available, using `http://127.0.0.1:11434/api/chat`.
+- `task = "text_generation"` and `task = "structured_generation"` profiles must declare `runtime`, `temperature`, and `max_output_tokens`, and `driver` is interpreted by `bitloops-inference`.
+- `bitloops inference install` installs or repairs the managed inference runtime. Interactive `bitloops init --install-default-daemon` can bind all four Bitloops inference capabilities to Bitloops cloud or a local Ollama model automatically.
 - `code_embeddings` and `summary_embeddings` can point at the same embeddings profile or at different ones.
 - For platform-specific config paths, use the configuration reference alongside your OS defaults.
 

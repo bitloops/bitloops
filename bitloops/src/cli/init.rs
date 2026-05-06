@@ -10,6 +10,7 @@ mod context_guidance_setup;
 mod daemon_bootstrap;
 mod embeddings_setup;
 mod final_setup;
+mod inference_setup;
 mod progress;
 mod repo_excludes;
 mod status;
@@ -43,6 +44,9 @@ pub(super) use embeddings_setup::{
 #[cfg(test)]
 pub(super) use final_setup::InitFinalSetupSelection;
 pub(super) use final_setup::{InitFinalSetupPromptOptions, choose_final_setup_options};
+#[cfg(test)]
+pub(super) use inference_setup::NON_INTERACTIVE_INIT_BITLOOPS_INFERENCE_SELECTION_ERROR;
+pub(super) use inference_setup::choose_bitloops_inference_setup_during_init;
 pub(super) use repo_excludes::ensure_repo_init_files_excluded;
 pub(crate) use repo_excludes::{
     clear_repo_local_policy_excluded, clear_repo_managed_skill_files_excluded,
