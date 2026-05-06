@@ -814,10 +814,13 @@ mod deterministic_tests {
                 crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
                     repo_id: "repo-1",
                     generation_seq: 42,
-                    affected_paths: std::collections::BTreeSet::from([
-                        "src/cli/commands/run.rs".to_string()
-                    ]),
-                    removed_paths: std::collections::BTreeSet::new(),
+                    scope: crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationScope {
+                        full_reconcile: false,
+                        affected_paths: std::collections::BTreeSet::from([
+                            "src/cli/commands/run.rs".to_string()
+                        ]),
+                        removed_paths: std::collections::BTreeSet::new(),
+                    },
                     files: &files,
                     artefacts: &preview_gateway.artefacts,
                     dependency_edges: &[],
@@ -907,10 +910,13 @@ mod deterministic_tests {
                 crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
                     repo_id: "repo-1",
                     generation_seq: 43,
-                    affected_paths: std::collections::BTreeSet::from([
-                        "src/cli/commands/run.rs".to_string()
-                    ]),
-                    removed_paths: std::collections::BTreeSet::new(),
+                    scope: crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationScope {
+                        full_reconcile: false,
+                        affected_paths: std::collections::BTreeSet::from([
+                            "src/cli/commands/run.rs".to_string()
+                        ]),
+                        removed_paths: std::collections::BTreeSet::new(),
+                    },
                     files: &files,
                     artefacts: &preview_gateway.artefacts,
                     dependency_edges: &[],

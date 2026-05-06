@@ -13,9 +13,9 @@ pub use adjudication::{DbRoleAssignmentWriter, DbRoleFactsReader, DbRoleTaxonomy
 pub use assignments::{
     AssignmentHistoryWrite, RoleClassificationStateReplacement, RoleClassificationStateWriteCounts,
     list_active_current_assignments_for_role, list_current_assignments_for_role,
-    load_assignments_for_path, load_assignments_for_paths, load_current_assignment_by_id,
-    mark_assignments_for_paths_stale, migrate_current_assignment_to_role,
-    record_assignment_history, replace_assignments_for_paths,
+    load_active_assignment_paths_not_in, load_assignments_for_path, load_assignments_for_paths,
+    load_current_assignment_by_id, mark_assignments_for_paths_stale,
+    migrate_current_assignment_to_role, record_assignment_history, replace_assignments_for_paths,
     replace_assignments_for_paths_with_history, replace_role_classification_state,
     retire_role_and_mark_assignments, update_current_assignment_status, upsert_assignment,
 };

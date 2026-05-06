@@ -22,8 +22,6 @@ pub async fn upsert_classification_role(
             {lifecycle}, {provenance}, {now}
          )
          ON CONFLICT(repo_id, role_id) DO UPDATE SET
-            family = excluded.family,
-            canonical_key = excluded.canonical_key,
             display_name = excluded.display_name,
             description = excluded.description,
             lifecycle_status = excluded.lifecycle_status,

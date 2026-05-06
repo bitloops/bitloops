@@ -73,6 +73,7 @@ pub fn enqueue_adjudication_requests(
     })
 }
 
+/// Compatibility helper for legacy delta callers; current-state sync selects role adjudication through the classifier.
 pub fn enqueue_adjudication_jobs_for_delta(
     repo_id: &str,
     generation: u64,

@@ -349,11 +349,16 @@ pub fn default_condition_score() -> f64 {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchitectureRoleReconcileMetrics {
+    pub full_reconcile: bool,
     pub affected_paths: usize,
+    pub refreshed_paths: usize,
+    pub removed_paths: usize,
+    pub skipped_unchanged_paths: usize,
     pub facts_written: usize,
     pub facts_deleted: usize,
     pub rules_loaded: usize,
     pub signals_written: usize,
+    pub signals_deleted: usize,
     pub assignments_written: usize,
     pub assignments_marked_stale: usize,
     pub assignment_history_rows: usize,

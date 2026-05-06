@@ -347,6 +347,50 @@ async fn assignment_persistence_preserves_contract_fields() -> anyhow::Result<()
 }
 
 #[tokio::test]
+async fn loads_active_assignment_paths_missing_from_live_targets() -> anyhow::Result<()> {
+    let (_temp, relational) = test_relational()?;
+    let role = role_fixture("repo-1", "layer", "api", "API");
+    upsert_classification_role(&relational, &role).await?;
+
+    for path in ["src/live.rs", "src/deleted.rs"] {
+        let target = RoleTarget::file(path);
+        upsert_assignment(
+            &relational,
+            &ArchitectureRoleAssignment {
+                repo_id: "repo-1".to_string(),
+                assignment_id: super::super::taxonomy::assignment_id(
+                    "repo-1",
+                    &role.role_id,
+                    &target,
+                ),
+                role_id: role.role_id.clone(),
+                target,
+                priority: AssignmentPriority::Primary,
+                status: AssignmentStatus::Active,
+                source: AssignmentSource::Rule,
+                confidence: 0.9,
+                evidence: serde_json::json!([]),
+                provenance: serde_json::json!({ "source": "test" }),
+                classifier_version: "test".to_string(),
+                rule_version: Some(1),
+                generation_seq: 1,
+            },
+        )
+        .await?;
+    }
+
+    let missing = load_active_assignment_paths_not_in(
+        &relational,
+        "repo-1",
+        &std::collections::BTreeSet::from(["src/live.rs".to_string()]),
+    )
+    .await?;
+
+    assert_eq!(missing, vec!["src/deleted.rs".to_string()]);
+    Ok(())
+}
+
+#[tokio::test]
 async fn replace_assignments_for_paths_removes_stale_assignments() -> anyhow::Result<()> {
     let (_temp, relational) = test_relational()?;
     let role = role_fixture("repo-1", "application", "entrypoint", "Entrypoint");
@@ -634,20 +678,20 @@ async fn change_proposal_persists_payload_and_preview() -> anyhow::Result<()> {
     insert_change_proposal(&relational, &proposal).await?;
 
     let rows = relational
-            .query_rows(
-                "SELECT proposal_kind, status, payload_json, impact_preview_json FROM architecture_role_change_proposals",
-            )
-            .await?;
+        .query_rows(
+            "SELECT proposal_type, status, request_payload_json, preview_payload_json FROM architecture_role_change_proposals",
+        )
+        .await?;
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["proposal_kind"], "role_rename");
+    assert_eq!(rows[0]["proposal_type"], "role_rename");
     assert_eq!(rows[0]["status"], "previewed");
     let payload: serde_json::Value = serde_json::from_str(
-        rows[0]["payload_json"]
+        rows[0]["request_payload_json"]
             .as_str()
             .expect("payload JSON should be stored as text"),
     )?;
     let impact_preview: serde_json::Value = serde_json::from_str(
-        rows[0]["impact_preview_json"]
+        rows[0]["preview_payload_json"]
             .as_str()
             .expect("impact preview JSON should be stored as text"),
     )?;

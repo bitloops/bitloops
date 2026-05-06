@@ -1,6 +1,6 @@
 use super::*;
 use crate::capability_packs::architecture_graph::roles::{
-    default_queue_store, enqueue_adjudication_requests,
+    RoleAdjudicationEnqueueMetrics, default_queue_store, enqueue_adjudication_requests,
 };
 
 pub struct ArchitectureGraphCurrentStateConsumer;
@@ -76,8 +76,7 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                 crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
                     repo_id: &request.repo_id,
                     generation_seq: request.to_generation_seq_inclusive,
-                    affected_paths: crate::capability_packs::architecture_graph::roles::classifier::affected_role_paths_from_request(request),
-                    removed_paths: crate::capability_packs::architecture_graph::roles::classifier::removed_role_paths_from_request(request),
+                    scope: crate::capability_packs::architecture_graph::roles::classifier::role_classification_scope_from_request(request),
                     files: &files,
                     artefacts: &artefacts,
                     dependency_edges: &dependency_edges,
@@ -116,11 +115,25 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             )
             .await?;
 
-            let adjudication_metrics = enqueue_adjudication_requests(
+            let mut role_adjudication_enqueue_failed = false;
+            let adjudication_metrics = match enqueue_adjudication_requests(
                 &adjudication_requests,
                 context.workplane.as_ref(),
                 default_queue_store().as_ref(),
-            )?;
+            ) {
+                Ok(metrics) => metrics,
+                Err(err) => {
+                    warnings.push(format!(
+                        "Architecture role adjudication enqueue failed: {err:#}"
+                    ));
+                    role_adjudication_enqueue_failed = true;
+                    RoleAdjudicationEnqueueMetrics {
+                        selected: adjudication_requests.len(),
+                        enqueued: 0,
+                        deduped: 0,
+                    }
+                }
+            };
             let mut metrics_with_adjudication = metrics;
             if let Some(metrics_obj) = metrics_with_adjudication.as_object_mut() {
                 metrics_obj.insert(
@@ -135,6 +148,12 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                     "role_adjudication_deduped".to_string(),
                     serde_json::Value::from(adjudication_metrics.deduped as u64),
                 );
+                if role_adjudication_enqueue_failed {
+                    metrics_obj.insert(
+                        "role_adjudication_enqueue_failed".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                }
             }
 
             Ok(CurrentStateConsumerResult {

@@ -9,6 +9,7 @@ use crate::models::{
     CurrentCanonicalArtefactRecord, CurrentCanonicalEdgeRecord, CurrentCanonicalFileRecord,
 };
 
+use super::adjudication_selector::{DeterministicRoleOutcomeInput, select_adjudication_reason};
 use super::contracts::{
     AdjudicationReason, RoleAdjudicationRequest, RoleCurrentAssignmentSnapshot,
 };
@@ -17,13 +18,14 @@ use super::fact_extraction::{
 };
 use super::rules::{compile_detection_rules, evaluate_rules_over_facts};
 use super::storage::{
-    AssignmentHistoryWrite, RoleClassificationStateReplacement, load_active_detection_rules,
-    load_assignments_for_paths, replace_role_classification_state,
+    AssignmentHistoryWrite, RoleClassificationStateReplacement,
+    load_active_assignment_paths_not_in, load_active_detection_rules, load_assignments_for_paths,
+    replace_role_classification_state,
 };
 use super::taxonomy::{
-    ArchitectureRoleAssignment, ArchitectureRoleReconcileMetrics, ArchitectureRoleReconcileOutcome,
-    ArchitectureRoleRuleSignal, AssignmentPriority, AssignmentSource, AssignmentStatus,
-    RoleSignalPolarity, RoleTarget, assignment_id,
+    ArchitectureArtefactFact, ArchitectureRoleAssignment, ArchitectureRoleReconcileMetrics,
+    ArchitectureRoleReconcileOutcome, ArchitectureRoleRuleSignal, AssignmentPriority,
+    AssignmentSource, AssignmentStatus, RoleSignalPolarity, RoleTarget, assignment_id,
 };
 
 pub const ARCHITECTURE_ROLE_CLASSIFIER_VERSION: &str =
@@ -33,11 +35,35 @@ pub const ARCHITECTURE_ROLE_CLASSIFIER_VERSION: &str =
 pub struct ArchitectureRoleClassificationInput<'a> {
     pub repo_id: &'a str,
     pub generation_seq: u64,
-    pub affected_paths: BTreeSet<String>,
-    pub removed_paths: BTreeSet<String>,
+    pub scope: ArchitectureRoleClassificationScope,
     pub files: &'a [CurrentCanonicalFileRecord],
     pub artefacts: &'a [CurrentCanonicalArtefactRecord],
     pub dependency_edges: &'a [CurrentCanonicalEdgeRecord],
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArchitectureRoleClassificationScope {
+    pub full_reconcile: bool,
+    pub affected_paths: BTreeSet<String>,
+    pub removed_paths: BTreeSet<String>,
+}
+
+pub fn role_classification_scope_from_request(
+    request: &crate::host::capability_host::CurrentStateConsumerRequest,
+) -> ArchitectureRoleClassificationScope {
+    if request.reconcile_mode == crate::host::capability_host::ReconcileMode::FullReconcile {
+        return ArchitectureRoleClassificationScope {
+            full_reconcile: true,
+            affected_paths: BTreeSet::new(),
+            removed_paths: BTreeSet::new(),
+        };
+    }
+
+    ArchitectureRoleClassificationScope {
+        full_reconcile: false,
+        affected_paths: affected_role_paths_from_request(request),
+        removed_paths: removed_role_paths_from_request(request),
+    }
 }
 
 pub fn affected_role_paths_from_request(
@@ -207,14 +233,37 @@ pub async fn classify_architecture_roles_for_current_state(
     let extraction = extract_architecture_role_facts(ArchitectureRoleFactExtractionInput {
         repo_id: input.repo_id,
         generation_seq: input.generation_seq,
-        affected_paths: &input.affected_paths,
+        affected_paths: &input.scope.affected_paths,
         files: input.files,
         artefacts: input.artefacts,
         dependency_edges: input.dependency_edges,
     });
+    let target_summaries = target_summaries_from_facts(&extraction.facts);
 
+    let live_paths = live_role_paths(input.files, input.artefacts);
+    let refreshed_path_set = extraction
+        .refreshed_paths
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let skipped_unchanged_paths = if input.scope.full_reconcile {
+        0
+    } else {
+        live_paths
+            .iter()
+            .filter(|path| !refreshed_path_set.contains(*path))
+            .count()
+    };
+    let mut removed_assignment_paths = input.scope.removed_paths.clone();
+    if input.scope.full_reconcile {
+        for path in
+            load_active_assignment_paths_not_in(relational, input.repo_id, &live_paths).await?
+        {
+            removed_assignment_paths.insert(path);
+        }
+    }
     let fact_and_signal_paths =
-        refreshed_paths_with_removals(&extraction.refreshed_paths, &input.removed_paths);
+        refreshed_paths_with_removals(&extraction.refreshed_paths, &removed_assignment_paths);
     let rules = load_active_detection_rules(relational, input.repo_id).await?;
     let compiled = compile_detection_rules(rules.clone())?;
     let rule_result = evaluate_rules_over_facts(&compiled, &extraction.facts)?;
@@ -224,7 +273,7 @@ pub async fn classify_architecture_roles_for_current_state(
         AssignmentAggregationConfig::default(),
     );
     let assignment_refresh_paths =
-        assignment_refresh_paths(&extraction.refreshed_paths, &input.removed_paths);
+        assignment_refresh_paths(&extraction.refreshed_paths, &removed_assignment_paths);
     let previous_assignments =
         load_assignments_for_paths(relational, input.repo_id, &assignment_refresh_paths).await?;
     let previous_by_id = previous_assignments
@@ -309,8 +358,33 @@ pub async fn classify_architecture_roles_for_current_state(
         .filter(|assignment| !adjudicated_targets.contains(&assignment.target))
         .cloned()
         .collect::<Vec<_>>();
-    let adjudication_requests = adjudication_requests_from_assignments(&adjudication_candidates);
-    let removed_paths = input.removed_paths.iter().cloned().collect::<Vec<_>>();
+    let mut adjudication_requests =
+        adjudication_requests_from_assignments(&adjudication_candidates);
+    let mut seen_adjudication_scopes = adjudication_requests
+        .iter()
+        .map(RoleAdjudicationRequest::scope_key)
+        .collect::<BTreeSet<_>>();
+    let mut unknown_or_high_impact_candidates = 0usize;
+    let unknown_request_paths =
+        if input.scope.full_reconcile || input.scope.affected_paths.is_empty() {
+            None
+        } else {
+            Some(&input.scope.affected_paths)
+        };
+    for request in unknown_or_high_impact_requests(
+        input.repo_id,
+        input.generation_seq,
+        target_summaries,
+        &assignments,
+        &adjudicated_targets,
+        unknown_request_paths,
+    ) {
+        if seen_adjudication_scopes.insert(request.scope_key()) {
+            unknown_or_high_impact_candidates += 1;
+            adjudication_requests.push(request);
+        }
+    }
+    let removed_paths = removed_assignment_paths.iter().cloned().collect::<Vec<_>>();
     let write_counts = replace_role_classification_state(
         relational,
         RoleClassificationStateReplacement {
@@ -330,19 +404,120 @@ pub async fn classify_architecture_roles_for_current_state(
 
     Ok(ArchitectureRoleReconcileOutcome {
         metrics: ArchitectureRoleReconcileMetrics {
-            affected_paths: input.affected_paths.len(),
+            full_reconcile: input.scope.full_reconcile,
+            affected_paths: input.scope.affected_paths.len(),
+            refreshed_paths: extraction.refreshed_paths.len(),
+            removed_paths: removed_assignment_paths.len(),
+            skipped_unchanged_paths,
             facts_written: write_counts.facts_written,
-            facts_deleted: 0,
+            facts_deleted: write_counts.facts_deleted,
             rules_loaded: rules.len(),
             signals_written: write_counts.signals_written,
+            signals_deleted: write_counts.signals_deleted,
             assignments_written: write_counts.assignments_written,
             assignments_marked_stale: write_counts.assignments_marked_stale,
             assignment_history_rows: write_counts.assignment_history_rows,
-            adjudication_candidates: adjudication_candidates.len(),
+            adjudication_candidates: adjudication_candidates.len()
+                + unknown_or_high_impact_candidates,
         },
         warnings: Vec::new(),
         adjudication_requests,
     })
+}
+
+#[derive(Debug, Clone)]
+struct RoleTargetSummary {
+    target: RoleTarget,
+    language: Option<String>,
+    canonical_kind: Option<String>,
+    high_impact: bool,
+}
+
+fn target_summaries_from_facts(
+    facts: &[ArchitectureArtefactFact],
+) -> BTreeMap<RoleTarget, RoleTargetSummary> {
+    let mut summaries = BTreeMap::new();
+    for fact in facts {
+        let entry = summaries
+            .entry(fact.target.clone())
+            .or_insert_with(|| RoleTargetSummary {
+                target: fact.target.clone(),
+                language: fact.language.clone(),
+                canonical_kind: None,
+                high_impact: false,
+            });
+        if entry.language.is_none() {
+            entry.language = fact.language.clone();
+        }
+        if fact.fact_kind == "artefact" && fact.fact_key == "canonical_kind" {
+            entry.canonical_kind = Some(fact.fact_value.clone());
+        }
+        if fact.fact_kind == "path"
+            && fact.fact_key == "full"
+            && (fact.fact_value == "main.rs" || fact.fact_value.ends_with("/main.rs"))
+        {
+            entry.high_impact = true;
+        }
+        if fact.fact_kind == "symbol" && fact.fact_key == "name" && fact.fact_value == "main" {
+            entry.high_impact = true;
+        }
+    }
+    summaries
+}
+
+fn unknown_or_high_impact_requests(
+    repo_id: &str,
+    generation_seq: u64,
+    target_summaries: BTreeMap<RoleTarget, RoleTargetSummary>,
+    deterministic_assignments: &[ArchitectureRoleAssignment],
+    authoritative_targets: &BTreeSet<RoleTarget>,
+    eligible_paths: Option<&BTreeSet<String>>,
+) -> Vec<RoleAdjudicationRequest> {
+    let assigned_targets = deterministic_assignments
+        .iter()
+        .map(|assignment| assignment.target.clone())
+        .collect::<BTreeSet<_>>();
+    let assigned_paths = deterministic_assignments
+        .iter()
+        .map(|assignment| assignment.target.path.clone())
+        .collect::<BTreeSet<_>>();
+
+    target_summaries
+        .into_values()
+        .filter(|summary| {
+            eligible_paths
+                .map(|paths| paths.contains(&summary.target.path))
+                .unwrap_or(true)
+        })
+        .filter(|summary| !assigned_targets.contains(&summary.target))
+        .filter(|summary| !assigned_paths.contains(&summary.target.path))
+        .filter(|summary| !authoritative_targets.contains(&summary.target))
+        .map(|summary| {
+            let reason = select_adjudication_reason(&DeterministicRoleOutcomeInput {
+                classification_known: false,
+                best_confidence: None,
+                has_conflict: false,
+                high_impact: summary.high_impact,
+                novel_pattern: false,
+                manual_review_requested: false,
+            })
+            .unwrap_or(AdjudicationReason::Unknown);
+            let target = summary.target;
+            RoleAdjudicationRequest {
+                repo_id: repo_id.to_string(),
+                generation: generation_seq,
+                artefact_id: target.artefact_id,
+                symbol_id: target.symbol_id,
+                path: Some(target.path),
+                language: summary.language,
+                canonical_kind: summary.canonical_kind,
+                reason,
+                deterministic_confidence: None,
+                candidate_role_ids: Vec::new(),
+                current_assignment: None,
+            }
+        })
+        .collect()
 }
 
 pub fn adjudication_requests_from_assignments(
@@ -426,6 +601,17 @@ fn assignment_refresh_paths(
         .iter()
         .filter(|path| !removed_paths.contains(path.as_str()))
         .cloned()
+        .collect()
+}
+
+fn live_role_paths(
+    files: &[CurrentCanonicalFileRecord],
+    artefacts: &[CurrentCanonicalArtefactRecord],
+) -> BTreeSet<String> {
+    files
+        .iter()
+        .map(|file| file.path.clone())
+        .chain(artefacts.iter().map(|artefact| artefact.path.clone()))
         .collect()
 }
 

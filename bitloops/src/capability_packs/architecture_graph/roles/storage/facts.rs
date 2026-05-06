@@ -75,7 +75,7 @@ pub async fn delete_role_facts_for_paths(
     if paths.is_empty() {
         return Ok(0);
     }
-    let before = count_facts_for_paths(relational, repo_id, paths).await?;
+    let before = count_role_facts_for_paths(relational, repo_id, paths).await?;
     relational
         .exec_serialized(&delete_facts_for_paths_sql(repo_id, paths))
         .await
@@ -99,7 +99,7 @@ pub(super) fn delete_facts_for_paths_sql(repo_id: &str, paths: &[String]) -> Str
     )
 }
 
-async fn count_facts_for_paths(
+pub async fn count_role_facts_for_paths(
     relational: &RelationalStorage,
     repo_id: &str,
     paths: &[String],

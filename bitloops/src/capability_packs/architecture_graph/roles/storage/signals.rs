@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde_json::Value;
 
 use crate::host::devql::{RelationalStorage, sql_json_value, sql_now};
 
@@ -41,6 +42,34 @@ pub(super) fn delete_signals_for_paths_sql(repo_id: &str, paths: &[String]) -> S
             .collect::<Vec<_>>()
             .join(", ")
     )
+}
+
+pub async fn count_role_signals_for_paths(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    paths: &[String],
+) -> Result<usize> {
+    if paths.is_empty() {
+        return Ok(0);
+    }
+    let sql = format!(
+        "SELECT COUNT(*) AS count
+         FROM architecture_role_rule_signals_current
+         WHERE repo_id = {} AND path IN ({});",
+        sql_text(repo_id),
+        paths
+            .iter()
+            .map(|path| sql_text(path))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let rows = relational.query_rows(&sql).await?;
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("count"))
+        .and_then(Value::as_i64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0))
 }
 
 pub(super) fn insert_signal_sql(

@@ -279,6 +279,8 @@ pub struct DevqlArchitectureRolesArgs {
 pub enum DevqlArchitectureRolesCommand {
     /// Seed a repository-specific architecture role taxonomy.
     Seed(DevqlArchitectureRolesSeedArgs),
+    /// Re-run architecture role classification from current canonical state.
+    Classify(DevqlArchitectureRolesClassifyArgs),
     /// Show ambiguous role adjudication queue and needs-review assignments.
     Status(DevqlArchitectureRolesStatusArgs),
     /// Rename a role's display name.
@@ -301,6 +303,29 @@ pub enum DevqlArchitectureRolesCommand {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct DevqlArchitectureRolesSeedArgs {}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesClassifyArgs {
+    /// Reclassify all current files and artefacts.
+    #[arg(long, conflicts_with = "paths")]
+    pub full: bool,
+
+    /// Reclassify selected paths from current canonical state.
+    #[arg(long, value_delimiter = ',', conflicts_with = "full")]
+    pub paths: Option<Vec<String>>,
+
+    /// Mark active role assignments whose paths no longer exist in current canonical state as stale.
+    #[arg(long, default_value_t = false)]
+    pub repair_stale: bool,
+
+    /// Enqueue ambiguous/high-impact results for asynchronous LLM adjudication.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub enqueue_adjudication: bool,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlArchitectureRolesStatusArgs {

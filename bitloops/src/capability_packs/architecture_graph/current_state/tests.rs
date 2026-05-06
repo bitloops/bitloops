@@ -141,6 +141,29 @@ impl crate::host::capability_host::gateways::CapabilityWorkplaneGateway
     }
 }
 
+#[derive(Default)]
+struct FailingWorkplaneGateway;
+
+impl crate::host::capability_host::gateways::CapabilityWorkplaneGateway
+    for FailingWorkplaneGateway
+{
+    fn enqueue_jobs(
+        &self,
+        _jobs: Vec<crate::host::capability_host::gateways::CapabilityWorkplaneJob>,
+    ) -> anyhow::Result<crate::host::capability_host::gateways::CapabilityWorkplaneEnqueueResult>
+    {
+        Err(anyhow::anyhow!("queue offline"))
+    }
+
+    fn mailbox_status(
+        &self,
+    ) -> anyhow::Result<
+        BTreeMap<String, crate::host::capability_host::gateways::CapabilityMailboxStatus>,
+    > {
+        Ok(BTreeMap::new())
+    }
+}
+
 struct ArchitectureConsumerTestContext {
     _temp: tempfile::TempDir,
     sqlite_path: std::path::PathBuf,
@@ -285,6 +308,48 @@ async fn upsert_path_suffix_rule(
         },
     )
     .await
+}
+
+fn role_reconcile_request(
+    repo_id: &str,
+    repo_root: &std::path::Path,
+    generation_seq: u64,
+    reconcile_mode: crate::host::capability_host::ReconcileMode,
+    affected_paths: Vec<String>,
+) -> CurrentStateConsumerRequest {
+    CurrentStateConsumerRequest {
+        run_id: Some(format!("run-{generation_seq}")),
+        repo_id: repo_id.to_string(),
+        repo_root: repo_root.to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some(format!("abc{generation_seq}")),
+        from_generation_seq_exclusive: generation_seq.saturating_sub(1),
+        to_generation_seq_inclusive: generation_seq,
+        reconcile_mode,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths,
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    }
+}
+
+async fn active_role_assignment_generation(
+    storage: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    path: &str,
+) -> anyhow::Result<u64> {
+    crate::capability_packs::architecture_graph::roles::storage::load_assignments_for_path(
+        storage, repo_id, path,
+    )
+    .await?
+    .into_iter()
+    .find(|assignment| {
+        assignment.status
+            == crate::capability_packs::architecture_graph::roles::AssignmentStatus::Active
+    })
+    .map(|assignment| assignment.generation_seq)
+    .ok_or_else(|| anyhow::anyhow!("missing active role assignment for `{path}`"))
 }
 
 #[tokio::test]
@@ -588,6 +653,227 @@ async fn current_state_reconcile_enqueues_conflict_role_adjudication_job() -> an
             .and_then(Value::as_u64),
         Some(1)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_enqueues_high_impact_role_adjudication_job() -> anyhow::Result<()>
+{
+    let repo_id = "repo-high-impact-current-state";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/main.rs", "rust")?;
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: repo_id.to_string(),
+        repo_root: test._temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 33,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: vec!["src/main.rs".to_string()],
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let result = ArchitectureGraphCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    let jobs = test.workplane.jobs();
+    assert_eq!(jobs.len(), 1);
+    let payload: crate::capability_packs::architecture_graph::roles::RoleAdjudicationMailboxPayload =
+        serde_json::from_value(jobs[0].payload.clone())?;
+    assert_eq!(
+        payload.request.reason,
+        crate::capability_packs::architecture_graph::roles::AdjudicationReason::HighImpact
+    );
+    assert_eq!(payload.request.path.as_deref(), Some("src/main.rs"));
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("role_adjudication_selected"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_warns_when_role_adjudication_enqueue_fails() -> anyhow::Result<()>
+{
+    let repo_id = "repo-role-enqueue-failure";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    upsert_test_role(
+        test.storage.as_ref(),
+        repo_id,
+        "role-api-enqueue-failure",
+        "api",
+    )
+    .await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-api-enqueue-failure",
+        "rule-api-enqueue-failure",
+        "api.rs",
+        0.6,
+    )
+    .await?;
+    let mut context = test.context.clone();
+    context.workplane = std::sync::Arc::new(FailingWorkplaneGateway);
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: repo_id.to_string(),
+        repo_root: test._temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 35,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: vec!["src/api.rs".to_string()],
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let result = ArchitectureGraphCurrentStateConsumer
+        .reconcile(&request, &context)
+        .await?;
+
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| { warning.contains("Architecture role adjudication enqueue failed") })
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("role_adjudication_enqueue_failed"))
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_skips_unchanged_role_paths() -> anyhow::Result<()> {
+    let repo_id = "repo-role-delta-skip";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/changed.rs", "rust")?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/unchanged.rs", "rust")?;
+    upsert_test_role(
+        test.storage.as_ref(),
+        repo_id,
+        "role-rust-source",
+        "rust-source",
+    )
+    .await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-rust-source",
+        "rule-rust-source",
+        ".rs",
+        0.9,
+    )
+    .await?;
+
+    let initial = role_reconcile_request(
+        repo_id,
+        test._temp.path(),
+        10,
+        crate::host::capability_host::ReconcileMode::FullReconcile,
+        Vec::new(),
+    );
+    ArchitectureGraphCurrentStateConsumer
+        .reconcile(&initial, &test.context)
+        .await?;
+
+    let delta = role_reconcile_request(
+        repo_id,
+        test._temp.path(),
+        11,
+        crate::host::capability_host::ReconcileMode::MergedDelta,
+        vec!["src/changed.rs".to_string()],
+    );
+    ArchitectureGraphCurrentStateConsumer
+        .reconcile(&delta, &test.context)
+        .await?;
+
+    let changed_generation =
+        active_role_assignment_generation(test.storage.as_ref(), repo_id, "src/changed.rs").await?;
+    let unchanged_generation =
+        active_role_assignment_generation(test.storage.as_ref(), repo_id, "src/unchanged.rs")
+            .await?;
+
+    assert_eq!(changed_generation, 11);
+    assert_ne!(unchanged_generation, 11);
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_full_refreshes_all_role_paths() -> anyhow::Result<()> {
+    let repo_id = "repo-role-full-refresh";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/changed.rs", "rust")?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/unchanged.rs", "rust")?;
+    upsert_test_role(
+        test.storage.as_ref(),
+        repo_id,
+        "role-rust-source",
+        "rust-source",
+    )
+    .await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-rust-source",
+        "rule-rust-source",
+        ".rs",
+        0.9,
+    )
+    .await?;
+
+    let initial = role_reconcile_request(
+        repo_id,
+        test._temp.path(),
+        10,
+        crate::host::capability_host::ReconcileMode::FullReconcile,
+        Vec::new(),
+    );
+    ArchitectureGraphCurrentStateConsumer
+        .reconcile(&initial, &test.context)
+        .await?;
+
+    let full = role_reconcile_request(
+        repo_id,
+        test._temp.path(),
+        12,
+        crate::host::capability_host::ReconcileMode::FullReconcile,
+        vec!["src/changed.rs".to_string()],
+    );
+    ArchitectureGraphCurrentStateConsumer
+        .reconcile(&full, &test.context)
+        .await?;
+
+    let changed_generation =
+        active_role_assignment_generation(test.storage.as_ref(), repo_id, "src/changed.rs").await?;
+    let unchanged_generation =
+        active_role_assignment_generation(test.storage.as_ref(), repo_id, "src/unchanged.rs")
+            .await?;
+
+    assert_eq!(changed_generation, 12);
+    assert_eq!(unchanged_generation, 12);
     Ok(())
 }
 

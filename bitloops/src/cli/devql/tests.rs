@@ -682,6 +682,41 @@ fn devql_cli_parses_sync_enqueue_require_daemon_flag() {
 }
 
 #[test]
+fn devql_cli_parses_architecture_roles_classify_command() {
+    let classify_full = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "classify",
+        "--full",
+    ]);
+    let DevqlArchitectureRolesCommand::Classify(classify_full) = classify_full else {
+        panic!("expected architecture roles classify command");
+    };
+    assert!(classify_full.full);
+
+    let classify_paths = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "classify",
+        "--paths",
+        "src/main.rs,src/lib.rs",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Classify(classify_paths) = classify_paths else {
+        panic!("expected architecture roles classify command");
+    };
+    assert_eq!(
+        classify_paths.paths,
+        Some(vec!["src/main.rs".to_string(), "src/lib.rs".to_string()])
+    );
+    assert!(classify_paths.json);
+}
+
+#[test]
 fn devql_cli_rejects_conflicting_sync_enqueue_modes() {
     let cases = vec![
         vec![

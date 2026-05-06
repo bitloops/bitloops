@@ -1,11 +1,15 @@
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::host::devql::{RelationalStorage, sql_json_value, sql_now};
 
-use super::facts::{delete_facts_for_paths_sql, insert_fact_sql};
+use super::facts::{count_role_facts_for_paths, delete_facts_for_paths_sql, insert_fact_sql};
 use super::rows::{assignment_from_row, sql_opt_i64, sql_opt_text, sql_text};
-use super::signals::{delete_signals_for_paths_sql, insert_signal_sql};
+use super::signals::{
+    count_role_signals_for_paths, delete_signals_for_paths_sql, insert_signal_sql,
+};
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRoleAssignment, ArchitectureRoleRuleSignal,
     AssignmentSource, AssignmentStatus, RoleLifecycle, assignment_history_id, assignment_id,
@@ -43,7 +47,9 @@ pub struct AssignmentHistoryWrite {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RoleClassificationStateWriteCounts {
     pub facts_written: usize,
+    pub facts_deleted: usize,
     pub signals_written: usize,
+    pub signals_deleted: usize,
     pub assignments_written: usize,
     pub assignments_marked_stale: usize,
     pub assignment_history_rows: usize,
@@ -65,6 +71,18 @@ pub async fn replace_role_classification_state(
     relational: &RelationalStorage,
     replacement: RoleClassificationStateReplacement<'_>,
 ) -> Result<RoleClassificationStateWriteCounts> {
+    let facts_deleted = count_role_facts_for_paths(
+        relational,
+        replacement.repo_id,
+        replacement.fact_and_signal_paths,
+    )
+    .await?;
+    let signals_deleted = count_role_signals_for_paths(
+        relational,
+        replacement.repo_id,
+        replacement.fact_and_signal_paths,
+    )
+    .await?;
     let removed_active_assignments = active_assignments_for_paths(
         relational,
         replacement.repo_id,
@@ -140,7 +158,9 @@ pub async fn replace_role_classification_state(
 
     Ok(RoleClassificationStateWriteCounts {
         facts_written: replacement.facts.len(),
+        facts_deleted,
         signals_written: replacement.signals.len(),
+        signals_deleted,
         assignments_written: replacement.assignments.len(),
         assignments_marked_stale: removed_active_assignments.len(),
         assignment_history_rows: all_history_writes.len(),
@@ -274,6 +294,33 @@ pub async fn load_assignments_for_paths(
         .into_iter()
         .map(assignment_from_row)
         .collect()
+}
+
+pub async fn load_active_assignment_paths_not_in(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    live_paths: &BTreeSet<String>,
+) -> Result<Vec<String>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT DISTINCT path
+             FROM architecture_role_assignments_current
+             WHERE repo_id = {} AND status = 'active'
+             ORDER BY path ASC;",
+            sql_text(repo_id)
+        ))
+        .await
+        .context("loading active architecture role assignment paths")?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.get("path")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .filter(|path| !live_paths.contains(path))
+        .collect())
 }
 
 pub async fn load_current_assignment_by_id(
@@ -493,7 +540,7 @@ pub async fn retire_role_and_mark_assignments(
     let mut statements = Vec::with_capacity(active_assignments.len() + 2);
     statements.push(format!(
         "UPDATE architecture_roles
-         SET lifecycle = {lifecycle}, lifecycle_status = {lifecycle}, updated_at = {now}
+         SET lifecycle_status = {lifecycle}, updated_at = {now}
          WHERE repo_id = {repo_id} AND role_id = {role_id};",
         repo_id = sql_text(repo_id),
         role_id = sql_text(role_id),

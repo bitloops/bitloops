@@ -6,13 +6,16 @@ use crate::capability_packs::architecture_graph::roles::rules::{
     compile_detection_rules, evaluate_rules_over_facts,
 };
 use crate::capability_packs::architecture_graph::roles::storage::{
-    list_roles, load_active_detection_rules, load_role_by_id, load_role_rules,
-    update_role_rule_lifecycle, upsert_assignment,
+    ArchitectureRoleAliasRecord, ArchitectureRoleRecord, deterministic_alias_id,
+    deterministic_role_id, list_roles, load_active_detection_rules, load_role_by_id,
+    load_role_rules, normalize_role_alias, update_role_rule_lifecycle, upsert_assignment,
+    upsert_role,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
-    ArchitectureRoleAssignment, AssignmentPriority, AssignmentSource, AssignmentStatus,
-    RoleRuleCandidateSelector, RoleRuleCondition, RoleRuleScore, RoleTarget,
-    SeededArchitectureRole, SeededArchitectureRuleCandidate, assignment_id,
+    ArchitectureRoleAssignment, ArchitectureRoleReconcileMetrics, AssignmentPriority,
+    AssignmentSource, AssignmentStatus, RoleRuleCandidateSelector, RoleRuleCondition,
+    RoleRuleScore, RoleTarget, SeededArchitectureRole, SeededArchitectureRuleCandidate,
+    SeededArchitectureTaxonomy, assignment_id,
 };
 use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
 use crate::host::devql::RelationalStorage;
@@ -146,6 +149,39 @@ fn role_adjudication_queue_item_keeps_malformed_payload_as_parse_error() {
     assert!(item.reason.is_none());
     assert!(item.parse_error.is_some());
     assert_eq!(item.last_error.as_deref(), Some("schema mismatch"));
+}
+
+#[test]
+fn roles_classify_formats_json_metrics() -> Result<()> {
+    let output = RolesClassifyOutput {
+        roles: ArchitectureRoleReconcileMetrics {
+            full_reconcile: true,
+            affected_paths: 0,
+            refreshed_paths: 2,
+            removed_paths: 0,
+            skipped_unchanged_paths: 0,
+            facts_written: 4,
+            facts_deleted: 0,
+            rules_loaded: 1,
+            signals_written: 0,
+            signals_deleted: 0,
+            assignments_written: 0,
+            assignments_marked_stale: 0,
+            assignment_history_rows: 0,
+            adjudication_candidates: 0,
+        },
+        role_adjudication_selected: 0,
+        role_adjudication_enqueued: 0,
+        role_adjudication_deduped: 0,
+        warnings: Vec::new(),
+    };
+
+    let rendered = format_roles_classify_output(&output, true)?;
+    let parsed: serde_json::Value = serde_json::from_str(&rendered)?;
+
+    assert_eq!(parsed["roles"]["full_reconcile"], true);
+    assert_eq!(parsed["roles"]["adjudication_candidates"], 0);
+    Ok(())
 }
 
 #[tokio::test]
