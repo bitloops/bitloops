@@ -574,6 +574,100 @@ fn update_last_task_id_from_output_read_only_mode_can_seed_empty_world_once() {
 }
 
 #[test]
+fn run_command_capture_logs_elapsed_millis() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let terminal_log_path = temp.path().join("terminal.log");
+    let world = QatWorld {
+        terminal_log_path: Some(terminal_log_path.clone()),
+        ..Default::default()
+    };
+
+    let output = run_command_capture(&world, "git version", {
+        let mut command = Command::new("git");
+        command.arg("--version");
+        command
+    })
+    .expect("run command");
+    assert!(output.status.success());
+
+    let terminal_log = fs::read_to_string(terminal_log_path).expect("read terminal log");
+    assert!(
+        terminal_log.contains("elapsed_ms:"),
+        "terminal log should include command elapsed timing\n{terminal_log}"
+    );
+}
+
+#[test]
+fn finish_run_metadata_records_completed_at_and_duration() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = run_dir.join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let metadata_path = run_dir.join("run.json");
+    let terminal_log_path = run_dir.join("terminal.log");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+    let world = QatWorld {
+        scenario_name: Some("Scenario timing".to_string()),
+        scenario_slug: Some("scenario-timing".to_string()),
+        flow_name: Some("ScenarioTiming".to_string()),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: temp.path().join("bitloops"),
+            suite_root,
+        })),
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir),
+        terminal_log_path: Some(terminal_log_path),
+        metadata_path: Some(metadata_path.clone()),
+        ..Default::default()
+    };
+
+    write_run_metadata(&world).expect("write run metadata");
+    finish_run_metadata(&world).expect("finish run metadata");
+
+    let payload = fs::read_to_string(metadata_path).expect("read metadata");
+    let metadata: serde_json::Value = serde_json::from_str(&payload).expect("parse metadata");
+    assert!(
+        metadata
+            .get("completed_at")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "run metadata should include completed_at\n{payload}"
+    );
+    assert!(
+        metadata
+            .get("duration_ms")
+            .and_then(|value| value.as_u64())
+            .is_some(),
+        "run metadata should include duration_ms\n{payload}"
+    );
+}
+
+#[test]
+fn append_timing_log_records_label_elapsed_and_details() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let terminal_log_path = temp.path().join("terminal.log");
+    let world = QatWorld {
+        terminal_log_path: Some(terminal_log_path.clone()),
+        ..Default::default()
+    };
+
+    append_timing_log(
+        &world,
+        "daemon startup",
+        StdDuration::from_millis(1234),
+        "port=0",
+    )
+    .expect("append timing log");
+
+    let terminal_log = fs::read_to_string(terminal_log_path).expect("read terminal log");
+    assert!(
+        terminal_log.contains("QAT timing: daemon startup elapsed_ms=1234 port=0"),
+        "terminal log should include timing label, elapsed, and details\n{terminal_log}"
+    );
+}
+
+#[test]
 fn parse_task_briefs_reads_task_summary_lines() {
     let stdout = "task task-123: kind=sync status=completed repo=bitloops\n\
 task task-456: kind=ingest status=queued repo=bitloops";

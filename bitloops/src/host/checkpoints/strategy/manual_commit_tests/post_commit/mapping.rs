@@ -81,6 +81,48 @@ pub(crate) fn post_commit_creates_checkpoint_mapping_and_checkpoint() {
 }
 
 #[test]
+pub(crate) fn post_commit_devql_refresh_disabled_env_still_maps_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    init_devql_schema(dir.path());
+    seed_interaction_turn(
+        dir.path(),
+        "pc-refresh-disabled",
+        "pc-refresh-disabled-turn",
+        &["src/change.rs"],
+    );
+
+    fs::create_dir_all(dir.path().join("src")).unwrap();
+    fs::write(
+        dir.path().join("src/change.rs"),
+        "pub fn change() -> usize { 1 }\n",
+    )
+    .unwrap();
+    git_command()
+        .args(["add", "."])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    git_command()
+        .args(["commit", "-m", "fix: map quiet commit"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
+
+    let strategy = ManualCommitStrategy::new(dir.path());
+    with_env_vars(
+        &[("BITLOOPS_DISABLE_POST_COMMIT_DEVQL_REFRESH", Some("1"))],
+        || strategy.post_commit().unwrap(),
+    );
+
+    assert!(
+        query_commit_checkpoint_id(dir.path(), &head_sha).is_some(),
+        "post_commit should still derive and map a checkpoint when only DevQL refresh is disabled"
+    );
+}
+
+#[test]
 pub(crate) fn post_commit_falls_back_to_local_spool_when_interaction_repository_is_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
