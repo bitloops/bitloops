@@ -105,8 +105,10 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     stop_daemon_for_scenario(world).ok();
 
     let stderr_log_path = daemon_stderr_log_path(world.run_dir());
+    let daemon_started = Instant::now();
     let mut attempt_errors = Vec::new();
     for port in daemon_candidate_ports(world.run_dir()) {
+        let attempt_started = Instant::now();
         append_world_log(
             world,
             &format!("Starting foreground daemon for scenario using port candidate {port}.\n"),
@@ -115,6 +117,16 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
         let mut child = spawn_daemon_process(world, &port, &stderr_log_path)?;
         match wait_for_daemon_ready(world.run_dir(), &mut child, &stderr_log_path) {
             Ok((runtime_state_path, runtime_state)) => {
+                append_timing_log(
+                    world,
+                    "daemon startup",
+                    daemon_started.elapsed(),
+                    format!(
+                        "port={port} attempts={} pid={}",
+                        attempt_errors.len() + 1,
+                        runtime_state.pid
+                    ),
+                )?;
                 append_world_log(
                     world,
                     &format!(
@@ -138,6 +150,12 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
                 return Ok(());
             }
             Err(err) => {
+                append_timing_log(
+                    world,
+                    "daemon startup attempt",
+                    attempt_started.elapsed(),
+                    format!("port={port} status=failed"),
+                )?;
                 append_world_log(
                     world,
                     &format!("Daemon startup attempt failed for port candidate {port}: {err:#}\n"),
@@ -2101,6 +2119,12 @@ pub fn wait_for_devql_task_queue_idle_for_repo(
         "DevQL task queue reached idle state: queued={}, running={}",
         status.queued, status.running
     ));
+    append_timing_log(
+        world,
+        "wait DevQL task queue idle",
+        started.elapsed(),
+        format!("repo={repo_name} attempts={attempts}"),
+    )?;
     Ok(())
 }
 
@@ -2110,6 +2134,7 @@ pub fn wait_for_completed_sync_task_source_for_repo(
     expected_source: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
     let expected_source = parse_devql_task_source(expected_source)?;
     let source_key = expected_source.to_string();
     if let Some(snapshot_count) = world
@@ -2137,6 +2162,12 @@ pub fn wait_for_completed_sync_task_source_for_repo(
             |exists| format!("exists={exists}"),
         )?;
     }
+    append_timing_log(
+        world,
+        "wait completed sync task source",
+        started.elapsed(),
+        format!("repo={repo_name} source={expected_source}"),
+    )?;
     Ok(())
 }
 
@@ -2148,6 +2179,7 @@ pub fn wait_for_completed_sync_task_source_summary_field_greater_than_since_snap
     min: usize,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
     let expected_source = parse_devql_task_source(expected_source)?;
     let source_key = expected_source.to_string();
     let snapshot_count = world
@@ -2177,6 +2209,12 @@ pub fn wait_for_completed_sync_task_source_summary_field_greater_than_since_snap
         },
         |tasks| completed_sync_task_summary_field_exceeds_min(tasks, field, min),
         |tasks| format_completed_sync_task_summary_diagnostics(tasks),
+    )?;
+    append_timing_log(
+        world,
+        "wait completed sync task summary",
+        started.elapsed(),
+        format!("repo={repo_name} source={expected_source} field={}", field.label()),
     )?;
     Ok(())
 }
@@ -5623,6 +5661,7 @@ pub fn assert_artefacts_current_contains_path_eventually(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
     let expected = format!("artefacts_current to eventually contain `{path}`");
     let first_attempt = wait_for_qat_condition(
         qat_eventual_timeout(),
@@ -5654,6 +5693,12 @@ pub fn assert_artefacts_current_contains_path_eventually(
             )
         })?;
     }
+    append_timing_log(
+        world,
+        "wait artefacts_current contains",
+        started.elapsed(),
+        format!("repo={repo_name} path={path} nudge=allowed"),
+    )?;
     Ok(())
 }
 
@@ -5663,6 +5708,7 @@ pub fn assert_artefacts_current_contains_path_eventually_without_nudge(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
     wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
@@ -5670,6 +5716,12 @@ pub fn assert_artefacts_current_contains_path_eventually_without_nudge(
         || assert_artefacts_current_contains_path(world, repo_name, path),
         |_| true,
         |_| format!("artefacts_current contains `{path}`"),
+    )?;
+    append_timing_log(
+        world,
+        "wait artefacts_current contains",
+        started.elapsed(),
+        format!("repo={repo_name} path={path} nudge=disabled"),
     )?;
     Ok(())
 }
@@ -5694,6 +5746,7 @@ pub fn assert_artefacts_current_lacks_path_eventually(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
     wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
@@ -5704,6 +5757,12 @@ pub fn assert_artefacts_current_lacks_path_eventually(
         },
         |ready| *ready,
         |ready| format!("ready={ready}"),
+    )?;
+    append_timing_log(
+        world,
+        "wait artefacts_current lacks",
+        started.elapsed(),
+        format!("repo={repo_name} path={path}"),
     )?;
     Ok(())
 }
@@ -5752,6 +5811,7 @@ pub fn assert_current_file_state_content_id_changed_eventually_for_path(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
     wait_for_qat_condition(
         qat_eventual_timeout(),
         qat_eventual_poll_interval(),
@@ -5764,6 +5824,12 @@ pub fn assert_current_file_state_content_id_changed_eventually_for_path(
         },
         |ready| *ready,
         |ready| format!("ready={ready}"),
+    )?;
+    append_timing_log(
+        world,
+        "wait current_file_state content id changed",
+        started.elapsed(),
+        format!("repo={repo_name} path={path}"),
     )?;
     Ok(())
 }

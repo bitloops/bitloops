@@ -82,7 +82,13 @@ cargo qat-onboarding
 cargo qat-agents-checkpoints
 ```
 
-All of those run through `cargo-nextest` from the repository root and enable the `qat-tests` feature on the `bitloops` crate.
+All of those route through `xtask qat`, which runs the matching `cargo-nextest` target from the repository root and enables the `qat-tests` feature on the `bitloops` crate. By default they keep serial QAT behavior. To shard a lane across multiple test-binary processes, pass `--parallel N` to the same alias:
+
+```bash
+cargo qat-devql-sync --parallel 5
+cargo qat-devql-sync-producer --parallel 5
+cargo qat-develop-gate --parallel 5
+```
 
 There is also an internal-only harness target:
 
@@ -103,7 +109,7 @@ Examples:
 
 - `qat_agent_smoke` runs `Suite::AgentSmoke`
 - `qat_devql_sync` runs `Suite::DevqlSync`
-- `qat_devql_sync_producer` runs `Suite::DevqlSync` filtered to `@sync_producer and not @sync_known_gap`
+- `qat_devql_sync_producer` runs `Suite::DevqlSync` filtered to `@sync_producer`
 - `qat_develop_gate` runs a serial filtered orchestration entrypoint instead of a single suite
 - `qat` runs the bundled multi-suite lane
 
@@ -180,7 +186,7 @@ Purpose of the develop gate:
 
 In practice, `cargo qat-develop-gate` walks the existing suite set above, applies an explicit Cucumber tag expression of `@develop_gate`, and runs only the tagged subset. That is how the same scenarios can participate both in their full focused lane and in the smaller CI gate for `develop`.
 
-For DevQL Sync specifically, `@develop_gate` coverage is producer-contract coverage. Sync scenarios in the gate must also be tagged `@sync_producer`, must not be tagged `@sync_known_gap`, and manual sync plus legacy init-sync scenarios stay out of the gate.
+For DevQL Sync specifically, `@develop_gate` coverage is producer-contract coverage. Sync scenarios in the gate must also be tagged `@sync_producer`, and manual sync plus legacy init-sync scenarios stay out of the gate.
 
 Because of that design, the source of truth for the gate is in code and feature tags:
 
@@ -206,6 +212,25 @@ BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS=4
 ```
 
 If unset or invalid, it falls back to `1`.
+
+For daemon-heavy DevQL sync lanes, prefer process sharding over in-process scenario concurrency:
+
+```bash
+cargo qat-devql-sync --parallel 5
+cargo qat-devql-sync-producer --parallel 5
+cargo qat-devql-sync --parallel 3
+```
+
+The `--parallel` path runs through `xtask qat`. The coordinator prebuilds the selected QAT test binary once, then starts one compiled test-binary process per shard. Each child process receives:
+
+- `BITLOOPS_QAT_SCENARIO_SHARD_INDEX`
+- `BITLOOPS_QAT_SCENARIO_SHARD_COUNT`
+- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS=1`
+- `BITLOOPS_QAT_RUNS_ROOT=<shard-specific artifact root>`
+
+Each shard writes its test stdout and stderr to `stdout.log` and `stderr.log` under its shard directory. That keeps the parent terminal readable while still preserving full diagnostics in artifacts.
+
+That shape avoids the current-thread Cucumber/Tokio bottleneck where blocking QAT steps can make multiple active in-process scenarios appear concurrent while still effectively serializing execution. It also avoids spawning multiple nested Cargo/nextest builds for the same sharded run.
 
 ### Tag filtering
 
@@ -797,7 +822,6 @@ New QAT coverage should preserve the current design principles:
 Exercises sync reconciliation across three lanes:
 
 - `@sync_producer` is the primary product-contract inventory. It simulates real user usage after `bitloops init`: watcher, git hook, daemon restart/downtime, branch checkout, merge, reset, clean, and validation flows.
-- `@sync_known_gap` marks producer scenarios that describe the target contract but currently expose product gaps; the producer alias excludes them until the product fix lands. There are currently no DevQL Sync producer scenarios carrying this tag.
 - `@sync_manual_smoke` is the small manual sync smoke subset for explicit enqueue/validate/repair/path-scoped behavior.
 - `@sync_legacy` is retained for historical `init --sync=true` manual convergence behavior and should not be treated as the main correctness signal.
 
@@ -820,7 +844,7 @@ CUCUMBER_FILTER_TAGS='@sync_manual_smoke' cargo qat-devql-sync
 CUCUMBER_FILTER_TAGS='@sync_legacy' cargo qat-devql-sync
 ```
 
-The producer alias supplies an explicit `@sync_producer and not @sync_known_gap` filter in code, so it is not affected by `CUCUMBER_FILTER_TAGS`. The develop gate also supplies its filter explicitly and only admits producer-tagged DevQL Sync scenarios that are not known gaps.
+The producer alias supplies an explicit `@sync_producer` filter in code, so it is not affected by `CUCUMBER_FILTER_TAGS`. The develop gate also supplies its filter explicitly and only admits producer-tagged DevQL Sync scenarios.
 
 ### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 25 scenarios)
 

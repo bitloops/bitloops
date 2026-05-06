@@ -1,4 +1,4 @@
-use super::helpers::{sanitize_name, stop_daemon_for_scenario};
+use super::helpers::{finish_run_metadata, sanitize_name, stop_daemon_for_scenario};
 use super::steps;
 use super::world::{QatRunConfig, QatWorld};
 use anyhow::{Context, Result, bail};
@@ -135,6 +135,15 @@ fn build_suite_failure_message(
 }
 
 const CUCUMBER_FILTER_TAGS_ENV: &str = "CUCUMBER_FILTER_TAGS";
+const SCENARIO_SHARD_INDEX_ENV: &str = "BITLOOPS_QAT_SCENARIO_SHARD_INDEX";
+const SCENARIO_SHARD_COUNT_ENV: &str = "BITLOOPS_QAT_SCENARIO_SHARD_COUNT";
+const QAT_RUNS_ROOT_ENV: &str = "BITLOOPS_QAT_RUNS_ROOT";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ScenarioShard {
+    index: usize,
+    count: usize,
+}
 
 pub async fn run_suite(binary_path: PathBuf, suite: Suite) -> Result<()> {
     run_suite_with_tags(binary_path, suite, None).await
@@ -163,6 +172,10 @@ pub async fn run_suite_with_tags_and_rerun_alias(
     let max_concurrent = resolve_max_concurrent_scenarios();
     let runs_root = resolve_runs_root()?;
     let suite_root = create_suite_root(&runs_root)?;
+    let scenario_shard = resolve_scenario_shard(
+        env::var(SCENARIO_SHARD_INDEX_ENV).ok().as_deref(),
+        env::var(SCENARIO_SHARD_COUNT_ENV).ok().as_deref(),
+    )?;
     let feature_path = suite_feature_path(&suite);
     let feature_path_display = feature_path.display().to_string();
 
@@ -186,6 +199,20 @@ pub async fn run_suite_with_tags_and_rerun_alias(
         suite.id(),
         suite_root.display()
     );
+    println!(
+        "[QAT suite concurrency] {} | max_concurrent_scenarios={}",
+        suite.id(),
+        max_concurrent
+    );
+    if let Some(shard) = scenario_shard {
+        println!(
+            "[QAT suite shard] {} | shard_index={} shard_count={} runs_root={}",
+            suite.id(),
+            shard.index,
+            shard.count,
+            runs_root.display()
+        );
+    }
 
     let config = Arc::new(QatRunConfig {
         binary_path: execution_binary,
@@ -215,13 +242,19 @@ pub async fn run_suite_with_tags_and_rerun_alias(
                         .expect("failed cucumber scenario list lock")
                         .push(failed_scenario);
                 }
-                if let Some(world) = world
-                    && let Err(err) = stop_daemon_for_scenario(world)
-                {
-                    eprintln!(
-                        "warning: daemon teardown failed for scenario `{}`: {err:#}",
-                        scenario.name
-                    );
+                if let Some(world) = world {
+                    if let Err(err) = stop_daemon_for_scenario(world) {
+                        eprintln!(
+                            "warning: daemon teardown failed for scenario `{}`: {err:#}",
+                            scenario.name
+                        );
+                    }
+                    if let Err(err) = finish_run_metadata(world) {
+                        eprintln!(
+                            "warning: metadata completion failed for scenario `{}`: {err:#}",
+                            scenario.name
+                        );
+                    }
                 }
             })
         })
@@ -229,12 +262,18 @@ pub async fn run_suite_with_tags_and_rerun_alias(
         .with_default_cli();
 
     let env_tags_filter = env::var(CUCUMBER_FILTER_TAGS_ENV).ok();
-    let result = if let Some(tags_filter) =
-        resolve_cucumber_tags_filter(explicit_tags_filter, env_tags_filter.as_deref())?
-    {
+    let tags_filter =
+        resolve_cucumber_tags_filter(explicit_tags_filter, env_tags_filter.as_deref())?;
+    let result = if tags_filter.is_some() || scenario_shard.is_some() {
         cucumber
             .filter_run(feature_path.clone(), move |feature, rule, scenario| {
-                scenario_matches_tags_filter(feature, rule, scenario, &tags_filter)
+                scenario_matches_filters(
+                    feature,
+                    rule,
+                    scenario,
+                    tags_filter.as_ref(),
+                    scenario_shard,
+                )
             })
             .await
     } else {
@@ -425,6 +464,14 @@ fn snapshot_target_hint(source_binary: &Path) -> String {
 }
 
 fn resolve_runs_root() -> Result<PathBuf> {
+    resolve_runs_root_with_env(env::var(QAT_RUNS_ROOT_ENV).ok().as_deref())
+}
+
+fn resolve_runs_root_with_env(raw: Option<&str>) -> Result<PathBuf> {
+    if let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(raw));
+    }
+
     Ok(env::current_dir()
         .context("resolving current directory for qat runs dir")?
         .join("target")
@@ -474,6 +521,39 @@ fn resolve_max_concurrent_scenarios() -> usize {
         .unwrap_or(1)
 }
 
+fn parse_optional_usize_env(raw: Option<&str>, name: &str) -> Result<Option<usize>> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+
+    let parsed = raw
+        .parse::<usize>()
+        .with_context(|| format!("parsing {name} value `{raw}` as a positive integer"))?;
+    Ok(Some(parsed))
+}
+
+fn resolve_scenario_shard(
+    index_raw: Option<&str>,
+    count_raw: Option<&str>,
+) -> Result<Option<ScenarioShard>> {
+    let index = parse_optional_usize_env(index_raw, SCENARIO_SHARD_INDEX_ENV)?;
+    let count = parse_optional_usize_env(count_raw, SCENARIO_SHARD_COUNT_ENV)?;
+
+    match (index, count) {
+        (None, None) => Ok(None),
+        (Some(index), Some(count)) if count > 0 && index < count => {
+            Ok(Some(ScenarioShard { index, count }))
+        }
+        (Some(_), Some(0)) => bail!("{SCENARIO_SHARD_COUNT_ENV} must be greater than 0"),
+        (Some(index), Some(count)) => bail!(
+            "{SCENARIO_SHARD_INDEX_ENV}={index} must be less than {SCENARIO_SHARD_COUNT_ENV}={count}"
+        ),
+        _ => {
+            bail!("{SCENARIO_SHARD_INDEX_ENV} and {SCENARIO_SHARD_COUNT_ENV} must be set together")
+        }
+    }
+}
+
 fn parse_cucumber_tags_filter(raw: Option<&str>) -> Result<Option<TagOperation>> {
     parse_cucumber_tags_filter_with_source(raw, CUCUMBER_FILTER_TAGS_ENV)
 }
@@ -519,4 +599,51 @@ fn scenario_matches_tags_filter(
             .chain(rule.iter().flat_map(|current| current.tags.iter()))
             .chain(scenario.tags.iter()),
     )
+}
+
+fn scenario_matches_filters(
+    feature: &gherkin::Feature,
+    rule: Option<&gherkin::Rule>,
+    scenario: &gherkin::Scenario,
+    tags_filter: Option<&TagOperation>,
+    scenario_shard: Option<ScenarioShard>,
+) -> bool {
+    if let Some(tags_filter) = tags_filter
+        && !scenario_matches_tags_filter(feature, rule, scenario, tags_filter)
+    {
+        return false;
+    }
+
+    if let Some(scenario_shard) = scenario_shard {
+        return scenario_matches_shard(feature, scenario, scenario_shard);
+    }
+
+    true
+}
+
+fn scenario_matches_shard(
+    feature: &gherkin::Feature,
+    scenario: &gherkin::Scenario,
+    shard: ScenarioShard,
+) -> bool {
+    let key = scenario_shard_key(feature, scenario);
+    stable_shard_hash(&key) % shard.count as u64 == shard.index as u64
+}
+
+fn scenario_shard_key(feature: &gherkin::Feature, scenario: &gherkin::Scenario) -> String {
+    let path = feature
+        .path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| feature.name.clone());
+    format!("{}:{}:{}", path, scenario.position.line, scenario.name)
+}
+
+fn stable_shard_hash(input: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in input.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }

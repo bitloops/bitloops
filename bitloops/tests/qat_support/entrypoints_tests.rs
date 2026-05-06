@@ -259,7 +259,7 @@ async fn run_devql_sync_producer_with_runner_filters_to_producer_contract() {
         observed,
         (
             "devql-sync",
-            Some("@sync_producer and not @sync_known_gap"),
+            Some("@sync_producer"),
             "cargo qat-devql-sync-producer"
         ),
         "producer entrypoint should run the DevQL Sync suite with the producer-only filter and rerun alias"
