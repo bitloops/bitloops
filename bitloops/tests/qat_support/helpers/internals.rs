@@ -1472,11 +1472,11 @@ fn run_command_capture_with_timeout(
 ) -> Result<Output> {
     let command_debug = format!("{command:?}");
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let started = Instant::now();
     let mut child = command
         .spawn()
         .with_context(|| format!("executing {label}"))?;
 
-    let started = Instant::now();
     loop {
         match child
             .try_wait()
@@ -1486,11 +1486,12 @@ fn run_command_capture_with_timeout(
                 let output = child
                     .wait_with_output()
                     .with_context(|| format!("collecting output for {label}"))?;
-                append_command_log(world, label, &command_debug, &output)?;
+                append_command_log(world, label, &command_debug, &output, started.elapsed())?;
                 return Ok(output);
             }
             None => {
                 if started.elapsed() >= timeout {
+                    let elapsed = started.elapsed();
                     append_world_log(
                         world,
                         &format!(
@@ -1507,7 +1508,7 @@ fn run_command_capture_with_timeout(
                     let output = child
                         .wait_with_output()
                         .with_context(|| format!("collecting timed out output for {label}"))?;
-                    append_command_log(world, label, &command_debug, &output)?;
+                    append_command_log(world, label, &command_debug, &output, elapsed)?;
                     return Ok(output);
                 }
                 std::thread::sleep(StdDuration::from_millis(100));
@@ -1524,6 +1525,7 @@ fn run_command_capture_with_stdin(
 ) -> Result<Output> {
     let command_debug = format!("{command:?}");
     command.stdin(Stdio::piped());
+    let started = Instant::now();
     let mut child = command
         .spawn()
         .with_context(|| format!("spawning {label}"))?;
@@ -1535,7 +1537,7 @@ fn run_command_capture_with_stdin(
     let output = child
         .wait_with_output()
         .with_context(|| format!("waiting for {label}"))?;
-    append_command_log(world, label, &command_debug, &output)?;
+    append_command_log(world, label, &command_debug, &output, started.elapsed())?;
     Ok(output)
 }
 
@@ -1562,11 +1564,28 @@ fn append_world_log(world: &QatWorld, message: &str) -> Result<()> {
         .with_context(|| format!("writing {}", world.terminal_log_path().display()))
 }
 
+fn append_timing_log(
+    world: &QatWorld,
+    label: &str,
+    elapsed: StdDuration,
+    details: impl AsRef<str>,
+) -> Result<()> {
+    let details = details.as_ref();
+    append_world_log(
+        world,
+        &format!(
+            "QAT timing: {label} elapsed_ms={} {details}\n",
+            elapsed.as_millis()
+        ),
+    )
+}
+
 fn append_command_log(
     world: &QatWorld,
     label: &str,
     command_debug: &str,
     output: &Output,
+    elapsed: StdDuration,
 ) -> Result<()> {
     let mut file = OpenOptions::new()
         .create(true)
@@ -1576,6 +1595,7 @@ fn append_command_log(
     writeln!(file, "=== {label} ===")?;
     writeln!(file, "{command_debug}")?;
     writeln!(file, "status: {:?}", output.status)?;
+    writeln!(file, "elapsed_ms: {}", elapsed.as_millis())?;
     writeln!(file, "stdout:\n{}", String::from_utf8_lossy(&output.stdout))?;
     writeln!(file, "stderr:\n{}", String::from_utf8_lossy(&output.stderr))?;
     writeln!(file)?;
@@ -1601,10 +1621,40 @@ fn write_run_metadata(world: &QatWorld) -> Result<()> {
         terminal_log: world.terminal_log_path().display().to_string(),
         binary_path: world.run_config().binary_path.display().to_string(),
         created_at: now_rfc3339()?,
+        completed_at: None,
+        duration_ms: None,
     };
     let payload = serde_json::to_vec_pretty(&metadata).context("serializing qat run metadata")?;
     fs::write(world.metadata_path(), payload)
         .with_context(|| format!("writing {}", world.metadata_path().display()))
+}
+
+pub(crate) fn finish_run_metadata(world: &QatWorld) -> Result<()> {
+    let Some(metadata_path) = world.metadata_path.as_deref() else {
+        return Ok(());
+    };
+    if !metadata_path.exists() {
+        return Ok(());
+    }
+    let payload = fs::read_to_string(metadata_path)
+        .with_context(|| format!("reading {}", metadata_path.display()))?;
+    let mut metadata: serde_json::Value =
+        serde_json::from_str(&payload).context("parsing qat run metadata")?;
+    let completed_at = OffsetDateTime::now_utc();
+    let completed_at_raw = completed_at
+        .format(&Rfc3339)
+        .context("formatting qat run completion timestamp")?;
+    if let Some(created_at) = metadata.get("created_at").and_then(|value| value.as_str())
+        && let Ok(created_at) = OffsetDateTime::parse(created_at, &Rfc3339)
+    {
+        let duration_ms = (completed_at - created_at).whole_milliseconds().max(0) as u64;
+        metadata["duration_ms"] = serde_json::Value::Number(duration_ms.into());
+    }
+    metadata["completed_at"] = serde_json::Value::String(completed_at_raw);
+    let payload =
+        serde_json::to_vec_pretty(&metadata).context("serializing completed qat run metadata")?;
+    fs::write(metadata_path, payload)
+        .with_context(|| format!("writing {}", metadata_path.display()))
 }
 
 fn create_offline_vite_react_ts_scaffold(repo_dir: &Path) -> Result<()> {

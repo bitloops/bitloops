@@ -145,6 +145,10 @@ struct RunMetadata<'a> {
     terminal_log: String,
     binary_path: String,
     created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
 }
 
 include!("core.rs");
