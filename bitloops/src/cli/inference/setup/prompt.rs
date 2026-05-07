@@ -6,9 +6,7 @@ use crate::cli::terminal_picker::{
     SingleSelectOption, can_use_terminal_picker, prompt_single_select,
 };
 
-use super::types::{
-    BitloopsInferenceSetupSelection, ContextGuidanceSetupSelection, SummarySetupSelection,
-};
+use super::types::{ContextGuidanceSetupSelection, SummarySetupSelection};
 
 pub(crate) fn prompt_summary_setup_selection(
     out: &mut dyn Write,
@@ -58,23 +56,6 @@ pub(crate) fn prompt_context_guidance_setup_selection(
     prompt_context_guidance_setup_selection_with_text_input(out, input)
 }
 
-pub(crate) fn prompt_bitloops_inference_setup_selection(
-    out: &mut dyn Write,
-    input: &mut dyn BufRead,
-    interactive: bool,
-    cloud_logged_in: bool,
-) -> Result<BitloopsInferenceSetupSelection> {
-    if !interactive {
-        return Ok(BitloopsInferenceSetupSelection::Skip);
-    }
-
-    if can_use_terminal_picker() {
-        return prompt_bitloops_inference_setup_selection_with_picker(out, cloud_logged_in);
-    }
-
-    prompt_bitloops_inference_setup_selection_with_text_input(out, input, cloud_logged_in)
-}
-
 fn prompt_summary_setup_selection_with_picker(
     out: &mut dyn Write,
     _cloud_logged_in: bool,
@@ -110,43 +91,6 @@ fn prompt_summary_setup_selection_with_picker(
         1 => SummarySetupSelection::Cloud,
         2 => SummarySetupSelection::Local,
         _ => unreachable!("terminal picker returned invalid summary selection"),
-    })
-}
-
-fn prompt_bitloops_inference_setup_selection_with_picker(
-    out: &mut dyn Write,
-    cloud_logged_in: bool,
-) -> Result<BitloopsInferenceSetupSelection> {
-    let options = vec![
-        SingleSelectOption::new(
-            "Bitloops Cloud",
-            vec!["Fast setup. No local compute required.".to_string()],
-        ),
-        SingleSelectOption::new(
-            "Local (Ollama)",
-            vec!["Runs locally (32GB+ RAM, GPU strongly recommended).".to_string()],
-        ),
-        SingleSelectOption::new("Skip for now", Vec::new()),
-    ];
-    let intro = vec![
-        "Bitloops inference powers semantic summaries, context guidance,".to_string(),
-        "architecture fact synthesis, and architecture role adjudication.".to_string(),
-    ];
-
-    writeln!(out)?;
-    let selection = prompt_single_select(
-        out,
-        "Enable Bitloops inference",
-        &intro,
-        &options,
-        if cloud_logged_in { 0 } else { 2 },
-        &[],
-    )?;
-
-    Ok(match selection {
-        0 => BitloopsInferenceSetupSelection::Cloud,
-        1 => BitloopsInferenceSetupSelection::Local,
-        _ => BitloopsInferenceSetupSelection::Skip,
     })
 }
 
@@ -255,44 +199,6 @@ fn prompt_context_guidance_setup_selection_with_text_input(
             "2" | "cloud" | "bitloops" => return Ok(ContextGuidanceSetupSelection::Cloud),
             "3" | "local" | "ollama" => return Ok(ContextGuidanceSetupSelection::Local),
             _ => writeln!(out, "Please choose 1, 2, or 3.")?,
-        }
-    }
-}
-
-fn prompt_bitloops_inference_setup_selection_with_text_input(
-    out: &mut dyn Write,
-    input: &mut dyn BufRead,
-    cloud_logged_in: bool,
-) -> Result<BitloopsInferenceSetupSelection> {
-    writeln!(out)?;
-    writeln!(out, "Enable Bitloops inference?")?;
-    writeln!(
-        out,
-        "Bitloops inference powers semantic summaries, context guidance, architecture fact synthesis, and architecture role adjudication."
-    )?;
-    writeln!(out, "  1. Bitloops Cloud")?;
-    writeln!(out, "  2. Local (Ollama)")?;
-    writeln!(out, "  3. Skip for now")?;
-    if cloud_logged_in {
-        writeln!(out, "Press Enter to use Bitloops Cloud.")?;
-    } else {
-        writeln!(out, "Press Enter to skip for now.")?;
-    }
-
-    loop {
-        write!(out, "> ")?;
-        out.flush()?;
-        let mut line = String::new();
-        input
-            .read_line(&mut line)
-            .context("reading Bitloops inference setup selection")?;
-        match line.trim().to_ascii_lowercase().as_str() {
-            "" if cloud_logged_in => return Ok(BitloopsInferenceSetupSelection::Cloud),
-            "" => return Ok(BitloopsInferenceSetupSelection::Skip),
-            "1" | "cloud" | "bitloops" => return Ok(BitloopsInferenceSetupSelection::Cloud),
-            "2" | "local" | "ollama" => return Ok(BitloopsInferenceSetupSelection::Local),
-            "3" | "skip" | "later" => return Ok(BitloopsInferenceSetupSelection::Skip),
-            _ => writeln!(out, "Please choose `1`, `2`, or `3`.")?,
         }
     }
 }

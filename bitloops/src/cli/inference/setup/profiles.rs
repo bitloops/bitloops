@@ -9,20 +9,23 @@ use crate::config::{
 };
 use crate::host::inference::{BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER};
 
+#[cfg(test)]
 use super::constants::{
     DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS,
     DEFAULT_ARCHITECTURE_ROLE_ADJUDICATION_MAX_OUTPUT_TOKENS,
-    DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS, DEFAULT_CONTEXT_GUIDANCE_PROFILE_NAME,
     DEFAULT_LOCAL_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
-    DEFAULT_LOCAL_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME, DEFAULT_OLLAMA_CHAT_BASE_URL,
+    DEFAULT_LOCAL_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
     DEFAULT_PLATFORM_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
-    DEFAULT_PLATFORM_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
-    DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL,
-    DEFAULT_PLATFORM_CONTEXT_GUIDANCE_PROFILE_NAME, DEFAULT_PLATFORM_SUMMARY_API_KEY,
-    DEFAULT_PLATFORM_SUMMARY_MODEL, DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME,
-    DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS, DEFAULT_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_TEMPERATURE,
-    OLLAMA_CHAT_DRIVER, PLATFORM_CHAT_COMPLETIONS_URL_ENV, PLATFORM_GATEWAY_URL_ENV,
-    STRUCTURED_GENERATION_TASK, TEXT_GENERATION_TASK,
+    DEFAULT_PLATFORM_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME, STRUCTURED_GENERATION_TASK,
+};
+use super::constants::{
+    DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS, DEFAULT_CONTEXT_GUIDANCE_PROFILE_NAME,
+    DEFAULT_OLLAMA_CHAT_BASE_URL, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
+    DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_PROFILE_NAME,
+    DEFAULT_PLATFORM_SUMMARY_API_KEY, DEFAULT_PLATFORM_SUMMARY_MODEL,
+    DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
+    DEFAULT_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_TEMPERATURE, OLLAMA_CHAT_DRIVER,
+    PLATFORM_CHAT_COMPLETIONS_URL_ENV, PLATFORM_GATEWAY_URL_ENV, TEXT_GENERATION_TASK,
 };
 
 #[cfg(test)]
@@ -46,18 +49,6 @@ type ContextGuidanceGenerationConfiguredHookCell =
 #[cfg(test)]
 thread_local! {
     static CONTEXT_GUIDANCE_GENERATION_CONFIGURED_HOOK: ContextGuidanceGenerationConfiguredHookCell =
-        std::cell::RefCell::new(None);
-}
-
-#[cfg(test)]
-type BitloopsInferenceGenerationConfiguredHook = dyn Fn(&Path) -> bool;
-#[cfg(test)]
-type BitloopsInferenceGenerationConfiguredHookCell =
-    std::cell::RefCell<Option<std::rc::Rc<BitloopsInferenceGenerationConfiguredHook>>>;
-
-#[cfg(test)]
-thread_local! {
-    static BITLOOPS_INFERENCE_GENERATION_CONFIGURED_HOOK: BitloopsInferenceGenerationConfiguredHookCell =
         std::cell::RefCell::new(None);
 }
 
@@ -108,14 +99,8 @@ pub(crate) fn context_guidance_generation_configured(repo_root: &Path) -> bool {
     text_generation_profile_configured(&capability, profile_name)
 }
 
+#[cfg(test)]
 pub(crate) fn bitloops_inference_generation_configured(repo_root: &Path) -> bool {
-    #[cfg(test)]
-    if let Some(hook) =
-        BITLOOPS_INFERENCE_GENERATION_CONFIGURED_HOOK.with(|cell| cell.borrow().clone())
-    {
-        return hook(repo_root);
-    }
-
     summary_generation_configured(repo_root) && {
         let capability = resolve_inference_capability_config_for_repo(repo_root);
         let guidance_configured = capability
@@ -159,6 +144,7 @@ fn text_generation_profile_configured(
     generation_profile_configured(capability, profile_name, InferenceTask::TextGeneration)
 }
 
+#[cfg(test)]
 fn structured_generation_profile_configured(
     capability: &crate::config::InferenceCapabilityConfig,
     profile_name: &str,
@@ -404,6 +390,7 @@ pub(super) fn write_platform_context_guidance_profile(
     write_daemon_config_document(&config_path, &doc)
 }
 
+#[cfg(test)]
 pub(super) fn write_local_bitloops_inference_profiles(
     repo_root: &Path,
     model_name: &str,
@@ -413,6 +400,7 @@ pub(super) fn write_local_bitloops_inference_profiles(
     write_local_architecture_profiles(repo_root, model_name)
 }
 
+#[cfg(test)]
 pub(super) fn write_platform_bitloops_inference_profiles(
     repo_root: &Path,
     gateway_url_override: Option<&str>,
@@ -428,6 +416,7 @@ pub(super) fn write_platform_bitloops_inference_profiles(
     write_platform_architecture_profiles(repo_root, gateway_url_override, api_key_env)
 }
 
+#[cfg(test)]
 fn write_local_architecture_profiles(repo_root: &Path, model_name: &str) -> Result<()> {
     let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
     let mut doc = read_daemon_config_document(&config_path)?;
@@ -452,6 +441,7 @@ fn write_local_architecture_profiles(repo_root: &Path, model_name: &str) -> Resu
     write_daemon_config_document(&config_path, &doc)
 }
 
+#[cfg(test)]
 fn write_platform_architecture_profiles(
     repo_root: &Path,
     gateway_url_override: Option<&str>,
@@ -483,6 +473,7 @@ fn write_platform_architecture_profiles(
     write_daemon_config_document(&config_path, &doc)
 }
 
+#[cfg(test)]
 fn write_local_architecture_profile(
     doc: &mut DocumentMut,
     default_profile_name: &str,
@@ -514,6 +505,7 @@ fn write_local_architecture_profile(
     profile_name
 }
 
+#[cfg(test)]
 fn write_platform_architecture_profile(
     doc: &mut DocumentMut,
     default_profile_name: &str,
@@ -606,6 +598,7 @@ fn update_context_guidance_generation_binding(doc: &mut DocumentMut, profile_nam
     update_text_generation_binding(doc, "context_guidance", "guidance_generation", profile_name);
 }
 
+#[cfg(test)]
 fn update_architecture_generation_binding(
     doc: &mut DocumentMut,
     inference_key: &str,
@@ -737,6 +730,7 @@ fn is_managed_platform_context_guidance_profile(profile: &Table) -> bool {
             })
 }
 
+#[cfg(test)]
 fn is_managed_local_architecture_profile(profile: &Table) -> bool {
     profile
         .get("task")
@@ -758,6 +752,7 @@ fn is_managed_local_architecture_profile(profile: &Table) -> bool {
             == Some(OLLAMA_CHAT_DRIVER)
 }
 
+#[cfg(test)]
 fn is_managed_platform_architecture_profile(profile: &Table) -> bool {
     profile
         .get("task")
@@ -841,25 +836,6 @@ pub(crate) fn with_context_guidance_generation_configured_hook<T>(
     });
     let result = f();
     CONTEXT_GUIDANCE_GENERATION_CONFIGURED_HOOK.with(|cell| {
-        *cell.borrow_mut() = None;
-    });
-    result
-}
-
-#[cfg(test)]
-pub(crate) fn with_bitloops_inference_generation_configured_hook<T>(
-    hook: impl Fn(&Path) -> bool + 'static,
-    f: impl FnOnce() -> T,
-) -> T {
-    BITLOOPS_INFERENCE_GENERATION_CONFIGURED_HOOK.with(|cell| {
-        assert!(
-            cell.borrow().is_none(),
-            "bitloops inference generation configured hook already installed"
-        );
-        *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
-    });
-    let result = f();
-    BITLOOPS_INFERENCE_GENERATION_CONFIGURED_HOOK.with(|cell| {
         *cell.borrow_mut() = None;
     });
     result

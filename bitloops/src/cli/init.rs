@@ -6,16 +6,13 @@ use anyhow::{Context, Result};
 mod agent_hooks;
 mod agent_selection;
 mod args;
-#[cfg(test)]
 mod context_guidance_setup;
 mod daemon_bootstrap;
 mod embeddings_setup;
 mod final_setup;
-mod inference_setup;
 mod progress;
 mod repo_excludes;
 mod status;
-#[cfg(test)]
 mod summary_setup;
 mod workflow;
 
@@ -28,7 +25,6 @@ pub use args::{InitArgs, InitCommand, InitStatusArgs};
 pub(super) use args::{
     DEFAULT_INIT_INGEST_BACKFILL, normalize_cli_exclusions, normalize_exclude_from_paths,
 };
-#[cfg(test)]
 pub(super) use context_guidance_setup::choose_context_guidance_setup_during_init;
 pub(super) use daemon_bootstrap::{
     maybe_enable_default_daemon_service, maybe_install_default_daemon,
@@ -47,14 +43,10 @@ pub(super) use embeddings_setup::{
 #[cfg(test)]
 pub(super) use final_setup::InitFinalSetupSelection;
 pub(super) use final_setup::{InitFinalSetupPromptOptions, choose_final_setup_options};
-#[cfg(test)]
-pub(super) use inference_setup::NON_INTERACTIVE_INIT_BITLOOPS_INFERENCE_SELECTION_ERROR;
-pub(super) use inference_setup::choose_bitloops_inference_setup_during_init;
 pub(super) use repo_excludes::ensure_repo_init_files_excluded;
 pub(crate) use repo_excludes::{
     clear_repo_local_policy_excluded, clear_repo_managed_skill_files_excluded,
 };
-#[cfg(test)]
 pub(super) use summary_setup::choose_summary_setup_during_init;
 
 pub type AgentSelector = dyn Fn(&[String], bool) -> std::result::Result<InitAgentSelection, String>;

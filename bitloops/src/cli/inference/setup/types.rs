@@ -22,13 +22,6 @@ pub(crate) enum ContextGuidanceSetupSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BitloopsInferenceSetupSelection {
-    Cloud,
-    Local,
-    Skip,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SummarySetupOutcome {
     InstalledRuntimeOnly,
     Configured { model_name: String },

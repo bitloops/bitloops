@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::cli::inference::{
     PreparedSummarySetupAction, PreparedSummarySetupPlan, SummarySetupExecutionResult,
     SummarySetupOutcome, SummarySetupPhase, SummarySetupProgress,
-    execute_prepared_bitloops_inference_setup_with_progress,
+    execute_prepared_summary_setup_with_progress,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::daemon::tasks::queue::{
@@ -327,7 +327,7 @@ impl DevqlTaskCoordinator {
             let plan = prepared_summary_setup_plan_from_request(&spec);
             let mut progress_state: ProgressPersistState<SummaryBootstrapProgress> =
                 ProgressPersistState::default();
-            execute_prepared_bitloops_inference_setup_with_progress(&repo_root, plan, |progress| {
+            execute_prepared_summary_setup_with_progress(&repo_root, plan, |progress| {
                 let progress = summary_progress_from_cli(progress);
                 let now = Instant::now();
                 if !should_persist_progress(

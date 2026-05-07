@@ -10,11 +10,12 @@ use crate::cli::embeddings::{
     platform_embeddings_gateway_url_override,
 };
 use crate::cli::inference::{
-    BitloopsInferenceSetupSelection, PreparedSummarySetupAction, TextGenerationRuntime,
-    bitloops_inference_generation_configured, configure_cloud_bitloops_inference,
-    configure_local_bitloops_inference, platform_context_guidance_gateway_url_override,
-    prepare_cloud_bitloops_inference_plan, prepare_local_bitloops_inference_plan,
-    summary_generation_configured,
+    ContextGuidanceSetupSelection, PreparedSummarySetupAction, SummarySetupSelection,
+    TextGenerationRuntime, configure_cloud_context_guidance_generation,
+    configure_cloud_summary_generation, configure_local_context_guidance_generation,
+    configure_local_summary_generation, platform_context_guidance_gateway_url_override,
+    platform_summary_gateway_url_override, prepare_cloud_summary_generation_plan,
+    prepare_local_summary_generation_plan, summary_generation_configured,
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
@@ -29,10 +30,10 @@ use super::progress::{InitProgressOptions, run_dual_init_progress};
 use super::{
     AgentSelector, DEFAULT_INIT_INGEST_BACKFILL, InitAgentSelection, InitArgs,
     InitEmbeddingsSetupSelection, InitFinalSetupPromptOptions,
-    choose_bitloops_inference_setup_during_init, choose_final_setup_options,
-    detect_or_select_agent, ensure_repo_init_files_excluded, maybe_enable_default_daemon_service,
-    maybe_install_default_daemon, normalize_cli_exclusions, normalize_exclude_from_paths,
-    should_install_embeddings_during_init,
+    choose_context_guidance_setup_during_init, choose_final_setup_options,
+    choose_summary_setup_during_init, detect_or_select_agent, ensure_repo_init_files_excluded,
+    maybe_enable_default_daemon_service, maybe_install_default_daemon, normalize_cli_exclusions,
+    normalize_exclude_from_paths, should_install_embeddings_during_init,
 };
 
 const SUCCESS_GREEN_HEX: &str = "#22c55e";
@@ -60,15 +61,6 @@ fn validate_context_guidance_init_args(args: &InitArgs) -> Result<()> {
     {
         bail!(
             "`--context-guidance-gateway-url` and `--context-guidance-api-key-env` require `--context-guidance-runtime platform`"
-        );
-    }
-
-    if args.bitloops_inference_runtime == Some(TextGenerationRuntime::Local)
-        && (args.bitloops_inference_gateway_url.is_some()
-            || args.bitloops_inference_api_key_env.is_some())
-    {
-        bail!(
-            "`--bitloops-inference-gateway-url` and `--bitloops-inference-api-key-env` require `--bitloops-inference-runtime platform`"
         );
     }
 
@@ -436,64 +428,64 @@ pub(crate) async fn run_for_project_root(
         }
         InitEmbeddingsSetupSelection::Skip => {}
     }
-    let bitloops_inference_selection =
-        choose_bitloops_inference_setup_during_init(project_root, &args, out, input).await?;
+    let summary_selection = choose_summary_setup_during_init(
+        project_root,
+        args.install_default_daemon,
+        args.no_summaries,
+        out,
+        input,
+    )
+    .await?;
+    if matches!(summary_selection, SummarySetupSelection::Cloud) {
+        login_required = true;
+    }
+    let context_guidance_selection =
+        choose_context_guidance_setup_during_init(project_root, &args, out, input).await?;
     if matches!(
-        bitloops_inference_selection,
-        BitloopsInferenceSetupSelection::Cloud
+        context_guidance_selection,
+        ContextGuidanceSetupSelection::Cloud
     ) {
         login_required = true;
     }
     if login_required {
         crate::cli::login::ensure_logged_in().await?;
     }
-    match bitloops_inference_selection {
-        BitloopsInferenceSetupSelection::Cloud => {
-            let api_key_env = args
-                .bitloops_inference_api_key_env
-                .as_deref()
-                .or(args.context_guidance_api_key_env.as_deref())
-                .unwrap_or(crate::cli::inference::DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV);
-            let gateway_url_override = platform_context_guidance_gateway_url_override(
-                args.bitloops_inference_gateway_url
-                    .as_deref()
-                    .or(args.context_guidance_gateway_url.as_deref()),
-            );
+    match summary_selection {
+        SummarySetupSelection::Cloud => {
+            let gateway_url_override = platform_summary_gateway_url_override();
             if args.install_default_daemon {
-                prepared_summary_setup = Some(prepare_cloud_bitloops_inference_plan(
+                prepared_summary_setup = Some(prepare_cloud_summary_generation_plan(
                     gateway_url_override.as_deref(),
-                    Some(api_key_env),
                 ));
             } else {
-                let message = configure_cloud_bitloops_inference(
+                let message = configure_cloud_summary_generation(
                     project_root,
                     gateway_url_override.as_deref(),
-                    Some(api_key_env),
                 )
                 .map_err(|err| {
                     anyhow::anyhow!(
-                        "Bitloops init completed, but Bitloops inference setup failed: {err:#}"
+                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
                     )
                 })?;
                 writeln!(out, "{message}")?;
             }
         }
-        BitloopsInferenceSetupSelection::Local => {
+        SummarySetupSelection::Local => {
             if args.install_default_daemon {
                 prepared_summary_setup = Some(
-                    prepare_local_bitloops_inference_plan(
+                    prepare_local_summary_generation_plan(
                         out,
                         input,
                         telemetry_consent::can_prompt_interactively(),
                     )
                     .map_err(|err| {
                         anyhow::anyhow!(
-                            "Bitloops init completed, but Bitloops inference setup failed: {err:#}"
+                            "Bitloops init completed, but semantic summary setup failed: {err:#}"
                         )
                     })?,
                 );
             } else {
-                configure_local_bitloops_inference(
+                configure_local_summary_generation(
                     project_root,
                     out,
                     input,
@@ -501,12 +493,48 @@ pub(crate) async fn run_for_project_root(
                 )
                 .map_err(|err| {
                     anyhow::anyhow!(
-                        "Bitloops init completed, but Bitloops inference setup failed: {err:#}"
+                        "Bitloops init completed, but semantic summary setup failed: {err:#}"
                     )
                 })?;
             }
         }
-        BitloopsInferenceSetupSelection::Skip => {}
+        SummarySetupSelection::Skip => {}
+    }
+    match context_guidance_selection {
+        ContextGuidanceSetupSelection::Cloud => {
+            let api_key_env = args
+                .context_guidance_api_key_env
+                .as_deref()
+                .unwrap_or(crate::cli::inference::DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV);
+            let gateway_url_override = platform_context_guidance_gateway_url_override(
+                args.context_guidance_gateway_url.as_deref(),
+            );
+            let message = configure_cloud_context_guidance_generation(
+                project_root,
+                gateway_url_override.as_deref(),
+                Some(api_key_env),
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops init completed, but context guidance setup failed: {err:#}"
+                )
+            })?;
+            writeln!(out, "{message}")?;
+        }
+        ContextGuidanceSetupSelection::Local => {
+            configure_local_context_guidance_generation(
+                project_root,
+                out,
+                input,
+                telemetry_consent::can_prompt_interactively(),
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Bitloops init completed, but context guidance setup failed: {err:#}"
+                )
+            })?;
+        }
+        ContextGuidanceSetupSelection::Skip => {}
     }
     let code_embeddings_selected = matches!(
         embeddings_selection,
@@ -514,10 +542,8 @@ pub(crate) async fn run_for_project_root(
             | InitEmbeddingsSetupSelection::Cloud
             | InitEmbeddingsSetupSelection::Local
     );
-    let summaries_selected = !args.no_summaries
-        && (prepared_summary_setup.is_some()
-            || bitloops_inference_generation_configured(project_root)
-            || summary_generation_configured(project_root));
+    let summaries_selected =
+        prepared_summary_setup.is_some() || summary_generation_configured(project_root);
     let final_setup_selection = choose_final_setup_options(
         args.sync,
         out,
@@ -768,13 +794,13 @@ fn runtime_summary_bootstrap_request_from_plan(
         }
         PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override,
-            api_key_env,
+            api_key_env: _,
         } => crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
             action: "configure_cloud".to_string(),
             message: None,
             model_name: None,
             gateway_url_override: gateway_url_override.clone(),
-            api_key_env: api_key_env.clone(),
+            api_key_env: None,
         },
     }
 }
@@ -813,7 +839,7 @@ async fn write_init_setup_handoff(
     if options.run_summaries {
         background_steps.push("Generating file and module summaries");
     } else if options.prepare_summary_generation {
-        background_steps.push("Preparing Bitloops inference");
+        background_steps.push("Preparing summary generation");
     }
     if options.run_summary_embeddings {
         background_steps.push("Creating summary embeddings");
