@@ -311,7 +311,7 @@ pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
 pub(super) async fn persist_current_symbol_feature_rows_for_matching_input(
     relational: &RelationalStorage,
     input: &semantic::SemanticFeatureInput,
-    rows: &semantic::SemanticFeatureRows,
+    rows: &impl semantic::HashedFeatureRows,
 ) -> Result<()> {
     match relational
         .exec_serialized(&build_conditional_current_symbol_feature_persist_rows_sql(
@@ -356,7 +356,7 @@ async fn persist_current_symbol_feature_rows(
     symbol_id: Option<&str>,
     path: &str,
     content_id: &str,
-    rows: &semantic::SemanticFeatureRows,
+    rows: &impl semantic::HashedFeatureRows,
 ) -> Result<()> {
     relational
         .exec_serialized(&build_current_symbol_feature_persist_rows_sql(
