@@ -41,8 +41,6 @@ bitloops init --install-default-daemon --sync=true
 
 When you use `bitloops init --install-default-daemon` and embeddings are not already configured, interactive init asks whether to use Bitloops cloud, the local runtime, or skip embeddings for now. Bitloops cloud is the recommended default. If you choose the local runtime, Bitloops installs the managed standalone `bitloops-local-embeddings` binary when needed and warms that profile. If init also runs sync or ingest, that managed runtime download happens afterwards.
 
-When Bitloops inference is not already configured, the same init flow asks whether to enable Bitloops inference with Bitloops cloud, local Ollama, or skip it. Enabling it configures semantic summaries, context guidance, architecture fact synthesis, and architecture role adjudication together. In non-interactive mode, pass `--bitloops-inference-runtime local`, `--bitloops-inference-runtime platform`, or `--no-bitloops-inference`.
-
 In an interactive terminal, plain `bitloops init` also asks whether you want to install that same default local embeddings setup when embeddings are still unconfigured.
 
 `bitloops init` can also queue an initial DevQL current-state sync after hook setup. Use `--sync=true` when you want that sync immediately, or `--sync=false` when you want to skip it. If you omit `--sync` in an interactive terminal, Bitloops asks after hook installation whether you want to sync the codebase now.
