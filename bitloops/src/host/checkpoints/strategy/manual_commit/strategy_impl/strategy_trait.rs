@@ -409,6 +409,12 @@ impl Strategy for ManualCommitStrategy {
         }
 
         self.execute_post_commit_derivation(&head, &committed_files_vec, is_rebase_in_progress)?;
+        if let Err(err) = run_devql_post_commit_ingest(&self.repo_root, &head) {
+            eprintln!(
+                "[bitloops] Warning: DevQL post-commit ingest failed for commit {}: {err:#}",
+                head
+            );
+        }
         Ok(())
     }
 

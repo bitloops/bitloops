@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
-use crate::daemon::SyncTaskMode;
+use crate::daemon::{DevqlTaskSource, DevqlTaskSpec, SyncTaskMode};
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::test_support::git_fixtures::{init_test_repo, write_test_daemon_config};
 
@@ -80,6 +80,36 @@ fn spooled_sync_paths_merge_into_existing_pending_job() {
                     "src/c.ts".to_string(),
                 ]
             );
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
+fn spooled_ingest_task_preserves_explicit_commits() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    enqueue_spooled_ingest_task_for_repo_root(
+        &repo_root,
+        DevqlTaskSource::PostCommit,
+        crate::daemon::IngestTaskSpec {
+            commits: vec!["commit-a".to_string()],
+            backfill: None,
+        },
+    )
+    .expect("enqueue post-commit ingest task");
+
+    let claimed =
+        claim_next_producer_spool_jobs(&store.config_root).expect("claim producer spool jobs");
+    assert_eq!(claimed.len(), 1, "expected one ingest producer job");
+    match &claimed[0].payload {
+        ProducerSpoolJobPayload::Task {
+            source,
+            spec: DevqlTaskSpec::Ingest(spec),
+        } => {
+            assert_eq!(*source, DevqlTaskSource::PostCommit);
+            assert_eq!(spec.commits, vec!["commit-a".to_string()]);
+            assert_eq!(spec.backfill, None);
         }
         other => panic!("unexpected payload: {other:?}"),
     }

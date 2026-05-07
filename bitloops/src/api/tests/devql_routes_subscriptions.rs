@@ -2588,6 +2588,7 @@ async fn devql_graphql_task_progress_subscription_receives_published_task_events
         kind: crate::daemon::DevqlTaskKind::Ingest,
         source: crate::daemon::DevqlTaskSource::ManualCli,
         spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+            commits: Vec::new(),
             backfill: Some(1),
         }),
         init_session_id: None,

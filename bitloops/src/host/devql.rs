@@ -69,7 +69,7 @@ pub(crate) use self::classification::{
 };
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_ingest::{
-    execute_ingest_with_backfill_window, execute_ingest_with_observer,
+    execute_ingest_with_backfill_window, execute_ingest_with_commits, execute_ingest_with_observer,
 };
 #[cfg(test)]
 pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
@@ -103,6 +103,8 @@ pub(crate) use self::plain_text::{
 };
 #[cfg(test)]
 pub(crate) use self::producer_spool::claim_next_producer_spool_jobs;
+#[cfg(not(test))]
+pub(crate) use self::producer_spool::enqueue_spooled_ingest_task_for_repo_root;
 #[cfg(test)]
 pub(crate) use self::producer_spool::enqueue_spooled_post_commit_derivation;
 pub(crate) use self::producer_spool::{

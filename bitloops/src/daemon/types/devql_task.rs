@@ -115,6 +115,9 @@ pub struct SyncTaskSpec {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IngestTaskSpec {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backfill: Option<usize>,
 }
 

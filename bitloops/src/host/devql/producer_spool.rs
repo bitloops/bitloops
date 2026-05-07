@@ -16,6 +16,7 @@ mod storage;
 #[path = "producer_spool/tests.rs"]
 mod tests;
 
+pub(crate) use enqueue::enqueue_spooled_ingest_task_for_repo_root;
 #[cfg(test)]
 pub(crate) use enqueue::enqueue_spooled_post_commit_derivation;
 pub(crate) use enqueue::{

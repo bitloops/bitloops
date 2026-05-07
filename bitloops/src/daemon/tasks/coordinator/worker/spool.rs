@@ -123,6 +123,7 @@ impl DevqlTaskCoordinator {
                         &cfg,
                         crate::daemon::DevqlTaskSource::PostMerge,
                         crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+                            commits: Vec::new(),
                             backfill: Some(backfill),
                         }),
                     )?;

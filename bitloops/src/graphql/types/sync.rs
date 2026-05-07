@@ -33,6 +33,7 @@ pub struct SyncTaskSpecObject {
 #[derive(Debug, Clone, SimpleObject)]
 #[graphql(name = "IngestTaskSpec")]
 pub struct IngestTaskSpecObject {
+    pub commits: Vec<String>,
     pub backfill: Option<i32>,
 }
 
@@ -209,6 +210,7 @@ impl From<DevqlTaskRecord> for TaskObject {
             },
         });
         let ingest_spec = value.ingest_spec().map(|spec| IngestTaskSpecObject {
+            commits: spec.commits.clone(),
             backfill: spec.backfill.map(to_graphql_count),
         });
         let embeddings_bootstrap_spec =

@@ -125,9 +125,7 @@ pub(super) fn spool_task_dedupe_key(
         )),
         DevqlTaskSpec::Ingest(spec) => Some(format!(
             "task:{source}:ingest:{}",
-            spec.backfill
-                .map(|backfill| backfill.to_string())
-                .unwrap_or_else(|| "all".to_string())
+            spool_ingest_spec_key(spec)
         )),
         DevqlTaskSpec::EmbeddingsBootstrap(_) | DevqlTaskSpec::SummaryBootstrap(_) => None,
     }
@@ -169,6 +167,26 @@ fn spool_sync_mode_key(mode: &SyncTaskMode) -> String {
         SyncTaskMode::Validate => "validate".to_string(),
         SyncTaskMode::Paths { .. } => "paths".to_string(),
     }
+}
+
+fn spool_ingest_spec_key(spec: &crate::daemon::IngestTaskSpec) -> String {
+    if !spec.commits.is_empty() {
+        let mut commits = spec
+            .commits
+            .iter()
+            .map(|commit| commit.trim())
+            .filter(|commit| !commit.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        commits.sort();
+        commits.dedup();
+        if !commits.is_empty() {
+            return format!("commits:{}", commits.join(","));
+        }
+    }
+    spec.backfill
+        .map(|backfill| backfill.to_string())
+        .unwrap_or_else(|| "all".to_string())
 }
 
 fn normalize_repo_path(path: &str) -> String {
