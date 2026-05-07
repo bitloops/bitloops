@@ -192,7 +192,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
 
     "experimental.chat.messages.transform": async (_input, output) => {
       if (!BOOTSTRAP_CONTEXT) return
-      const repoSkillPath = path.join(directory, ".opencode", "skills", "bitloops", "using-devql", "SKILL.md")
+      const repoSkillPath = path.join(directory, ".opencode", "skills", "bitloops", "devql-explore-first", "SKILL.md")
       if (!(await Bun.file(repoSkillPath).exists())) return
       if (!output.messages.length) return
 

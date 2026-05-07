@@ -448,7 +448,7 @@ mod tests {
                 .join(".github")
                 .join("skills")
                 .join("bitloops")
-                .join("using-devql")
+                .join("devql-explore-first")
                 .join("SKILL.md"),
         )
         .ok()
@@ -488,7 +488,7 @@ mod tests {
         let skill = read_repo_skill(&dir).expect("repo skill should be installed");
         assert_eq!(
             skill,
-            crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL
+            crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL
         );
     }
 

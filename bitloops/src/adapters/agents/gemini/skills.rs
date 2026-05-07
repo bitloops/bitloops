@@ -5,18 +5,24 @@ use anyhow::{Context, Result};
 use crate::adapters::agents::skill_install::{
     prune_empty_parents, remove_managed_file, write_managed_file,
 };
-use crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL;
+use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
 const GEMINI_DIR_NAME: &str = ".gemini";
 const GEMINI_MD_FILE_NAME: &str = "GEMINI.md";
-pub const GEMINI_SKILL_RELATIVE_PATH: &str = ".gemini/skills/bitloops/using-devql/SKILL.md";
+pub const GEMINI_SKILL_RELATIVE_PATH: &str = ".gemini/skills/bitloops/devql-explore-first/SKILL.md";
+pub const LEGACY_GEMINI_SKILL_RELATIVE_PATH: &str = ".gemini/skills/bitloops/using-devql/SKILL.md";
 
 const MANAGED_BLOCK_START: &str = "<!-- bitloops-managed-start -->";
 const MANAGED_BLOCK_END: &str = "<!-- bitloops-managed-end -->";
-const MANAGED_IMPORT_LINE: &str = "@./.gemini/skills/bitloops/using-devql/SKILL.md";
+const MANAGED_IMPORT_LINE: &str = "@./.gemini/skills/bitloops/devql-explore-first/SKILL.md";
+const LEGACY_MANAGED_IMPORT_LINE: &str = "@./.gemini/skills/bitloops/using-devql/SKILL.md";
 
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
     repo_root.join(GEMINI_SKILL_RELATIVE_PATH)
+}
+
+fn legacy_repo_skill_path(repo_root: &Path) -> PathBuf {
+    repo_root.join(LEGACY_GEMINI_SKILL_RELATIVE_PATH)
 }
 
 pub fn gemini_md_path(repo_root: &Path) -> PathBuf {
@@ -25,7 +31,15 @@ pub fn gemini_md_path(repo_root: &Path) -> PathBuf {
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
     let skill_path = repo_skill_path(repo_root);
-    let mut changed = write_managed_file(&skill_path, USING_DEVQL_SKILL)?;
+    let mut changed = write_managed_file(&skill_path, DEVQL_EXPLORE_FIRST_SKILL)?;
+
+    // Remove legacy skill file if present.
+    let legacy_skill_path = legacy_repo_skill_path(repo_root);
+    if legacy_skill_path.exists() {
+        remove_managed_file(&legacy_skill_path)?;
+        prune_empty_parents(&legacy_skill_path, &repo_root.join(GEMINI_DIR_NAME))?;
+        changed = true;
+    }
 
     let gemini_md_path = gemini_md_path(repo_root);
     let gemini_content = match std::fs::read_to_string(&gemini_md_path) {
@@ -35,21 +49,29 @@ pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
             return Err(err).with_context(|| format!("reading {}", gemini_md_path.display()));
         }
     };
-    let managed_block = managed_block();
+
+    // Replace legacy managed block (if present) or skip if up-to-date, or append new block.
     let next_content = if gemini_content.contains(MANAGED_BLOCK_START)
         && gemini_content.contains(MANAGED_BLOCK_END)
         && gemini_content.contains(MANAGED_IMPORT_LINE)
     {
+        // Already up to date.
         gemini_content
+    } else if gemini_content.contains(MANAGED_BLOCK_START)
+        && gemini_content.contains(MANAGED_BLOCK_END)
+        && gemini_content.contains(LEGACY_MANAGED_IMPORT_LINE)
+    {
+        // Replace legacy block with updated import line.
+        gemini_content.replace(LEGACY_MANAGED_IMPORT_LINE, MANAGED_IMPORT_LINE)
     } else if gemini_content.trim().is_empty() {
-        managed_block
+        managed_block()
     } else {
         let mut content = gemini_content;
         if !content.ends_with('\n') {
             content.push('\n');
         }
         content.push('\n');
-        content.push_str(&managed_block);
+        content.push_str(&managed_block());
         content
     };
 
@@ -64,6 +86,11 @@ pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
     remove_managed_file(&skill_path)
         .with_context(|| format!("removing {}", skill_path.display()))?;
     prune_empty_parents(&skill_path, &repo_root.join(GEMINI_DIR_NAME))?;
+
+    let legacy_skill_path = legacy_repo_skill_path(repo_root);
+    remove_managed_file(&legacy_skill_path)
+        .with_context(|| format!("removing {}", legacy_skill_path.display()))?;
+    prune_empty_parents(&legacy_skill_path, &repo_root.join(GEMINI_DIR_NAME))?;
 
     let gemini_md_path = gemini_md_path(repo_root);
     let gemini_content = match std::fs::read_to_string(&gemini_md_path) {
@@ -136,7 +163,7 @@ fn remove_managed_block(content: &str) -> String {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL;
+    use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
     use super::*;
 
@@ -155,16 +182,16 @@ mod tests {
         let skill_path = repo_skill_path(root);
         assert_eq!(
             std::fs::read_to_string(&skill_path).expect("failed to read skill"),
-            USING_DEVQL_SKILL
+            DEVQL_EXPLORE_FIRST_SKILL
         );
 
         let gemini_md =
             std::fs::read_to_string(root.join("GEMINI.md")).expect("failed to read GEMINI.md");
         assert!(gemini_md.contains("user context"));
-        assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+        assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
         assert_eq!(
             gemini_md
-                .matches("@./.gemini/skills/bitloops/using-devql/SKILL.md")
+                .matches("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md")
                 .count(),
             1
         );
@@ -185,12 +212,13 @@ mod tests {
         std::fs::create_dir_all(&gemini_dir).expect("failed to create .gemini");
         std::fs::write(
             root.join("GEMINI.md"),
-            "user context\n\n<!-- bitloops-managed-start -->\n@./.gemini/skills/bitloops/using-devql/SKILL.md\n<!-- bitloops-managed-end -->\n",
+            "user context\n\n<!-- bitloops-managed-start -->\n@./.gemini/skills/bitloops/devql-explore-first/SKILL.md\n<!-- bitloops-managed-end -->\n",
         )
         .expect("failed to seed GEMINI.md");
         std::fs::create_dir_all(repo_skill_path(root).parent().expect("skill parent"))
             .expect("failed to create skill directory");
-        std::fs::write(repo_skill_path(root), USING_DEVQL_SKILL).expect("failed to seed skill");
+        std::fs::write(repo_skill_path(root), DEVQL_EXPLORE_FIRST_SKILL)
+            .expect("failed to seed skill");
 
         uninstall_repo_skill(root).expect("uninstall_repo_skill should succeed");
 
@@ -198,7 +226,55 @@ mod tests {
         let gemini_md =
             std::fs::read_to_string(root.join("GEMINI.md")).expect("failed to read GEMINI.md");
         assert!(gemini_md.contains("user context"));
-        assert!(!gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+        assert!(!gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
         assert!(!gemini_md.contains("bitloops-managed-start"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn TestInstallRepoSkill_MigratesLegacyUsingDevqlBlock() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let root = dir.path();
+        let gemini_dir = root.join(".gemini");
+        std::fs::create_dir_all(&gemini_dir).expect("failed to create .gemini");
+
+        // Seed legacy skill file and GEMINI.md with old import line.
+        let legacy_skill_path = legacy_repo_skill_path(root);
+        std::fs::create_dir_all(legacy_skill_path.parent().expect("legacy parent"))
+            .expect("create legacy parent");
+        std::fs::write(&legacy_skill_path, "legacy content").expect("write legacy skill");
+        std::fs::write(
+            root.join("GEMINI.md"),
+            "user context\n\n<!-- bitloops-managed-start -->\n@./.gemini/skills/bitloops/using-devql/SKILL.md\n<!-- bitloops-managed-end -->\n",
+        )
+        .expect("seed legacy GEMINI.md");
+
+        let changed = install_repo_skill(root).expect("install should succeed");
+        assert!(changed);
+
+        // Legacy skill file removed.
+        assert!(!legacy_skill_path.exists());
+
+        // New skill file written.
+        let skill_path = repo_skill_path(root);
+        assert!(skill_path.exists());
+        assert!(
+            std::fs::read_to_string(&skill_path)
+                .expect("read skill")
+                .contains("name: devql-explore-first")
+        );
+
+        // GEMINI.md updated to use new import line.
+        let gemini_md =
+            std::fs::read_to_string(root.join("GEMINI.md")).expect("failed to read GEMINI.md");
+        assert!(gemini_md.contains("user context"));
+        assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(!gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+        assert_eq!(
+            gemini_md
+                .matches("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md")
+                .count(),
+            1
+        );
     }
 }
