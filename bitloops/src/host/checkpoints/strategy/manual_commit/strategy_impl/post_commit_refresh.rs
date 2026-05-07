@@ -17,6 +17,11 @@ pub(crate) fn run_devql_post_commit_refresh(
     if should_skip_post_commit_devql_refresh() {
         return Ok(());
     }
+    if !crate::config::settings::devql_sync_enabled(repo_root)
+        .context("loading DevQL sync producer policy for post-commit refresh")?
+    {
+        return Ok(());
+    }
 
     let mut changed_files = committed_files.iter().cloned().collect::<Vec<_>>();
     changed_files.sort();
@@ -49,6 +54,12 @@ pub(crate) async fn execute_devql_post_commit_refresh(
     commit_sha: &str,
     changed_files: &[String],
 ) -> Result<()> {
+    if !crate::config::settings::devql_sync_enabled(&cfg.repo_root)
+        .context("loading DevQL sync producer policy for post-commit refresh")?
+    {
+        return Ok(());
+    }
+
     let commit_sha = commit_sha.trim();
     if commit_sha.is_empty() {
         return Ok(());
@@ -79,6 +90,11 @@ pub(crate) fn run_devql_post_commit_checkpoint_projection_refresh(
     checkpoint_id: &str,
 ) -> Result<()> {
     if should_skip_post_commit_devql_refresh() {
+        return Ok(());
+    }
+    if !crate::config::settings::devql_sync_enabled(repo_root).context(
+        "loading DevQL sync producer policy for post-commit checkpoint projection refresh",
+    )? {
         return Ok(());
     }
 

@@ -184,6 +184,82 @@ async fn producer_spool_task_job_enqueues_devql_task_and_clears_spool_row() {
 }
 
 #[tokio::test]
+async fn producer_spool_sync_task_job_skips_when_devql_sync_disabled() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+    crate::config::settings::set_devql_producer_settings(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        false,
+        true,
+    )
+    .expect("disable producer sync");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo.clone())
+        .expect("build devql config");
+    crate::host::devql::enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/lib.rs".to_string()]),
+    )
+    .expect("enqueue watcher sync into producer spool");
+
+    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs");
+    assert_eq!(jobs.len(), 1, "expected one producer spool job");
+
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+
+    Arc::clone(&coordinator)
+        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+        .await
+        .expect("process producer spool job");
+
+    let tasks = coordinator
+        .tasks(
+            Some(&cfg.repo.repo_id),
+            Some(DevqlTaskKind::Sync),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued tasks");
+    assert!(
+        tasks.is_empty(),
+        "producer spool task must not enqueue sync when [devql].sync_enabled=false"
+    );
+
+    let remaining_jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs after processing");
+    assert!(
+        remaining_jobs.is_empty(),
+        "policy-skipped producer spool jobs should be removed"
+    );
+}
+
+#[tokio::test]
 async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_row() {
     let dir = TempDir::new().expect("temp dir");
     let config_root = dir.path().join("config");
@@ -287,6 +363,321 @@ async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_r
     assert!(
         remaining_jobs.is_empty(),
         "completed producer spool jobs should be removed from the repo runtime store"
+    );
+}
+
+#[tokio::test]
+async fn post_merge_producer_spool_job_skips_ingest_when_devql_ingest_disabled() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo src dir");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(
+        repo_root.join("src/lib.rs"),
+        "pub fn qa_merge() -> i32 { 7 }\n",
+    )
+    .expect("write source file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+    let head_sha = crate::test_support::git_fixtures::git_ok(&repo_root, &["rev-parse", "HEAD"]);
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+    crate::config::settings::set_devql_producer_settings(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        true,
+        false,
+    )
+    .expect("disable producer ingest");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo.clone())
+        .expect("build devql config");
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        &head_sha,
+        &["src/lib.rs".to_string()],
+    )
+    .expect("enqueue post-merge producer spool job");
+
+    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs");
+    assert_eq!(jobs.len(), 1, "expected one post-merge producer job");
+
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+
+    Arc::clone(&coordinator)
+        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+        .await
+        .expect("process producer spool job");
+
+    let ingest_tasks = coordinator
+        .tasks(
+            Some(&cfg.repo.repo_id),
+            Some(DevqlTaskKind::Ingest),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued ingest tasks");
+    assert!(
+        ingest_tasks.is_empty(),
+        "post-merge must not enqueue ingest when [devql].ingest_enabled=false"
+    );
+
+    let sync_tasks = coordinator
+        .tasks(
+            Some(&cfg.repo.repo_id),
+            Some(DevqlTaskKind::Sync),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued sync tasks");
+    assert_eq!(
+        sync_tasks.len(),
+        1,
+        "post-merge current-state refresh should still be queued"
+    );
+    assert_eq!(sync_tasks[0].source, DevqlTaskSource::PostMerge);
+}
+
+#[tokio::test]
+async fn post_merge_producer_spool_job_skips_sync_when_devql_sync_disabled() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo src dir");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(
+        repo_root.join("src/lib.rs"),
+        "pub fn qa_merge() -> i32 { 7 }\n",
+    )
+    .expect("write source file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+    let head_sha = crate::test_support::git_fixtures::git_ok(&repo_root, &["rev-parse", "HEAD"]);
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+    crate::config::settings::set_devql_producer_settings(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        false,
+        true,
+    )
+    .expect("disable producer sync");
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo.clone())
+        .expect("build devql config");
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        &head_sha,
+        &["src/lib.rs".to_string()],
+    )
+    .expect("enqueue post-merge producer spool job");
+
+    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs");
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+
+    Arc::clone(&coordinator)
+        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+        .await
+        .expect("process producer spool job");
+
+    let sync_tasks = coordinator
+        .tasks(
+            Some(&cfg.repo.repo_id),
+            Some(DevqlTaskKind::Sync),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued sync tasks");
+    assert!(
+        sync_tasks.is_empty(),
+        "post-merge must not enqueue sync when [devql].sync_enabled=false"
+    );
+
+    let ingest_tasks = coordinator
+        .tasks(
+            Some(&cfg.repo.repo_id),
+            Some(DevqlTaskKind::Ingest),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued ingest tasks");
+    assert_eq!(
+        ingest_tasks.len(),
+        1,
+        "ingest_enabled=true should still allow post-merge ingest"
+    );
+}
+
+#[tokio::test]
+async fn post_commit_producer_spool_job_skips_sync_when_devql_sync_disabled() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo src dir");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn qa_commit() {}\n")
+        .expect("write source file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+    let head_sha = crate::test_support::git_fixtures::git_ok(&repo_root, &["rev-parse", "HEAD"]);
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+    crate::config::settings::set_devql_producer_settings(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        false,
+        true,
+    )
+    .expect("disable producer sync");
+
+    crate::host::devql::enqueue_spooled_post_commit_refresh(
+        &repo_root,
+        &head_sha,
+        &["src/lib.rs".to_string()],
+    )
+    .expect("enqueue post-commit producer spool job");
+
+    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs");
+    assert_eq!(jobs.len(), 1, "expected one post-commit producer job");
+    std::fs::remove_dir_all(repo_root.join(".git")).expect("remove git dir after spooling");
+
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+
+    Arc::clone(&coordinator)
+        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+        .await
+        .expect("process producer spool job");
+
+    let remaining_jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs after processing");
+    assert!(
+        remaining_jobs.is_empty(),
+        "sync-disabled post-commit producer spool job should be dropped instead of retried"
+    );
+}
+
+#[tokio::test]
+async fn pre_push_producer_spool_job_skips_sync_when_devql_sync_disabled() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo src dir");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn qa_pre_push() {}\n")
+        .expect("write source file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "initial"]);
+    let head_sha = crate::test_support::git_fixtures::git_ok(&repo_root, &["rev-parse", "HEAD"]);
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+    crate::config::settings::set_devql_producer_settings(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        false,
+        true,
+    )
+    .expect("disable producer sync");
+
+    crate::host::devql::enqueue_spooled_pre_push_sync(
+        &repo_root,
+        "origin",
+        &[format!(
+            "refs/heads/main {head_sha} refs/heads/main 0000000000000000000000000000000000000000"
+        )],
+    )
+    .expect("enqueue pre-push producer spool job");
+
+    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs");
+    assert_eq!(jobs.len(), 1, "expected one pre-push producer job");
+    std::fs::remove_dir_all(repo_root.join(".git")).expect("remove git dir after spooling");
+
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+
+    Arc::clone(&coordinator)
+        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+        .await
+        .expect("process producer spool job");
+
+    let remaining_jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
+        .expect("claim producer spool jobs after processing");
+    assert!(
+        remaining_jobs.is_empty(),
+        "sync-disabled pre-push producer spool job should be dropped instead of retried"
     );
 }
 
