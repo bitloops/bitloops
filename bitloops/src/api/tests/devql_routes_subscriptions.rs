@@ -315,6 +315,7 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert!(
         sdl_body.contains("startInit(repoId: String!, input: StartInitInput!): StartInitResult!")
     );
+    assert!(sdl_body.contains("validateSync(repoId: String!): RuntimeTaskEnqueueResultObject!"));
     assert!(
         sdl_body.contains("runtimeEvents(repoId: String!, initSessionId: ID): RuntimeEventObject!")
     );
@@ -322,6 +323,7 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     let slim_sdl = crate::graphql::slim_schema_sdl();
     assert!(!slim_sdl.contains("runtimeSnapshot("));
     assert!(!slim_sdl.contains("startInit("));
+    assert!(!slim_sdl.contains("validateSync("));
     assert!(!slim_sdl.contains("runtimeEvents("));
 
     let global_sdl = crate::graphql::schema_sdl();
@@ -329,6 +331,7 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert!(!global_sdl.contains("updateConfig("));
     assert!(!global_sdl.contains("runtimeSnapshot("));
     assert!(!global_sdl.contains("startInit("));
+    assert!(!global_sdl.contains("validateSync("));
     assert!(!global_sdl.contains("runtimeEvents("));
 }
 
@@ -753,6 +756,53 @@ async fn devql_runtime_route_executes_start_init_mutations() {
         .as_str()
         .expect("init session id");
     assert!(init_session_id.starts_with("init-session-"));
+}
+
+#[tokio::test]
+async fn devql_runtime_route_executes_validate_sync_mutation() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation ValidateSync($repoId: String!) { validateSync(repoId: $repoId) { merged task { kind source status syncSpec { mode paths } syncProgress { phase pathsTotal pathsCompleted pathsRemaining } } } }",
+                "variables": {
+                    "repoId": repo_id,
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let task = &payload["data"]["validateSync"]["task"];
+    assert_eq!(task["kind"], "SYNC");
+    assert_eq!(task["source"], "manual_cli");
+    assert_eq!(task["status"], "QUEUED");
+    assert_eq!(task["syncSpec"]["mode"], "validate");
+    assert_eq!(
+        task["syncSpec"]["paths"].as_array().expect("paths").len(),
+        0
+    );
+    assert_eq!(task["syncProgress"]["phase"], "queued");
 }
 
 #[test]

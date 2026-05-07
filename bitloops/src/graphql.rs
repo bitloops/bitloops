@@ -20,8 +20,8 @@ pub(crate) use scope::{ResolvedTemporalScope, ResolverScope, TemporalAccessMode}
 pub(crate) use subscriptions::SubscriptionHub;
 pub(crate) use types::Checkpoint;
 pub(crate) use types::HealthStatus;
-pub(crate) use types::TaskQueueStatusObject;
 pub(crate) use types::{ArtefactFilterInput, CanonicalKind};
+pub(crate) use types::{TaskObject, TaskQueueStatusObject};
 
 #[cfg(test)]
 pub(crate) use types::DateTimeScalar;
