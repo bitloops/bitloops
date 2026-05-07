@@ -114,7 +114,7 @@ jobs:
           shared-key: dev-ci
           cache-workspace-crates: true
       - name: Run develop gate QAT
-        run: cargo qat-develop-gate --parallel 3
+        run: cargo qat-develop-gate
 
   test-full:
     name: Full test suite
