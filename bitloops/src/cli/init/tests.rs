@@ -1340,6 +1340,20 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         assert!(!rendered.contains("Initialising DevQL schema"));
         assert!(!rendered.contains("Bitloops project bootstrap is ready."));
         assert!(repo.path().join(".bitloops.local.toml").exists());
+        let local_policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+            .expect("read local repo policy");
+        assert!(
+            local_policy.contains("[devql]"),
+            "expected [devql] table in local policy:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("sync_enabled = false"),
+            "expected init --sync=false to persist sync_enabled=false:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("ingest_enabled = false"),
+            "expected init --ingest=false to persist ingest_enabled=false:\n{local_policy}"
+        );
         assert_eq!(
             crate::cli::enable::initialized_agents(repo.path()),
             vec![DEFAULT_AGENT.to_string()]
@@ -1547,7 +1561,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
 }
 
 #[test]
-fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
+fn run_init_reports_repo_watcher_disabled_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -1559,11 +1573,11 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
                 let repo_root = repo_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "init should only reconcile watchers when capture is enabled"
+                        !watcher_enabled,
+                        "init --sync=false should not reconcile/start a DevQL watcher"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1628,11 +1642,11 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
         crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
             {
                 let repo_root = repo_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "init should only reconcile watchers when capture is enabled"
+                        !watcher_enabled,
+                        "init --sync=false should surface watcher reconcile failures with watcher disabled"
                     );
                     anyhow::bail!("watcher reconcile exploded");
                 }
@@ -1681,7 +1695,7 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
 }
 
 #[test]
-fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
+fn run_init_reports_nested_repo_watcher_disabled_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let project_root = repo.path().join("apps/nested-project");
@@ -1694,11 +1708,11 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
                 let project_root = project_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, project_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "nested init should reconcile watchers when nested-project capture is enabled"
+                        !watcher_enabled,
+                        "nested init --sync=false should not reconcile/start a DevQL watcher"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1769,7 +1783,7 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
         crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
-                move |_repo_root, _capture_enabled| {
+                move |_repo_root, _watcher_enabled| {
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
                 }

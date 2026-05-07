@@ -174,6 +174,23 @@ Feature: DevQL sync workspace reconciliation
     And I enqueue DevQL sync validate task with status in bitloops
     Then DevQL sync validation reports clean in bitloops
 
+  @devql @sync @sync_producer @sync_producer_post_merge @sync_no_ingest
+  Scenario: Post-merge sync respects init ingest disabled
+    Given I run CleanStart for flow "SyncPostMergeNoIngest"
+    And I start the daemon in bitloops
+    And I create a simple Rust project in bitloops
+    And I run InitCommit for bitloops
+    And I run bitloops producer-contract init --agent claude --sync=true in bitloops
+    Then DevQL watcher is registered and running in bitloops
+    Given I snapshot completed DevQL sync task source "post_merge" in bitloops
+    When I simulate a git pull with new changes in bitloops
+    Then a completed DevQL sync task with source "post_merge" shows work greater than 0 since snapshot in bitloops
+    And artefacts_current eventually contains path "src/utils.rs" without nudge in bitloops
+    Given I wait for the DevQL task queue to become idle in bitloops
+    Then no DevQL ingest task with source "post_merge" exists since snapshot in bitloops
+    Given I enqueue DevQL sync validate task with status in bitloops
+    Then DevQL sync validation reports clean in bitloops
+
   @devql @sync @sync_manual @sync_manual_smoke
   Scenario: Sync validate reports clean after a full sync
     Given I run CleanStart for flow "SyncValidateClean"
