@@ -125,10 +125,10 @@ fn semantic_generated_at_now_sql(dialect: RelationalDialect) -> &'static str {
 }
 
 pub(crate) fn build_symbol_feature_persist_rows_sql(
-    rows: &semantic::SemanticFeatureRows,
+    rows: &impl semantic::HashedFeatureRows,
     dialect: RelationalDialect,
 ) -> Result<String> {
-    let features = &rows.features;
+    let features = rows.features_row();
     let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
     let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
     let modifiers_expr = sql_json_string_for_dialect(&features.modifiers, dialect)?;
@@ -144,7 +144,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         features_artefact_id = esc_pg(&features.artefact_id),
         features_repo_id = esc_pg(&features.repo_id),
         features_blob_sha = esc_pg(&features.blob_sha),
-        features_input_hash = esc_pg(&rows.semantic_features_input_hash),
+        features_input_hash = esc_pg(rows.semantic_features_input_hash()),
         normalized_name = esc_pg(&features.normalized_name),
         normalized_signature = normalized_signature_expr,
         modifiers = modifiers_expr,
@@ -157,13 +157,13 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
 }
 
 pub(crate) fn build_current_symbol_feature_persist_rows_sql(
-    rows: &semantic::SemanticFeatureRows,
+    rows: &impl semantic::HashedFeatureRows,
     symbol_id: Option<&str>,
     path: &str,
     content_id: &str,
     dialect: RelationalDialect,
 ) -> Result<String> {
-    let features = &rows.features;
+    let features = rows.features_row();
     let symbol_id_expr = sql_optional_string(symbol_id);
     let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
     let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
@@ -182,7 +182,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
         path = esc_pg(path),
         content_id = esc_pg(content_id),
         symbol_id = symbol_id_expr,
-        features_input_hash = esc_pg(&rows.semantic_features_input_hash),
+        features_input_hash = esc_pg(rows.semantic_features_input_hash()),
         normalized_name = esc_pg(&features.normalized_name),
         normalized_signature = normalized_signature_expr,
         modifiers = modifiers_expr,
@@ -195,11 +195,11 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
 }
 
 pub(crate) fn build_conditional_current_symbol_feature_persist_rows_sql(
-    rows: &semantic::SemanticFeatureRows,
+    rows: &impl semantic::HashedFeatureRows,
     input: &semantic::SemanticFeatureInput,
     dialect: RelationalDialect,
 ) -> Result<String> {
-    let features = &rows.features;
+    let features = rows.features_row();
     let normalized_signature_expr = sql_optional_string(features.normalized_signature.as_deref());
     let parent_kind_expr = sql_optional_string(features.parent_kind.as_deref());
     let modifiers_expr = sql_json_string_for_dialect(&features.modifiers, dialect)?;
@@ -216,7 +216,7 @@ FROM ({target_select}) target \
 WHERE 1 = 1 \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, normalized_name = EXCLUDED.normalized_name, normalized_signature = EXCLUDED.normalized_signature, modifiers = EXCLUDED.modifiers, identifier_tokens = EXCLUDED.identifier_tokens, normalized_body_tokens = EXCLUDED.normalized_body_tokens, parent_kind = EXCLUDED.parent_kind, context_tokens = EXCLUDED.context_tokens, generated_at = {generated_at}",
         target_select = target_select,
-        features_input_hash = esc_pg(&rows.semantic_features_input_hash),
+        features_input_hash = esc_pg(rows.semantic_features_input_hash()),
         normalized_name = esc_pg(&features.normalized_name),
         normalized_signature = normalized_signature_expr,
         modifiers = modifiers_expr,
