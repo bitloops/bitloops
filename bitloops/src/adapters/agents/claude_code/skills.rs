@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::adapters::agents::skill_install::{
-    prune_empty_parents, remove_managed_file, write_managed_file,
+    install_canonical_repo_skill, prune_empty_parents, read_or_install_canonical_repo_skill,
+    remove_canonical_repo_skill, remove_managed_file, write_managed_file,
 };
-use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
 pub const CLAUDE_CODE_SKILL_RELATIVE_PATH: &str =
     ".claude/skills/bitloops/devql-explore-first/SKILL.md";
@@ -21,14 +21,16 @@ fn legacy_repo_skill_path(repo_root: &Path) -> PathBuf {
 }
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
+    let canonical_changed = install_canonical_repo_skill(repo_root)?;
+    let skill = read_or_install_canonical_repo_skill(repo_root)?;
     let path = repo_skill_path(repo_root);
-    let changed = write_managed_file(&path, DEVQL_EXPLORE_FIRST_SKILL)?;
+    let changed = write_managed_file(&path, &skill)?;
     let legacy_path = legacy_repo_skill_path(repo_root);
     let removed_legacy = legacy_path.exists();
     remove_managed_file(&legacy_path)?;
     prune_empty_parents(&legacy_path, &repo_root.join(".claude"))?;
 
-    Ok(changed || removed_legacy)
+    Ok(changed || removed_legacy || canonical_changed)
 }
 
 pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
@@ -38,11 +40,15 @@ pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
 
     let legacy_path = legacy_repo_skill_path(repo_root);
     remove_managed_file(&legacy_path)?;
-    prune_empty_parents(&legacy_path, &repo_root.join(".claude"))
+    prune_empty_parents(&legacy_path, &repo_root.join(".claude"))?;
+
+    remove_canonical_repo_skill(repo_root)
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::adapters::agents::skill_install::read_or_install_canonical_repo_skill;
+
     use super::*;
 
     #[test]
@@ -81,10 +87,9 @@ mod tests {
         let skill_path = repo_skill_path(dir.path());
         assert!(skill_path.exists());
         assert!(!legacy_path.exists());
-        assert!(
-            std::fs::read_to_string(skill_path)
-                .expect("read skill")
-                .contains("name: devql-explore-first")
+        assert_eq!(
+            std::fs::read_to_string(skill_path).expect("read skill"),
+            read_or_install_canonical_repo_skill(dir.path()).expect("read canonical skill")
         );
     }
 }

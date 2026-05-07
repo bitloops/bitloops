@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::adapters::agents::skill_install::{
-    prune_empty_parents, remove_managed_file, write_managed_file,
+    install_canonical_repo_skill, prune_empty_parents, read_or_install_canonical_repo_skill,
+    remove_canonical_repo_skill, remove_managed_file, strip_skill_frontmatter, write_managed_file,
 };
-use crate::host::hooks::augmentation::skill_content::devql_explore_first_skill_body;
 
 pub const CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/bitloops-devql-explore-first.mdc";
 pub const LEGACY_CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/bitloops-using-devql.mdc";
@@ -18,20 +18,22 @@ fn legacy_repo_rule_path(repo_root: &Path) -> PathBuf {
     repo_root.join(LEGACY_CURSOR_RULE_RELATIVE_PATH)
 }
 
-fn cursor_rule_content() -> String {
-    let body = devql_explore_first_skill_body().trim();
-    format!(
+fn cursor_rule_content(repo_root: &Path) -> Result<String> {
+    let skill = read_or_install_canonical_repo_skill(repo_root)?;
+    let body = strip_skill_frontmatter(&skill).trim();
+    Ok(format!(
         "---\n\
 description: Use DevQL before codebase exploration, symbol lookup, or any source-file reads. DevQL is the primary discovery tool — use `bitloops devql query` whenever locating symbols, files, tests, or implementations.\n\
 alwaysApply: true\n\
 ---\n\n\
 {body}\n"
-    )
+    ))
 }
 
 pub fn install_repo_rule(repo_root: &Path) -> Result<bool> {
+    let canonical_changed = install_canonical_repo_skill(repo_root)?;
     let path = repo_rule_path(repo_root);
-    let content = cursor_rule_content();
+    let content = cursor_rule_content(repo_root)?;
     let changed = write_managed_file(&path, &content)?;
 
     let legacy_path = legacy_repo_rule_path(repo_root);
@@ -39,7 +41,7 @@ pub fn install_repo_rule(repo_root: &Path) -> Result<bool> {
     remove_managed_file(&legacy_path)?;
     prune_empty_parents(&legacy_path, &repo_root.join(".cursor"))?;
 
-    Ok(changed || removed_legacy)
+    Ok(changed || removed_legacy || canonical_changed)
 }
 
 pub fn uninstall_repo_rule(repo_root: &Path) -> Result<()> {
@@ -49,7 +51,9 @@ pub fn uninstall_repo_rule(repo_root: &Path) -> Result<()> {
 
     let legacy_path = legacy_repo_rule_path(repo_root);
     remove_managed_file(&legacy_path)?;
-    prune_empty_parents(&legacy_path, &repo_root.join(".cursor"))
+    prune_empty_parents(&legacy_path, &repo_root.join(".cursor"))?;
+
+    remove_canonical_repo_skill(repo_root)
 }
 
 #[cfg(test)]
@@ -67,7 +71,8 @@ mod tests {
 
     #[test]
     fn cursor_rule_content_uses_frontmatter_and_devql_body() {
-        let content = cursor_rule_content();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let content = cursor_rule_content(dir.path()).expect("rule content");
         assert!(content.starts_with("---\n"));
         assert!(content.contains("alwaysApply: true"));
         assert!(content.contains("primary discovery tool"));
