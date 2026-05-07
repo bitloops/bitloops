@@ -29,8 +29,8 @@ pub(crate) use queue::claim_next_producer_spool_jobs;
 pub(crate) use queue::claim_next_producer_spool_jobs_excluding_repo_ids;
 pub(crate) use queue::{
     claim_next_producer_spool_jobs_excluding, delete_producer_spool_job,
-    recover_running_producer_spool_jobs, requeue_producer_spool_job,
-    running_producer_spool_repo_ids,
+    list_recent_producer_spool_jobs, recover_running_producer_spool_jobs,
+    requeue_producer_spool_job, running_producer_spool_repo_ids,
 };
 
 const PRODUCER_SPOOL_SCHEMA_SQLITE: &str = r#"
@@ -81,7 +81,7 @@ pub(crate) enum ProducerSpoolJobStatus {
 }
 
 impl ProducerSpoolJobStatus {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
             Self::Running => "running",

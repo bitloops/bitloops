@@ -218,6 +218,29 @@ pub(crate) fn running_producer_spool_repo_ids(config_root: &Path) -> Result<Hash
     })
 }
 
+pub(crate) fn list_recent_producer_spool_jobs(
+    config_root: &Path,
+    repo_id: &str,
+    limit: usize,
+) -> Result<Vec<ProducerSpoolJobRecord>> {
+    let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
+    let limit = i64::try_from(limit.max(1)).unwrap_or(i64::MAX);
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT job_id, repo_id, repo_root, config_root, repo_name, repo_provider,
+                    repo_organisation, repo_identity, dedupe_key, payload, status, attempts,
+                    available_at_unix, submitted_at_unix, updated_at_unix, last_error
+             FROM devql_producer_spool_jobs
+             WHERE repo_id = ?1
+             ORDER BY updated_at_unix DESC, submitted_at_unix DESC, job_id ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![repo_id, limit], map_producer_spool_job_record_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
+    })
+}
+
 fn producer_spool_claim_sort_key(job: &ProducerSpoolJobRecord) -> (u64, u64, u8, String) {
     (
         job.available_at_unix,

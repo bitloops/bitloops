@@ -8,6 +8,7 @@
 
 mod config;
 mod config_management;
+mod debug;
 mod events;
 mod handlers;
 mod init_session;

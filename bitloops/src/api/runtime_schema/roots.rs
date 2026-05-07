@@ -10,6 +10,7 @@ use super::config_management::{
     UpdateRuntimeConfigResult, list_config_targets, load_config_snapshot,
     update_config as update_runtime_config,
 };
+use super::debug::{RuntimeDebugSnapshotObject, load_runtime_debug_snapshot};
 use super::events::RuntimeEventObject;
 use super::snapshot::RuntimeSnapshotObject;
 use super::start_init::{StartInitInput, StartInitResult};
@@ -64,6 +65,20 @@ impl RuntimeQueryRoot {
                     format!("failed to load runtime snapshot: {err:#}"),
                 )
             })
+    }
+
+    #[graphql(name = "runtimeDebugSnapshot")]
+    async fn runtime_debug_snapshot(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: String,
+    ) -> Result<RuntimeDebugSnapshotObject> {
+        let state = ctx.data_unchecked::<DashboardState>();
+        let request_context = ctx
+            .data_opt::<RuntimeRequestContext>()
+            .cloned()
+            .unwrap_or_default();
+        load_runtime_debug_snapshot(state, request_context, repo_id.as_str()).await
     }
 }
 

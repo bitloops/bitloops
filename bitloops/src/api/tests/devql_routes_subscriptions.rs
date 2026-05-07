@@ -333,6 +333,158 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
 }
 
 #[tokio::test]
+async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    fs::write(repo.path().join("README.md"), "# debug fixture\n").expect("write readme");
+    git_ok(repo.path(), &["add", "README.md"]);
+    git_ok(repo.path(), &["commit", "-m", "initial"]);
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src").join("lib.rs"),
+        "pub fn debug_fixture() {}\n",
+    )
+    .expect("write source");
+    git_ok(repo.path(), &["add", "src/lib.rs"]);
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        repo.path(),
+        "merge-head",
+        &["src/lib.rs".to_string()],
+    )
+    .expect("enqueue post-merge refresh");
+    crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo.path())
+        .expect("open repo runtime store")
+        .save_watcher_registration(
+            12345,
+            "restart-token",
+            repo.path(),
+            crate::host::runtime_store::RepoWatcherRegistrationState::Ready,
+        )
+        .expect("save watcher registration");
+
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+    let headers = runtime_binding_headers(repo.path());
+    let headers_ref = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    let (status, payload) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        &headers_ref,
+        Body::from(
+            json!({
+                "query": r#"
+                    query RuntimeDebug($repoId: String!) {
+                      runtimeDebugSnapshot(repoId: $repoId) {
+                        repoId
+                        producerSpool {
+                          pendingCount
+                          runningCount
+                          jobs {
+                            jobId
+                            status
+                            payloadKind
+                            source
+                            dedupeKey
+                            attempts
+                            pathCount
+                            paths
+                            headSha
+                            lastError
+                          }
+                        }
+                        repoState {
+                          branch
+                          headSha
+                          mergeState
+                          stagedPaths
+                          unstagedPaths
+                          untrackedPaths
+                          deletedPaths
+                        }
+                        watcher {
+                          registered
+                          repoRoot
+                          pid
+                          state
+                        }
+                        supportingLogs {
+                          available
+                          path
+                          lines {
+                            level
+                            message
+                            raw
+                            timestampUnix
+                          }
+                        }
+                      }
+                    }
+                "#,
+                "variables": {
+                    "repoId": repo_id,
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let snapshot = &payload["data"]["runtimeDebugSnapshot"];
+    assert_eq!(snapshot["repoId"], repo_id);
+    assert_eq!(snapshot["producerSpool"]["pendingCount"], 1);
+    assert_eq!(snapshot["producerSpool"]["runningCount"], 0);
+    let first_job = &snapshot["producerSpool"]["jobs"][0];
+    assert_eq!(first_job["status"], "pending");
+    assert_eq!(first_job["payloadKind"], "post_merge_refresh");
+    assert_eq!(first_job["dedupeKey"], "post_merge:merge-head");
+    assert_eq!(first_job["pathCount"], 1);
+    assert_eq!(first_job["paths"][0], "src/lib.rs");
+    assert_eq!(first_job["headSha"], "merge-head");
+
+    assert_eq!(snapshot["repoState"]["branch"], "main");
+    assert_eq!(snapshot["repoState"]["mergeState"], "none");
+    assert_eq!(snapshot["repoState"]["stagedPaths"][0], "src/lib.rs");
+    assert_eq!(
+        snapshot["repoState"]["unstagedPaths"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    assert_eq!(snapshot["watcher"]["registered"], true);
+    assert_eq!(snapshot["watcher"]["state"], "ready");
+    assert_eq!(snapshot["watcher"]["pid"], 12345);
+    assert_eq!(
+        snapshot["watcher"]["repoRoot"],
+        repo.path().to_string_lossy().to_string()
+    );
+
+    assert!(snapshot["supportingLogs"]["available"].is_boolean());
+    assert!(snapshot["supportingLogs"]["lines"].is_array());
+}
+
+#[tokio::test]
 async fn devql_runtime_config_targets_list_existing_config_files() {
     let repo = TempDir::new().expect("temp dir");
     init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
