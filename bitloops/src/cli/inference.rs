@@ -14,7 +14,7 @@ pub(crate) use managed::{
     managed_inference_binary_path, managed_inference_metadata_path,
     managed_runtime_command_is_eligible, managed_runtime_version_for_command,
 };
-pub use setup::TextGenerationRuntime;
+pub use setup::{ArchitectureInferenceRuntime, TextGenerationRuntime};
 pub(crate) use setup::{
     ContextGuidanceSetupSelection, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
     PreparedSummarySetupAction, PreparedSummarySetupPlan, SummarySetupExecutionResult,
@@ -31,7 +31,7 @@ pub(crate) use setup::{
 #[cfg(test)]
 pub(crate) use setup::{
     bitloops_inference_generation_configured, configure_cloud_bitloops_inference,
-    configure_local_bitloops_inference,
+    configure_codex_architecture_inference, configure_local_bitloops_inference,
 };
 
 #[cfg(test)]

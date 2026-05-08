@@ -13,8 +13,9 @@ use super::embeddings::BitloopsEmbeddingsIpcService;
 use super::text_generation::BitloopsInferenceTextGenerationService;
 use super::{
     BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER,
-    BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, EmbeddingService, InferenceGateway,
-    ResolvedInferenceSlot, StructuredGenerationService, TextGenerationService,
+    BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, CLAUDE_CODE_PRINT_DRIVER, CODEX_EXEC_DRIVER,
+    EmbeddingService, InferenceGateway, ResolvedInferenceSlot, StructuredGenerationService,
+    TextGenerationService,
 };
 
 pub struct EmptyInferenceGateway;
@@ -230,7 +231,12 @@ impl LocalInferenceGateway {
             .runtime
             .as_deref()
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
-        let runtime = self.configured_runtime(profile_name, runtime_name)?;
+        let runtime = if is_cli_agent_structured_driver(&profile.driver) {
+            self.validate_cli_agent_provider_runtime(profile_name, profile)?;
+            self.bitloops_inference_launcher_runtime(profile_name)?
+        } else {
+            self.configured_runtime(profile_name, runtime_name)?
+        };
         let model = profile
             .model
             .as_deref()
@@ -277,10 +283,50 @@ impl LocalInferenceGateway {
         Ok(runtime)
     }
 
+    fn bitloops_inference_launcher_runtime(
+        &self,
+        profile_name: &str,
+    ) -> Result<&InferenceRuntimeConfig> {
+        self.configured_runtime(profile_name, super::BITLOOPS_INFERENCE_RUNTIME_ID)
+            .with_context(|| {
+                format!(
+                    "profile `{profile_name}` uses a CLI-agent structured-generation driver and requires runtime `{}` to launch `bitloops-inference`",
+                    super::BITLOOPS_INFERENCE_RUNTIME_ID
+                )
+            })
+    }
+
+    fn validate_cli_agent_provider_runtime(
+        &self,
+        profile_name: &str,
+        profile: &InferenceProfileConfig,
+    ) -> Result<()> {
+        if !is_cli_agent_structured_driver(&profile.driver) {
+            return Ok(());
+        }
+        let provider_runtime_name = profile
+            .runtime
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a provider runtime"))?;
+        let provider_runtime = self.configured_runtime(profile_name, provider_runtime_name)?;
+        if provider_runtime.command.trim().is_empty() {
+            bail!(
+                "provider runtime `{provider_runtime_name}` for profile `{profile_name}` has no command configured"
+            );
+        }
+        Ok(())
+    }
+
     fn resolve_runtime_config_path(&self) -> Result<PathBuf> {
         resolve_preferred_daemon_config_path_for_repo(&self.repo_root)
             .or_else(|_| Ok(self.repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)))
     }
+}
+
+fn is_cli_agent_structured_driver(driver: &str) -> bool {
+    matches!(driver.trim(), CODEX_EXEC_DRIVER | CLAUDE_CODE_PRINT_DRIVER)
 }
 
 impl InferenceGateway for LocalInferenceGateway {

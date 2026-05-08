@@ -1,14 +1,16 @@
 use std::io::Cursor;
 use std::rc::Rc;
 
+use clap::Parser;
 use tempfile::TempDir;
 use toml_edit::{DocumentMut, Item};
 
 use crate::cli::inference::{
-    ContextGuidanceSetupOutcome, ContextGuidanceSetupSelection, OllamaAvailability,
-    SummarySetupOutcome, SummarySetupPhase, SummarySetupSelection,
-    bitloops_inference_generation_configured, configure_cloud_bitloops_inference,
-    configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
+    ArchitectureInferenceRuntime, ContextGuidanceSetupOutcome, ContextGuidanceSetupSelection,
+    InferenceCommand, OllamaAvailability, SummarySetupOutcome, SummarySetupPhase,
+    SummarySetupSelection, bitloops_inference_generation_configured,
+    configure_cloud_bitloops_inference, configure_cloud_context_guidance_generation,
+    configure_cloud_summary_generation, configure_codex_architecture_inference,
     configure_local_bitloops_inference, configure_local_context_guidance_generation,
     configure_local_summary_generation, context_guidance_generation_configured,
     execute_prepared_summary_setup_with_progress, prepare_cloud_summary_generation_plan,
@@ -113,6 +115,87 @@ fn local_bitloops_inference_setup_configures_all_generation_slots() {
     assert!(rendered.contains("role_adjudication = \"architecture_role_adjudication_local\""));
     assert!(rendered.contains("driver = \"ollama_chat\""));
     assert!(rendered.contains("base_url = \"http://127.0.0.1:11434/api/chat\""));
+}
+
+#[test]
+fn codex_architecture_setup_configures_split_launcher_and_provider_runtimes() {
+    let repo = TempDir::new().expect("tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    std::fs::write(&config_path, "").expect("write config");
+    let binary_path = repo_root.join("bitloops-inference");
+    let install_binary_path = binary_path.clone();
+    let configure_root = repo_root.clone();
+
+    let message = with_managed_inference_install_hook(
+        move |_repo_root| {
+            Ok(
+                crate::cli::inference::ManagedInferenceBinaryInstallOutcome {
+                    version: "v1.2.3".to_string(),
+                    binary_path: install_binary_path.clone(),
+                    freshly_installed: true,
+                },
+            )
+        },
+        || configure_codex_architecture_inference(&configure_root, "gpt-5.4-mini"),
+    )
+    .expect("configure codex architecture inference");
+
+    assert_eq!(
+        message,
+        "Configured architecture inference to use Codex model `gpt-5.4-mini`."
+    );
+
+    let rendered = std::fs::read_to_string(repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH))
+        .expect("read config");
+    assert!(rendered.contains("fact_synthesis = \"architecture_fact_synthesis_codex\""));
+    assert!(rendered.contains("role_adjudication = \"architecture_role_adjudication_codex\""));
+    assert!(rendered.contains("[inference.runtimes.bitloops_inference]"));
+    assert!(rendered.contains(&format!(
+        "command = {:?}",
+        binary_path.display().to_string()
+    )));
+    assert!(rendered.contains("[inference.runtimes.codex]"));
+    assert!(rendered.contains("command = \"codex\""));
+    assert!(rendered.contains("args = [\"--ask-for-approval\", \"never\"]"));
+    assert!(rendered.contains("[inference.profiles.architecture_fact_synthesis_codex]"));
+    assert!(rendered.contains("task = \"structured_generation\""));
+    assert!(rendered.contains("driver = \"codex_exec\""));
+    assert!(rendered.contains("runtime = \"codex\""));
+    assert!(rendered.contains("model = \"gpt-5.4-mini\""));
+    assert!(rendered.contains("max_output_tokens = 4096"));
+    assert!(rendered.contains("[inference.profiles.architecture_role_adjudication_codex]"));
+    assert!(rendered.contains("max_output_tokens = 1024"));
+    assert!(!rendered.contains("summary_generation ="));
+    assert!(!rendered.contains("guidance_generation ="));
+}
+
+#[test]
+fn inference_install_parses_codex_architecture_selection() {
+    let cli = crate::cli::Cli::try_parse_from([
+        "bitloops",
+        "inference",
+        "install",
+        "--architecture-runtime",
+        "codex",
+        "--architecture-model",
+        "gpt-5.4-mini",
+    ])
+    .expect("parse inference install");
+
+    let crate::cli::Commands::Inference(args) = cli.command.expect("inference command") else {
+        panic!("expected inference command");
+    };
+    let Some(InferenceCommand::Install(args)) = args.command else {
+        panic!("expected inference install command");
+    };
+    assert_eq!(
+        args.architecture_runtime,
+        Some(ArchitectureInferenceRuntime::Codex)
+    );
+    assert_eq!(args.architecture_model, "gpt-5.4-mini");
 }
 
 #[test]

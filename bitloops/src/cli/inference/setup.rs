@@ -10,12 +10,13 @@ pub(crate) use execution::{
     configure_cloud_context_guidance_generation, configure_cloud_summary_generation,
     configure_local_context_guidance_generation, configure_local_summary_generation,
     execute_prepared_summary_setup_with_progress, prepare_cloud_summary_generation_plan,
-    prepare_local_summary_generation_plan,
+    prepare_local_summary_generation_plan, write_codex_architecture_inference_profiles,
 };
 
 #[cfg(test)]
 pub(crate) use execution::{
-    configure_cloud_bitloops_inference, configure_local_bitloops_inference,
+    configure_cloud_bitloops_inference, configure_codex_architecture_inference,
+    configure_local_bitloops_inference,
 };
 #[cfg(test)]
 pub(crate) use ollama::with_ollama_probe_hook;
@@ -34,7 +35,7 @@ pub(crate) use prompt::{prompt_context_guidance_setup_selection, prompt_summary_
 pub(crate) use types::ContextGuidanceSetupOutcome;
 #[cfg(test)]
 pub(crate) use types::OllamaAvailability;
-pub use types::TextGenerationRuntime;
+pub use types::{ArchitectureInferenceRuntime, TextGenerationRuntime};
 pub(crate) use types::{
     ContextGuidanceSetupSelection, PreparedSummarySetupAction, PreparedSummarySetupPlan,
     SummarySetupExecutionResult, SummarySetupOutcome, SummarySetupPhase, SummarySetupProgress,

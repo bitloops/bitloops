@@ -7,6 +7,12 @@ pub enum TextGenerationRuntime {
     Platform,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ArchitectureInferenceRuntime {
+    #[default]
+    Codex,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SummarySetupSelection {
     Cloud,

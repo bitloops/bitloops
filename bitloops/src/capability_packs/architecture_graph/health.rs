@@ -231,7 +231,7 @@ mod tests {
                 ResolvedInferenceSlot {
                     capability_id: "architecture_graph".to_string(),
                     slot_name: ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT.to_string(),
-                    profile_name: "local_agent".to_string(),
+                    profile_name: "architecture_fact_synthesis_codex".to_string(),
                     task,
                     driver: Some("codex_exec".to_string()),
                     runtime: Some("codex".to_string()),
@@ -319,6 +319,9 @@ mod tests {
         let result = check_architecture_graph_inference(&ctx);
 
         assert!(result.healthy);
-        assert!(result.message.contains("ready"));
+        assert_eq!(
+            result.message,
+            "architecture graph inference slots ready (codex:gpt-5.4-mini)"
+        );
     }
 }

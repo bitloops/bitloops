@@ -10,9 +10,7 @@ pub(super) const DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS: i64 = 4096;
 pub(super) const DEFAULT_CONTEXT_GUIDANCE_PROFILE_NAME: &str = "guidance_local";
 pub(super) const DEFAULT_PLATFORM_CONTEXT_GUIDANCE_PROFILE_NAME: &str = "guidance_llm";
 pub(super) const DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL: &str = "ministral-3-3b-instruct";
-#[cfg(test)]
 pub(super) const DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS: i64 = 4096;
-#[cfg(test)]
 pub(super) const DEFAULT_ARCHITECTURE_ROLE_ADJUDICATION_MAX_OUTPUT_TOKENS: i64 = 1024;
 #[cfg(test)]
 pub(super) const DEFAULT_LOCAL_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME: &str =
@@ -26,11 +24,15 @@ pub(super) const DEFAULT_PLATFORM_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME: &str
 #[cfg(test)]
 pub(super) const DEFAULT_PLATFORM_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME: &str =
     "architecture_role_adjudication";
+pub(super) const DEFAULT_CODEX_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME: &str =
+    "architecture_fact_synthesis_codex";
+pub(super) const DEFAULT_CODEX_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME: &str =
+    "architecture_role_adjudication_codex";
 pub(crate) const DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV: &str =
     "BITLOOPS_PLATFORM_GATEWAY_TOKEN";
+pub(super) const CODEX_RUNTIME_ID: &str = "codex";
 pub(super) const OLLAMA_CHAT_DRIVER: &str = "ollama_chat";
 pub(super) const PLATFORM_CHAT_COMPLETIONS_URL_ENV: &str = "BITLOOPS_PLATFORM_CHAT_COMPLETIONS_URL";
 pub(super) const PLATFORM_GATEWAY_URL_ENV: &str = "BITLOOPS_PLATFORM_GATEWAY_URL";
-#[cfg(test)]
 pub(super) const STRUCTURED_GENERATION_TASK: &str = "structured_generation";
 pub(super) const TEXT_GENERATION_TASK: &str = "text_generation";
