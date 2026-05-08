@@ -6,11 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
-### Fixed
-
-- **DevQL guidance no longer writes a shared canonical skill copy in .bitloops path**: init and agent guidance installation now write only the native agent prompt surfaces.
-
-## [0.0.21] - 2026-05-07
+## [0.0.21] - 2026-05-08
 
 ### Added
 
@@ -23,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Full test lane QAT fixtures now cover the current sync paths reliably**: QAT agent enablement scenarios now enqueue a sync after ingest, semantic-clone snapshot coverage seeds the producer policy explicitly, and the semantic clone fixture now records current file state so embedding-backed clone drift assertions can run against current-state data.
+- **DevQL guidance no longer writes a shared canonical skill copy in .bitloops path**: init and agent guidance installation now write only the native agent prompt surfaces.
 - **Post-commit hooks now ingest the committed HEAD when DevQL ingest is enabled**: the manual-commit hook queues a targeted `post_commit` ingest task with the new commit SHA after the sync and checkpoint refresh path, and ingest task specs now carry explicit commit lists so newly committed history is materialised without backfilling unrelated older commits.
 - **Architecture graph reads and manual assertions now work through repo-scoped CLI GraphQL**: the slim DevQL GraphQL root now exposes `project(path:)`, letting QAT and CLI callers reach the project-scoped architecture graph fields, and architecture graph assertion/revocation mutations now write directly to the repo relational store instead of relying on ingest-scoped storage. A new QAT fixture modelled after `bitloops-inference` verifies Rust CLI entry points from `main`, dispatch functions, Cargo binary configuration, manual assertions, suppression, and revocation.
 - **`bitloops init` no longer fails when Test Harness discovery sees ignored virtualenv fixtures**: structural test mapping now sources candidate test files from Git-visible paths so `.gitignore` exclusions such as `.venv` are honoured, and full mapping records unreadable or legacy-encoded test files as discovery issues instead of failing the current-state consumer. This prevents Big5 or other non-UTF-8 dependency test fixtures from aborting `Applying codebase updates` during init while still allowing normal repository tests to be discovered.

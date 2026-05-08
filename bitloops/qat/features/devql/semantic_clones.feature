@@ -36,7 +36,8 @@ Feature: Semantic Clones enrichment and query coverage
 
   @devql @semantic-clones
   Scenario: Commit snapshots current semantic-clone data into historical tables
-    Given I committed today in bitloops
+    Given I set DevQL producer policy --sync=true --ingest=false in bitloops
+    And I committed today in bitloops
     And I enqueue DevQL sync task with status in bitloops
     And I modify a semantic clone fixture source file in bitloops
     And I committed today in bitloops

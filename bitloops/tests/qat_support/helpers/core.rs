@@ -1031,6 +1031,21 @@ pub fn run_init_bitloops_for_repo(world: &mut QatWorld, repo_name: &str) -> Resu
     run_init_bitloops_with_agent(world, repo_name, "claude-code", false, None)
 }
 
+pub fn set_devql_producer_policy_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    sync_enabled: bool,
+    ingest_enabled: bool,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    set_devql_producer_settings(
+        &settings_local_path(world.repo_dir()),
+        sync_enabled,
+        ingest_enabled,
+    )
+    .context("writing repo-local DevQL producer policy")
+}
+
 fn normalise_onboarding_agent_name(agent_name: &str) -> &str {
     if agent_name.eq_ignore_ascii_case("claude") {
         AGENT_NAME_CLAUDE_CODE

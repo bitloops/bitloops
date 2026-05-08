@@ -1176,6 +1176,51 @@ fn seed_real_clone_fixture(
             insert_pre_stage_artefact(conn, row, !is_parent)?;
         }
 
+        conn.execute(
+            "INSERT INTO current_file_state (
+                repo_id, path, analysis_mode, file_role, text_index_mode, language,
+                resolved_language, dialect, primary_context_id, secondary_context_ids_json,
+                frameworks_json, runtime_profile, classification_reason, context_fingerprint,
+                extraction_fingerprint, head_content_id, index_content_id, worktree_content_id,
+                effective_content_id, effective_source, parser_version, extractor_version,
+                exists_in_head, exists_in_index, exists_in_worktree, last_synced_at
+            ) VALUES (
+                ?1, ?2, 'code', 'source_code', 'none', 'typescript',
+                'typescript', NULL, NULL, '[]',
+                '[]', NULL, 'fixture', NULL,
+                'fixture-extraction', ?3, ?3, ?3,
+                ?3, 'worktree', 'fixture-parser', 'fixture-extractor',
+                1, 1, 1, datetime('now')
+            )
+            ON CONFLICT (repo_id, path) DO UPDATE SET
+                analysis_mode = excluded.analysis_mode,
+                file_role = excluded.file_role,
+                text_index_mode = excluded.text_index_mode,
+                language = excluded.language,
+                resolved_language = excluded.resolved_language,
+                dialect = excluded.dialect,
+                primary_context_id = excluded.primary_context_id,
+                secondary_context_ids_json = excluded.secondary_context_ids_json,
+                frameworks_json = excluded.frameworks_json,
+                runtime_profile = excluded.runtime_profile,
+                classification_reason = excluded.classification_reason,
+                context_fingerprint = excluded.context_fingerprint,
+                extraction_fingerprint = excluded.extraction_fingerprint,
+                head_content_id = excluded.head_content_id,
+                index_content_id = excluded.index_content_id,
+                worktree_content_id = excluded.worktree_content_id,
+                effective_content_id = excluded.effective_content_id,
+                effective_source = excluded.effective_source,
+                parser_version = excluded.parser_version,
+                extractor_version = excluded.extractor_version,
+                exists_in_head = excluded.exists_in_head,
+                exists_in_index = excluded.exists_in_index,
+                exists_in_worktree = excluded.exists_in_worktree,
+                last_synced_at = excluded.last_synced_at",
+            rusqlite::params![repo_id, path.as_str(), blob_sha.as_str()],
+        )
+        .context("insert current file state for real semantic clone fixture")?;
+
         for symbol in &symbols {
             for churn_index in 0..symbol.churn_count.max(1) {
                 let historical_artefact_id =
@@ -5033,6 +5078,96 @@ mod tests {
         assert_eq!(
             response["coverage"]["branch_data_available"].as_bool(),
             Some(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn real_clone_fixture_diverged_implementations_keeps_one_current_summary_embedding_state()
+    {
+        let prepared = prepare_real_clone_fixture_db("diverged implementations")
+            .await
+            .expect("prepare real clone fixture db");
+        let relational = RelationalStorage::local_only(prepared.sqlite_path.clone());
+        let repo_id = DevqlBddWorld::test_cfg().repo.repo_id;
+        let states = crate::capability_packs::semantic_clones::load_current_repo_embedding_states(
+            &relational,
+            &repo_id,
+            Some(
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+            ),
+        )
+        .await
+        .expect("load current summary embedding states");
+
+        assert_eq!(
+            states.len(),
+            1,
+            "expected one current summary embedding state, got {states:#?}"
+        );
+
+        let rows = relational
+            .query_rows(&format!(
+                "SELECT artefact_id, embedding \
+                 FROM symbol_embeddings_current \
+                 WHERE repo_id = '{}' AND representation_kind = 'summary' \
+                 ORDER BY artefact_id",
+                crate::host::devql::esc_pg(&repo_id),
+            ))
+            .await
+            .expect("read current summary embedding rows");
+        let rendered = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.get("artefact_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    row.get("embedding")
+                        .map(|value| !value.is_null())
+                        .unwrap_or(false),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered,
+            vec![
+                ("artefact::validate_order_checkout".to_string(), true),
+                ("artefact::validate_order_draft".to_string(), true),
+            ],
+            "expected current summary embeddings for both diverged fixture artefacts"
+        );
+    }
+
+    #[tokio::test]
+    async fn real_clone_fixture_diverged_implementations_query_uses_embedding_backed_drift() {
+        let rows = execute_clone_query_for_real_fixture(
+            "diverged implementations",
+            r#"
+repo("temp2")->artefacts(kind:"function",symbol_fqn:"src/validation/checkout.ts::validate_order_checkout")->clones()->limit(10)
+"#
+            .trim(),
+        )
+        .await
+        .expect("execute diverged implementations clone query");
+
+        let row = rows
+            .iter()
+            .find(|row| {
+                row.get("target_symbol_fqn").and_then(Value::as_str)
+                    == Some("src/validation/draft.ts::validate_order_draft")
+            })
+            .expect("find validate_order_draft clone row");
+
+        assert_eq!(
+            row.get("relation_kind"),
+            Some(&Value::String("diverged_implementation".to_string())),
+            "expected diverged clone row, got {row:#?}"
+        );
+        assert_eq!(
+            row["explanation_json"]["evidence"]["semantic_views"]["summary_signal_source"],
+            Value::String("embedding".to_string()),
+            "expected embedding-backed semantic view, got {row:#?}"
         );
     }
 }
