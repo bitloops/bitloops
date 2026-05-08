@@ -13,6 +13,12 @@ pub(crate) fn run_devql_post_checkout_seed(
         return Ok(());
     }
 
+    if !crate::config::settings::devql_sync_enabled(repo_root)
+        .context("loading DevQL sync producer policy for post-checkout branch seed")?
+    {
+        return Ok(());
+    }
+
     #[cfg(not(test))]
     {
         let _ = previous_head;
@@ -53,5 +59,24 @@ pub(crate) fn run_devql_post_checkout_seed(
             .build()
             .context("building tokio runtime for post-checkout DevQL seeding")?;
         runtime.block_on(seed_future)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_checkout_seed_sync_disabled_returns_ok_for_non_repo() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        crate::config::settings::set_devql_producer_settings(
+            &dir.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            false,
+            true,
+        )
+        .expect("disable producer sync");
+
+        run_devql_post_checkout_seed(dir.path(), "old", "new", true)
+            .expect("disabled sync should skip post-checkout seed");
     }
 }

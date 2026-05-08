@@ -6,10 +6,17 @@ use crate::capability_packs::semantic_clones::scoring::{
 use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineRangeInput};
 
 use super::support::{
-    build_clone_expand_hint, build_dependency_expand_hint, build_dependency_summary,
+    CONTEXT_GUIDANCE_STAGE_SCHEMA, SelectionSummaryStages, build_clone_expand_hint,
+    build_dependency_expand_hint, build_dependency_summary, build_historical_context_expand_hint,
+    build_historical_context_summary, build_selection_summary, captured_preview, take_stage_items,
 };
 use super::{
     ArtefactSelectorInput, ArtefactSelectorMode, CloneExpandHint, DependencyExpandHint, SearchMode,
+};
+use crate::graphql::types::artefact_selection::stages::{
+    CheckpointStageData, CloneStageData, ContextGuidanceItem, ContextGuidanceStageData,
+    DependencyStageData, HistoricalContextItem, HistoricalContextStageData, HistoricalMatchReason,
+    HistoricalMatchStrength, HistoricalToolEvent, TestsStageData,
 };
 
 fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> DependencyEdge {
@@ -25,6 +32,211 @@ fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> D
         metadata: None,
         scope: crate::graphql::ResolverScope::default(),
     }
+}
+
+#[test]
+fn historical_context_item_keeps_captured_evidence_fields() {
+    let item = HistoricalContextItem {
+        checkpoint_id: async_graphql::ID::from("checkpoint-1"),
+        session_id: "session-1".to_string(),
+        turn_id: Some("turn-1".to_string()),
+        agent_type: Some("codex".to_string()),
+        model: Some("gpt-5.4".to_string()),
+        event_time: crate::graphql::types::DateTimeScalar::from_rfc3339(
+            "2026-04-28T12:30:13+00:00",
+        )
+        .expect("timestamp parses"),
+        match_reason: HistoricalMatchReason::FileRelation,
+        match_strength: HistoricalMatchStrength::Medium,
+        prompt_preview: Some("explain this file".to_string()),
+        turn_summary: Some("read attr parsing".to_string()),
+        transcript_preview: Some("captured transcript text".to_string()),
+        files_modified: vec!["src/lib.rs".to_string()],
+        file_relations: Vec::new(),
+        tool_events: vec![HistoricalToolEvent {
+            tool_kind: Some("Read".to_string()),
+            input_summary: Some("src/lib.rs".to_string()),
+            output_summary: Some("file contents".to_string()),
+            command: None,
+        }],
+        evidence_kinds: vec![HistoricalMatchReason::FileRelation],
+    };
+
+    assert_eq!(item.session_id, "session-1");
+    assert_eq!(item.match_reason, HistoricalMatchReason::FileRelation);
+    assert_eq!(item.tool_events[0].tool_kind.as_deref(), Some("Read"));
+}
+
+#[test]
+fn captured_preview_truncates_without_rewriting_text() {
+    let text = "0123456789abcdefghijklmnopqrstuvwxyz";
+    assert_eq!(captured_preview(text, 12).as_deref(), Some("0123456789ab"));
+    assert_eq!(captured_preview("   ", 12), None);
+}
+
+#[test]
+fn historical_context_summary_counts_distinct_evidence() {
+    let event_time =
+        crate::graphql::types::DateTimeScalar::from_rfc3339("2026-04-28T12:30:13+00:00")
+            .expect("timestamp parses");
+    let rows = vec![HistoricalContextItem {
+        checkpoint_id: async_graphql::ID::from("checkpoint-1"),
+        session_id: "session-1".to_string(),
+        turn_id: Some("turn-1".to_string()),
+        agent_type: Some("codex".to_string()),
+        model: None,
+        event_time,
+        match_reason: HistoricalMatchReason::FileRelation,
+        match_strength: HistoricalMatchStrength::Medium,
+        prompt_preview: None,
+        turn_summary: None,
+        transcript_preview: None,
+        files_modified: Vec::new(),
+        file_relations: Vec::new(),
+        tool_events: Vec::new(),
+        evidence_kinds: vec![
+            HistoricalMatchReason::FileRelation,
+            HistoricalMatchReason::SymbolProvenance,
+        ],
+    }];
+
+    assert_eq!(
+        build_historical_context_summary(&rows),
+        serde_json::json!({
+            "totalCount": 1,
+            "latestAt": "2026-04-28T12:30:13+00:00",
+            "agents": ["codex"],
+            "checkpointCount": 1,
+            "sessionCount": 1,
+            "turnCount": 1,
+            "evidenceCounts": {
+                "symbolProvenance": 1,
+                "fileRelation": 1,
+                "lineOverlap": 0
+            },
+            "expandHint": {
+                "intent": "Inspect captured historical context for selected artefacts",
+                "template": "bitloops devql query '{ selectArtefacts(...) { historicalContext { overview items(first: 20) { checkpointId sessionId turnId promptPreview transcriptPreview toolEvents { toolKind inputSummary outputSummary command } } } } }'"
+            }
+        })
+    );
+
+    assert!(build_historical_context_expand_hint(0).is_none());
+}
+
+#[test]
+fn selection_summary_includes_historical_context_stage() {
+    let checkpoints = CheckpointStageData {
+        summary: serde_json::json!({ "totalCount": 0 }),
+        schema: None,
+        items: Vec::new(),
+    };
+    let clones = CloneStageData {
+        summary: serde_json::json!({ "counts": { "total": 0 } }),
+        expand_hint: None,
+        schema: None,
+        items: Vec::new(),
+    };
+    let deps = DependencyStageData {
+        summary: serde_json::json!({ "dependencies": { "total": 0 } }),
+        expand_hint: None,
+        schema: None,
+        items: Vec::new(),
+    };
+    let tests = TestsStageData {
+        summary: serde_json::json!({ "totalCoveringTests": 0 }),
+        schema: None,
+        items: Vec::new(),
+    };
+    let historical_context = HistoricalContextStageData {
+        summary: serde_json::json!({ "totalCount": 0 }),
+        schema: None,
+        items: Vec::new(),
+    };
+    let context_guidance = ContextGuidanceStageData {
+        summary: serde_json::json!({ "totalCount": 0 }),
+        schema: None,
+        items: Vec::new(),
+    };
+
+    let summary = build_selection_summary(
+        1,
+        SelectionSummaryStages {
+            checkpoints: &checkpoints,
+            clones: &clones,
+            deps: &deps,
+            tests: &tests,
+            historical_context: &historical_context,
+            context_guidance: &context_guidance,
+            http: &serde_json::json!({
+            "bundleCount": 0,
+            "riskCount": 0,
+            "topRisks": [],
+            "expandHint": {
+                "template": "selectArtefacts(...){ httpContext { bundles { ... } } }"
+            }
+            }),
+        },
+    );
+
+    assert_eq!(
+        summary["historicalContext"],
+        serde_json::json!({
+            "overview": { "totalCount": 0 },
+            "schema": null
+        })
+    );
+    assert_eq!(
+        summary["contextGuidance"],
+        serde_json::json!({
+            "overview": { "totalCount": 0 },
+            "schema": null
+        })
+    );
+    assert_eq!(summary["http"]["bundleCount"], 0);
+    assert_eq!(summary["http"]["riskCount"], 0);
+}
+
+#[test]
+fn context_guidance_stage_item_pagination_rejects_non_positive_first() {
+    let err = take_stage_items::<ContextGuidanceItem>(&[], 0)
+        .expect_err("context guidance item pagination should reject zero");
+
+    assert!(err.message.contains("`first` must be greater than 0"));
+}
+
+#[test]
+fn http_selection_terms_split_search_query_for_index_fallback() {
+    let terms = super::resolvers::split_http_selection_terms(
+        "HEAD, Content-Length RouteFuture strip_body `Empty` (Hyper)",
+    );
+
+    assert_eq!(
+        terms,
+        vec![
+            "HEAD",
+            "Content-Length",
+            "RouteFuture",
+            "strip_body",
+            "Empty",
+            "Hyper"
+        ]
+    );
+}
+
+#[test]
+fn context_guidance_stage_schema_matches_contract() {
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains(
+        "contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!"
+    ));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("type ContextGuidanceItem"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("type ContextGuidanceSource"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("enum ContextGuidanceCategory"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("generatedAt"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("sourceModel"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("knowledgeItemId"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("knowledgeItemVersionId"));
+    assert!(CONTEXT_GUIDANCE_STAGE_SCHEMA.contains("relationAssertionId"));
 }
 
 #[test]

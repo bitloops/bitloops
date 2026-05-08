@@ -8,7 +8,7 @@ use crate::devql_transport::{RepoPathRegistry, RepoPathRegistryEntry, persist_re
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::log_capture::capture_logs_async;
-use crate::test_support::process_state::enter_process_state;
+use crate::test_support::process_state::{enter_process_state, with_env_var};
 use tempfile::TempDir;
 
 fn write_daemon_test_config(config_root: &Path) -> PathBuf {
@@ -18,13 +18,13 @@ fn write_daemon_test_config(config_root: &Path) -> PathBuf {
     fs::write(
         &config_path,
         r#"[stores.relational]
-sqlite_path = ".bitloops/stores/daemon.sqlite"
+sqlite_path = "stores/daemon.sqlite"
 
 [stores.events]
-duckdb_path = ".bitloops/stores/daemon.duckdb"
+duckdb_path = "stores/daemon.duckdb"
 
 [stores.blob]
-local_path = ".bitloops/blob-store"
+local_path = "blob-store"
 "#,
     )
     .expect("write test config");
@@ -214,6 +214,153 @@ fn daemon_shutdown_tears_down_watchers_bound_to_the_same_daemon_config() {
 }
 
 #[test]
+fn daemon_startup_rehydrates_enabled_bound_repo_watchers_and_continues_after_failures() {
+    let temp = TempDir::new().expect("temp dir");
+    let daemon_root = temp.path().join("daemon-root");
+    let enabled_repo = temp.path().join("enabled-repo");
+    let second_enabled_repo = temp.path().join("second-enabled-repo");
+    let third_enabled_repo = temp.path().join("third-enabled-repo");
+    let sync_disabled_repo = temp.path().join("sync-disabled-repo");
+    let disabled_repo = temp.path().join("disabled-repo");
+    let unbound_repo = temp.path().join("unbound-repo");
+    for repo_root in [
+        &enabled_repo,
+        &second_enabled_repo,
+        &third_enabled_repo,
+        &sync_disabled_repo,
+        &disabled_repo,
+        &unbound_repo,
+    ] {
+        fs::create_dir_all(repo_root).expect("create repo root");
+        init_test_repo(repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    }
+    fs::create_dir_all(&daemon_root).expect("create daemon root");
+
+    let daemon_config_path = write_daemon_test_config(&daemon_root);
+    let other_daemon_config_path = temp.path().join("other").join(".bitloops.toml");
+    fs::create_dir_all(
+        other_daemon_config_path
+            .parent()
+            .expect("other config parent"),
+    )
+    .expect("create other config parent");
+    fs::write(&other_daemon_config_path, "").expect("write other config");
+
+    for repo_root in [
+        &enabled_repo,
+        &second_enabled_repo,
+        &third_enabled_repo,
+        &unbound_repo,
+    ] {
+        fs::write(
+            repo_root.join(".bitloops.local.toml"),
+            "[capture]\nenabled = true\nstrategy = \"manual-commit\"\n",
+        )
+        .expect("write enabled repo policy");
+    }
+    fs::write(
+        sync_disabled_repo.join(".bitloops.local.toml"),
+        "[capture]\nenabled = true\nstrategy = \"manual-commit\"\n[devql]\nsync_enabled = false\ningest_enabled = true\n",
+    )
+    .expect("write sync-disabled repo policy");
+    fs::write(
+        disabled_repo.join(".bitloops.local.toml"),
+        "[capture]\nenabled = false\nstrategy = \"manual-commit\"\n",
+    )
+    .expect("write disabled repo policy");
+
+    for repo_root in [
+        &enabled_repo,
+        &second_enabled_repo,
+        &third_enabled_repo,
+        &sync_disabled_repo,
+        &disabled_repo,
+    ] {
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(".bitloops.local.toml"),
+            &daemon_config_path,
+        )
+        .expect("write repo daemon binding");
+    }
+    crate::config::settings::write_repo_daemon_binding(
+        &unbound_repo.join(".bitloops.local.toml"),
+        &other_daemon_config_path,
+    )
+    .expect("write other repo daemon binding");
+
+    let mut daemon_config =
+        resolve_daemon_config(Some(daemon_config_path.as_path())).expect("resolve daemon config");
+    daemon_config.repo_registry_path = temp.path().join("repo-path-registry.json");
+    let mut entries = Vec::new();
+    for repo_root in [
+        &enabled_repo,
+        &second_enabled_repo,
+        &third_enabled_repo,
+        &sync_disabled_repo,
+        &disabled_repo,
+        &unbound_repo,
+    ] {
+        let repo = crate::host::devql::resolve_repo_identity(repo_root).expect("resolve repo");
+        entries.push(RepoPathRegistryEntry {
+            repo_id: repo.repo_id,
+            provider: repo.provider,
+            organisation: repo.organization,
+            name: repo.name,
+            identity: repo.identity,
+            repo_root: repo_root.clone(),
+            last_branch: Some("main".to_string()),
+            git_dir_relative_path: Some(".git".to_string()),
+            updated_at_unix: 0,
+        });
+    }
+    persist_repo_path_registry(
+        &daemon_config.repo_registry_path,
+        &RepoPathRegistry {
+            version: 1,
+            entries,
+        },
+    )
+    .expect("persist repo path registry");
+
+    let expected_enabled_repo = enabled_repo
+        .canonicalize()
+        .unwrap_or_else(|_| enabled_repo.clone());
+    let expected_second_enabled_repo = second_enabled_repo
+        .canonicalize()
+        .unwrap_or_else(|_| second_enabled_repo.clone());
+    let expected_third_enabled_repo = third_enabled_repo
+        .canonicalize()
+        .unwrap_or_else(|_| third_enabled_repo.clone());
+    let mut attempted = Vec::new();
+    let daemon_config_path_string = daemon_config_path.to_string_lossy().to_string();
+    with_env_var(
+        ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(daemon_config_path_string.as_str()),
+        || {
+            ensure_bound_repo_watchers_for_daemon_startup_with(
+                &daemon_config,
+                |repo_root, _config_root| {
+                    attempted.push(repo_root.to_path_buf());
+                    if repo_root == expected_second_enabled_repo {
+                        anyhow::bail!("synthetic watcher startup failure");
+                    }
+                    Ok(())
+                },
+            );
+        },
+    );
+
+    assert_eq!(
+        attempted,
+        vec![
+            expected_enabled_repo,
+            expected_second_enabled_repo,
+            expected_third_enabled_repo
+        ]
+    );
+}
+
+#[test]
 fn launchd_plist_includes_hidden_supervisor_command() {
     let rendered = render_launchd_plist(
         GLOBAL_SUPERVISOR_SERVICE_NAME,
@@ -299,16 +446,13 @@ fn resolve_daemon_config_uses_explicit_config_path_independent_of_cwd() {
     assert_eq!(resolved.config_root, canonical_root);
     assert_eq!(
         resolved.relational_db_path,
-        canonical_root.join(".bitloops/stores/daemon.sqlite")
+        canonical_root.join("stores/daemon.sqlite")
     );
     assert_eq!(
         resolved.events_db_path,
-        canonical_root.join(".bitloops/stores/daemon.duckdb")
+        canonical_root.join("stores/daemon.duckdb")
     );
-    assert_eq!(
-        resolved.blob_store_path,
-        canonical_root.join(".bitloops/blob-store")
-    );
+    assert_eq!(resolved.blob_store_path, canonical_root.join("blob-store"));
     assert_eq!(
         resolved.repo_registry_path,
         global_daemon_dir_fallback().join("repo-path-registry.json")
@@ -345,7 +489,7 @@ fn resolve_daemon_config_uses_default_global_config_path() {
     assert_eq!(resolved.config_root, canonical_root);
     assert_eq!(
         resolved.relational_db_path,
-        canonical_root.join(".bitloops/stores/daemon.sqlite")
+        canonical_root.join("stores/daemon.sqlite")
     );
 }
 
@@ -402,7 +546,7 @@ fn resolve_daemon_config_uses_env_override_when_explicit_path_is_missing() {
     assert_eq!(resolved.config_root, canonical_root);
     assert_eq!(
         resolved.relational_db_path,
-        canonical_root.join(".bitloops/stores/daemon.sqlite")
+        canonical_root.join("stores/daemon.sqlite")
     );
 }
 

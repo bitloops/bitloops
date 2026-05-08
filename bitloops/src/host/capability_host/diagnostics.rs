@@ -73,6 +73,10 @@ pub struct PackRegistryEntry {
     pub dependencies: Vec<String>,
     pub stages: Vec<String>,
     pub ingesters: Vec<String>,
+    #[serde(default)]
+    pub current_state_consumers: Vec<String>,
+    #[serde(default)]
+    pub mailboxes: Vec<String>,
     pub migrations: Vec<MigrationStepSummary>,
     pub schema_modules: Vec<SchemaModuleSummary>,
     pub health_check_names: Vec<String>,
@@ -297,6 +301,28 @@ pub fn format_registry_report_human(report: &HostRegistryReport) -> String {
             }
         )
         .ok();
+        writeln!(
+            s,
+            "      current_state_consumers ({}): {}",
+            pack.current_state_consumers.len(),
+            if pack.current_state_consumers.is_empty() {
+                "(none)".to_string()
+            } else {
+                pack.current_state_consumers.join(", ")
+            }
+        )
+        .ok();
+        writeln!(
+            s,
+            "      mailboxes ({}): {}",
+            pack.mailboxes.len(),
+            if pack.mailboxes.is_empty() {
+                "(none)".to_string()
+            } else {
+                pack.mailboxes.join(", ")
+            }
+        )
+        .ok();
         if pack.migrations.is_empty() {
             writeln!(s, "      migrations: (none registered)").ok();
         } else {
@@ -461,17 +487,38 @@ mod tests {
     }
 
     #[test]
-    fn builtin_registry_report_lists_three_first_party_packs() {
+    fn builtin_registry_report_lists_first_party_packs() {
         let tmp = tempdir().expect("tempdir");
         let host = DevqlCapabilityHost::builtin(tmp.path(), sample_repo()).expect("builtin host");
         let report = host.registry_report();
         let mut ids: Vec<_> = report.packs.iter().map(|p| p.id.as_str()).collect();
         ids.sort();
-        assert_eq!(ids, ["knowledge", "semantic_clones", "test_harness"]);
+        assert_eq!(
+            ids,
+            [
+                "architecture_graph",
+                "codecity",
+                "context_guidance",
+                "http",
+                "knowledge",
+                "navigation_context",
+                "semantic_clones",
+                "test_harness"
+            ]
+        );
         assert!(
             !report.migration_plan.is_empty(),
             "expected at least one pack migration registered"
         );
+        let http = report
+            .packs
+            .iter()
+            .find(|pack| pack.id == "http")
+            .expect("HTTP pack report entry");
+        assert!(http.stages.is_empty());
+        assert!(http.ingesters.is_empty());
+        assert_eq!(http.current_state_consumers, ["http.current_state"]);
+        assert_eq!(http.mailboxes, ["http.current_state"]);
     }
 
     #[test]
@@ -480,9 +527,15 @@ mod tests {
         let host = DevqlCapabilityHost::builtin(tmp.path(), sample_repo()).expect("builtin host");
         let report = host.registry_report();
         let text = format_registry_report_human(&report);
+        assert!(text.contains("architecture_graph"));
+        assert!(text.contains("codecity"));
+        assert!(text.contains("http"));
         assert!(text.contains("knowledge"));
+        assert!(text.contains("navigation_context"));
         assert!(text.contains("semantic_clones"));
         assert!(text.contains("test_harness"));
+        assert!(text.contains("current_state_consumers"));
+        assert!(text.contains("mailboxes"));
         assert!(text.contains("migration_plan"));
     }
 }

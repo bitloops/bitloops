@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -216,28 +217,40 @@ impl DevqlTaskCoordinator {
             repo_name: task.repo_name.clone(),
             progress_state: std::sync::Mutex::new(ProgressPersistState::default()),
         };
-        let backfill = task.ingest_spec().and_then(|spec| spec.backfill);
+        let ingest_spec = task.ingest_spec().cloned().unwrap_or_default();
+        let commits = normalize_explicit_ingest_commits(ingest_spec.commits);
 
-        let result = match backfill {
-            Some(backfill) => {
-                crate::host::devql::execute_ingest_with_backfill_window(
-                    &cfg,
-                    false,
-                    backfill,
-                    Some(&observer),
-                    Some(crate::daemon::shared_enrichment_coordinator()),
-                )
-                .await
-            }
-            None => {
-                crate::host::devql::execute_ingest_with_observer(
-                    &cfg,
-                    false,
-                    0,
-                    Some(&observer),
-                    Some(crate::daemon::shared_enrichment_coordinator()),
-                )
-                .await
+        let result = if !commits.is_empty() {
+            crate::host::devql::execute_ingest_with_commits(
+                &cfg,
+                false,
+                commits,
+                Some(&observer),
+                Some(crate::daemon::shared_enrichment_coordinator()),
+            )
+            .await
+        } else {
+            match ingest_spec.backfill {
+                Some(backfill) => {
+                    crate::host::devql::execute_ingest_with_backfill_window(
+                        &cfg,
+                        false,
+                        backfill,
+                        Some(&observer),
+                        Some(crate::daemon::shared_enrichment_coordinator()),
+                    )
+                    .await
+                }
+                None => {
+                    crate::host::devql::execute_ingest_with_observer(
+                        &cfg,
+                        false,
+                        0,
+                        Some(&observer),
+                        Some(crate::daemon::shared_enrichment_coordinator()),
+                    )
+                    .await
+                }
             }
         };
 
@@ -433,6 +446,19 @@ fn prepared_summary_setup_plan_from_request(
             gateway_url_override: request.gateway_url_override.clone(),
         },
     })
+}
+
+fn normalize_explicit_ingest_commits(commits: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
+    for commit in commits {
+        let commit = commit.trim();
+        if commit.is_empty() || !seen.insert(commit.to_string()) {
+            continue;
+        }
+        normalized.push(commit.to_string());
+    }
+    normalized
 }
 
 fn summary_progress_from_cli(progress: SummarySetupProgress) -> SummaryBootstrapProgress {

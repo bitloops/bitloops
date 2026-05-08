@@ -27,14 +27,15 @@ dev-coverage-compare = "run --quiet --package xtask -- coverage compare --lines 
 dev-coverage-html = "llvm-cov --manifest-path bitloops/Cargo.toml --workspace --all-targets --features slow-tests --no-default-features --html --output-dir bitloops/target/llvm-cov-html"
 
 # QAT aliases from workspace root.
-qat = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat --run-ignored only -- qat --exact"
-qat-agent-smoke = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_agent_smoke --run-ignored only -- qat_agent_smoke --exact"
-qat-develop-gate = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_develop_gate --run-ignored only -- qat_develop_gate --exact"
-qat-devql-capabilities = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_capabilities --run-ignored only -- qat_devql_capabilities --exact"
-qat-devql-sync = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact"
-qat-onboarding = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_onboarding --run-ignored only -- qat_onboarding --exact"
-qat-devql-ingest = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_devql_ingest --run-ignored only -- qat_devql_ingest --exact"
-qat-agents-checkpoints = "nextest run --manifest-path bitloops/Cargo.toml --features qat-tests --test qat_agents_checkpoints --run-ignored only -- qat_agents_checkpoints --exact"
+qat = "run --quiet --package xtask -- qat bundle"
+qat-agent-smoke = "run --quiet --package xtask -- qat agent-smoke"
+qat-develop-gate = "run --quiet --package xtask -- qat develop-gate"
+qat-devql-capabilities = "run --quiet --package xtask -- qat devql-capabilities"
+qat-devql-sync = "run --quiet --package xtask -- qat devql-sync"
+qat-devql-sync-producer = "run --quiet --package xtask -- qat devql-sync-producer"
+qat-onboarding = "run --quiet --package xtask -- qat onboarding"
+qat-devql-ingest = "run --quiet --package xtask -- qat devql-ingest"
+qat-agents-checkpoints = "run --quiet --package xtask -- qat agents-checkpoints"
 
 # Explicit bundled-DuckDB aliases for release/offline/exotic targets.
 dev-check-bundled = "check --manifest-path bitloops/Cargo.toml --features duckdb-bundled"

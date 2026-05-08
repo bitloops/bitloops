@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_budgets_default_remote_summary_to_four_and_embeddings_to_four() {
+    fn worker_budgets_default_remote_summary_to_eight_and_embeddings_to_four() {
         assert_eq!(
             resolve_worker_budgets_from_sources(WorkerBudgetSources {
                 summary_remote: true,
@@ -353,7 +353,7 @@ mod tests {
                 ..WorkerBudgetSources::default()
             }),
             EnrichmentWorkerBudgets {
-                summary_refresh: 4,
+                summary_refresh: 8,
                 embeddings: 4,
                 clone_rebuild: 1,
             }

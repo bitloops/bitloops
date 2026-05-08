@@ -403,6 +403,61 @@ fn sync_mutation_result_converts_to_sync_summary_with_validation_details() {
 }
 
 #[test]
+fn sync_follow_up_failure_deltas_ignore_existing_enrichment_failures() {
+    let baseline = super::client::EnrichmentFailureCounts {
+        failed_jobs: 810,
+        failed_semantic_jobs: 770,
+        failed_embedding_jobs: 40,
+        failed_clone_edges_rebuild_jobs: 0,
+    };
+    let current = baseline;
+
+    assert!(super::client::enrichment_failure_pool_deltas(baseline, current).is_empty());
+}
+
+#[test]
+fn sync_follow_up_failure_message_names_enrichment_pool_and_latest_job() {
+    let baseline = super::client::EnrichmentFailureCounts {
+        failed_jobs: 2,
+        failed_semantic_jobs: 1,
+        failed_embedding_jobs: 1,
+        failed_clone_edges_rebuild_jobs: 0,
+    };
+    let mut state = crate::daemon::EnrichmentQueueState {
+        failed_jobs: 4,
+        failed_semantic_jobs: 1,
+        failed_embedding_jobs: 3,
+        failed_clone_edges_rebuild_jobs: 0,
+        ..Default::default()
+    };
+    state.mode = crate::daemon::EnrichmentQueueMode::Running;
+    let status = crate::daemon::EnrichmentQueueStatus {
+        state,
+        persisted: true,
+        embeddings_gate: None,
+        blocked_mailboxes: Vec::new(),
+        last_failed_embedding: Some(crate::daemon::FailedEmbeddingJobSummary {
+            job_id: "embedding-job-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            branch: "main".to_string(),
+            representation_kind: "summary".to_string(),
+            artefact_count: 1,
+            attempts: 1,
+            error: Some("git cat-file failed".to_string()),
+            updated_at_unix: 42,
+        }),
+    };
+
+    let message = super::client::enrichment_follow_up_failure_message("repo-1", &baseline, &status);
+
+    assert!(message.contains("semantic enrichment (Semantic search indexing +2)"));
+    assert!(message.contains("failed jobs increased from 2 to 4"));
+    assert!(message.contains("embedding-job-1"));
+    assert!(message.contains("git cat-file failed"));
+    assert!(message.contains("bitloops daemon enrichments status"));
+}
+
+#[test]
 fn tasks_query_omits_result_payloads_and_deserializes_completed_tasks() {
     let scope = test_scope();
     let runtime = tokio::runtime::Builder::new_current_thread()

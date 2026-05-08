@@ -8,11 +8,12 @@ use crate::graphql::{
 };
 
 use super::{
-    ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge, CloneConnection,
-    CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination, DateTimeScalar,
-    DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection, DepsFilterInput,
-    DepsSummary, DepsSummaryFilterInput, TestHarnessCoverageResult, TestHarnessTestsResult,
-    paginate_items,
+    ArchitectureGraphNode, ArtefactConnection, ArtefactEdge, ChatEntryConnection, ChatEntryEdge,
+    CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, ConnectionPagination,
+    DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection, DepsDirection,
+    DepsFilterInput, DepsSummary, DepsSummaryFilterInput, HttpContextResult,
+    HttpLossyTransformAroundInput, HttpPrimitive, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
 
 const GRAPHQL_SCORE_PRECISION_SCALE: f64 = 10_000.0;
@@ -530,6 +531,68 @@ impl Artefact {
             .await
             .map_err(|err| map_stage_adapter_error(self.id.as_ref(), "coverage", err))?,
         )
+    }
+
+    #[graphql(name = "httpContext")]
+    async fn http_context(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<HttpContextResult> {
+        let artefact_ids = vec![self.id.as_ref().to_string()];
+        let symbol_ids = vec![self.symbol_id.clone()];
+        let paths = vec![self.path.clone()];
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_context_for_targets(
+                &self.scope,
+                &artefact_ids,
+                &symbol_ids,
+                &paths,
+                stage_limit(first)?,
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve HTTP context for artefact {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })
+    }
+
+    #[graphql(name = "httpLossyTransforms")]
+    async fn http_lossy_transforms(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<Vec<HttpPrimitive>> {
+        let around = HttpLossyTransformAroundInput {
+            symbol_fqn: self.symbol_fqn.clone(),
+            symbol_id: Some(self.symbol_id.clone()),
+            artefact_id: Some(self.id.as_ref().to_string()),
+            path: Some(self.path.clone()),
+        };
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_lossy_transforms(&self.scope, Some(&around), stage_limit(first)?)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve HTTP lossy transforms for artefact {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })
+    }
+
+    #[graphql(name = "architectureNode")]
+    async fn architecture_node(&self, ctx: &Context<'_>) -> Result<Option<ArchitectureGraphNode>> {
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .architecture_node_for_artefact(&self.scope, self.id.as_ref())
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve architecture node for artefact {}: {err:#}",
+                    self.id.as_ref()
+                ))
+            })
     }
 
     async fn copy_lineage(&self, ctx: &Context<'_>) -> Result<Vec<ArtefactCopyLineage>> {

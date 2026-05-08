@@ -310,6 +310,40 @@ pub fn capability_event_status(repo_id: Option<&str>) -> Result<CapabilityEventQ
     CapabilityEventCoordinator::try_shared()?.snapshot(repo_id)
 }
 
+pub fn capability_event_latest_generation(repo_id: &str) -> Result<Option<u64>> {
+    CapabilityEventCoordinator::try_shared()?.latest_generation_seq(repo_id)
+}
+
+pub fn force_current_state_consumer_run_for_config(
+    cfg: &crate::host::devql::DevqlConfig,
+    capability_id: &str,
+    mailbox_name: &str,
+) -> Result<CapabilityEventRunRecord> {
+    let host = crate::host::devql::build_capability_host(&cfg.repo_root, cfg.repo.clone())
+        .context("building capability host for forced current-state consumer run")?;
+    let registration = host
+        .mailbox_registration(capability_id, mailbox_name)
+        .ok_or_else(|| {
+            anyhow::anyhow!("current-state mailbox `{mailbox_name}` is not registered")
+        })?;
+    let crate::host::capability_host::CapabilityMailboxHandler::CurrentStateConsumer(handler_id) =
+        registration.handler
+    else {
+        anyhow::bail!("mailbox `{mailbox_name}` is not a current-state consumer mailbox");
+    };
+    let coordinator = CapabilityEventCoordinator::try_shared()?;
+    coordinator.activate_worker();
+    coordinator.force_consumer_run(
+        &cfg.repo.repo_id,
+        &cfg.repo_root,
+        capability_id,
+        mailbox_name,
+        handler_id,
+        None,
+        crate::daemon::types::unix_timestamp_now(),
+    )
+}
+
 pub(crate) fn capability_event_status_for_config_root(
     config_root: &Path,
     repo_id: Option<&str>,
@@ -443,7 +477,10 @@ pub fn enqueue_ingest_for_config(
     enqueue_task_for_config(
         cfg,
         source,
-        DevqlTaskSpec::Ingest(IngestTaskSpec { backfill }),
+        DevqlTaskSpec::Ingest(IngestTaskSpec {
+            commits: Vec::new(),
+            backfill,
+        }),
     )
 }
 

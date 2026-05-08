@@ -488,6 +488,11 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
 fn route_codex_second_turn_uses_transcript_offsets_for_fragment() -> anyhow::Result<()> {
     let repo = tempfile::tempdir().expect("tempdir");
     setup_git_repo(&repo);
+    crate::config::settings::set_devql_guidance_enabled(
+        &repo.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        false,
+    )
+    .expect("disable DevQL guidance for transcript offset fixture");
     let session_id = "codex-offset-session";
     let transcript_path = repo.path().join("codex-rollout.jsonl");
     std::fs::write(&transcript_path, "").expect("write transcript");
@@ -1561,6 +1566,21 @@ fn test_parse_hook_event_session_start_opencode() {
 
     assert_eq!(Some(LifecycleEventType::SessionStart), event.event_type);
     assert_eq!("sess-abc123", event.session_id);
+}
+
+#[test]
+fn test_parse_hook_event_session_start_opencode_accepts_model_id_alias() {
+    let adapter = OpenCodeLifecycleAdapter;
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"sess-abc123","transcript_path":"/tmp/bitloops-opencode/-project/sess-abc123.json","modelID":"gpt-5.4"}"#,
+    );
+    let event = adapter
+        .parse_hook_event(OPENCODE_HOOK_SESSION_START, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(Some(LifecycleEventType::SessionStart), event.event_type);
+    assert_eq!("gpt-5.4", event.model);
 }
 
 #[test]

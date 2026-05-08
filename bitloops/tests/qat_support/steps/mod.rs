@@ -68,6 +68,21 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops init --agent (\S+) --sync=(true|false) --ingest=(true|false) in (\S+)$"),
+            step_fn(given_init_bitloops_with_agent_sync_ingest),
+        )
+        .given(
+            None,
+            regex(r"^I set DevQL producer policy --sync=(true|false) --ingest=(true|false) in (\S+)$"),
+            step_fn(given_set_devql_producer_policy),
+        )
+        .given(
+            None,
+            regex(r"^I run bitloops producer-contract init --agent (\S+) --sync=(true|false) in (\S+)$"),
+            step_fn(given_init_bitloops_producer_contract),
+        )
+        .given(
+            None,
             regex(
                 r"^I run bitloops init --agent (\S+) --sync=false --ingest=true --backfill=(\d+) in (\S+)$",
             ),
@@ -254,6 +269,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create a bitloops-inference CLI fixture in (\S+)$"),
+            step_fn(given_create_bitloops_inference_cli_fixture),
+        )
+        .given(
+            None,
             regex(r"^I run (?:TestHarness|TestLens) ingest-tests for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_tests),
         )
@@ -298,6 +318,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^I configure semantic clones with fake embeddings runtime in (\S+)$"),
             step_fn(given_configure_semantic_clones_fake_runtime),
+        )
+        .given(
+            None,
+            regex(r"^I configure context guidance with fake text-generation runtime in (\S+)$"),
+            step_fn(given_configure_context_guidance_fake_runtime),
         )
         .given(
             None,
@@ -416,6 +441,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r#"^I snapshot completed DevQL sync task source \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_completed_sync_task_source),
+        )
+        .given(
+            None,
             regex(r"^I run DevQL tasks list in (\S+)$"),
             step_fn(given_run_devql_tasks_list),
         )
@@ -449,7 +479,17 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I add a new source file in (\S+)$"),
             step_fn(given_add_new_source_file),
         )
+        .when(
+            None,
+            regex(r"^I add a new source file in (\S+)$"),
+            step_fn(given_add_new_source_file),
+        )
         .given(
+            None,
+            regex(r#"^I add a source file \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_add_source_file_at_path),
+        )
+        .when(
             None,
             regex(r#"^I add a source file \"([^\"]+)\" in (\S+)$"#),
             step_fn(given_add_source_file_at_path),
@@ -459,7 +499,17 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r"^I modify an existing source file in (\S+)$"),
             step_fn(given_modify_existing_source_file),
         )
+        .when(
+            None,
+            regex(r"^I modify an existing source file in (\S+)$"),
+            step_fn(given_modify_existing_source_file),
+        )
         .given(
+            None,
+            regex(r#"^I modify a source file \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_modify_source_file_at_path),
+        )
+        .when(
             None,
             regex(r#"^I modify a source file \"([^\"]+)\" in (\S+)$"#),
             step_fn(given_modify_source_file_at_path),
@@ -470,6 +520,11 @@ pub fn collection() -> Collection<QatWorld> {
             step_fn(given_snapshot_current_file_state_content_ids),
         )
         .given(
+            None,
+            regex(r"^I delete a source file in (\S+)$"),
+            step_fn(given_delete_a_source_file),
+        )
+        .when(
             None,
             regex(r"^I delete a source file in (\S+)$"),
             step_fn(given_delete_a_source_file),
@@ -486,6 +541,46 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I commit changes with hooks in (\S+)$"),
+            step_fn(given_commit_with_hooks),
+        )
+        .when(
+            None,
+            regex(r"^I commit changes with hooks in (\S+)$"),
+            step_fn(given_commit_with_hooks),
+        )
+        .given(
+            None,
+            regex(r#"^I create a branch \"([^\"]+)\" with source file \"([^\"]+)\" and return in (\S+)$"#),
+            step_fn(given_create_branch_with_source_file_and_return),
+        )
+        .given(
+            None,
+            regex(r"^I checkout the previous branch in (\S+)$"),
+            step_fn(given_checkout_previous_branch),
+        )
+        .when(
+            None,
+            regex(r#"^I checkout branch \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_checkout_branch),
+        )
+        .when(
+            None,
+            regex(r"^I checkout the previous branch in (\S+)$"),
+            step_fn(given_checkout_previous_branch),
+        )
+        .when(
+            None,
+            regex(r"^I run git reset --hard HEAD in (\S+)$"),
+            step_fn(given_git_reset_hard_head),
+        )
+        .when(
+            None,
+            regex(r"^I run git clean -fd in (\S+)$"),
+            step_fn(given_git_clean_fd),
+        )
+        .given(
+            None,
             regex(r"^I stage the changes without committing in (\S+)$"),
             step_fn(given_stage_without_committing),
         )
@@ -495,6 +590,11 @@ pub fn collection() -> Collection<QatWorld> {
             step_fn(given_stop_daemon),
         )
         .given(
+            None,
+            regex(r"^I simulate a git pull with new changes in (\S+)$"),
+            step_fn(given_simulate_git_pull),
+        )
+        .when(
             None,
             regex(r"^I simulate a git pull with new changes in (\S+)$"),
             step_fn(given_simulate_git_pull),
@@ -678,6 +778,31 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r#"^Architecture graph entry point kind \"([^\"]+)\" for path \"([^\"]+)\" is effective in (\S+)$"#),
+            step_fn(then_architecture_entry_point_effective),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph container kind \"([^\"]+)\" exposes entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_container_exposes_entry_point),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph system membership \"([^\"]+)\" includes entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_system_membership_for_entry_point),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph suppression hides entry point kind \"([^\"]+)\" for path \"([^\"]+)\" then revoke restores it in (\S+)$"#),
+            step_fn(then_architecture_suppression_revoke_roundtrip),
+        )
+        .then(
+            None,
+            regex(r#"^Architecture graph assertion adds entry point kind \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_manual_entry_point),
+        )
+        .then(
+            None,
             regex(r#"^DevQL selectArtefacts search for \"([^\"]+)\" returns at least (\d+) results? in (\S+)$"#),
             step_fn(then_devql_select_artefacts_search_returns_at_least),
         )
@@ -710,6 +835,21 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^DevQL artefacts query result count is stable across ingests in (\S+)$"),
             step_fn(then_devql_artefacts_stable),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL context guidance query for \"([^\"]+)\" returns at least (\d+) items? in (\S+)$"#),
+            step_fn(then_devql_context_guidance_returns_at_least),
+        )
+        .then(
+            None,
+            regex(r#"^DevQL context guidance query for \"([^\"]+)\" includes kind \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_devql_context_guidance_includes_kind),
+        )
+        .then(
+            None,
+            regex(r"^daemon enrichments eventually drain in (\S+)$"),
+            step_fn(then_daemon_enrichments_eventually_drain),
         )
         .then(
             None,
@@ -1006,8 +1146,48 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .then(
             None,
+            regex(r"^DevQL watcher is registered and running in (\S+)$"),
+            step_fn(then_devql_watcher_registered_and_running),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current eventually contains path \"([^\"]+)\" without nudge in (\S+)$"#),
+            step_fn(then_artefacts_current_contains_path_eventually_without_nudge),
+        )
+        .then(
+            None,
+            regex(r#"^artefacts_current eventually does not contain path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_artefacts_current_lacks_path_eventually),
+        )
+        .then(
+            None,
             regex(r#"^current-state content id for \"([^\"]+)\" changed since snapshot in (\S+)$"#),
             step_fn(then_current_file_state_content_id_changed_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^current-state content id for \"([^\"]+)\" eventually changed since snapshot in (\S+)$"#),
+            step_fn(then_current_file_state_content_id_changed_eventually),
+        )
+        .then(
+            None,
+            regex(r#"^a completed DevQL sync task with source \"([^\"]+)\" exists in (\S+)$"#),
+            step_fn(then_completed_sync_task_source_exists),
+        )
+        .then(
+            None,
+            regex(r#"^a completed DevQL sync task with source \"([^\"]+)\" shows (work|added|changed|removed|unchanged|cache hits|cache misses|parse errors) greater than (\d+) since snapshot in (\S+)$"#),
+            step_fn(then_completed_sync_task_source_summary_field_greater_than_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^no DevQL ingest task with source \"([^\"]+)\" exists since snapshot in (\S+)$"#),
+            step_fn(then_no_devql_ingest_task_source_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^the latest completed DevQL sync task source is \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_latest_completed_sync_task_source_matches),
         )
         .then(
             None,

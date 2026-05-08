@@ -31,7 +31,7 @@ fn check_semantic_clones_semantic_summaries(
     }
 
     let Some(slot_name) = resolve_selected_summary_slot(&config) else {
-        return CapabilityHealthResult::ok("semantic summaries use deterministic fallback only");
+        return CapabilityHealthResult::ok("semantic summaries not configured");
     };
     let profile_name = ctx
         .inference()
@@ -192,6 +192,9 @@ fn check_semantic_clones_runtime_handshake(
         let resolution = match task {
             InferenceTask::Embeddings => ctx.inference().embeddings(slot_name).map(|_| ()),
             InferenceTask::TextGeneration => ctx.inference().text_generation(slot_name).map(|_| ()),
+            InferenceTask::StructuredGeneration => {
+                ctx.inference().structured_generation(slot_name).map(|_| ())
+            }
         };
         match resolution {
             Ok(_) => {

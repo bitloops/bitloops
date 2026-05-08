@@ -33,6 +33,16 @@ pub(crate) async fn execute_ingest_with_backfill_window(
     .await
 }
 
+pub(crate) async fn execute_ingest_with_commits(
+    cfg: &DevqlConfig,
+    init: bool,
+    commits: Vec<String>,
+    observer: Option<&dyn IngestionObserver>,
+    enrichment: Option<Arc<crate::daemon::EnrichmentCoordinator>>,
+) -> Result<IngestionCounters> {
+    execute_ingest_inner(cfg, init, 0, None, Some(commits), observer, enrichment).await
+}
+
 pub(crate) async fn execute_ingest_with_observer(
     cfg: &DevqlConfig,
     init: bool,

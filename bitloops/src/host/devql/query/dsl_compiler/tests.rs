@@ -571,6 +571,124 @@ fn compile_repository_knowledge_pipeline() {
 }
 
 #[test]
+fn compile_http_search_pipeline_targets_typed_project_field() {
+    let parsed = parse_devql_query(
+        r#"repo("axum")->httpSearch(terms:"HEAD,Content-Length,Hyper")->limit(10)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert!(
+        graphql.contains(r#"httpSearch(terms: ["HEAD", "Content-Length", "Hyper"], first: 10)"#),
+        "unexpected graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("bundles {"),
+        "unexpected graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("matchedFacts {"),
+        "unexpected graphql: {graphql}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_overview_http_entry_surface() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(search:"HEAD Content-Length Hyper")->overview()"#)
+            .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { search: "HEAD Content-Length Hyper" }) {
+    overview
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_http_context_deep_dive() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(symbol_fqn:"axum::routing::MethodRouter::call")->httpContext()->limit(20)"#)
+            .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert!(
+        graphql.contains(r#"httpContext(first: 20) {"#),
+        "unexpected graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("causalChain {"),
+        "unexpected graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("obligations {"),
+        "unexpected graphql: {graphql}"
+    );
+}
+
+#[test]
+fn compile_http_direct_lookup_pipelines() {
+    let header = parse_devql_query(
+        r#"repo("axum")->httpHeaderProducers(header:"content-length")->limit(20)"#,
+    )
+    .expect("query parses");
+    let header_graphql = compile_devql_to_graphql(&header).expect("header graphql compiles");
+    assert!(
+        header_graphql.contains(r#"httpHeaderProducers(headerName: "content-length", first: 20)"#),
+        "unexpected graphql: {header_graphql}"
+    );
+
+    let lifecycle = parse_devql_query(
+        r#"repo("axum")->httpLifecycleBoundaries(terms:"framework,runtime,serialisation")->limit(20)"#,
+    )
+    .expect("query parses");
+    let lifecycle_graphql =
+        compile_devql_to_graphql(&lifecycle).expect("lifecycle graphql compiles");
+    assert!(
+        lifecycle_graphql.contains(
+            r#"httpLifecycleBoundaries(terms: ["framework", "runtime", "serialisation"], first: 20)"#
+        ),
+        "unexpected graphql: {lifecycle_graphql}"
+    );
+
+    let patch =
+        parse_devql_query(r#"repo("axum")->httpPatchImpact(patch_fingerprint:"sha256:abc123")"#)
+            .expect("query parses");
+    let patch_graphql = compile_devql_to_graphql(&patch).expect("patch graphql compiles");
+    assert!(
+        patch_graphql.contains(r#"httpPatchImpact(input: { patchFingerprint: "sha256:abc123" })"#),
+        "unexpected graphql: {patch_graphql}"
+    );
+}
+
+#[test]
+fn compile_artefact_http_lossy_transforms_convenience_lookup() {
+    let parsed =
+        parse_devql_query(r#"repo("axum")->artefacts(symbol_fqn:"axum::routing::RouteFuture::strip_body")->httpLossyTransforms()->limit(20)"#)
+            .expect("query parses");
+
+    let graphql = compile_devql_to_graphql(&parsed).expect("graphql compiles");
+
+    assert!(
+        graphql.contains(r#"httpLossyTransforms(first: 20) {"#),
+        "unexpected graphql: {graphql}"
+    );
+    assert!(
+        graphql.contains("primitiveType"),
+        "unexpected graphql: {graphql}"
+    );
+}
+
+#[test]
 fn parse_devql_pipeline_supports_select_artefacts_symbol_selector() {
     let parsed =
         parse_devql_query(r#"selectArtefacts(symbol_fqn:"src/main.rs::main")->checkpoints()"#)
@@ -624,6 +742,229 @@ fn compile_slim_select_artefacts_search_selector() {
     }
   }
 }"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_defaults_to_overview() {
+    let parsed = parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->historicalContext()"#)
+        .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_maps_args_and_explicit_selection() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(agent:"codex",since:"2026-04-01",evidence_kind:"file_relation")->select(overview,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext(agent: "codex", since: "2026-04-01T00:00:00Z", evidenceKind: FILE_RELATION) {
+      overview
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_accepts_graphql_evidence_kind_alias() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(evidenceKind:"file_relation")->select(overview)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    historicalContext(evidenceKind: FILE_RELATION) {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_defaults_to_overview() {
+    let parsed = parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->contextGuidance()"#)
+        .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    contextGuidance {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_maps_args_and_explicit_selection() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(agent:"codex",since:"2026-04-01",evidenceKind:"file_relation",category:"decision",kind:"rejected_approach")->select(overview,schema)"#,
+    )
+    .expect("query parses");
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { path: "src/lib.rs" }) {
+    contextGuidance(agent: "codex", since: "2026-04-01T00:00:00Z", evidenceKind: FILE_RELATION, category: DECISION, kind: "rejected_approach") {
+      overview
+      schema
+    }
+  }
+}"#
+    );
+}
+
+#[test]
+fn compile_rejects_historical_context_outside_select_artefacts() {
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->artefacts()->historicalContext()"#)
+        .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("historical context should fail");
+
+    assert!(
+        err.to_string()
+            .contains("historicalContext() is only supported after selectArtefacts(...)"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_rejects_context_guidance_outside_select_artefacts() {
+    let parsed = parse_devql_query(r#"repo("bitloops-cli")->artefacts()->contextGuidance()"#)
+        .expect("query parses");
+
+    let err = compile_devql_to_graphql(&parsed).expect_err("context guidance should fail");
+
+    assert!(
+        err.to_string()
+            .contains("contextGuidance() is only supported after selectArtefacts(...)"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_rejects_invalid_category() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(category:"surprise")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid category should fail");
+
+    assert!(
+        err.to_string().contains(
+            "contextGuidance(category:...) must be one of: decision, constraint, pattern, risk, verification, context"
+        ),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_rejects_invalid_evidence_kind() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(evidenceKind:"rumor")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid evidence kind should fail");
+
+    assert!(
+        err.to_string().contains(
+            "contextGuidance(evidenceKind:...) must be one of: symbol_provenance, file_relation, line_overlap"
+        ),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_historical_context_rejects_invalid_evidence_kind() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->historicalContext(evidenceKind:"rumor")"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("invalid evidence kind should fail");
+
+    assert!(
+        err.to_string().contains(
+            "historicalContext(evidenceKind:...) must be one of: symbol_provenance, file_relation, line_overlap"
+        ),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_context_guidance_rejects_empty_kind() {
+    let parsed =
+        parse_devql_query(r#"selectArtefacts(path:"src/lib.rs")->contextGuidance(kind:"")"#)
+            .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("empty kind should fail");
+
+    assert!(
+        err.to_string()
+            .contains("contextGuidance(kind:...) must be non-empty"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn compile_slim_select_artefacts_rejects_context_guidance_with_another_terminal_stage() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(path:"src/lib.rs")->contextGuidance()->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let err = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect_err("multiple terminal stages should fail");
+
+    assert!(
+        err.to_string()
+            .contains("selectArtefacts(...) supports exactly one terminal stage in v1"),
+        "unexpected error: {err:#}"
     );
 }
 

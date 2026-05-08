@@ -37,6 +37,22 @@ pub struct CurrentFileStateRecord {
     pub committed_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentCanonicalFileRecord {
+    pub repo_id: String,
+    pub path: String,
+    pub analysis_mode: String,
+    pub file_role: String,
+    pub language: String,
+    pub resolved_language: String,
+    pub effective_content_id: String,
+    pub parser_version: String,
+    pub extractor_version: String,
+    pub exists_in_head: bool,
+    pub exists_in_index: bool,
+    pub exists_in_worktree: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProductionArtefactRecord {
     pub artefact_id: String,
@@ -83,6 +99,29 @@ pub struct CurrentProductionArtefactRecord {
     pub content_hash: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentCanonicalArtefactRecord {
+    pub repo_id: String,
+    pub path: String,
+    pub content_id: String,
+    pub symbol_id: String,
+    pub artefact_id: String,
+    pub language: String,
+    pub extraction_fingerprint: String,
+    pub canonical_kind: Option<String>,
+    pub language_kind: Option<String>,
+    pub symbol_fqn: Option<String>,
+    pub parent_symbol_id: Option<String>,
+    pub parent_artefact_id: Option<String>,
+    pub start_line: i64,
+    pub end_line: i64,
+    pub start_byte: i64,
+    pub end_byte: i64,
+    pub signature: Option<String>,
+    pub modifiers: String,
+    pub docstring: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ProductionEdgeRecord {
     pub edge_id: String,
@@ -105,6 +144,24 @@ pub struct CurrentProductionEdgeRecord {
     pub commit_sha: String,
     pub blob_sha: String,
     pub path: String,
+    pub from_symbol_id: String,
+    pub from_artefact_id: String,
+    pub to_symbol_id: Option<String>,
+    pub to_artefact_id: Option<String>,
+    pub to_symbol_ref: Option<String>,
+    pub edge_kind: String,
+    pub language: String,
+    pub start_line: Option<i64>,
+    pub end_line: Option<i64>,
+    pub metadata: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentCanonicalEdgeRecord {
+    pub repo_id: String,
+    pub edge_id: String,
+    pub path: String,
+    pub content_id: String,
     pub from_symbol_id: String,
     pub from_artefact_id: String,
     pub to_symbol_id: Option<String>,

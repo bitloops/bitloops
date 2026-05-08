@@ -7,12 +7,16 @@ use anyhow::Result;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
 pub use crate::adapters::connectors::{
     ConnectorContext, ConnectorRegistry, ExternalKnowledgeRecord, KnowledgeConnectorAdapter,
 };
-use crate::host::language_adapter::LanguageTestSupport;
+use crate::host::language_adapter::{
+    LanguageEntryPointArtefact, LanguageEntryPointCandidate, LanguageEntryPointFile,
+    LanguageHttpFact, LanguageHttpFactArtefact, LanguageHttpFactFile, LanguageTestSupport,
+};
 pub use blob_payloads::{BlobPayloadGateway, BlobPayloadRef};
 pub use documents::DocumentStoreGateway;
 pub use relational::RelationalGateway;
@@ -42,11 +46,78 @@ pub trait LanguageServicesGateway: Send + Sync {
         let _ = relative_path;
         None
     }
+
+    fn entry_point_candidates_for_file(
+        &self,
+        file: &LanguageEntryPointFile,
+        artefacts: &[LanguageEntryPointArtefact],
+    ) -> Vec<LanguageEntryPointCandidate> {
+        let _ = (file, artefacts);
+        Vec::new()
+    }
+
+    fn http_facts_for_file(
+        &self,
+        file: &LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[LanguageHttpFactArtefact],
+    ) -> Option<(String, Vec<LanguageHttpFact>)> {
+        let _ = (file, content, artefacts);
+        None
+    }
 }
 
 pub struct EmptyLanguageServicesGateway;
 
 impl LanguageServicesGateway for EmptyLanguageServicesGateway {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitHistoryRequest<'a> {
+    pub paths: &'a [String],
+    pub since_unix: i64,
+    pub until_commit_sha: Option<&'a str>,
+    pub bug_patterns: &'a [String],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHistoryEvent {
+    pub path: String,
+    pub commit_sha: String,
+    pub author_name: Option<String>,
+    pub author_email: Option<String>,
+    pub committed_at_unix: i64,
+    pub message: String,
+    pub is_bug_fix: bool,
+    pub changed_ranges: Vec<ChangedLineRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedLineRange {
+    pub start_line: i64,
+    pub end_line: i64,
+}
+
+pub trait GitHistoryGateway: Send + Sync {
+    fn available(&self) -> bool {
+        false
+    }
+
+    fn resolve_head(&self, _repo_root: &Path) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn load_file_history(
+        &self,
+        _repo_root: &Path,
+        _request: GitHistoryRequest<'_>,
+    ) -> Result<Vec<FileHistoryEvent>> {
+        Ok(Vec::new())
+    }
+}
+
+pub struct EmptyGitHistoryGateway;
+
+impl GitHistoryGateway for EmptyGitHistoryGateway {}
 
 pub struct SymbolIdentityInput<'a> {
     pub path: &'a str,
@@ -74,6 +145,7 @@ pub trait HostServicesGateway: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapabilityWorkplaneJob {
+    pub target_capability_id: Option<String>,
     pub mailbox_name: String,
     pub dedupe_key: Option<String>,
     pub payload: Value,
@@ -86,6 +158,21 @@ impl CapabilityWorkplaneJob {
         payload: Value,
     ) -> Self {
         Self {
+            target_capability_id: None,
+            mailbox_name: mailbox_name.into(),
+            dedupe_key,
+            payload,
+        }
+    }
+
+    pub fn new_for_capability(
+        target_capability_id: impl Into<String>,
+        mailbox_name: impl Into<String>,
+        dedupe_key: Option<String>,
+        payload: Value,
+    ) -> Self {
+        Self {
+            target_capability_id: Some(target_capability_id.into()),
             mailbox_name: mailbox_name.into(),
             dedupe_key,
             payload,

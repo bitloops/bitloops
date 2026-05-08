@@ -925,6 +925,208 @@ fn devql_cli_parses_packs_flags() {
 }
 
 #[test]
+fn devql_cli_parses_navigation_context_status_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "navigation-context",
+        "status",
+        "--project",
+        "crates/api",
+        "--view",
+        "architecture_map",
+        "--status",
+        "stale",
+        "--changed-limit",
+        "3",
+        "--json",
+    ])
+    .expect("devql navigation-context status should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::NavigationContext(navigation_context)) = args.command else {
+        panic!("expected devql navigation-context command");
+    };
+    let DevqlNavigationContextCommand::Status(status) = navigation_context.command else {
+        panic!("expected devql navigation-context status command");
+    };
+
+    assert_eq!(status.project, "crates/api");
+    assert_eq!(status.view.as_deref(), Some("architecture_map"));
+    assert_eq!(status.status, Some(DevqlNavigationContextStatusArg::Stale));
+    assert_eq!(status.changed_limit, 3);
+    assert!(status.json);
+}
+
+#[test]
+fn devql_cli_parses_navigation_context_accept_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "navigation-context",
+        "accept",
+        "architecture_map",
+        "--expected-current-signature",
+        "signature-1",
+        "--reason",
+        "reviewed",
+        "--materialised-ref",
+        "docs/navigation/architecture.md",
+        "--json",
+    ])
+    .expect("devql navigation-context accept should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::NavigationContext(navigation_context)) = args.command else {
+        panic!("expected devql navigation-context command");
+    };
+    let DevqlNavigationContextCommand::Accept(accept) = navigation_context.command else {
+        panic!("expected devql navigation-context accept command");
+    };
+
+    assert_eq!(accept.view_id, "architecture_map");
+    assert_eq!(
+        accept.expected_current_signature.as_deref(),
+        Some("signature-1")
+    );
+    assert_eq!(accept.reason.as_deref(), Some("reviewed"));
+    assert_eq!(
+        accept.materialised_ref.as_deref(),
+        Some("docs/navigation/architecture.md")
+    );
+    assert!(accept.json);
+}
+
+#[test]
+fn devql_cli_parses_navigation_context_materialise_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "devql",
+        "navigation-context",
+        "materialise",
+        "architecture_map",
+        "--expected-current-signature",
+        "signature-1",
+        "--rendered",
+        "--json",
+    ])
+    .expect("devql navigation-context materialise should parse");
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::NavigationContext(navigation_context)) = args.command else {
+        panic!("expected devql navigation-context command");
+    };
+    let DevqlNavigationContextCommand::Materialise(materialise) = navigation_context.command else {
+        panic!("expected devql navigation-context materialise command");
+    };
+
+    assert_eq!(materialise.view_id, "architecture_map");
+    assert_eq!(
+        materialise.expected_current_signature.as_deref(),
+        Some("signature-1")
+    );
+    assert!(materialise.rendered);
+    assert!(materialise.json);
+}
+
+#[test]
+fn format_navigation_context_status_shows_changed_primitive_details() {
+    let snapshot = json!({
+        "totalViews": 1,
+        "totalPrimitives": 42,
+        "totalEdges": 7,
+        "views": [{
+            "viewId": "architecture_map",
+            "label": "Architecture map",
+            "acceptedSignature": "accepted-signature",
+            "currentSignature": "current-signature",
+            "status": "STALE",
+            "materialisedRef": "docs/navigation/architecture.md",
+            "acceptanceHistory": [{
+                "acceptanceId": "acceptance-1",
+                "acceptedSignature": "accepted-signature",
+                "previousAcceptedSignature": "previous-accepted-signature",
+                "currentSignature": "accepted-signature",
+                "expectedCurrentSignature": "accepted-signature",
+                "source": "manual_cli",
+                "reason": "reviewed",
+                "materialisedRef": "docs/navigation/architecture.md",
+                "acceptedAt": "2026-05-03T00:00:00Z"
+            }],
+            "staleReason": {
+                "changedPrimitives": [{
+                    "primitiveId": "symbol-1",
+                    "primitiveKind": "SYMBOL",
+                    "label": "render",
+                    "path": "src/render.rs",
+                    "sourceKind": "TEST",
+                    "changeKind": "hash_changed",
+                    "previousHash": "previous-signature",
+                    "currentHash": "current-signature"
+                }]
+            }
+        }]
+    });
+
+    let rendered = format_navigation_context_status(&snapshot, 10);
+
+    assert!(
+        rendered.contains("navigation context: 1 views, 1 stale, 42 primitives, 7 edges"),
+        "expected summary line, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("- architecture_map [stale] Architecture map"),
+        "expected view line, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("materialised: docs/navigation/architecture.md"),
+        "expected materialised ref, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("last accepted: 2026-05-03T00:00:00Z by manual_cli"),
+        "expected acceptance history, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("hash_changed: SYMBOL render (src/render.rs) previous-sig->current-sign"),
+        "expected changed primitive details, got: {rendered}"
+    );
+}
+
+#[test]
+fn format_navigation_context_materialisation_shows_snapshot_ref_and_counts() {
+    let result = json!({
+        "viewId": "architecture_map",
+        "currentSignature": "current-signature",
+        "status": "STALE",
+        "materialisedRef": "navigation-context://materialisations/123",
+        "primitiveCount": 42,
+        "edgeCount": 7,
+        "materialisedAt": "2026-05-03T00:00:00Z"
+    });
+
+    let rendered = format_navigation_context_materialisation(&result);
+
+    assert!(
+        rendered.contains("navigation context view materialised: architecture_map status=stale"),
+        "expected materialisation summary, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("primitives=42 edges=7"),
+        "expected materialisation counts, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("ref=navigation-context://materialisations/123"),
+        "expected materialised ref, got: {rendered}"
+    );
+}
+
+#[test]
 fn devql_cli_parses_schema_defaults() {
     let parsed =
         Cli::try_parse_from(["bitloops", "devql", "schema"]).expect("devql schema should parse");
@@ -1545,47 +1747,48 @@ fn devql_run_ingest_enqueue_executes_graphql_mutation_with_expected_input() {
 #[test]
 fn devql_run_ingest_enqueue_requires_current_daemon_before_graphql_mutation() {
     let repo = seed_devql_cli_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let bootstrap_count = Rc::new(RefCell::new(0usize));
     let query_count = Rc::new(RefCell::new(0usize));
     let ingested = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
 
-    super::graphql::with_ingest_daemon_runtime_hook(
-        {
-            let bootstrap_count = Rc::clone(&bootstrap_count);
-            move |_repo_root: &std::path::Path| {
-                *bootstrap_count.borrow_mut() += 1;
-                Ok(())
-            }
-        },
-        || {
-            with_graphql_executor_hook(
-                {
-                    let query_count = Rc::clone(&query_count);
-                    let ingested = Rc::clone(&ingested);
-                    move |_repo_root: &std::path::Path,
-                          query: &str,
-                          variables: &serde_json::Value| {
-                        *query_count.borrow_mut() += 1;
-                        *ingested.borrow_mut() = Some((query.to_string(), variables.clone()));
-                        Ok(json!({
-                            "enqueueTask": {
-                                "merged": false,
-                                "task": queued_ingest_task_payload("ingest-task-2", None)
-                            }
-                        }))
-                    }
-                },
-                || {
-                    test_runtime()
-                        .block_on(run(DevqlArgs {
-                            command: Some(ingest_enqueue_command(false)),
-                        }))
-                        .expect("devql ingest enqueue should succeed");
-                },
-            );
-        },
-    );
+    with_isolated_daemon_state(repo.path(), || {
+        super::graphql::with_ingest_daemon_runtime_hook(
+            {
+                let bootstrap_count = Rc::clone(&bootstrap_count);
+                move |_repo_root: &std::path::Path| {
+                    *bootstrap_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                with_graphql_executor_hook(
+                    {
+                        let query_count = Rc::clone(&query_count);
+                        let ingested = Rc::clone(&ingested);
+                        move |_repo_root: &std::path::Path,
+                              query: &str,
+                              variables: &serde_json::Value| {
+                            *query_count.borrow_mut() += 1;
+                            *ingested.borrow_mut() = Some((query.to_string(), variables.clone()));
+                            Ok(json!({
+                                "enqueueTask": {
+                                    "merged": false,
+                                    "task": queued_ingest_task_payload("ingest-task-2", None)
+                                }
+                            }))
+                        }
+                    },
+                    || {
+                        test_runtime()
+                            .block_on(run(DevqlArgs {
+                                command: Some(ingest_enqueue_command(false)),
+                            }))
+                            .expect("devql ingest enqueue should succeed");
+                    },
+                );
+            },
+        );
+    });
 
     assert_eq!(*bootstrap_count.borrow(), 1);
     assert_eq!(*query_count.borrow(), 1);
@@ -2019,6 +2222,109 @@ fn devql_run_knowledge_associate_executes_graphql_mutation() {
     assert!(query.contains("associateKnowledge"));
     assert_eq!(variables["input"]["sourceRef"], json!("knowledge:item-1"));
     assert_eq!(variables["input"]["targetRef"], json!("commit:abc123"));
+}
+
+#[test]
+fn devql_run_knowledge_associate_accepts_path_target_response() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    with_graphql_executor_hook(
+        {
+            let captured = Rc::clone(&captured);
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
+                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                Ok(json!({
+                    "associateKnowledge": {
+                        "success": true,
+                        "relation": {
+                            "id": "relation-path-1",
+                            "targetType": "PATH",
+                            "targetId": "axum-macros/src/from_request.rs",
+                            "relationType": "associated_with",
+                            "associationMethod": "manual_attachment"
+                        }
+                    }
+                }))
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run(DevqlArgs {
+                    command: Some(DevqlCommand::Knowledge(DevqlKnowledgeArgs {
+                        command: DevqlKnowledgeCommand::Associate(DevqlKnowledgeAssociateArgs {
+                            source_ref: "knowledge:item-1".to_string(),
+                            target_ref: "path:axum-macros/src/from_request.rs".to_string(),
+                        }),
+                    })),
+                }))
+                .expect("devql knowledge associate should accept path target response");
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("associateKnowledge"));
+    assert_eq!(variables["input"]["sourceRef"], json!("knowledge:item-1"));
+    assert_eq!(
+        variables["input"]["targetRef"],
+        json!("path:axum-macros/src/from_request.rs")
+    );
+}
+
+#[test]
+fn devql_run_knowledge_associate_accepts_symbol_target_response() {
+    let repo = seed_devql_cli_repo();
+    let _guard = enter_process_state(Some(repo.path()), &[]);
+    let captured = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
+
+    with_graphql_executor_hook(
+        {
+            let captured = Rc::clone(&captured);
+            move |_repo_root: &std::path::Path, query: &str, variables: &serde_json::Value| {
+                *captured.borrow_mut() = Some((query.to_string(), variables.clone()));
+                Ok(json!({
+                    "associateKnowledge": {
+                        "success": true,
+                        "relation": {
+                            "id": "relation-symbol-1",
+                            "targetType": "SYMBOL_FQN",
+                            "targetId": "axum-macros/src/from_request.rs::expand",
+                            "relationType": "associated_with",
+                            "associationMethod": "manual_attachment"
+                        }
+                    }
+                }))
+            }
+        },
+        || {
+            test_runtime()
+                .block_on(run(DevqlArgs {
+                    command: Some(DevqlCommand::Knowledge(DevqlKnowledgeArgs {
+                        command: DevqlKnowledgeCommand::Associate(DevqlKnowledgeAssociateArgs {
+                            source_ref: "knowledge:item-1".to_string(),
+                            target_ref: "symbol_fqn:axum-macros/src/from_request.rs::expand"
+                                .to_string(),
+                        }),
+                    })),
+                }))
+                .expect("devql knowledge associate should accept symbol target response");
+        },
+    );
+
+    let (query, variables) = captured
+        .borrow_mut()
+        .take()
+        .expect("graphql mutation should be captured");
+    assert!(query.contains("associateKnowledge"));
+    assert_eq!(variables["input"]["sourceRef"], json!("knowledge:item-1"));
+    assert_eq!(
+        variables["input"]["targetRef"],
+        json!("symbol_fqn:axum-macros/src/from_request.rs::expand")
+    );
 }
 
 #[test]

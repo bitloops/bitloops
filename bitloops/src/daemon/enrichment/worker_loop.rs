@@ -4,6 +4,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::daemon::types::unix_timestamp_now;
 use crate::host::relational_store::DefaultRelationalStore;
+use crate::host::runtime_store::WorkplaneJobRecord;
 
 use super::coordinator::EnrichmentCoordinator;
 use super::execution;
@@ -20,7 +21,6 @@ use super::workplane::{
 impl EnrichmentCoordinator {
     pub(crate) async fn run_loop(self: std::sync::Arc<Self>, pool: EnrichmentWorkerPool) {
         loop {
-            self.ensure_worker_capacity();
             match self.process_next_job(pool).await {
                 Ok(true) => continue,
                 Ok(false) => {}
@@ -53,7 +53,20 @@ impl EnrichmentCoordinator {
             let Some(batch) =
                 claim_summary_mailbox_batch(&self.workplane_store, &self.runtime_store, &state)?
             else {
-                return Ok(false);
+                let Some(job) = claim_next_workplane_job(
+                    &self.workplane_store,
+                    &self.runtime_store,
+                    &state,
+                    EnrichmentWorkerPool::SummaryRefresh,
+                )?
+                else {
+                    return Ok(false);
+                };
+                state.last_action = Some(format!("running:{}", job.mailbox_name));
+                self.save_state(&mut state)?;
+                drop(state);
+                drop(_guard);
+                return self.execute_claimed_workplane_job(job).await;
             };
             state.last_action = Some("running:summary_refresh".to_string());
             self.save_state(&mut state)?;
@@ -111,11 +124,12 @@ impl EnrichmentCoordinator {
         .await;
         let flush_ms = flush_started.elapsed().as_millis() as u64;
         init_runtime.clear_summary_in_memory_batch(&batch.lease_token);
+        let flush_succeeded = flush_result.is_ok();
 
         {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;
-            state.last_action = Some(if flush_result.is_ok() {
+            state.last_action = Some(if flush_succeeded {
                 "completed".to_string()
             } else {
                 "retry_scheduled".to_string()
@@ -123,33 +137,52 @@ impl EnrichmentCoordinator {
             self.save_state(&mut state)?;
         }
 
-        if let Err(err) = flush_result {
-            requeue_summary_mailbox_batch(&self.workplane_store, &batch, 5, &format!("{err:#}"))?;
-            log::warn!(
-                "semantic mailbox batch completed: pipeline=summary_refresh repo_id={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=retry_scheduled retry_in_ms=5000",
-                batch.repo_id,
-                batch.items.len(),
-                expanded_count,
-                queue_wait_ms,
-                inference_ms,
-                flush_ms,
-                inference_ms.saturating_add(flush_ms),
-                attempts,
-            );
-            return Ok(true);
+        match flush_result {
+            Err(err) => {
+                let err_text = format!("{err:#}");
+                let timings = err.timings();
+                requeue_summary_mailbox_batch(&self.workplane_store, &batch, 5, &err_text)?;
+                log::warn!(
+                    "semantic mailbox batch completed: pipeline=summary_refresh repo_id={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=retry_scheduled retry_in_ms=5000 failure_substage={} runtime_store_writes_succeeded_in_tx={} transaction_start_ms={} summary_sql_ms={} runtime_embedding_mailbox_upsert_ms={} replacement_summary_backfill_insert_ms={} summary_mailbox_delete_ms={} transaction_commit_ms={}",
+                    batch.repo_id,
+                    batch.items.len(),
+                    expanded_count,
+                    queue_wait_ms,
+                    inference_ms,
+                    flush_ms,
+                    inference_ms.saturating_add(flush_ms),
+                    attempts,
+                    err.phase().as_str(),
+                    err.runtime_store_writes_succeeded_in_tx(),
+                    timings.transaction_start_ms,
+                    timings.summary_sql_ms,
+                    timings.runtime_embedding_mailbox_upsert_ms,
+                    timings.replacement_summary_backfill_insert_ms,
+                    timings.summary_mailbox_delete_ms,
+                    timings.transaction_commit_ms,
+                );
+                return Ok(true);
+            }
+            Ok(report) => {
+                log::info!(
+                    "semantic mailbox batch completed: pipeline=summary_refresh repo_id={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=completed transaction_start_ms={} summary_sql_ms={} runtime_embedding_mailbox_upsert_ms={} replacement_summary_backfill_insert_ms={} summary_mailbox_delete_ms={} transaction_commit_ms={}",
+                    batch.repo_id,
+                    batch.items.len(),
+                    expanded_count,
+                    queue_wait_ms,
+                    inference_ms,
+                    flush_ms,
+                    inference_ms.saturating_add(flush_ms),
+                    attempts,
+                    report.timings.transaction_start_ms,
+                    report.timings.summary_sql_ms,
+                    report.timings.runtime_embedding_mailbox_upsert_ms,
+                    report.timings.replacement_summary_backfill_insert_ms,
+                    report.timings.summary_mailbox_delete_ms,
+                    report.timings.transaction_commit_ms,
+                );
+            }
         }
-
-        log::info!(
-            "semantic mailbox batch completed: pipeline=summary_refresh repo_id={} leased_count={} expanded_count={} queue_wait_ms={} inference_ms={} flush_ms={} total_ms={} attempts={} outcome=completed",
-            batch.repo_id,
-            batch.items.len(),
-            expanded_count,
-            queue_wait_ms,
-            inference_ms,
-            flush_ms,
-            inference_ms.saturating_add(flush_ms),
-            attempts,
-        );
 
         Ok(true)
     }
@@ -287,10 +320,13 @@ impl EnrichmentCoordinator {
             self.save_state(&mut state)?;
             job
         };
+
+        self.execute_claimed_workplane_job(job).await
+    }
+
+    async fn execute_claimed_workplane_job(&self, job: WorkplaneJobRecord) -> Result<bool> {
         publish_job_runtime_event(&job);
-
         let outcome = execution::execute_workplane_job(&job).await;
-
         {
             let _guard = self.lock.lock().await;
             let mut state = self.load_state()?;

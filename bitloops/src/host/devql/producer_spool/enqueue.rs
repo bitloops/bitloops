@@ -49,6 +49,31 @@ pub(crate) fn enqueue_spooled_sync_task_for_repo_root(
     enqueue_spooled_sync_task(&cfg, source, mode)
 }
 
+pub(crate) fn enqueue_spooled_ingest_task_for_repo_root(
+    repo_root: &Path,
+    source: DevqlTaskSource,
+    spec: crate::daemon::IngestTaskSpec,
+) -> Result<ProducerSpoolEnqueueResult> {
+    let repo = crate::host::devql::resolve_repo_identity(repo_root)
+        .context("resolving repo identity for DevQL ingest producer spool")?;
+    let config_root = crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)
+        .context("resolving daemon config root for DevQL ingest producer spool")?;
+    let cfg =
+        crate::host::devql::DevqlConfig::from_roots(config_root, repo_root.to_path_buf(), repo)
+            .context("building DevQL config for ingest producer spool")?;
+    let store = RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)
+        .context("opening repo runtime store for DevQL ingest producer spool")?;
+    let spec = DevqlTaskSpec::Ingest(spec);
+    enqueue_job(
+        &store,
+        &cfg.repo,
+        ProducerSpoolJobInsert {
+            dedupe_key: spool_task_dedupe_key(source, &spec),
+            payload: ProducerSpoolJobPayload::Task { source, spec },
+        },
+    )
+}
+
 pub(crate) fn enqueue_spooled_post_commit_refresh(
     repo_root: &Path,
     commit_sha: &str,
@@ -60,6 +85,24 @@ pub(crate) fn enqueue_spooled_post_commit_refresh(
         ProducerSpoolJobPayload::PostCommitRefresh {
             commit_sha: commit_sha.trim().to_string(),
             changed_files: normalize_paths(changed_files),
+        },
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn enqueue_spooled_post_commit_derivation(
+    repo_root: &Path,
+    commit_sha: &str,
+    committed_files: &[String],
+    is_rebase_in_progress: bool,
+) -> Result<ProducerSpoolEnqueueResult> {
+    enqueue_hook_job(
+        repo_root,
+        Some(format!("post_commit_derivation:{}", commit_sha.trim())),
+        ProducerSpoolJobPayload::PostCommitDerivation {
+            commit_sha: commit_sha.trim().to_string(),
+            committed_files: normalize_paths(committed_files),
+            is_rebase_in_progress,
         },
     )
 }

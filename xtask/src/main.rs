@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
@@ -32,6 +34,11 @@ const MERGE_SMOKE_TARGETS: &[&str] = &[
     "graphql_smoke",
 ];
 const DEFAULT_LCOV_PATH: &str = "bitloops/target/llvm-cov.info";
+const DEFAULT_QAT_SHARD_JOBS: usize = 5;
+const QAT_SHARD_INDEX_ENV: &str = "BITLOOPS_QAT_SCENARIO_SHARD_INDEX";
+const QAT_SHARD_COUNT_ENV: &str = "BITLOOPS_QAT_SCENARIO_SHARD_COUNT";
+const QAT_MAX_CONCURRENT_SCENARIOS_ENV: &str = "BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS";
+const QAT_RUNS_ROOT_ENV: &str = "BITLOOPS_QAT_RUNS_ROOT";
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -55,6 +62,8 @@ fn main() {
             let subcommand = args.next().unwrap_or_else(|| "run-lcov".to_string());
             run_coverage_command(&subcommand, args.collect())
         }
+        "qat" => run_qat(args.collect()),
+        "qat-shard" => run_qat_shard(args.collect()),
         other => Err(format!("unknown xtask command: {other}")),
     };
 
@@ -71,6 +80,9 @@ fn print_usage() {
     eprintln!("  dev-loop");
     eprintln!("  install");
     eprintln!("  test <lib|core|cli|fast|smoke|merge|slow|full>");
+    eprintln!(
+        "  qat <bundle|agent-smoke|develop-gate|devql-capabilities|devql-sync|devql-sync-producer|devql-ingest|onboarding|agents-checkpoints> [--parallel N]"
+    );
     eprintln!("  coverage run-lcov [--lcov <path>]");
     eprintln!("  coverage run-all [--lcov <path>] [--html-dir <path>]");
     eprintln!("  coverage metrics [--lcov <path>]");
@@ -166,6 +178,538 @@ fn run_test_lane(lane: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn run_qat_shard(raw_args: Vec<String>) -> Result<(), String> {
+    ensure_cargo_subcommand_available("nextest", nextest_install_hint())?;
+    let options = parse_qat_shard_options(raw_args)?;
+    run_qat_shard_options(options)
+}
+
+fn run_qat(raw_args: Vec<String>) -> Result<(), String> {
+    ensure_cargo_subcommand_available("nextest", nextest_install_hint())?;
+    let options = parse_qat_options(raw_args)?;
+    if let Some(jobs) = options.parallel {
+        return run_qat_shard_options(QatShardOptions {
+            suite: options.suite,
+            jobs,
+        });
+    }
+
+    let workspace_root = workspace_root()?;
+    let run_args = qat_nextest_run_args(options.suite);
+    let command = prepend_cargo(&run_args);
+    run_command_owned(
+        &workspace_root,
+        &format!("cargo {}", run_args.join(" ")),
+        &command,
+    )
+}
+
+fn run_qat_shard_options(options: QatShardOptions) -> Result<(), String> {
+    let workspace_root = workspace_root()?;
+    let shard_root = create_qat_shard_root(&workspace_root, options.suite)?;
+    let binary_path = resolve_qat_shard_binary(&workspace_root, options.suite)?;
+    let child_specs = build_qat_shard_child_specs(&options, &shard_root, &binary_path);
+
+    println!(
+        "==> sharding {} across {} process(es)",
+        options.suite.id(),
+        options.jobs
+    );
+    println!("==> shard artifacts root: {}", shard_root.display());
+    println!("==> prebuilt test binary: {}", binary_path.display());
+
+    let mut children = Vec::new();
+    for spec in child_specs {
+        fs::create_dir_all(&spec.runs_root).map_err(|err| {
+            format!(
+                "failed to create shard runs root {}: {err}",
+                spec.runs_root.display()
+            )
+        })?;
+
+        println!(
+            "==> shard {}/{}: {} {}",
+            spec.shard_index + 1,
+            spec.shard_count,
+            spec.binary_path.display(),
+            spec.test_args.join(" ")
+        );
+
+        let stdout = File::create(&spec.stdout_path).map_err(|err| {
+            format!(
+                "failed to create shard stdout log {}: {err}",
+                spec.stdout_path.display()
+            )
+        })?;
+        let stderr = File::create(&spec.stderr_path).map_err(|err| {
+            format!(
+                "failed to create shard stderr log {}: {err}",
+                spec.stderr_path.display()
+            )
+        })?;
+
+        let mut command = Command::new(&spec.binary_path);
+        command
+            .current_dir(&workspace_root)
+            .args(&spec.test_args)
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr));
+        for (key, value) in &spec.envs {
+            command.env(key, value);
+        }
+        let child = command
+            .spawn()
+            .map_err(|err| format!("failed to start shard {}: {err}", spec.shard_index))?;
+        children.push((spec, child));
+    }
+
+    let mut completed = Vec::new();
+    let mut failed = Vec::new();
+    for (spec, mut child) in children {
+        let status = child
+            .wait()
+            .map_err(|err| format!("failed to wait for shard {}: {err}", spec.shard_index))?;
+        if status.success() {
+            let output_summary = read_qat_shard_output_summary(&spec.stdout_path);
+            println!(
+                "==> shard {}/{} passed: {} ({})",
+                spec.shard_index + 1,
+                spec.shard_count,
+                spec.runs_root.display(),
+                format_qat_shard_output_summary(&output_summary)
+            );
+            completed.push(CompletedQatShard {
+                shard_index: spec.shard_index,
+                shard_count: spec.shard_count,
+                runs_root: spec.runs_root.clone(),
+                stdout_path: spec.stdout_path.clone(),
+                stderr_path: spec.stderr_path.clone(),
+                output_summary,
+            });
+        } else {
+            failed.push((
+                spec.shard_index,
+                status,
+                spec.stdout_path.clone(),
+                spec.stderr_path.clone(),
+            ));
+        }
+    }
+
+    if failed.is_empty() {
+        println!("{}", format_qat_shard_run_summary(&completed));
+        return Ok(());
+    }
+
+    let mut message = String::from("QAT shard run failed:");
+    for (index, status, stdout_path, stderr_path) in failed {
+        message.push_str(&format!(
+            "\n- shard {index} exited with {status}; stdout: {}; stderr: {}",
+            stdout_path.display(),
+            stderr_path.display()
+        ));
+    }
+    Err(message)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct QatShardOutputSummary {
+    scenarios: Option<u64>,
+    steps: Option<u64>,
+    duration_seconds: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct CompletedQatShard {
+    shard_index: usize,
+    shard_count: usize,
+    runs_root: PathBuf,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    output_summary: QatShardOutputSummary,
+}
+
+fn read_qat_shard_output_summary(stdout_path: &Path) -> QatShardOutputSummary {
+    fs::read_to_string(stdout_path)
+        .map(|stdout| parse_qat_shard_stdout_summary(&stdout))
+        .unwrap_or_default()
+}
+
+fn parse_qat_shard_stdout_summary(stdout: &str) -> QatShardOutputSummary {
+    let mut summary = QatShardOutputSummary::default();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.contains(" scenario") {
+            summary.scenarios =
+                parse_leading_u64(trimmed).map(|count| summary.scenarios.unwrap_or(0) + count);
+        } else if trimmed.contains(" step") {
+            summary.steps =
+                parse_leading_u64(trimmed).map(|count| summary.steps.unwrap_or(0) + count);
+        }
+        if let Some(duration) = parse_finished_duration_seconds(trimmed) {
+            summary.duration_seconds = Some(duration);
+        }
+    }
+    summary
+}
+
+fn parse_leading_u64(line: &str) -> Option<u64> {
+    line.split_whitespace().next()?.parse::<u64>().ok()
+}
+
+fn parse_finished_duration_seconds(line: &str) -> Option<f64> {
+    let (_, after) = line.rsplit_once("finished in ")?;
+    let value = after.strip_suffix('s')?;
+    value.parse::<f64>().ok()
+}
+
+fn format_qat_shard_output_summary(summary: &QatShardOutputSummary) -> String {
+    format!(
+        "{}, {}, {}",
+        format_optional_count(summary.scenarios, "scenario"),
+        format_optional_count(summary.steps, "step"),
+        format_optional_duration(summary.duration_seconds)
+    )
+}
+
+fn format_qat_shard_run_summary(completed: &[CompletedQatShard]) -> String {
+    let total_scenarios = completed
+        .iter()
+        .map(|shard| shard.output_summary.scenarios.unwrap_or(0))
+        .sum::<u64>();
+    let total_steps = completed
+        .iter()
+        .map(|shard| shard.output_summary.steps.unwrap_or(0))
+        .sum::<u64>();
+    let shard_count = completed
+        .first()
+        .map(|shard| shard.shard_count)
+        .unwrap_or(0);
+    let slowest = completed
+        .iter()
+        .filter_map(|shard| {
+            shard
+                .output_summary
+                .duration_seconds
+                .map(|duration| (shard, duration))
+        })
+        .max_by(|(_, left), (_, right)| {
+            left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+    let mut output = format!(
+        "==> QAT sharded run passed: {}/{} shards, {}, {}",
+        completed.len(),
+        shard_count,
+        format_count(total_scenarios, "scenario"),
+        format_count(total_steps, "step")
+    );
+    if let Some((shard, duration)) = slowest {
+        output.push_str(&format!(
+            ", slowest shard {}/{} {:.2}s",
+            shard.shard_index + 1,
+            shard.shard_count,
+            duration
+        ));
+    }
+    output.push_str("\n==> shard summary:");
+    for shard in completed {
+        output.push_str(&format!(
+            "\n    shard {}/{}: {} (stdout: {}, stderr: {})",
+            shard.shard_index + 1,
+            shard.shard_count,
+            format_qat_shard_output_summary(&shard.output_summary),
+            shard.stdout_path.display(),
+            shard.stderr_path.display()
+        ));
+    }
+    output
+}
+
+fn format_optional_count(value: Option<u64>, noun: &str) -> String {
+    value
+        .map(|value| format_count(value, noun))
+        .unwrap_or_else(|| format!("{noun} count unavailable"))
+}
+
+fn format_count(value: u64, noun: &str) -> String {
+    if value == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{value} {noun}s")
+    }
+}
+
+fn format_optional_duration(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.2}s"))
+        .unwrap_or_else(|| "duration unavailable".to_string())
+}
+
+impl Default for QatShardOutputSummary {
+    fn default() -> Self {
+        Self {
+            scenarios: None,
+            steps: None,
+            duration_seconds: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum QatSuite {
+    Bundle,
+    AgentSmoke,
+    DevelopGate,
+    DevqlCapabilities,
+    DevqlSync,
+    DevqlSyncProducer,
+    DevqlIngest,
+    Onboarding,
+    AgentsCheckpoints,
+}
+
+impl QatSuite {
+    const EXPECTED: &'static str = "bundle|agent-smoke|develop-gate|devql-capabilities|devql-sync|devql-sync-producer|devql-ingest|onboarding|agents-checkpoints";
+
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "bundle" => Ok(Self::Bundle),
+            "agent-smoke" => Ok(Self::AgentSmoke),
+            "develop-gate" => Ok(Self::DevelopGate),
+            "devql-capabilities" => Ok(Self::DevqlCapabilities),
+            "devql-sync" => Ok(Self::DevqlSync),
+            "devql-sync-producer" => Ok(Self::DevqlSyncProducer),
+            "devql-ingest" => Ok(Self::DevqlIngest),
+            "onboarding" => Ok(Self::Onboarding),
+            "agents-checkpoints" => Ok(Self::AgentsCheckpoints),
+            _ => Err(format!(
+                "unknown QAT suite `{raw}` (expected: {})",
+                Self::EXPECTED
+            )),
+        }
+    }
+
+    fn id(&self) -> &'static str {
+        match self {
+            Self::Bundle => "bundle",
+            Self::AgentSmoke => "agent-smoke",
+            Self::DevelopGate => "develop-gate",
+            Self::DevqlCapabilities => "devql-capabilities",
+            Self::DevqlSync => "devql-sync",
+            Self::DevqlSyncProducer => "devql-sync-producer",
+            Self::DevqlIngest => "devql-ingest",
+            Self::Onboarding => "onboarding",
+            Self::AgentsCheckpoints => "agents-checkpoints",
+        }
+    }
+
+    fn test_target(&self) -> &'static str {
+        match self {
+            Self::Bundle => "qat",
+            Self::AgentSmoke => "qat_agent_smoke",
+            Self::DevelopGate => "qat_develop_gate",
+            Self::DevqlCapabilities => "qat_devql_capabilities",
+            Self::DevqlSync => "qat_devql_sync",
+            Self::DevqlSyncProducer => "qat_devql_sync_producer",
+            Self::DevqlIngest => "qat_devql_ingest",
+            Self::Onboarding => "qat_onboarding",
+            Self::AgentsCheckpoints => "qat_agents_checkpoints",
+        }
+    }
+
+    fn test_name(&self) -> &'static str {
+        self.test_target()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct QatOptions {
+    suite: QatSuite,
+    parallel: Option<usize>,
+}
+
+fn parse_qat_options(raw_args: Vec<String>) -> Result<QatOptions, String> {
+    let mut args = raw_args.into_iter();
+    let suite = args
+        .next()
+        .ok_or_else(|| format!("missing QAT suite (expected: {})", QatSuite::EXPECTED))
+        .and_then(|raw| QatSuite::parse(&raw))?;
+    let mut parallel = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--parallel" | "-p" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "missing value for --parallel".to_string())?;
+                parallel = Some(parse_positive_usize_arg("--parallel", &value)?);
+            }
+            _ => return Err(format!("unknown qat argument `{arg}`")),
+        }
+    }
+
+    Ok(QatOptions { suite, parallel })
+}
+
+fn qat_shard_nextest_run_args(suite: QatSuite) -> Vec<String> {
+    qat_nextest_run_args(suite)
+}
+
+fn qat_nextest_run_args(suite: QatSuite) -> Vec<String> {
+    vec![
+        "nextest".to_string(),
+        "run".to_string(),
+        "--manifest-path".to_string(),
+        BITLOOPS_MANIFEST.to_string(),
+        "--features".to_string(),
+        "qat-tests".to_string(),
+        "--test".to_string(),
+        suite.test_target().to_string(),
+        "--run-ignored".to_string(),
+        "only".to_string(),
+        "--".to_string(),
+        suite.test_name().to_string(),
+        "--exact".to_string(),
+    ]
+}
+
+fn qat_shard_libtest_args(suite: QatSuite) -> Vec<String> {
+    vec![
+        "--ignored".to_string(),
+        "--exact".to_string(),
+        suite.test_name().to_string(),
+    ]
+}
+
+fn resolve_qat_shard_binary(workspace_root: &Path, suite: QatSuite) -> Result<PathBuf, String> {
+    let run_args = qat_shard_nextest_run_args(suite);
+    let profile_args = nextest_profile_args();
+    let list_args = nextest_list_args(&run_args, &profile_args)?;
+    let binaries = collect_test_binaries(workspace_root, &list_args)?;
+    match binaries.as_slice() {
+        [binary] => Ok(binary.clone()),
+        [] => Err(format!(
+            "cargo nextest list did not return a binary for {}",
+            suite.id()
+        )),
+        _ => Err(format!(
+            "cargo nextest list returned multiple binaries for {}: {}",
+            suite.id(),
+            binaries
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct QatShardOptions {
+    suite: QatSuite,
+    jobs: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QatShardChildSpec {
+    shard_index: usize,
+    shard_count: usize,
+    binary_path: PathBuf,
+    test_args: Vec<String>,
+    runs_root: PathBuf,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+    envs: Vec<(String, String)>,
+}
+
+fn parse_qat_shard_options(raw_args: Vec<String>) -> Result<QatShardOptions, String> {
+    let mut args = raw_args.into_iter();
+    let suite = args
+        .next()
+        .ok_or_else(|| format!("missing QAT shard suite (expected: {})", QatSuite::EXPECTED))
+        .and_then(|raw| QatSuite::parse(&raw))?;
+    let mut jobs = DEFAULT_QAT_SHARD_JOBS;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--jobs" | "-j" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "missing value for --jobs".to_string())?;
+                jobs = parse_positive_usize_arg("--jobs", &value)?;
+            }
+            _ => return Err(format!("unknown qat-shard argument `{arg}`")),
+        }
+    }
+
+    Ok(QatShardOptions { suite, jobs })
+}
+
+fn parse_positive_usize_arg(name: &str, value: &str) -> Result<usize, String> {
+    let parsed = value
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| format!("{name} must be a positive integer"))?;
+    if parsed == 0 {
+        return Err(format!("{name} must be greater than zero"));
+    }
+    Ok(parsed)
+}
+
+fn build_qat_shard_child_specs(
+    options: &QatShardOptions,
+    shard_root: &Path,
+    binary_path: &Path,
+) -> Vec<QatShardChildSpec> {
+    let mut specs = Vec::with_capacity(options.jobs);
+    for index in 0..options.jobs {
+        let runs_root = shard_root.join(format!("shard-{index}"));
+        specs.push(QatShardChildSpec {
+            shard_index: index,
+            shard_count: options.jobs,
+            binary_path: binary_path.to_path_buf(),
+            test_args: qat_shard_libtest_args(options.suite),
+            runs_root: runs_root.clone(),
+            stdout_path: runs_root.join("stdout.log"),
+            stderr_path: runs_root.join("stderr.log"),
+            envs: vec![
+                (QAT_SHARD_INDEX_ENV.to_string(), index.to_string()),
+                (QAT_SHARD_COUNT_ENV.to_string(), options.jobs.to_string()),
+                (
+                    QAT_MAX_CONCURRENT_SCENARIOS_ENV.to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    QAT_RUNS_ROOT_ENV.to_string(),
+                    runs_root.to_string_lossy().into_owned(),
+                ),
+            ],
+        });
+    }
+    specs
+}
+
+fn create_qat_shard_root(workspace_root: &Path, suite: QatSuite) -> Result<PathBuf, String> {
+    let epoch_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("system clock is before unix epoch: {err}"))?
+        .as_millis();
+    let root = workspace_root
+        .join("bitloops")
+        .join("target")
+        .join("qat-runs")
+        .join("sharded")
+        .join(format!(
+            "{}-{epoch_millis}-{}",
+            suite.id(),
+            std::process::id()
+        ));
+    fs::create_dir_all(&root)
+        .map_err(|err| format!("failed to create shard root {}: {err}", root.display()))?;
+    Ok(root)
 }
 
 fn ensure_cargo_subcommand_available(subcommand: &str, install_hint: &str) -> Result<(), String> {
@@ -1117,6 +1661,32 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn public_qat_aliases() -> Vec<(&'static str, &'static str, &'static str)> {
+        vec![
+            ("qat = ", "bundle", "qat"),
+            ("qat-agent-smoke = ", "agent-smoke", "qat_agent_smoke"),
+            ("qat-develop-gate = ", "develop-gate", "qat_develop_gate"),
+            (
+                "qat-devql-capabilities = ",
+                "devql-capabilities",
+                "qat_devql_capabilities",
+            ),
+            ("qat-devql-sync = ", "devql-sync", "qat_devql_sync"),
+            (
+                "qat-devql-sync-producer = ",
+                "devql-sync-producer",
+                "qat_devql_sync_producer",
+            ),
+            ("qat-onboarding = ", "onboarding", "qat_onboarding"),
+            ("qat-devql-ingest = ", "devql-ingest", "qat_devql_ingest"),
+            (
+                "qat-agents-checkpoints = ",
+                "agents-checkpoints",
+                "qat_agents_checkpoints",
+            ),
+        ]
+    }
+
     #[test]
     fn parses_lcov_metrics() {
         let lcov = "TN:\nSF:a.rs\nFNF:4\nFNH:3\nLF:10\nLH:8\nend_of_record\nSF:b.rs\nFNF:1\nFNH:1\nLF:2\nLH:2\nend_of_record\n";
@@ -1485,6 +2055,7 @@ mod tests {
             "qat_devql_capabilities",
             "qat_devql_ingest",
             "qat_devql_sync",
+            "qat_devql_sync_producer",
             "qat_onboarding",
             "qat_agents_checkpoints",
         ] {
@@ -1493,6 +2064,273 @@ mod tests {
                 "QAT target `{target}` should remain outside the generic slow lane"
             );
         }
+    }
+
+    #[test]
+    fn parse_qat_shard_options_defaults_to_five_jobs() {
+        let options = super::parse_qat_shard_options(vec!["devql-sync".to_string()])
+            .expect("valid shard options should parse");
+
+        assert_eq!(options.suite, super::QatSuite::DevqlSync);
+        assert_eq!(options.jobs, 5);
+    }
+
+    #[test]
+    fn parse_qat_shard_options_accepts_producer_suite_and_jobs() {
+        let options = super::parse_qat_shard_options(vec![
+            "devql-sync-producer".to_string(),
+            "--jobs".to_string(),
+            "3".to_string(),
+        ])
+        .expect("valid shard options should parse");
+
+        assert_eq!(options.suite, super::QatSuite::DevqlSyncProducer);
+        assert_eq!(options.jobs, 3);
+    }
+
+    #[test]
+    fn parse_qat_shard_options_rejects_zero_jobs() {
+        let err = super::parse_qat_shard_options(vec![
+            "devql-sync".to_string(),
+            "--jobs".to_string(),
+            "0".to_string(),
+        ])
+        .expect_err("zero jobs should be rejected");
+
+        assert!(
+            err.contains("--jobs must be greater than zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_qat_options_defaults_to_serial_suite_run() {
+        let options = super::parse_qat_options(vec!["bundle".to_string()])
+            .expect("valid qat options should parse");
+
+        assert_eq!(options.suite, super::QatSuite::Bundle);
+        assert_eq!(options.parallel, None);
+    }
+
+    #[test]
+    fn parse_qat_options_accepts_every_public_qat_suite() {
+        for (_, suite, test_name) in public_qat_aliases() {
+            let options = super::parse_qat_options(vec![suite.to_string()])
+                .unwrap_or_else(|err| panic!("suite `{suite}` should parse: {err}"));
+
+            assert_eq!(options.suite.id(), suite);
+            assert_eq!(options.suite.test_name(), test_name);
+            assert_eq!(options.parallel, None);
+        }
+    }
+
+    #[test]
+    fn parse_qat_options_accepts_parallel_count() {
+        let options = super::parse_qat_options(vec![
+            "devql-sync-producer".to_string(),
+            "--parallel".to_string(),
+            "5".to_string(),
+        ])
+        .expect("valid qat options should parse");
+
+        assert_eq!(options.suite, super::QatSuite::DevqlSyncProducer);
+        assert_eq!(options.parallel, Some(5));
+    }
+
+    #[test]
+    fn parse_qat_options_rejects_zero_parallel_count() {
+        let err = super::parse_qat_options(vec![
+            "devql-sync".to_string(),
+            "--parallel".to_string(),
+            "0".to_string(),
+        ])
+        .expect_err("zero parallel count should be rejected");
+
+        assert!(
+            err.contains("--parallel must be greater than zero"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn qat_shard_nextest_run_args_builds_one_prebuild_command_for_suite() {
+        let args = super::qat_shard_nextest_run_args(super::QatSuite::DevqlSyncProducer);
+
+        assert_eq!(
+            args,
+            vec![
+                "nextest",
+                "run",
+                "--manifest-path",
+                "bitloops/Cargo.toml",
+                "--features",
+                "qat-tests",
+                "--test",
+                "qat_devql_sync_producer",
+                "--run-ignored",
+                "only",
+                "--",
+                "qat_devql_sync_producer",
+                "--exact",
+            ]
+        );
+    }
+
+    #[test]
+    fn qat_shard_libtest_args_select_ignored_exact_entrypoint() {
+        assert_eq!(
+            super::qat_shard_libtest_args(super::QatSuite::DevqlSync),
+            vec!["--ignored", "--exact", "qat_devql_sync"]
+        );
+    }
+
+    #[test]
+    fn build_qat_shard_child_specs_uses_prebuilt_binary_logs_and_serial_scenarios() {
+        let options = super::QatShardOptions {
+            suite: super::QatSuite::DevqlSyncProducer,
+            jobs: 3,
+        };
+        let root = Path::new("/tmp/bitloops/qat-shards/run");
+        let binary = Path::new("/tmp/bitloops/target/debug/deps/qat_devql_sync_producer-abc123");
+
+        let specs = super::build_qat_shard_child_specs(&options, root, binary);
+
+        assert_eq!(specs.len(), 3);
+        assert_eq!(specs[1].binary_path, binary);
+        assert_eq!(
+            specs[1].test_args,
+            vec!["--ignored", "--exact", "qat_devql_sync_producer"]
+        );
+        assert_eq!(
+            specs[1].stdout_path,
+            Path::new("/tmp/bitloops/qat-shards/run/shard-1/stdout.log")
+        );
+        assert_eq!(
+            specs[1].stderr_path,
+            Path::new("/tmp/bitloops/qat-shards/run/shard-1/stderr.log")
+        );
+        assert_eq!(
+            specs[1].envs,
+            vec![
+                (
+                    "BITLOOPS_QAT_SCENARIO_SHARD_INDEX".to_string(),
+                    "1".to_string()
+                ),
+                (
+                    "BITLOOPS_QAT_SCENARIO_SHARD_COUNT".to_string(),
+                    "3".to_string()
+                ),
+                (
+                    "BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS".to_string(),
+                    "1".to_string()
+                ),
+                (
+                    "BITLOOPS_QAT_RUNS_ROOT".to_string(),
+                    "/tmp/bitloops/qat-shards/run/shard-1".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_qat_shard_stdout_summary_extracts_counts_and_duration() {
+        let stdout = "\
+[Summary]
+1 feature
+7 scenarios (7 passed)
+95 steps (95 passed)
+test qat_devql_sync ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 147.87s
+";
+
+        let summary = super::parse_qat_shard_stdout_summary(stdout);
+
+        assert_eq!(
+            summary,
+            super::QatShardOutputSummary {
+                scenarios: Some(7),
+                steps: Some(95),
+                duration_seconds: Some(147.87),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_qat_shard_stdout_summary_sums_multi_suite_counts() {
+        let stdout = "\
+[Summary]
+1 feature
+1 scenario (1 passed)
+12 steps (12 passed)
+[Summary]
+1 feature
+2 scenarios (2 passed)
+30 steps (30 passed)
+[Summary]
+0 features
+0 scenarios
+0 steps
+test qat_develop_gate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 106.10s
+";
+
+        let summary = super::parse_qat_shard_stdout_summary(stdout);
+
+        assert_eq!(
+            summary,
+            super::QatShardOutputSummary {
+                scenarios: Some(3),
+                steps: Some(42),
+                duration_seconds: Some(106.10),
+            }
+        );
+    }
+
+    #[test]
+    fn format_qat_shard_run_summary_reports_totals_and_slowest_shard() {
+        let summaries = vec![
+            super::CompletedQatShard {
+                shard_index: 0,
+                shard_count: 3,
+                runs_root: PathBuf::from("/tmp/shard-0"),
+                stdout_path: PathBuf::from("/tmp/shard-0/stdout.log"),
+                stderr_path: PathBuf::from("/tmp/shard-0/stderr.log"),
+                output_summary: super::QatShardOutputSummary {
+                    scenarios: Some(7),
+                    steps: Some(95),
+                    duration_seconds: Some(147.87),
+                },
+            },
+            super::CompletedQatShard {
+                shard_index: 1,
+                shard_count: 3,
+                runs_root: PathBuf::from("/tmp/shard-1"),
+                stdout_path: PathBuf::from("/tmp/shard-1/stdout.log"),
+                stderr_path: PathBuf::from("/tmp/shard-1/stderr.log"),
+                output_summary: super::QatShardOutputSummary {
+                    scenarios: Some(4),
+                    steps: Some(67),
+                    duration_seconds: Some(81.40),
+                },
+            },
+        ];
+
+        let summary = super::format_qat_shard_run_summary(&summaries);
+
+        assert!(
+            summary.contains("QAT sharded run passed: 2/3 shards, 11 scenarios, 162 steps"),
+            "summary should include aggregate totals: {summary}"
+        );
+        assert!(
+            summary.contains("slowest shard 1/3 147.87s"),
+            "summary should identify the slowest shard: {summary}"
+        );
+        assert!(
+            summary.contains("shard 2/3: 4 scenarios, 67 steps, 81.40s"),
+            "summary should include per-shard detail: {summary}"
+        );
     }
 
     #[test]
@@ -1541,6 +2379,11 @@ mod tests {
                 &["qat-tests"][..],
             ),
             (
+                "qat_devql_sync_producer",
+                "tests/qat_devql_sync_producer.rs",
+                &["qat-tests"][..],
+            ),
+            (
                 "qat_onboarding",
                 "tests/qat_onboarding.rs",
                 &["qat-tests"][..],
@@ -1574,51 +2417,7 @@ mod tests {
         let config = fs::read_to_string(&config_path)
             .unwrap_or_else(|err| panic!("reading {} failed: {err}", config_path.display()));
 
-        for (alias, target, test_name, expect_no_capture) in [
-            ("qat = ", "qat", "qat", false),
-            (
-                "qat-agent-smoke = ",
-                "qat_agent_smoke",
-                "qat_agent_smoke",
-                false,
-            ),
-            (
-                "qat-develop-gate = ",
-                "qat_develop_gate",
-                "qat_develop_gate",
-                false,
-            ),
-            (
-                "qat-devql-capabilities = ",
-                "qat_devql_capabilities",
-                "qat_devql_capabilities",
-                false,
-            ),
-            (
-                "qat-devql-sync = ",
-                "qat_devql_sync",
-                "qat_devql_sync",
-                false,
-            ),
-            (
-                "qat-onboarding = ",
-                "qat_onboarding",
-                "qat_onboarding",
-                false,
-            ),
-            (
-                "qat-devql-ingest = ",
-                "qat_devql_ingest",
-                "qat_devql_ingest",
-                false,
-            ),
-            (
-                "qat-agents-checkpoints = ",
-                "qat_agents_checkpoints",
-                "qat_agents_checkpoints",
-                false,
-            ),
-        ] {
+        for (alias, suite, target) in public_qat_aliases() {
             let line = config
                 .lines()
                 .find(|line| line.starts_with(alias))
@@ -1630,22 +2429,74 @@ mod tests {
                     )
                 });
             assert!(
-                line.contains("--features qat-tests"),
-                "cargo alias should enable the dedicated qat-tests feature: {line}"
+                line.contains(&format!("run --quiet --package xtask -- qat {suite}")),
+                "cargo alias should route `{target}` through xtask qat so it can accept --parallel: {line}"
             );
             assert!(
-                line.contains(&format!("--test {target}")),
-                "cargo alias should target `{target}`: {line}"
+                !line.contains("--parallel"),
+                "cargo alias `{alias}` should preserve serial default behavior unless --parallel is passed: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn qat_aliases_route_through_xtask_qat_with_optional_parallel_flag() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        let workspace_config_path = workspace_root.join(".cargo").join("config.toml");
+        let workspace_config = fs::read_to_string(&workspace_config_path).unwrap_or_else(|err| {
+            panic!("reading {} failed: {err}", workspace_config_path.display())
+        });
+        let crate_config_path = workspace_root
+            .join("bitloops")
+            .join(".cargo")
+            .join("config.toml");
+        let crate_config = fs::read_to_string(&crate_config_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", crate_config_path.display()));
+
+        for (alias, suite, _) in public_qat_aliases() {
+            let workspace_line = workspace_config
+                .lines()
+                .find(|line| line.starts_with(alias))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing workspace cargo alias `{}` in {}",
+                        alias,
+                        workspace_config_path.display()
+                    )
+                });
+            let crate_line = crate_config
+                .lines()
+                .find(|line| line.starts_with(alias))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing crate-local cargo alias `{}` in {}",
+                        alias,
+                        crate_config_path.display()
+                    )
+                });
+
+            assert!(
+                workspace_line.contains(&format!("run --quiet --package xtask -- qat {suite}")),
+                "workspace alias should route to xtask qat: {workspace_line}"
             );
             assert!(
-                line.contains(&format!("-- {test_name} --exact")),
-                "cargo alias should select `{test_name}` exactly: {line}"
+                crate_line.contains(&format!(
+                    "run --manifest-path ../Cargo.toml --quiet --package xtask -- qat {suite}"
+                )),
+                "crate-local alias should route to xtask qat: {crate_line}"
             );
-            assert_eq!(
-                line.contains("--no-capture"),
-                expect_no_capture,
-                "cargo alias `{alias}` should {}use --no-capture: {line}",
-                if expect_no_capture { "" } else { "not " }
+        }
+
+        for config in [workspace_config.as_str(), crate_config.as_str()] {
+            assert!(
+                !config.contains("qat-devql-sync-sharded"),
+                "temporary sharded sync alias should be removed"
+            );
+            assert!(
+                !config.contains("qat-devql-sync-producer-sharded"),
+                "temporary sharded producer alias should be removed"
             );
         }
     }
@@ -1666,51 +2517,7 @@ mod tests {
         let crate_config = fs::read_to_string(&crate_config_path)
             .unwrap_or_else(|err| panic!("reading {} failed: {err}", crate_config_path.display()));
 
-        for (alias, target, test_name, expect_no_capture) in [
-            ("qat = ", "qat", "qat", false),
-            (
-                "qat-agent-smoke = ",
-                "qat_agent_smoke",
-                "qat_agent_smoke",
-                false,
-            ),
-            (
-                "qat-develop-gate = ",
-                "qat_develop_gate",
-                "qat_develop_gate",
-                false,
-            ),
-            (
-                "qat-devql-capabilities = ",
-                "qat_devql_capabilities",
-                "qat_devql_capabilities",
-                false,
-            ),
-            (
-                "qat-devql-sync = ",
-                "qat_devql_sync",
-                "qat_devql_sync",
-                false,
-            ),
-            (
-                "qat-onboarding = ",
-                "qat_onboarding",
-                "qat_onboarding",
-                false,
-            ),
-            (
-                "qat-devql-ingest = ",
-                "qat_devql_ingest",
-                "qat_devql_ingest",
-                false,
-            ),
-            (
-                "qat-agents-checkpoints = ",
-                "qat_agents_checkpoints",
-                "qat_agents_checkpoints",
-                false,
-            ),
-        ] {
+        for (alias, suite, target) in public_qat_aliases() {
             let workspace_line = workspace_config
                 .lines()
                 .find(|line| line.starts_with(alias))
@@ -1733,22 +2540,12 @@ mod tests {
                 });
             for line in [workspace_line, crate_line] {
                 assert!(
-                    line.contains("--features qat-tests"),
-                    "QAT alias `{alias}` should enable the dedicated qat-tests feature: {line}"
+                    line.contains(&format!("-- qat {suite}")),
+                    "QAT alias `{alias}` should route `{target}` through xtask qat: {line}"
                 );
                 assert!(
-                    line.contains(&format!("--test {target}")),
-                    "QAT alias `{alias}` should target `{target}`: {line}"
-                );
-                assert!(
-                    line.contains(&format!("-- {test_name} --exact")),
-                    "QAT alias `{alias}` should select `{test_name}` exactly: {line}"
-                );
-                assert_eq!(
-                    line.contains("--no-capture"),
-                    expect_no_capture,
-                    "QAT alias `{alias}` should {}use --no-capture: {line}",
-                    if expect_no_capture { "" } else { "not " }
+                    !line.contains("--parallel"),
+                    "QAT alias `{alias}` should leave parallelism opt-in: {line}"
                 );
             }
             assert_eq!(
@@ -1775,6 +2572,7 @@ mod tests {
             "qat_devql_capabilities",
             "qat_devql_ingest",
             "qat_devql_sync",
+            "qat_devql_sync_producer",
             "qat_onboarding",
             "qat_agents_checkpoints",
         ] {
@@ -1788,6 +2586,64 @@ mod tests {
         assert!(
             !config.contains("binary(=qat_acceptance)"),
             "nextest config should no longer reference the legacy qat_acceptance target"
+        );
+    }
+
+    #[test]
+    fn devql_sync_develop_gate_scenarios_are_producer_contract_scenarios() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root");
+        let feature_path = workspace_root
+            .join("bitloops")
+            .join("qat")
+            .join("features")
+            .join("devql-sync")
+            .join("sync_workspace.feature");
+        let feature = fs::read_to_string(&feature_path)
+            .unwrap_or_else(|err| panic!("reading {} failed: {err}", feature_path.display()));
+
+        let mut active_tags = Vec::new();
+        let mut develop_gate_sync_scenarios = 0;
+        for line in feature.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('@') {
+                active_tags = trimmed
+                    .split_whitespace()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                continue;
+            }
+
+            if trimmed.starts_with("Scenario:") {
+                if active_tags.iter().any(|tag| tag == "@develop_gate")
+                    && active_tags.iter().any(|tag| tag == "@sync")
+                {
+                    develop_gate_sync_scenarios += 1;
+                    assert!(
+                        active_tags.iter().any(|tag| tag == "@sync_producer"),
+                        "develop-gate sync scenario `{trimmed}` should use @sync_producer tags"
+                    );
+                    assert!(
+                        !active_tags.iter().any(|tag| tag == "@sync_manual"),
+                        "develop-gate sync scenario `{trimmed}` should not use @sync_manual"
+                    );
+                    assert!(
+                        !active_tags.iter().any(|tag| tag == "@sync_legacy"),
+                        "develop-gate sync scenario `{trimmed}` should not use @sync_legacy"
+                    );
+                }
+                active_tags.clear();
+            }
+        }
+
+        assert!(
+            develop_gate_sync_scenarios > 0,
+            "devql-sync feature should keep producer sync scenarios in the develop gate"
+        );
+        assert!(
+            feature.contains("@sync_manual_smoke"),
+            "devql-sync feature should keep a small taggable manual smoke subset"
         );
     }
 

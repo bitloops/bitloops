@@ -9,7 +9,8 @@ use super::storage::{
     unix_timestamp_now,
 };
 use super::{
-    CLAIM_BATCH_LIMIT, ProducerSpoolJobRecord, ProducerSpoolJobStatus, REQUEUE_BACKOFF_SECS,
+    CLAIM_BATCH_LIMIT, PostCommitDerivationClaimGuards, ProducerSpoolJobCounts,
+    ProducerSpoolJobPayload, ProducerSpoolJobRecord, ProducerSpoolJobStatus, REQUEUE_BACKOFF_SECS,
 };
 
 pub(crate) fn recover_running_producer_spool_jobs(config_root: &Path) -> Result<u64> {
@@ -50,8 +51,33 @@ pub(crate) fn recover_running_producer_spool_jobs(config_root: &Path) -> Result<
     })
 }
 
+#[cfg(test)]
 pub(crate) fn claim_next_producer_spool_jobs(
     config_root: &Path,
+) -> Result<Vec<ProducerSpoolJobRecord>> {
+    claim_next_producer_spool_jobs_excluding(
+        config_root,
+        &HashSet::new(),
+        &PostCommitDerivationClaimGuards::default(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn claim_next_producer_spool_jobs_excluding_repo_ids(
+    config_root: &Path,
+    blocked_repo_ids: &HashSet<String>,
+) -> Result<Vec<ProducerSpoolJobRecord>> {
+    claim_next_producer_spool_jobs_excluding(
+        config_root,
+        blocked_repo_ids,
+        &PostCommitDerivationClaimGuards::default(),
+    )
+}
+
+pub(crate) fn claim_next_producer_spool_jobs_excluding(
+    config_root: &Path,
+    blocked_repo_ids: &HashSet<String>,
+    post_commit_derivation_guards: &PostCommitDerivationClaimGuards,
 ) -> Result<Vec<ProducerSpoolJobRecord>> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
     sqlite.with_connection(|conn| {
@@ -75,8 +101,20 @@ pub(crate) fn claim_next_producer_spool_jobs(
                 params![ProducerSpoolJobStatus::Pending.as_str(), sql_i64(now)?,],
                 map_producer_spool_job_record_row,
             )?;
-            for row in rows {
-                let mut job = row?;
+            let mut pending = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+            pending.sort_by_key(producer_spool_claim_sort_key);
+            let mut abandoned_job_ids = Vec::new();
+            for mut job in pending {
+                if blocked_repo_ids.contains(&job.repo_id) {
+                    continue;
+                }
+                if post_commit_derivation_is_abandoned(&job, post_commit_derivation_guards) {
+                    abandoned_job_ids.push(job.job_id);
+                    continue;
+                }
+                if post_commit_derivation_is_blocked(&job, post_commit_derivation_guards) {
+                    continue;
+                }
                 if running_repo_ids.contains(&job.repo_id)
                     || claimed_repo_ids.contains(&job.repo_id)
                 {
@@ -90,6 +128,19 @@ pub(crate) fn claim_next_producer_spool_jobs(
                 if selected.len() >= CLAIM_BATCH_LIMIT {
                     break;
                 }
+            }
+
+            for job_id in &abandoned_job_ids {
+                conn.execute(
+                    "DELETE FROM devql_producer_spool_jobs WHERE job_id = ?1",
+                    params![job_id],
+                )
+                .with_context(|| {
+                    format!(
+                        "deleting abandoned DevQL post-commit derivation job `{}`",
+                        job_id
+                    )
+                })?;
             }
 
             for job in &selected {
@@ -127,6 +178,110 @@ pub(crate) fn claim_next_producer_spool_jobs(
             }
         }
     })
+}
+
+fn post_commit_derivation_is_blocked(
+    job: &ProducerSpoolJobRecord,
+    guards: &PostCommitDerivationClaimGuards,
+) -> bool {
+    let ProducerSpoolJobPayload::PostCommitDerivation { commit_sha, .. } = &job.payload else {
+        return false;
+    };
+    guards
+        .blocked
+        .contains(&(job.repo_id.clone(), commit_sha.clone()))
+}
+
+fn post_commit_derivation_is_abandoned(
+    job: &ProducerSpoolJobRecord,
+    guards: &PostCommitDerivationClaimGuards,
+) -> bool {
+    let ProducerSpoolJobPayload::PostCommitDerivation { commit_sha, .. } = &job.payload else {
+        return false;
+    };
+    guards
+        .abandoned
+        .contains(&(job.repo_id.clone(), commit_sha.clone()))
+}
+
+pub(crate) fn running_producer_spool_repo_ids(config_root: &Path) -> Result<HashSet<String>> {
+    let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT repo_id
+             FROM devql_producer_spool_jobs
+             WHERE status = ?1",
+        )?;
+        let rows = stmt.query_map([ProducerSpoolJobStatus::Running.as_str()], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<HashSet<String>>>()
+            .map_err(anyhow::Error::from)
+    })
+}
+
+pub(crate) fn list_recent_producer_spool_jobs(
+    config_root: &Path,
+    repo_id: &str,
+    limit: usize,
+) -> Result<Vec<ProducerSpoolJobRecord>> {
+    let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
+    let limit = i64::try_from(limit.max(1)).unwrap_or(i64::MAX);
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT job_id, repo_id, repo_root, config_root, repo_name, repo_provider,
+                    repo_organisation, repo_identity, dedupe_key, payload, status, attempts,
+                    available_at_unix, submitted_at_unix, updated_at_unix, last_error
+             FROM devql_producer_spool_jobs
+             WHERE repo_id = ?1
+             ORDER BY updated_at_unix DESC, submitted_at_unix DESC, job_id ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![repo_id, limit], map_producer_spool_job_record_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
+    })
+}
+
+pub(crate) fn count_producer_spool_jobs(
+    config_root: &Path,
+    repo_id: &str,
+) -> Result<ProducerSpoolJobCounts> {
+    let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
+    sqlite.with_connection(|conn| {
+        let (pending, running): (i64, i64) = conn.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN status = ?2 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = ?3 THEN 1 ELSE 0 END), 0)
+             FROM devql_producer_spool_jobs
+             WHERE repo_id = ?1",
+            params![
+                repo_id,
+                ProducerSpoolJobStatus::Pending.as_str(),
+                ProducerSpoolJobStatus::Running.as_str(),
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(ProducerSpoolJobCounts {
+            pending: u64::try_from(pending).unwrap_or_default(),
+            running: u64::try_from(running).unwrap_or_default(),
+        })
+    })
+}
+
+fn producer_spool_claim_sort_key(job: &ProducerSpoolJobRecord) -> (u64, u64, u8, String) {
+    (
+        job.available_at_unix,
+        job.submitted_at_unix,
+        producer_spool_payload_priority(&job.payload),
+        job.job_id.clone(),
+    )
+}
+
+fn producer_spool_payload_priority(payload: &ProducerSpoolJobPayload) -> u8 {
+    match payload {
+        ProducerSpoolJobPayload::PostCommitRefresh { .. } => 0,
+        ProducerSpoolJobPayload::PostCommitDerivation { .. } => 1,
+        _ => 0,
+    }
 }
 
 pub(crate) fn delete_producer_spool_job(config_root: &Path, job_id: &str) -> Result<()> {

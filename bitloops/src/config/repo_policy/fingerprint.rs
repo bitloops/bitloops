@@ -8,6 +8,7 @@ pub(super) fn fingerprint_repo_policy(inputs: RepoPolicyFingerprintInputs<'_>) -
     let RepoPolicyFingerprintInputs {
         capture,
         watch,
+        devql,
         scope,
         scope_exclusions,
         contexts,
@@ -18,6 +19,7 @@ pub(super) fn fingerprint_repo_policy(inputs: RepoPolicyFingerprintInputs<'_>) -
     let mut root = Map::new();
     root.insert("capture".into(), canonicalize_value(capture));
     root.insert("watch".into(), canonicalize_value(watch));
+    root.insert("devql".into(), canonicalize_value(devql));
     root.insert("scope".into(), canonicalize_value(scope));
     root.insert(
         "scope_exclusions".into(),

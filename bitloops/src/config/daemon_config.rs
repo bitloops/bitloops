@@ -11,6 +11,7 @@ mod toml;
 #[path = "daemon_config/tests.rs"]
 mod tests;
 
+pub(crate) use file::validate_daemon_config_text;
 pub use file::{
     DaemonCliSettings, DaemonTelemetryConsentState, LoadedDaemonSettings,
     bootstrap_default_daemon_environment, default_daemon_config_exists, default_daemon_config_path,

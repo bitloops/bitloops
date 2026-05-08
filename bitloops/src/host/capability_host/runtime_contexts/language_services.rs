@@ -5,7 +5,10 @@ use anyhow::Result;
 use crate::adapters::languages::builtin_language_adapter_packs;
 use crate::host::capability_host::gateways::LanguageServicesGateway;
 use crate::host::extension_host::{CoreExtensionHost, LanguagePackResolutionInput};
-use crate::host::language_adapter::LanguageAdapterRegistry;
+use crate::host::language_adapter::{
+    LanguageAdapterRegistry, LanguageEntryPointArtefact, LanguageEntryPointCandidate,
+    LanguageEntryPointFile, LanguageHttpFact, LanguageHttpFactArtefact, LanguageHttpFactFile,
+};
 
 pub struct BuiltinLanguageServicesGateway {
     extension_host: &'static CoreExtensionHost,
@@ -30,9 +33,58 @@ impl LanguageServicesGateway for BuiltinLanguageServicesGateway {
             .ok()?;
         self.registry.test_support_for_pack(resolved.pack.id)
     }
+
+    fn entry_point_candidates_for_file(
+        &self,
+        file: &LanguageEntryPointFile,
+        artefacts: &[LanguageEntryPointArtefact],
+    ) -> Vec<LanguageEntryPointCandidate> {
+        let Some(pack) = self
+            .extension_host
+            .language_packs()
+            .resolve_for_language(&file.language)
+            .or_else(|| {
+                self.extension_host
+                    .language_packs()
+                    .resolve(LanguagePackResolutionInput::for_file_path(&file.path))
+                    .ok()
+                    .map(|resolved| resolved.pack)
+            })
+        else {
+            return Vec::new();
+        };
+        self.registry
+            .entry_point_support_for_pack(pack.id)
+            .map(|support| support.detect_entry_points(file, artefacts))
+            .unwrap_or_default()
+    }
+
+    fn http_facts_for_file(
+        &self,
+        file: &LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[LanguageHttpFactArtefact],
+    ) -> Option<(String, Vec<LanguageHttpFact>)> {
+        let pack = self
+            .extension_host
+            .language_packs()
+            .resolve_for_language(&file.language)
+            .or_else(|| {
+                self.extension_host
+                    .language_packs()
+                    .resolve(LanguagePackResolutionInput::for_file_path(&file.path))
+                    .ok()
+                    .map(|resolved| resolved.pack)
+            })?;
+        let facts = self
+            .registry
+            .extract_http_facts(pack.id, file, content, artefacts)
+            .ok()?;
+        Some((pack.id.to_string(), facts))
+    }
 }
 
-pub(super) fn builtin_language_services() -> Result<&'static BuiltinLanguageServicesGateway> {
+pub(crate) fn builtin_language_services() -> Result<&'static BuiltinLanguageServicesGateway> {
     static SERVICES: OnceLock<Result<BuiltinLanguageServicesGateway, String>> = OnceLock::new();
     let service = SERVICES.get_or_init(|| {
         let extension_host = CoreExtensionHost::with_builtins().map_err(|err| err.to_string())?;

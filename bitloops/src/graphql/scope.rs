@@ -128,6 +128,10 @@ impl ResolverScope {
     }
 
     pub(crate) fn with_project_path(&self, project_path: String) -> Self {
+        if project_path == "." {
+            return self.without_project_path();
+        }
+
         Self {
             repository: self.repository.clone(),
             branch_name: self.branch_name.clone(),

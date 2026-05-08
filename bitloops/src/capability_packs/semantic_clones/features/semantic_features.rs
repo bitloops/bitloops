@@ -17,6 +17,7 @@ use self::features::{SymbolFeaturesRow, build_features_row, normalize_signature}
 pub use self::semantic::SymbolSemanticsRow;
 pub(crate) use self::semantic::synthesize_deterministic_summary;
 pub use self::semantic::{
+    DeterministicFallbackSummaryProvider, DocstringOnlySummaryProvider,
     NoopSemanticSummaryProvider, SemanticSummaryCandidate, SemanticSummaryProvider,
     summary_provider_from_service,
 };
@@ -94,6 +95,60 @@ pub struct SemanticFeatureRows {
     pub semantics: SymbolSemanticsRow,
     pub features: SymbolFeaturesRow,
     pub semantic_features_input_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SymbolFeatureRowsWithHash {
+    pub features: SymbolFeaturesRow,
+    pub semantic_features_input_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticFeatureHashKey {
+    summary_provider_cache_key: String,
+}
+
+impl SemanticFeatureHashKey {
+    pub fn for_summary_provider(summary_provider: &dyn SemanticSummaryProvider) -> Self {
+        Self {
+            summary_provider_cache_key: summary_provider.cache_key(),
+        }
+    }
+
+    pub fn from_summary_provider_cache_key(cache_key: impl Into<String>) -> Self {
+        Self {
+            summary_provider_cache_key: cache_key.into(),
+        }
+    }
+
+    fn summary_provider_cache_key(&self) -> &str {
+        &self.summary_provider_cache_key
+    }
+}
+
+pub(crate) trait HashedFeatureRows {
+    fn features_row(&self) -> &SymbolFeaturesRow;
+    fn semantic_features_input_hash(&self) -> &str;
+}
+
+impl HashedFeatureRows for SemanticFeatureRows {
+    fn features_row(&self) -> &SymbolFeaturesRow {
+        &self.features
+    }
+
+    fn semantic_features_input_hash(&self) -> &str {
+        &self.semantic_features_input_hash
+    }
+}
+
+impl HashedFeatureRows for SymbolFeatureRowsWithHash {
+    fn features_row(&self) -> &SymbolFeaturesRow {
+        &self.features
+    }
+
+    fn semantic_features_input_hash(&self) -> &str {
+        &self.semantic_features_input_hash
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -259,19 +314,48 @@ pub fn build_semantic_feature_rows(
     input: &SemanticFeatureInput,
     summary_provider: &dyn SemanticSummaryProvider,
 ) -> SemanticFeatureRows {
+    let hash_key = build_semantic_feature_hash_key(summary_provider);
+    let feature_rows = build_symbol_feature_rows(input, &hash_key);
     let semantics = build_semantics_row(input, summary_provider);
-    let features = build_features_row(input);
-    let semantic_features_input_hash = build_semantic_feature_input_hash(input, summary_provider);
     SemanticFeatureRows {
         semantics,
+        features: feature_rows.features,
+        semantic_features_input_hash: feature_rows.semantic_features_input_hash,
+    }
+}
+
+pub fn build_symbol_feature_rows(
+    input: &SemanticFeatureInput,
+    hash_key: &SemanticFeatureHashKey,
+) -> SymbolFeatureRowsWithHash {
+    let features = build_features_row(input);
+    let semantic_features_input_hash =
+        build_semantic_feature_input_hash_for_hash_key(input, hash_key);
+    SymbolFeatureRowsWithHash {
         features,
         semantic_features_input_hash,
     }
 }
 
+pub fn build_semantic_feature_hash_key(
+    summary_provider: &dyn SemanticSummaryProvider,
+) -> SemanticFeatureHashKey {
+    SemanticFeatureHashKey::for_summary_provider(summary_provider)
+}
+
 pub fn build_semantic_feature_input_hash(
     input: &SemanticFeatureInput,
     summary_provider: &dyn SemanticSummaryProvider,
+) -> String {
+    build_semantic_feature_input_hash_for_hash_key(
+        input,
+        &build_semantic_feature_hash_key(summary_provider),
+    )
+}
+
+pub fn build_semantic_feature_input_hash_for_hash_key(
+    input: &SemanticFeatureInput,
+    hash_key: &SemanticFeatureHashKey,
 ) -> String {
     let mut normalized_modifiers = input
         .modifiers
@@ -306,7 +390,7 @@ pub fn build_semantic_feature_input_hash(
             "parent_kind": input.parent_kind.as_deref().map(|value| value.to_ascii_lowercase()),
             "dependency_signals": &input.dependency_signals,
             "content_hash": &input.content_hash,
-            "summary_provider": summary_provider.cache_key(),
+            "summary_provider": hash_key.summary_provider_cache_key(),
         })
         .to_string(),
     )
@@ -318,8 +402,9 @@ pub fn semantic_features_require_reindex(
     state: &SemanticFeatureIndexState,
     next_input_hash: &str,
     requires_model_output: bool,
+    persists_summaries: bool,
 ) -> bool {
-    state.semantics_hash.as_deref() != Some(next_input_hash)
+    (persists_summaries && state.semantics_hash.as_deref() != Some(next_input_hash))
         || state.features_hash.as_deref() != Some(next_input_hash)
         || (requires_model_output && !state.semantics_llm_enriched)
 }
@@ -479,6 +564,40 @@ mod tests {
     }
 
     #[test]
+    fn symbol_feature_rows_share_hash_contract_with_semantic_rows() {
+        let input = SemanticFeatureInput {
+            artefact_id: "artefact-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            path: "src/services/user.ts".to_string(),
+            language: "typescript".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function".to_string(),
+            symbol_fqn: "src/services/user.ts::normalizeEmail".to_string(),
+            name: "normalizeEmail".to_string(),
+            signature: Some("export function normalizeEmail(email: string): string {".to_string()),
+            modifiers: vec!["export".to_string()],
+            body: "return email.trim().toLowerCase();".to_string(),
+            docstring: Some("Normalize email addresses.".to_string()),
+            parent_kind: Some("file".to_string()),
+            dependency_signals: vec!["calls:email::trim".to_string()],
+            content_hash: Some("hash-1".to_string()),
+        };
+        let provider = HashTestProvider { key: "provider=a" };
+        let hash_key = build_semantic_feature_hash_key(&provider);
+
+        let symbol_rows = build_symbol_feature_rows(&input, &hash_key);
+        let semantic_rows = build_semantic_feature_rows(&input, &provider);
+
+        assert_eq!(symbol_rows.features, semantic_rows.features);
+        assert_eq!(
+            symbol_rows.semantic_features_input_hash,
+            semantic_rows.semantic_features_input_hash
+        );
+    }
+
+    #[test]
     fn semantic_features_require_reindex_when_summary_provider_changes() {
         let input = SemanticFeatureInput {
             artefact_id: "artefact-1".to_string(),
@@ -518,7 +637,7 @@ mod tests {
         };
 
         assert!(
-            semantic_features_require_reindex(&state, &next_hash, false),
+            semantic_features_require_reindex(&state, &next_hash, false, true),
             "changing the summary provider should force semantic rows to be rebuilt"
         );
     }
@@ -538,16 +657,31 @@ mod tests {
         };
 
         assert!(
-            semantic_features_require_reindex(&missing_model_output, &next_hash, true),
+            semantic_features_require_reindex(&missing_model_output, &next_hash, true, true),
             "strict summary mode should retry template-only semantic rows"
         );
         assert!(
-            !semantic_features_require_reindex(&missing_model_output, &next_hash, false),
+            !semantic_features_require_reindex(&missing_model_output, &next_hash, false, true),
             "deterministic summary mode should not force a rebuild when hashes still match"
         );
         assert!(
-            !semantic_features_require_reindex(&model_backed, &next_hash, true),
+            !semantic_features_require_reindex(&model_backed, &next_hash, true, true),
             "strict summary mode should keep model-backed rows when hashes still match"
+        );
+    }
+
+    #[test]
+    fn semantic_features_require_reindex_allows_missing_semantics_when_summaries_are_skipped() {
+        let next_hash = "hash-1".to_string();
+        let state = SemanticFeatureIndexState {
+            semantics_hash: None,
+            features_hash: Some(next_hash.clone()),
+            semantics_llm_enriched: false,
+        };
+
+        assert!(
+            !semantic_features_require_reindex(&state, &next_hash, false, false),
+            "feature rows alone should be considered current when providerless summaries are skipped"
         );
     }
 

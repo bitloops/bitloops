@@ -9,7 +9,10 @@ use crate::daemon::{
 };
 use crate::host::devql::SyncProgressUpdate;
 
-use super::snapshot::snapshot_committed_current_rows_for_commit;
+use super::snapshot::{
+    snapshot_committed_current_rows_for_commit,
+    snapshot_committed_current_rows_for_commit_for_config,
+};
 use super::stats::{PostCommitArtefactRefreshStats, QueuedSyncTaskMetadata};
 
 fn sample_queued_result() -> crate::daemon::DevqlTaskEnqueueResult {
@@ -78,6 +81,44 @@ fn inline_refresh_stats_report_completed_failures() {
     };
 
     assert!(stats.completed_with_failures());
+}
+
+#[tokio::test]
+async fn snapshot_committed_current_rows_skips_stale_post_commit_when_head_moved() {
+    let temp = tempdir().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    std::fs::create_dir_all(&repo_root).expect("create repo root");
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(repo_root.join("lib.rs"), "pub fn first() -> i32 { 1 }\n")
+        .expect("write first file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "first"]);
+    let first_commit =
+        crate::test_support::git_fixtures::git_ok(&repo_root, &["rev-parse", "HEAD"]);
+    std::fs::write(repo_root.join("lib.rs"), "pub fn second() -> i32 { 2 }\n")
+        .expect("write second file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "second"]);
+
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg =
+        crate::host::devql::DevqlConfig::from_roots(temp.path().join("config"), repo_root, repo)
+            .expect("build devql config");
+
+    snapshot_committed_current_rows_for_commit_for_config(
+        &cfg,
+        &crate::daemon::PostCommitSnapshotSpec {
+            commit_sha: first_commit,
+            changed_paths: vec!["lib.rs".to_string()],
+        },
+    )
+    .await
+    .expect("stale post-commit snapshot should no-op after HEAD moves");
 }
 
 #[tokio::test]

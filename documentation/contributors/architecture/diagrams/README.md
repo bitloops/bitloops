@@ -34,3 +34,4 @@ No single diagram captures the current runtime shape. This directory splits the 
 - [../capability-packs.md](../capability-packs.md)
 - [../language-adapters.md](../language-adapters.md)
 - [../agent-adapters.md](../agent-adapters.md)
+- [../devql-sync-producer-ownership.md](../devql-sync-producer-ownership.md)

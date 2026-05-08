@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use serde_json::Value;
 
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
@@ -15,21 +16,23 @@ use crate::capability_packs::semantic_clones::runtime_config::{
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX;
 use crate::capability_packs::semantic_clones::{
     build_conditional_current_semantic_persist_rows_sql,
+    build_conditional_current_symbol_feature_persist_rows_sql,
+    build_delete_current_symbol_semantics_for_artefact_sql,
     build_repair_current_semantic_projection_from_historical_sql,
     build_semantic_get_index_state_sql, build_semantic_persist_rows_sql,
-    ensure_required_llm_summary_output, parse_semantic_index_state_rows,
+    build_symbol_feature_persist_rows_sql, ensure_required_llm_summary_output,
+    parse_semantic_index_state_rows,
 };
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{
-    DevqlConfig, RelationalStorage, build_capability_host, resolve_repo_identity,
-};
+use crate::host::devql::{DevqlConfig, RelationalStorage, build_capability_host, esc_pg};
 use crate::host::runtime_store::{
     SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind, SemanticSummaryMailboxItemInsert,
 };
 
 use super::super::semantic_writer::{CommitSummaryBatchRequest, SemanticBatchRepoContext};
 use super::super::workplane::{
-    ClaimedSummaryMailboxBatch, SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE, fallback_repo_identity,
+    ClaimedSummaryMailboxBatch, SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE,
+    repo_identity_from_runtime_metadata,
 };
 use super::helpers::{
     dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
@@ -49,8 +52,7 @@ pub(crate) async fn prepare_summary_mailbox_batch<F>(
 where
     F: FnMut(&str, &BTreeSet<String>),
 {
-    let repo = resolve_repo_identity(&batch.repo_root)
-        .unwrap_or_else(|_| fallback_repo_identity(&batch.repo_root, &batch.repo_id));
+    let repo = repo_identity_from_runtime_metadata(&batch.repo_root, &batch.repo_id);
     let cfg = DevqlConfig::from_roots(batch.config_root.clone(), batch.repo_root.clone(), repo)?;
     let backends = resolve_store_backend_config_for_repo(&batch.config_root)?;
     let relational =
@@ -66,12 +68,25 @@ where
     let summary_embeddings_enabled =
         embedding_slot_for_representation(&config, EmbeddingRepresentationKind::Summary).is_some();
 
-    let current_input_selection = select_current_semantic_input_scope(&batch.items);
+    let contains_repo_wide_backfill = batch.items.iter().any(|item| {
+        item.item_kind == SemanticMailboxItemKind::RepoBackfill && item.payload_json.is_none()
+    });
+    let explicit_artefact_ids =
+        contains_repo_wide_backfill.then(|| explicit_artefact_ids_from_batch(&batch.items));
+    let current_input_selection =
+        (!contains_repo_wide_backfill).then(|| select_current_semantic_input_scope(&batch.items));
+    let requested_artefact_ids = if contains_repo_wide_backfill {
+        explicit_artefact_ids.as_deref()
+    } else {
+        current_input_selection
+            .as_ref()
+            .and_then(|selection| selection.requested_artefact_ids())
+    };
     let current_inputs = load_current_semantic_inputs(
         &relational,
         &batch.repo_root,
         &batch.repo_id,
-        current_input_selection.requested_artefact_ids(),
+        requested_artefact_ids,
     )
     .await?;
     let current_by_artefact = current_inputs
@@ -83,6 +98,8 @@ where
     let mut expanded_inputs = Vec::new();
     let mut artefact_session_ids = HashMap::<String, BTreeSet<String>>::new();
     let mut replacement_backfill_item = None;
+    let mut current_by_artefact = current_by_artefact;
+    let mut repo_wide_artefact_ids = None;
     for item in &batch.items {
         match item.item_kind {
             SemanticMailboxItemKind::Artefact => {
@@ -108,7 +125,54 @@ where
                         .iter()
                         .filter_map(|artefact_id| current_by_artefact.get(artefact_id).cloned())
                         .collect::<Vec<_>>(),
-                    None => current_inputs.clone(),
+                    None => {
+                        let artefact_ids = match repo_wide_artefact_ids.as_ref() {
+                            Some(ids) => ids,
+                            None => {
+                                repo_wide_artefact_ids = Some(
+                                    load_current_summary_backfill_artefact_ids(
+                                        &relational,
+                                        &batch.repo_id,
+                                    )
+                                    .await?,
+                                );
+                                repo_wide_artefact_ids
+                                    .as_ref()
+                                    .expect("repo-wide artefact ids loaded above")
+                            }
+                        };
+                        let selected_ids = artefact_ids
+                            .iter()
+                            .take(SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        if artefact_ids.len() > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE {
+                            let remaining_ids = artefact_ids
+                                .iter()
+                                .skip(SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE)
+                                .cloned()
+                                .collect::<Vec<_>>();
+                            replacement_backfill_item =
+                                Some(SemanticSummaryMailboxItemInsert::new(
+                                    item.init_session_id.clone(),
+                                    SemanticMailboxItemKind::RepoBackfill,
+                                    None,
+                                    Some(serde_json::to_value(remaining_ids)?),
+                                    item.dedupe_key.clone(),
+                                ));
+                        }
+                        let selected_inputs = load_current_semantic_inputs(
+                            &relational,
+                            &batch.repo_root,
+                            &batch.repo_id,
+                            Some(&selected_ids),
+                        )
+                        .await?;
+                        for input in &selected_inputs {
+                            current_by_artefact.insert(input.artefact_id.clone(), input.clone());
+                        }
+                        selected_inputs
+                    }
                 };
                 if selected.len() > SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE {
                     let remaining_ids = selected
@@ -141,6 +205,7 @@ where
     let mut semantic_statements = Vec::new();
     let mut embedding_follow_ups = Vec::new();
     for input in &expanded_inputs {
+        let persist_summaries = summary_provider.provider.persists_summaries_for(input);
         let next_input_hash =
             build_semantic_feature_input_hash(input, summary_provider.provider.as_ref());
         let state = parse_semantic_index_state_rows(
@@ -152,6 +217,7 @@ where
             &state,
             &next_input_hash,
             summary_provider.provider.requires_model_output(),
+            persist_summaries,
         ) {
             semantic_statements.push(
                 build_repair_current_semantic_projection_from_historical_sql(
@@ -160,7 +226,13 @@ where
                     relational.dialect(),
                 ),
             );
-            if summary_embeddings_enabled {
+            if !persist_summaries {
+                semantic_statements.push(build_delete_current_symbol_semantics_for_artefact_sql(
+                    &input.repo_id,
+                    &input.artefact_id,
+                ));
+            }
+            if summary_embeddings_enabled && persist_summaries {
                 embedding_follow_ups.push(summary_embedding_follow_up_for(input));
             }
             continue;
@@ -177,17 +249,33 @@ where
         .await
         .context("building semantic summary rows on blocking worker")?;
         ensure_required_llm_summary_output(&rows, summary_provider.provider.as_ref())?;
-        semantic_statements.push(build_semantic_persist_rows_sql(
-            &rows,
-            relational.dialect(),
-        )?);
-        semantic_statements.push(build_conditional_current_semantic_persist_rows_sql(
-            &rows,
-            input,
-            relational.dialect(),
-        )?);
-        if summary_embeddings_enabled {
-            embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+        if persist_summaries {
+            semantic_statements.push(build_semantic_persist_rows_sql(
+                &rows,
+                relational.dialect(),
+            )?);
+            semantic_statements.push(build_conditional_current_semantic_persist_rows_sql(
+                &rows,
+                input,
+                relational.dialect(),
+            )?);
+            if summary_embeddings_enabled {
+                embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+            }
+        } else {
+            semantic_statements.push(build_symbol_feature_persist_rows_sql(
+                &rows,
+                relational.dialect(),
+            )?);
+            semantic_statements.push(build_conditional_current_symbol_feature_persist_rows_sql(
+                &rows,
+                input,
+                relational.dialect(),
+            )?);
+            semantic_statements.push(build_delete_current_symbol_semantics_for_artefact_sql(
+                &input.repo_id,
+                &input.artefact_id,
+            ));
         }
         if let Some(init_session_ids) = artefact_session_ids.get(&input.artefact_id) {
             on_item_prepared(&input.artefact_id, init_session_ids);
@@ -235,4 +323,53 @@ fn summary_embedding_follow_up_for(
             SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, input.artefact_id
         )),
     )
+}
+
+fn explicit_artefact_ids_from_batch(
+    items: &[crate::host::runtime_store::SemanticSummaryMailboxItemRecord],
+) -> Vec<String> {
+    let mut ids = Vec::new();
+    for item in items {
+        match item.item_kind {
+            SemanticMailboxItemKind::Artefact => {
+                if let Some(artefact_id) = item.artefact_id.as_ref() {
+                    ids.push(artefact_id.clone());
+                }
+            }
+            SemanticMailboxItemKind::RepoBackfill => {
+                if let Some(payload) = item.payload_json.as_ref() {
+                    ids.extend(payload_artefact_ids_from_value(payload));
+                }
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+async fn load_current_summary_backfill_artefact_ids(
+    relational: &RelationalStorage,
+    repo_id: &str,
+) -> Result<Vec<String>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT current.artefact_id \
+FROM artefacts_current current \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
+WHERE current.repo_id = '{}' \
+  AND state.analysis_mode = 'code' \
+  AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) <> 'import' \
+ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.start_byte, 0), current.artefact_id",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row: Value| {
+            row.get("artefact_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
 }

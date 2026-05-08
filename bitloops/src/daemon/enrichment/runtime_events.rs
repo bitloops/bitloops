@@ -11,7 +11,10 @@ pub(crate) fn publish_workplane_runtime_event(
     let Some(init_session_id) = target.init_session_id.clone() else {
         return Ok(());
     };
-    let repo_id = crate::host::devql::resolve_repo_identity(&target.repo_root)?.repo_id;
+    let repo_id = match target.repo_id.as_ref() {
+        Some(repo_id) => repo_id.clone(),
+        None => crate::host::devql::resolve_repo_identity(&target.repo_root)?.repo_id,
+    };
     crate::daemon::shared_init_runtime_coordinator().publish_runtime_event(
         crate::daemon::RuntimeEventRecord {
             domain: "workplane".to_string(),

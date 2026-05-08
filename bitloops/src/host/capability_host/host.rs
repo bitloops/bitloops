@@ -62,6 +62,23 @@ impl LanguageServicesGateway for RuntimeLanguageServicesGateway {
     ) -> Option<Arc<dyn crate::host::language_adapter::LanguageTestSupport>> {
         self.inner.resolve_test_support_for_path(relative_path)
     }
+
+    fn entry_point_candidates_for_file(
+        &self,
+        file: &crate::host::language_adapter::LanguageEntryPointFile,
+        artefacts: &[crate::host::language_adapter::LanguageEntryPointArtefact],
+    ) -> Vec<crate::host::language_adapter::LanguageEntryPointCandidate> {
+        self.inner.entry_point_candidates_for_file(file, artefacts)
+    }
+
+    fn http_facts_for_file(
+        &self,
+        file: &crate::host::language_adapter::LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[crate::host::language_adapter::LanguageHttpFactArtefact],
+    ) -> Option<(String, Vec<crate::host::language_adapter::LanguageHttpFact>)> {
+        self.inner.http_facts_for_file(file, content, artefacts)
+    }
 }
 
 pub struct DevqlCapabilityHost {
@@ -246,6 +263,10 @@ impl DevqlCapabilityHost {
             Arc::new(RuntimeLanguageServicesGateway {
                 inner: self.runtime.languages,
             });
+        let git_history: Arc<dyn super::gateways::GitHistoryGateway> =
+            Arc::new(super::runtime_contexts::LocalGitHistoryGateway);
+        let inference: Arc<dyn InferenceGateway> =
+            Arc::new(self.runtime.inference.owned_scoped(Some(capability_id)));
         let relational = Arc::new(SqliteRelationalGateway::new(sqlite_pool));
         let host_services: Arc<dyn HostServicesGateway> = Arc::new(
             DefaultHostServicesGateway::new(self.runtime.repo.repo_id.clone()),
@@ -261,8 +282,16 @@ impl DevqlCapabilityHost {
             storage: Arc::new(relational_store.to_local_inner()),
             relational,
             language_services,
+            git_history,
+            inference,
             host_services,
             workplane,
+            test_harness: crate::capability_packs::test_harness::storage::open_repository_for_repo(
+                self.repo_root(),
+            )
+            .ok()
+            .map(std::sync::Mutex::new)
+            .map(Arc::new),
             init_session_id,
         })
     }
@@ -346,6 +375,22 @@ impl DevqlCapabilityHost {
             .collect();
         ingesters.sort();
 
+        let mut current_state_consumers: Vec<String> = self
+            .current_state_consumers
+            .iter()
+            .filter(|registration| registration.capability_id == d.id)
+            .map(|registration| registration.consumer_id.to_string())
+            .collect();
+        current_state_consumers.sort();
+
+        let mut mailboxes: Vec<String> = self
+            .mailboxes
+            .iter()
+            .filter(|registration| registration.capability_id == d.id)
+            .map(|registration| registration.mailbox_name.to_string())
+            .collect();
+        mailboxes.sort();
+
         let migrations: Vec<MigrationStepSummary> = self
             .migrations
             .iter()
@@ -396,6 +441,8 @@ impl DevqlCapabilityHost {
             dependencies,
             stages,
             ingesters,
+            current_state_consumers,
+            mailboxes,
             migrations,
             schema_modules,
             health_check_names,

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table};
 
 use crate::config::{
@@ -10,10 +10,14 @@ use crate::config::{
 use crate::host::inference::{BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER};
 
 use super::constants::{
-    DEFAULT_OLLAMA_CHAT_BASE_URL, DEFAULT_PLATFORM_SUMMARY_API_KEY, DEFAULT_PLATFORM_SUMMARY_MODEL,
-    DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
-    DEFAULT_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_TEMPERATURE, OLLAMA_CHAT_DRIVER,
-    PLATFORM_CHAT_COMPLETIONS_URL_ENV, PLATFORM_GATEWAY_URL_ENV, TEXT_GENERATION_TASK,
+    DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS, DEFAULT_CONTEXT_GUIDANCE_PROFILE_NAME,
+    DEFAULT_OLLAMA_CHAT_BASE_URL, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
+    DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_PROFILE_NAME,
+    DEFAULT_PLATFORM_SUMMARY_API_KEY, DEFAULT_PLATFORM_SUMMARY_MAX_OUTPUT_TOKENS,
+    DEFAULT_PLATFORM_SUMMARY_MODEL, DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME,
+    DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS, DEFAULT_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_TEMPERATURE,
+    OLLAMA_CHAT_DRIVER, PLATFORM_CHAT_COMPLETIONS_URL_ENV, PLATFORM_GATEWAY_URL_ENV,
+    TEXT_GENERATION_TASK,
 };
 
 #[cfg(test)]
@@ -25,6 +29,18 @@ type SummaryGenerationConfiguredHookCell =
 #[cfg(test)]
 thread_local! {
     static SUMMARY_GENERATION_CONFIGURED_HOOK: SummaryGenerationConfiguredHookCell =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+type ContextGuidanceGenerationConfiguredHook = dyn Fn(&Path) -> bool;
+#[cfg(test)]
+type ContextGuidanceGenerationConfiguredHookCell =
+    std::cell::RefCell<Option<std::rc::Rc<ContextGuidanceGenerationConfiguredHook>>>;
+
+#[cfg(test)]
+thread_local! {
+    static CONTEXT_GUIDANCE_GENERATION_CONFIGURED_HOOK: ContextGuidanceGenerationConfiguredHookCell =
         std::cell::RefCell::new(None);
 }
 
@@ -49,6 +65,36 @@ pub(crate) fn summary_generation_configured(repo_root: &Path) -> bool {
         return false;
     };
 
+    text_generation_profile_configured(&capability, profile_name)
+}
+
+pub(crate) fn context_guidance_generation_configured(repo_root: &Path) -> bool {
+    #[cfg(test)]
+    if let Some(hook) =
+        CONTEXT_GUIDANCE_GENERATION_CONFIGURED_HOOK.with(|cell| cell.borrow().clone())
+    {
+        return hook(repo_root);
+    }
+
+    let capability = resolve_inference_capability_config_for_repo(repo_root);
+    let Some(profile_name) = capability
+        .context_guidance
+        .inference
+        .guidance_generation
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return false;
+    };
+
+    text_generation_profile_configured(&capability, profile_name)
+}
+
+fn text_generation_profile_configured(
+    capability: &crate::config::InferenceCapabilityConfig,
+    profile_name: &str,
+) -> bool {
     let Some(profile) = capability.inference.profiles.get(profile_name) else {
         return false;
     };
@@ -104,6 +150,16 @@ pub(crate) fn platform_summary_gateway_url_override() -> Option<String> {
     })
 }
 
+pub(crate) fn platform_context_guidance_gateway_url_override(
+    explicit: Option<&str>,
+) -> Option<String> {
+    explicit
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(platform_summary_gateway_url_override)
+}
+
 pub(super) fn write_summary_profile(repo_root: &Path, model_name: &str) -> Result<()> {
     let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
     let mut doc = read_daemon_config_document(&config_path)?;
@@ -132,6 +188,40 @@ pub(super) fn write_summary_profile(repo_root: &Path, model_name: &str) -> Resul
     update_summary_generation_binding(&mut doc, &profile_name);
     write_daemon_config_document(&config_path, &doc)?;
     maybe_sync_repo_local_summary_mode(repo_root, "auto")
+}
+
+pub(super) fn write_context_guidance_profile(repo_root: &Path, model_name: &str) -> Result<()> {
+    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
+    let mut doc = read_daemon_config_document(&config_path)?;
+
+    let profile_name = {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        select_profile_name(
+            profiles,
+            DEFAULT_CONTEXT_GUIDANCE_PROFILE_NAME,
+            is_managed_summary_profile,
+        )
+    };
+
+    {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        let profile = ensure_child_table(profiles, &profile_name);
+        profile["task"] = Item::Value(TEXT_GENERATION_TASK.into());
+        profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
+        profile["driver"] = Item::Value(OLLAMA_CHAT_DRIVER.into());
+        profile["model"] = Item::Value(model_name.into());
+        profile["base_url"] = Item::Value(DEFAULT_OLLAMA_CHAT_BASE_URL.into());
+        profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
+        profile["max_output_tokens"] =
+            Item::Value(DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS.into());
+        profile.remove("api_key");
+        profile.remove("cache_dir");
+    }
+
+    update_context_guidance_generation_binding(&mut doc, &profile_name);
+    write_daemon_config_document(&config_path, &doc)
 }
 
 pub(super) fn write_platform_summary_profile(
@@ -166,13 +256,61 @@ pub(super) fn write_platform_summary_profile(
             profile.remove("base_url");
         }
         profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
-        profile["max_output_tokens"] = Item::Value(DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS.into());
+        profile["max_output_tokens"] =
+            Item::Value(DEFAULT_PLATFORM_SUMMARY_MAX_OUTPUT_TOKENS.into());
         profile.remove("cache_dir");
     }
 
     update_summary_generation_binding(&mut doc, &profile_name);
     write_daemon_config_document(&config_path, &doc)?;
     maybe_sync_repo_local_summary_mode(repo_root, "auto")
+}
+
+pub(super) fn write_platform_context_guidance_profile(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+    api_key_env: &str,
+) -> Result<()> {
+    let api_key_env = api_key_env.trim();
+    if api_key_env.is_empty() {
+        bail!("context guidance platform API key environment variable cannot be empty");
+    }
+
+    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
+    let mut doc = read_daemon_config_document(&config_path)?;
+
+    let profile_name = {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        select_profile_name(
+            profiles,
+            DEFAULT_PLATFORM_CONTEXT_GUIDANCE_PROFILE_NAME,
+            is_managed_platform_context_guidance_profile,
+        )
+    };
+
+    {
+        let inference = ensure_table(&mut doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        let profile = ensure_child_table(profiles, &profile_name);
+        profile["task"] = Item::Value(TEXT_GENERATION_TASK.into());
+        profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
+        profile["driver"] = Item::Value(BITLOOPS_PLATFORM_CHAT_DRIVER.into());
+        profile["model"] = Item::Value(DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL.into());
+        profile["api_key"] = Item::Value(env_placeholder(api_key_env).into());
+        if let Some(gateway_url_override) = gateway_url_override {
+            profile["base_url"] = Item::Value(gateway_url_override.into());
+        } else {
+            profile.remove("base_url");
+        }
+        profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
+        profile["max_output_tokens"] =
+            Item::Value(DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS.into());
+        profile.remove("cache_dir");
+    }
+
+    update_context_guidance_generation_binding(&mut doc, &profile_name);
+    write_daemon_config_document(&config_path, &doc)
 }
 
 fn read_daemon_config_document(config_path: &Path) -> Result<DocumentMut> {
@@ -220,10 +358,26 @@ fn write_summary_mode(config_path: &Path, mode: &str) -> Result<()> {
 }
 
 fn update_summary_generation_binding(doc: &mut DocumentMut, profile_name: &str) {
-    let semantic_clones = ensure_table(doc, "semantic_clones");
-    semantic_clones["summary_mode"] = Item::Value("auto".into());
-    let semantic_inference = ensure_child_table(semantic_clones, "inference");
-    semantic_inference["summary_generation"] = Item::Value(profile_name.into());
+    {
+        let semantic_clones = ensure_table(doc, "semantic_clones");
+        semantic_clones["summary_mode"] = Item::Value("auto".into());
+    }
+    update_text_generation_binding(doc, "semantic_clones", "summary_generation", profile_name);
+}
+
+fn update_context_guidance_generation_binding(doc: &mut DocumentMut, profile_name: &str) {
+    update_text_generation_binding(doc, "context_guidance", "guidance_generation", profile_name);
+}
+
+fn update_text_generation_binding(
+    doc: &mut DocumentMut,
+    capability_table: &str,
+    inference_key: &str,
+    profile_name: &str,
+) {
+    let capability = ensure_table(doc, capability_table);
+    let inference = ensure_child_table(capability, "inference");
+    inference[inference_key] = Item::Value(profile_name.into());
 }
 
 fn select_summary_profile_name(profiles: &Table) -> String {
@@ -307,6 +461,41 @@ fn is_managed_platform_summary_profile(profile: &Table) -> bool {
             .is_none_or(|api_key| api_key == DEFAULT_PLATFORM_SUMMARY_API_KEY)
 }
 
+fn is_managed_platform_context_guidance_profile(profile: &Table) -> bool {
+    profile
+        .get("task")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        == Some(TEXT_GENERATION_TASK)
+        && profile
+            .get("runtime")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some(BITLOOPS_INFERENCE_RUNTIME_ID)
+        && profile
+            .get("driver")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_some_and(|driver| {
+                driver == BITLOOPS_PLATFORM_CHAT_DRIVER || driver == "openai_chat_completions"
+            })
+        && profile
+            .get("api_key")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_none_or(|api_key| {
+                api_key == env_placeholder(DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV).as_str()
+            })
+}
+
+fn env_placeholder(env_name: &str) -> String {
+    format!("${{{}}}", env_name.trim())
+}
+
 fn read_non_empty_env_value(key: &str) -> Option<String> {
     std::env::var(key).ok().and_then(|value| {
         let trimmed = value.trim();
@@ -346,6 +535,25 @@ pub(crate) fn with_summary_generation_configured_hook<T>(
     });
     let result = f();
     SUMMARY_GENERATION_CONFIGURED_HOOK.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    result
+}
+
+#[cfg(test)]
+pub(crate) fn with_context_guidance_generation_configured_hook<T>(
+    hook: impl Fn(&Path) -> bool + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    CONTEXT_GUIDANCE_GENERATION_CONFIGURED_HOOK.with(|cell| {
+        assert!(
+            cell.borrow().is_none(),
+            "context guidance generation configured hook already installed"
+        );
+        *cell.borrow_mut() = Some(std::rc::Rc::new(hook));
+    });
+    let result = f();
+    CONTEXT_GUIDANCE_GENERATION_CONFIGURED_HOOK.with(|cell| {
         *cell.borrow_mut() = None;
     });
     result

@@ -16,6 +16,7 @@ Feature: Agent enablement produces a queryable repository
     And I committed today in bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
+    And I enqueue DevQL sync task with status in bitloops
     Then bitloops stores exist in bitloops
     And checkpoint mapping exists in bitloops
     And DevQL artefacts query returns results in bitloops
@@ -33,4 +34,5 @@ Feature: Agent enablement produces a queryable repository
     And I committed today in bitloops
     And I run DevQL init in bitloops
     And I enqueue DevQL ingest task with status in bitloops
+    And I enqueue DevQL sync task with status in bitloops
     Then DevQL chatHistory query returns results in bitloops

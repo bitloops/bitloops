@@ -202,7 +202,7 @@ pub(crate) fn post_commit_refreshes_devql_current_state_for_changed_files() {
 }
 
 #[test]
-pub(crate) fn post_commit_does_not_backfill_missing_historical_commit_segments() {
+pub(crate) fn post_commit_ingests_latest_commit_history_without_backfilling_older_segments() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     let devql_sqlite_path = init_devql_schema(dir.path());
@@ -253,14 +253,44 @@ pub(crate) fn post_commit_does_not_backfill_missing_historical_commit_segments()
             |row| row.get(0),
         )
         .unwrap();
+    let first_history_status: String = sqlite
+        .query_row(
+            "SELECT COALESCE((
+                SELECT history_status FROM commit_ingest_ledger
+                WHERE repo_id = ?1 AND commit_sha = ?2
+                LIMIT 1
+             ), '')",
+            rusqlite::params![repo_id.as_str(), first_commit.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let second_history_status: String = sqlite
+        .query_row(
+            "SELECT COALESCE((
+                SELECT history_status FROM commit_ingest_ledger
+                WHERE repo_id = ?1 AND commit_sha = ?2
+                LIMIT 1
+             ), '')",
+            rusqlite::params![repo_id.as_str(), second_commit.as_str()],
+            |row| row.get(0),
+        )
+        .unwrap();
 
-    assert!(
-        first_history_rows == 0,
-        "post_commit should not backfill earlier commits once ingest no longer owns semantic-clone history"
+    assert_eq!(
+        first_history_rows, 0,
+        "post_commit should not backfill older commits"
+    );
+    assert_eq!(
+        first_history_status, "",
+        "post_commit should not write an ingest ledger row for older commits"
     );
     assert!(
         second_history_rows > 0,
         "post_commit should snapshot the current HEAD commit into file_state"
+    );
+    assert_eq!(
+        second_history_status, "completed",
+        "post_commit should ingest the latest HEAD commit when DevQL ingest is enabled"
     );
     assert!(
         current_rows > 0,

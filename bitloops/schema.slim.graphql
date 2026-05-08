@@ -1,3 +1,25 @@
+input AcceptNavigationContextViewInput {
+	viewId: String!
+	expectedCurrentSignature: String = null
+	source: String = null
+	reason: String = null
+	materialisedRef: String = null
+}
+
+type AcceptNavigationContextViewResult {
+	success: Boolean!
+	acceptanceId: String!
+	viewId: String!
+	previousAcceptedSignature: String!
+	acceptedSignature: String!
+	currentSignature: String!
+	status: NavigationContextViewStatus!
+	source: String!
+	reason: String
+	materialisedRef: String
+	acceptedAt: String!
+}
+
 input AddKnowledgeInput {
 	url: String!
 	commitRef: String
@@ -15,6 +37,199 @@ type AddKnowledgeResult {
 type ApplyMigrationsResult {
 	success: Boolean!
 	migrationsApplied: [MigrationRecord!]!
+}
+
+type ArchitectureContainer {
+	id: String!
+	key: String
+	kind: String
+	label: String!
+	repository: ArchitectureGraphRepositoryRef!
+	node: ArchitectureGraphNode!
+	components: [ArchitectureGraphNode!]!
+	deploymentUnits: [ArchitectureGraphNode!]!
+	entryPoints: [ArchitectureGraphNode!]!
+}
+
+type ArchitectureGraph {
+	nodes: [ArchitectureGraphNode!]!
+	edges: [ArchitectureGraphEdge!]!
+	totalNodes: Int!
+	totalEdges: Int!
+}
+
+enum ArchitectureGraphAssertionAction {
+	ASSERT
+	SUPPRESS
+	ANNOTATE
+}
+
+type ArchitectureGraphAssertionResult {
+	success: Boolean!
+	assertionId: String!
+}
+
+type ArchitectureGraphAssertionSummary {
+	id: String!
+	action: ArchitectureGraphAssertionAction!
+	targetKind: ArchitectureGraphTargetKind!
+	reason: String!
+	source: String!
+	provenance: JSON!
+	evidence: JSON!
+	properties: JSON!
+}
+
+type ArchitectureGraphEdge {
+	id: String!
+	kind: ArchitectureGraphEdgeKind!
+	fromNodeId: String!
+	toNodeId: String!
+	sourceKind: String!
+	confidence: Float!
+	computed: Boolean!
+	asserted: Boolean!
+	suppressed: Boolean!
+	effective: Boolean!
+	provenance: JSON!
+	computedProvenance: JSON!
+	assertedProvenance: JSON!
+	evidence: JSON!
+	properties: JSON!
+	annotations: [ArchitectureGraphAssertionSummary!]!
+}
+
+input ArchitectureGraphEdgeAssertionInput {
+	id: String = null
+	kind: ArchitectureGraphEdgeKind!
+	fromNodeId: String!
+	toNodeId: String!
+}
+
+enum ArchitectureGraphEdgeKind {
+	CONTAINS
+	OWNS
+	EXPOSES
+	PRODUCES
+	REALISES
+	TRIGGERS
+	TRAVERSES
+	READS
+	WRITES
+	EMITS
+	CALLS
+	IMPLEMENTS
+	DEPENDS_ON
+	VERIFIED_BY
+	STORES
+	MODIFIES
+	IMPACTS
+	SCORES
+}
+
+input ArchitectureGraphFilterInput {
+	nodeKind: ArchitectureGraphNodeKind = null
+	edgeKind: ArchitectureGraphEdgeKind = null
+	path: String = null
+	sourceKind: String = null
+	effectiveOnly: Boolean! = true
+}
+
+type ArchitectureGraphFlow {
+	entryPoint: ArchitectureGraphNode!
+	flow: ArchitectureGraphNode!
+	traversedNodes: [ArchitectureGraphNode!]!
+	steps: [ArchitectureGraphFlowStep!]!
+}
+
+type ArchitectureGraphFlowStep {
+	ordinal: Int!
+	moduleKey: String!
+	depth: Int!
+	nodes: [ArchitectureGraphNode!]!
+	predecessorModuleKeys: [String!]!
+	edgeKinds: [ArchitectureGraphEdgeKind!]!
+	cyclic: Boolean!
+}
+
+type ArchitectureGraphNode {
+	id: String!
+	kind: ArchitectureGraphNodeKind!
+	label: String!
+	artefactId: String
+	symbolId: String
+	path: String
+	entryKind: String
+	sourceKind: String!
+	confidence: Float!
+	computed: Boolean!
+	asserted: Boolean!
+	suppressed: Boolean!
+	effective: Boolean!
+	provenance: JSON!
+	computedProvenance: JSON!
+	assertedProvenance: JSON!
+	evidence: JSON!
+	properties: JSON!
+	annotations: [ArchitectureGraphAssertionSummary!]!
+}
+
+input ArchitectureGraphNodeAssertionInput {
+	id: String = null
+	kind: ArchitectureGraphNodeKind!
+	label: String = null
+	artefactId: String = null
+	symbolId: String = null
+	path: String = null
+	entryKind: String = null
+}
+
+enum ArchitectureGraphNodeKind {
+	SYSTEM
+	DEPLOYMENT_UNIT
+	CONTAINER
+	COMPONENT
+	DOMAIN
+	ENTITY
+	CAPABILITY
+	ENTRY_POINT
+	FLOW
+	NODE
+	PERSISTENCE_OBJECT
+	EVENT
+	EXTERNAL_SYSTEM
+	CONTRACT
+	TEST
+	CHANGE_UNIT
+	RISK_SIGNAL
+}
+
+type ArchitectureGraphRepositoryRef {
+	repoId: String!
+	name: String!
+	provider: String!
+	organization: String!
+}
+
+enum ArchitectureGraphTargetKind {
+	NODE
+	EDGE
+}
+
+type ArchitectureSystem {
+	id: String!
+	key: String!
+	label: String!
+	repositories: [ArchitectureGraphRepositoryRef!]!
+	containers: [ArchitectureContainer!]!
+	node: ArchitectureGraphNode!
+}
+
+type ArchitectureSystemMembershipAssertionResult {
+	success: Boolean!
+	systemId: String!
+	containerId: String!
+	assertionIds: [String!]!
 }
 
 type Artefact {
@@ -49,6 +264,9 @@ type Artefact {
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	httpContext(first: Int! = 20): HttpContextResult!
+	httpLossyTransforms(first: Int! = 20): [HttpPrimitive!]!
+	architectureNode: ArchitectureGraphNode
 	copyLineage: [ArtefactCopyLineage!]!
 }
 
@@ -108,6 +326,9 @@ type ArtefactSelection {
 	codeMatches(relationKind: String, minScore: Float): CloneStageResult!
 	dependencies(kind: EdgeKind, direction: DependenciesDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
 	tests(minConfidence: Float, linkageSource: String): TestsStageResult!
+	historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
+	contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
+	httpContext(first: Int! = 20): HttpContextResult!
 }
 
 input ArtefactSelectorInput {
@@ -123,6 +344,34 @@ input AsOfInput {
 	commit: String
 	save: SaveSelector
 	saveRevision: String
+}
+
+input AssertArchitectureGraphFactInput {
+	action: ArchitectureGraphAssertionAction!
+	targetKind: ArchitectureGraphTargetKind!
+	node: ArchitectureGraphNodeAssertionInput = null
+	edge: ArchitectureGraphEdgeAssertionInput = null
+	reason: String!
+	source: String = null
+	confidence: Float = null
+	provenance: JSON = null
+	evidence: JSON = null
+	properties: JSON = null
+}
+
+input AssertArchitectureSystemMembershipInput {
+	systemKey: String!
+	systemLabel: String = null
+	repository: String = null
+	containerId: String = null
+	containerKey: String = null
+	containerLabel: String = null
+	containerKind: String = null
+	deploymentUnitId: String = null
+	reason: String!
+	source: String = null
+	confidence: Float = null
+	properties: JSON = null
 }
 
 input AssociateKnowledgeInput {
@@ -301,6 +550,689 @@ input ClonesFilterInput {
 	neighbors: Int
 }
 
+type CodeCityArcConnectionEdgeResult {
+	node: CodeCityRenderArcResult!
+	cursor: String!
+}
+
+type CodeCityArcConnectionResult {
+	snapshotStatus: CodeCitySnapshotStatusResult!
+	totalCount: Int!
+	edges: [CodeCityArcConnectionEdgeResult!]!
+	pageInfo: PageInfo!
+}
+
+input CodeCityArcFilterInput {
+	kind: CodeCityArcKindResult
+	visibility: CodeCityArcVisibilityResult
+	severity: CodeCityViolationSeverityResult
+	boundaryId: String
+	path: String
+	direction: CodeCityDependencyDirectionResult
+	includeHidden: Boolean
+}
+
+type CodeCityArcGeometryResult {
+	fromX: Float!
+	fromY: Float!
+	fromZ: Float!
+	toX: Float!
+	toY: Float!
+	toZ: Float!
+	controlY: Float!
+}
+
+type CodeCityArcKindLegendResult {
+	kind: CodeCityArcKindResult!
+	label: String!
+	defaultVisible: Boolean!
+	description: String!
+}
+
+enum CodeCityArcKindResult {
+	DEPENDENCY
+	VIOLATION
+	CROSS_BOUNDARY
+	CYCLE
+	BRIDGE
+}
+
+enum CodeCityArcVisibilityResult {
+	HIDDEN_BY_DEFAULT
+	VISIBLE_ON_SELECTION
+	VISIBLE_AT_MEDIUM_ZOOM
+	VISIBLE_AT_WORLD_ZOOM
+	ALWAYS_VISIBLE
+}
+
+type CodeCityArchitectureEvidenceResult {
+	name: String!
+	value: Float!
+	description: String!
+}
+
+enum CodeCityArchitecturePatternResult {
+	LAYERED
+	HEXAGONAL
+	MODULAR
+	EVENT_DRIVEN
+	PIPE_AND_FILTER
+	BALL_OF_MUD
+	UNCLASSIFIED
+}
+
+type CodeCityArchitectureReportResult {
+	macroTopology: CodeCityMacroTopologyResult!
+	primaryPattern: CodeCityArchitecturePatternResult!
+	primaryScore: Float!
+	secondaryPattern: CodeCityArchitecturePatternResult
+	secondaryScore: Float
+	mudScore: Float!
+	mudWarning: Boolean!
+	boundaryReports: [CodeCityBoundaryArchitectureReportResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+type CodeCityArchitectureResult {
+	capability: String!
+	stage: String!
+	status: String!
+	repoId: String!
+	commitSha: String
+	configFingerprint: String!
+	summary: CodeCityArchitectureStageSummaryResult!
+	macroGraph: CodeCityMacroGraphResult
+	architecture: CodeCityArchitectureReportResult!
+	boundaries: [CodeCityBoundaryResult!]!
+	boundaryReports: [CodeCityBoundaryArchitectureReportResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+type CodeCityArchitectureScoresResult {
+	layered: Float!
+	hexagonal: Float!
+	modular: Float!
+	eventDriven: Float!
+	pipeAndFilter: Float!
+	ballOfMud: Float!
+}
+
+type CodeCityArchitectureStageSummaryResult {
+	boundaryCount: Int!
+	macroEdgeCount: Int!
+	macroTopology: CodeCityMacroTopologyResult!
+	primaryPattern: CodeCityArchitecturePatternResult!
+	mudWarningCount: Int!
+}
+
+type CodeCityBoundaryArchitectureReportResult {
+	boundaryId: String!
+	primaryPattern: CodeCityArchitecturePatternResult!
+	primaryScore: Float!
+	secondaryPattern: CodeCityArchitecturePatternResult
+	secondaryScore: Float
+	scores: CodeCityArchitectureScoresResult!
+	metrics: CodeCityBoundaryGraphMetricsResult!
+	evidence: [CodeCityArchitectureEvidenceResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+type CodeCityBoundaryArchitectureSummaryResult {
+	primaryPattern: CodeCityArchitecturePatternResult!
+	primaryScore: Float!
+	secondaryPattern: CodeCityArchitecturePatternResult
+	mudScore: Float!
+	modularity: Float!
+}
+
+type CodeCityBoundaryGraphMetricsResult {
+	nodeCount: Int!
+	edgeCount: Int!
+	density: Float!
+	cycleEdgeCount: Int!
+	largestSccSize: Int!
+	sccCount: Int!
+	backEdgeRatio: Float!
+	modularity: Float!
+	communityCount: Int!
+	maxFanIn: Int!
+	medianFanIn: Float!
+	maxFanOut: Int!
+	medianFanOut: Float!
+	averagePathLength: Float
+	clusteringCoefficient: Float!
+	corePeripheryScore: Float!
+	directCouplingRatio: Float!
+	branchingFactor: Float!
+	longestPathLen: Int!
+	chainDominance: Float!
+}
+
+enum CodeCityBoundaryKindResult {
+	EXPLICIT
+	RUNTIME
+	IMPLICIT
+	GROUP
+	ROOT_FALLBACK
+}
+
+type CodeCityBoundaryLayoutPreviewResult {
+	strategy: CodeCityLayoutStrategyResult!
+	zoneCount: Int!
+}
+
+type CodeCityBoundaryLayoutSummaryResult {
+	boundaryId: String!
+	strategy: CodeCityLayoutStrategyResult!
+	zoneCount: Int!
+	width: Float!
+	depth: Float!
+	x: Float!
+	z: Float!
+}
+
+type CodeCityBoundaryResult {
+	id: String!
+	name: String!
+	rootPath: String!
+	kind: CodeCityBoundaryKindResult!
+	ecosystem: String
+	parentBoundaryId: String
+	source: CodeCityBoundarySourceResult!
+	fileCount: Int!
+	artefactCount: Int!
+	dependencyCount: Int!
+	entryPoints: [CodeCityEntryPointResult!]!
+	sharedLibrary: Boolean!
+	atomic: Boolean!
+	architecture: CodeCityBoundaryArchitectureSummaryResult
+	layout: CodeCityBoundaryLayoutPreviewResult
+	violationSummary: CodeCityViolationSummaryResult!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
+enum CodeCityBoundarySourceResult {
+	MANIFEST
+	WORKSPACE_MANIFEST
+	ENTRY_POINT
+	COMMUNITY_DETECTION
+	HIERARCHY
+	FALLBACK
+}
+
+type CodeCityBuildingHealthSummaryResult {
+	floorCount: Int!
+	highRiskFloorCount: Int!
+	insufficientDataFloorCount: Int!
+	averageRisk: Float
+	maxRisk: Float
+	missingSignals: [String!]!
+}
+
+type CodeCityBuildingResult {
+	path: String!
+	language: String!
+	boundaryId: String!
+	zone: String!
+	inferredZone: String
+	conventionZone: String
+	architectureRole: String
+	importance: CodeCityImportanceResult!
+	size: CodeCitySizeResult!
+	geometry: CodeCityGeometryResult!
+	healthRisk: Float
+	healthStatus: String!
+	healthConfidence: Float!
+	colour: String!
+	healthSummary: CodeCityBuildingHealthSummaryResult!
+	diagnosticBadges: [CodeCityDiagnosticBadgeResult!]!
+	floors: [CodeCityFloorResult!]!
+}
+
+type CodeCityDependencyArcResult {
+	fromPath: String!
+	toPath: String!
+	edgeCount: Int!
+	arcKind: String!
+	severity: String
+}
+
+type CodeCityDependencyConnectionEdgeResult {
+	node: CodeCityFileDependencyArcResult!
+	cursor: String!
+}
+
+type CodeCityDependencyConnectionResult {
+	totalCount: Int!
+	edges: [CodeCityDependencyConnectionEdgeResult!]!
+}
+
+enum CodeCityDependencyDirectionResult {
+	INCOMING
+	OUTGOING
+	BOTH
+}
+
+enum CodeCityDiagnosticBadgeKindResult {
+	ARCHITECTURE_VIOLATION
+	CROSS_BOUNDARY_COUPLING
+	CYCLE_PARTICIPANT
+	BRIDGE_FILE
+	HEALTH_RISK
+	INSUFFICIENT_DATA
+}
+
+type CodeCityDiagnosticBadgeResult {
+	kind: CodeCityDiagnosticBadgeKindResult!
+	severity: CodeCityViolationSeverityResult!
+	count: Int!
+	tooltip: String!
+}
+
+type CodeCityDiagnosticResult {
+	code: String!
+	severity: String!
+	message: String!
+	path: String
+	boundaryId: String
+}
+
+type CodeCityEntryPointResult {
+	path: String!
+	entryKind: String!
+	closureFileCount: Int!
+}
+
+type CodeCityFileArchitectureContextResult {
+	boundaryId: String
+	boundaryName: String
+	primaryPattern: CodeCityArchitecturePatternResult
+}
+
+type CodeCityFileDependencyArcResult {
+	arcId: String!
+	runId: String!
+	commitSha: String
+	fromPath: String!
+	toPath: String!
+	fromBoundaryId: String
+	toBoundaryId: String
+	fromZone: String
+	toZone: String
+	edgeCount: Int!
+	importCount: Int!
+	callCount: Int!
+	referenceCount: Int!
+	exportCount: Int!
+	inheritanceCount: Int!
+	weight: Float!
+	crossBoundary: Boolean!
+	hasViolation: Boolean!
+	highestSeverity: CodeCityViolationSeverityResult
+	evidenceIds: [String!]!
+}
+
+type CodeCityFileDetailResult {
+	status: String!
+	path: String!
+	snapshotStatus: CodeCitySnapshotStatusResult!
+	building: CodeCityBuildingResult
+	architectureContext: CodeCityFileArchitectureContextResult!
+	incomingDependencies: CodeCityDependencyConnectionResult!
+	outgoingDependencies: CodeCityDependencyConnectionResult!
+	violations: [CodeCityViolationResult!]!
+	relatedArcs: [CodeCityRenderArcResult!]!
+}
+
+type CodeCityFloorResult {
+	artefactId: String
+	symbolId: String
+	name: String!
+	canonicalKind: String
+	languageKind: String
+	startLine: Int!
+	endLine: Int!
+	loc: Int!
+	floorIndex: Int!
+	floorHeight: Float!
+	healthRisk: Float
+	colour: String!
+	healthStatus: String!
+	healthConfidence: Float!
+	healthMetrics: CodeCityHealthMetricsResult!
+	healthEvidence: CodeCityHealthEvidenceResult!
+}
+
+type CodeCityGeometryResult {
+	x: Float!
+	y: Float!
+	z: Float!
+	width: Float!
+	depth: Float!
+	sideLength: Float!
+	footprintArea: Float!
+	height: Float!
+}
+
+type CodeCityHealthEvidenceResult {
+	commitsTouching: Int!
+	bugFixCommits: Int!
+	distinctAuthors: Int!
+	coveredLines: Int
+	totalCoverableLines: Int
+	complexitySource: String!
+	coverageSource: String!
+	gitHistorySource: String!
+	missingSignals: [String!]!
+}
+
+type CodeCityHealthMetricsResult {
+	churn: Int!
+	complexity: Float!
+	bugCount: Int!
+	coverage: Float
+	authorConcentration: Float
+}
+
+type CodeCityHealthOverviewResult {
+	status: String!
+	analysisWindowMonths: Int!
+	generatedAt: String
+	confidence: Float!
+	missingSignals: [String!]!
+	coverageAvailable: Boolean!
+	gitHistoryAvailable: Boolean!
+	weights: CodeCityHealthWeightsResult!
+}
+
+type CodeCityHealthWeightsResult {
+	churn: Float!
+	complexity: Float!
+	bugs: Float!
+	coverage: Float!
+	authorConcentration: Float!
+}
+
+type CodeCityImportanceResult {
+	score: Float!
+	blastRadius: Int!
+	weightedFanIn: Float!
+	articulationScore: Float!
+	normalizedBlastRadius: Float!
+	normalizedWeightedFanIn: Float!
+	normalizedArticulationScore: Float!
+}
+
+type CodeCityLayoutResult {
+	layoutKind: String!
+	width: Float!
+	depth: Float!
+	gap: Float!
+}
+
+enum CodeCityLayoutStrategyResult {
+	GRID_TREEMAP
+	HEXAGONAL_RINGS
+	LAYERED_BANDS
+	MODULAR_ISLANDS
+	PIPE_AND_FILTER_STRIP
+	MUD_FORCE_DIRECTED
+	PLAIN_TREEMAP
+}
+
+type CodeCityLegendsResult {
+	arcKinds: [CodeCityArcKindLegendResult!]!
+	violationRules: [CodeCityViolationRuleLegendResult!]!
+	severities: [CodeCitySeverityLegendResult!]!
+}
+
+type CodeCityMacroEdgeResult {
+	fromBoundaryId: String!
+	toBoundaryId: String!
+	weight: Int!
+	fileEdgeCount: Int!
+}
+
+type CodeCityMacroGraphResult {
+	topology: CodeCityMacroTopologyResult!
+	boundaryCount: Int!
+	edgeCount: Int!
+	density: Float!
+	modularity: Float
+	edges: [CodeCityMacroEdgeResult!]!
+}
+
+enum CodeCityMacroTopologyResult {
+	SINGLE_BOUNDARY
+	STAR
+	LAYERED
+	FEDERATED
+	TANGLED
+	UNKNOWN
+}
+
+input CodeCityRefreshInput {
+	projectPath: String = null
+}
+
+type CodeCityRefreshResult {
+	success: Boolean!
+	queued: Boolean!
+	runId: String
+	message: String!
+	snapshotStatus: CodeCitySnapshotStatusResult!
+}
+
+type CodeCityRenderArcResult {
+	id: String!
+	kind: CodeCityArcKindResult!
+	visibility: CodeCityArcVisibilityResult!
+	severity: CodeCityViolationSeverityResult
+	fromPath: String
+	toPath: String
+	fromBoundaryId: String
+	toBoundaryId: String
+	sourceArcId: String
+	violationId: String
+	weight: Float!
+	label: String
+	tooltip: String
+	geometry: CodeCityArcGeometryResult!
+	metadataJson: String!
+}
+
+type CodeCitySeverityLegendResult {
+	severity: CodeCityViolationSeverityResult!
+	label: String!
+	description: String!
+}
+
+type CodeCitySizeResult {
+	loc: Int!
+	artefactCount: Int!
+	totalHeight: Float!
+}
+
+enum CodeCitySnapshotStateResult {
+	MISSING
+	QUEUED
+	RUNNING
+	READY
+	FAILED
+}
+
+type CodeCitySnapshotStatusResult {
+	state: CodeCitySnapshotStateResult!
+	stale: Boolean!
+	repoId: String!
+	projectPath: String
+	snapshotKey: String!
+	configFingerprint: String!
+	sourceGenerationSeq: Int
+	lastSuccessGenerationSeq: Int
+	runId: String
+	commitSha: String
+	generatedAt: String
+	updatedAt: String
+	lastError: String
+}
+
+type CodeCitySummaryResult {
+	fileCount: Int!
+	artefactCount: Int!
+	dependencyCount: Int!
+	boundaryCount: Int!
+	macroEdgeCount: Int!
+	includedFileCount: Int!
+	excludedFileCount: Int!
+	unhealthyFloorCount: Int!
+	insufficientHealthDataCount: Int!
+	coverageAvailable: Boolean!
+	gitHistoryAvailable: Boolean!
+	violationCount: Int!
+	highSeverityViolationCount: Int!
+	visibleArcCount: Int!
+	crossBoundaryArcCount: Int!
+	maxImportance: Float!
+	maxHeight: Float!
+}
+
+type CodeCityViolationConnectionEdgeResult {
+	node: CodeCityViolationResult!
+	cursor: String!
+}
+
+type CodeCityViolationConnectionResult {
+	snapshotStatus: CodeCitySnapshotStatusResult!
+	totalCount: Int!
+	edges: [CodeCityViolationConnectionEdgeResult!]!
+	pageInfo: PageInfo!
+}
+
+type CodeCityViolationEvidenceResult {
+	evidenceId: String!
+	edgeId: String
+	edgeKind: String!
+	fromSymbolId: String
+	toSymbolId: String
+	fromArtefactId: String
+	toArtefactId: String
+	startLine: Int
+	endLine: Int
+	toSymbolRef: String
+}
+
+input CodeCityViolationFilterInput {
+	severity: CodeCityViolationSeverityResult
+	severities: [CodeCityViolationSeverityResult!]
+	pattern: CodeCityViolationPatternResult
+	rule: CodeCityViolationRuleResult
+	boundaryId: String
+	path: String
+	fromPath: String
+	toPath: String
+	includeSuppressed: Boolean
+}
+
+enum CodeCityViolationPatternResult {
+	LAYERED
+	HEXAGONAL
+	MODULAR
+	EVENT_DRIVEN
+	CROSS_BOUNDARY
+	CYCLE
+	MUD
+}
+
+type CodeCityViolationResult {
+	id: String!
+	runId: String!
+	commitSha: String
+	boundaryId: String
+	boundaryRoot: String
+	pattern: CodeCityViolationPatternResult!
+	rule: CodeCityViolationRuleResult!
+	severity: CodeCityViolationSeverityResult!
+	fromPath: String!
+	toPath: String
+	fromZone: String
+	toZone: String
+	fromBoundaryId: String
+	toBoundaryId: String
+	arcId: String
+	message: String!
+	explanation: String!
+	recommendation: String
+	evidenceIds: [String!]!
+	evidence: [CodeCityViolationEvidenceResult!]!
+	confidence: Float!
+	suppressed: Boolean!
+}
+
+type CodeCityViolationRuleCountResult {
+	rule: CodeCityViolationRuleResult!
+	count: Int!
+	severity: CodeCityViolationSeverityResult!
+}
+
+type CodeCityViolationRuleLegendResult {
+	rule: CodeCityViolationRuleResult!
+	pattern: CodeCityViolationPatternResult!
+	severity: CodeCityViolationSeverityResult!
+	description: String!
+}
+
+enum CodeCityViolationRuleResult {
+	LAYERED_UPWARD_DEPENDENCY
+	LAYERED_SKIPPED_LAYER
+	HEXAGONAL_CORE_IMPORTS_PERIPHERY
+	HEXAGONAL_CORE_IMPORTS_EXTERNAL
+	HEXAGONAL_APPLICATION_IMPORTS_EDGE
+	MODULAR_INTERNAL_CROSS_MODULE_DEPENDENCY
+	MODULAR_BROAD_BRIDGE_FILE
+	EVENT_DRIVEN_DIRECT_PEER_DEPENDENCY
+	CROSS_BOUNDARY_CYCLE
+	CROSS_BOUNDARY_HIGH_COUPLING
+}
+
+enum CodeCityViolationSeverityResult {
+	HIGH
+	MEDIUM
+	LOW
+	INFO
+}
+
+type CodeCityViolationSummaryResult {
+	total: Int!
+	high: Int!
+	medium: Int!
+	low: Int!
+	info: Int!
+	byRule: [CodeCityViolationRuleCountResult!]!
+}
+
+type CodeCityWorldResult {
+	capability: String!
+	stage: String!
+	status: String!
+	repoId: String!
+	commitSha: String
+	configFingerprint: String!
+	snapshotStatus: CodeCitySnapshotStatusResult!
+	summary: CodeCitySummaryResult!
+	health: CodeCityHealthOverviewResult!
+	legends: CodeCityLegendsResult!
+	layout: CodeCityLayoutResult!
+	boundaries: [CodeCityBoundaryResult!]!
+	macroGraph: CodeCityMacroGraphResult
+	architecture: CodeCityArchitectureReportResult
+	boundaryLayouts: [CodeCityBoundaryLayoutSummaryResult!]!
+	buildings: [CodeCityBuildingResult!]!
+	arcs: [CodeCityRenderArcResult!]!
+	dependencyArcs: [CodeCityDependencyArcResult!]!
+	diagnostics: [CodeCityDiagnosticResult!]!
+}
+
 type Commit {
 	sha: String!
 	parents: [String!]!
@@ -322,6 +1254,59 @@ type CommitConnection {
 type CommitEdge {
 	node: Commit!
 	cursor: String!
+}
+
+enum ContextGuidanceCategory {
+	DECISION
+	CONSTRAINT
+	PATTERN
+	RISK
+	VERIFICATION
+	CONTEXT
+}
+
+enum ContextGuidanceConfidence {
+	HIGH
+	MEDIUM
+	LOW
+}
+
+type ContextGuidanceItem {
+	id: ID!
+	category: ContextGuidanceCategory!
+	kind: String!
+	label: String!
+	guidance: String!
+	evidenceExcerpt: String!
+	confidence: ContextGuidanceConfidence!
+	relevanceScore: Float!
+	generatedAt: DateTime
+	sourceModel: String
+	sourceCount: Int!
+	sources: [ContextGuidanceSource!]!
+}
+
+type ContextGuidanceSource {
+	sourceType: String!
+	sourceId: String!
+	checkpointId: ID
+	sessionId: String
+	turnId: String
+	toolKind: String
+	knowledgeItemId: ID
+	knowledgeItemVersionId: ID
+	relationAssertionId: ID
+	provider: String
+	sourceKind: String
+	title: String
+	url: String
+	excerpt: String
+}
+
+type ContextGuidanceStageResult {
+	overview: JSON!
+	schema: String
+	items(first: Int! = 20): [ContextGuidanceItem!]!
 }
 
 scalar DateTime
@@ -505,6 +1490,168 @@ type HealthStatus {
 	blob: HealthBackendStatus!
 }
 
+type HistoricalContextItem {
+	checkpointId: ID!
+	sessionId: String!
+	turnId: String
+	agentType: String
+	model: String
+	eventTime: DateTime!
+	matchReason: HistoricalMatchReason!
+	matchStrength: HistoricalMatchStrength!
+	promptPreview: String
+	turnSummary: String
+	transcriptPreview: String
+	filesModified: [String!]!
+	fileRelations: [CheckpointFileRelation!]!
+	toolEvents: [HistoricalToolEvent!]!
+}
+
+type HistoricalContextStageResult {
+	overview: JSON!
+	schema: String
+	items(first: Int! = 20): [HistoricalContextItem!]!
+}
+
+enum HistoricalEvidenceKind {
+	SYMBOL_PROVENANCE
+	FILE_RELATION
+	LINE_OVERLAP
+}
+
+enum HistoricalMatchReason {
+	SYMBOL_PROVENANCE
+	FILE_RELATION
+	LINE_OVERLAP
+}
+
+enum HistoricalMatchStrength {
+	HIGH
+	MEDIUM
+	LOW
+}
+
+type HistoricalToolEvent {
+	toolKind: String
+	inputSummary: String
+	outputSummary: String
+	command: String
+}
+
+type HttpBundle {
+	bundleId: String!
+	kind: String!
+	riskKind: String
+	severity: String
+	matchedRoles: [String!]!
+	status: String!
+	confidence: HttpConfidence!
+	upstreamFacts: [HttpUpstreamFact!]!
+	causalChain: [HttpCausalChainLink!]!
+	invalidatedAssumptions: [HttpInvalidatedAssumption!]!
+	obligations: [HttpPropagationObligation!]!
+}
+
+type HttpCausalChainLink {
+	owner: String!
+	factId: String!
+	role: String!
+	primitiveType: String
+	subject: String
+}
+
+type HttpConfidence {
+	level: String!
+	score: Float!
+}
+
+type HttpContextResult {
+	overview: JSON!
+	bundles: [HttpBundle!]!
+	primitives: [HttpPrimitive!]!
+	obligations: [HttpPropagationObligation!]!
+}
+
+type HttpEvidence {
+	kind: String!
+	path: String
+	artefactId: String
+	symbolId: String
+	contentId: String
+	startLine: Int
+	endLine: Int
+	dependencyPackage: String
+	dependencyVersion: String
+	sourceUrl: String
+}
+
+type HttpHeaderProducer {
+	primitiveId: String!
+	producerKind: String!
+	sourceSignal: String
+	phase: String
+	preconditions: [String!]!
+	confidence: HttpConfidence!
+}
+
+type HttpInvalidatedAssumption {
+	id: String!
+	assumption: String!
+	invalidatedByPrimitiveIds: [String!]!
+	scope: String
+}
+
+input HttpLossyTransformAroundInput {
+	symbolFqn: String = null
+	symbolId: String = null
+	artefactId: String = null
+	path: String = null
+}
+
+input HttpPatchImpactInput {
+	patchFingerprint: String!
+}
+
+type HttpPatchImpactResult {
+	patchFingerprint: String!
+	invalidatedAssumptions: [HttpInvalidatedAssumption!]!
+	propagationObligations: [HttpPropagationObligation!]!
+}
+
+type HttpPrimitive {
+	id: String!
+	owner: String!
+	primitiveType: String!
+	subject: String!
+	roles: [String!]!
+	terms: [String!]!
+	status: String!
+	confidence: HttpConfidence!
+	evidence: [HttpEvidence!]!
+	properties: JSON!
+}
+
+type HttpPropagationObligation {
+	id: String!
+	requiredFollowUp: String!
+	targetSymbols: [String!]!
+	blocking: Boolean!
+}
+
+type HttpSearchResult {
+	overview: JSON!
+	bundles: [HttpBundle!]!
+	matchedFacts: [HttpPrimitive!]!
+}
+
+type HttpUpstreamFact {
+	owner: String!
+	factId: String!
+	primitiveType: String
+	subject: String
+	roles: [String!]!
+}
+
 type IngestResult {
 	success: Boolean!
 	commitsProcessed: Int!
@@ -520,6 +1667,7 @@ type IngestResult {
 }
 
 type IngestTaskSpec {
+	commits: [String!]!
 	backfill: Int
 }
 
@@ -816,6 +1964,8 @@ enum KnowledgeTargetType {
 	CHECKPOINT
 	ARTEFACT
 	KNOWLEDGE
+	PATH
+	SYMBOL_FQN
 }
 
 type KnowledgeVersion {
@@ -849,6 +1999,30 @@ input LineRangeInput {
 	end: Int!
 }
 
+input MaterialiseNavigationContextViewInput {
+	viewId: String!
+	expectedCurrentSignature: String = null
+}
+
+type MaterialiseNavigationContextViewResult {
+	success: Boolean!
+	materialisationId: String!
+	materialisedRef: String!
+	viewId: String!
+	viewKind: String!
+	label: String!
+	acceptedSignature: String!
+	currentSignature: String!
+	status: NavigationContextViewStatus!
+	materialisationFormat: String!
+	materialisationVersion: String!
+	payload: JSON!
+	renderedText: String!
+	primitiveCount: Int!
+	edgeCount: Int!
+	materialisedAt: String!
+}
+
 type MigrationRecord {
 	packId: String!
 	migrationName: String!
@@ -860,13 +2034,138 @@ type MutationRoot {
 	updateCliTelemetryConsent(cliVersion: String!, telemetry: Boolean): UpdateCliTelemetryConsentResult!
 	initSchema: InitSchemaResult!
 	enqueueTask(input: EnqueueTaskInput!): EnqueueTaskResult!
+	refreshCodeCity(input: CodeCityRefreshInput!): CodeCityRefreshResult!
 	pauseTaskQueue(reason: String): TaskQueueControlResult!
 	resumeTaskQueue(repoId: String): TaskQueueControlResult!
 	cancelTask(id: String!): Task!
 	addKnowledge(input: AddKnowledgeInput!): AddKnowledgeResult!
 	associateKnowledge(input: AssociateKnowledgeInput!): AssociateKnowledgeResult!
 	refreshKnowledge(input: RefreshKnowledgeInput!): RefreshKnowledgeResult!
+	assertArchitectureGraphFact(input: AssertArchitectureGraphFactInput!): ArchitectureGraphAssertionResult!
+	revokeArchitectureGraphAssertion(id: String!): RevokeArchitectureGraphAssertionResult!
+	assertArchitectureSystemMembership(input: AssertArchitectureSystemMembershipInput!): ArchitectureSystemMembershipAssertionResult!
+	acceptNavigationContextView(input: AcceptNavigationContextViewInput!): AcceptNavigationContextViewResult!
+	materialiseNavigationContextView(input: MaterialiseNavigationContextViewInput!): MaterialiseNavigationContextViewResult!
 	applyMigrations: ApplyMigrationsResult!
+}
+
+input NavigationContextFilterInput {
+	viewId: String = null
+	viewStatus: NavigationContextViewStatus = null
+	primitiveKind: NavigationPrimitiveKind = null
+	edgeKind: String = null
+	path: String = null
+	sourceKind: String = null
+}
+
+type NavigationContextSnapshot {
+	views: [NavigationContextView!]!
+	primitives: [NavigationPrimitive!]!
+	edges: [NavigationEdge!]!
+	totalViews: Int!
+	totalPrimitives: Int!
+	totalEdges: Int!
+}
+
+type NavigationContextView {
+	viewId: String!
+	viewKind: String!
+	label: String!
+	viewQueryVersion: String!
+	dependencyQuery: JSON!
+	acceptedSignature: String!
+	currentSignature: String!
+	status: NavigationContextViewStatus!
+	staleReason: JSON!
+	materialisedRef: String
+	lastObservedGeneration: Int
+	updatedAt: String!
+	dependencies: [NavigationContextViewDependency!]!
+	acceptanceHistory: [NavigationContextViewAcceptance!]!
+}
+
+type NavigationContextViewAcceptance {
+	acceptanceId: String!
+	viewId: String!
+	previousAcceptedSignature: String!
+	acceptedSignature: String!
+	currentSignature: String!
+	expectedCurrentSignature: String
+	source: String!
+	reason: String
+	materialisedRef: String
+	acceptedAt: String!
+}
+
+type NavigationContextViewDependency {
+	viewId: String!
+	primitiveId: String!
+	primitiveKind: NavigationPrimitiveKind!
+	primitiveHash: String!
+	dependencyRole: String!
+	updatedAt: String!
+}
+
+enum NavigationContextViewStatus {
+	FRESH
+	STALE
+}
+
+type NavigationEdge {
+	id: String!
+	kind: String!
+	fromPrimitiveId: String!
+	toPrimitiveId: String!
+	sourceKind: String!
+	confidence: Float!
+	edgeHash: String!
+	hashVersion: String!
+	properties: JSON!
+	provenance: JSON!
+	lastObservedGeneration: Int
+	updatedAt: String!
+}
+
+type NavigationPrimitive {
+	id: String!
+	kind: NavigationPrimitiveKind!
+	identityKey: String!
+	label: String!
+	path: String
+	artefactId: String
+	symbolId: String
+	sourceKind: String!
+	confidence: Float!
+	primitiveHash: String!
+	hashVersion: String!
+	properties: JSON!
+	provenance: JSON!
+	lastObservedGeneration: Int
+	updatedAt: String!
+}
+
+enum NavigationPrimitiveKind {
+	FILE_BLOB
+	PACKAGE
+	MODULE
+	SYMBOL
+	DEPENDENCY_EDGE
+	CALL_EDGE
+	DATA_FLOW_EDGE
+	ENTRYPOINT
+	PUBLIC_CONTRACT
+	DATA_OBJECT
+	CONFIG_KEY
+	RUNTIME_FLOW
+	TEST_CASE
+	VERIFICATION_COMMAND
+	PIPELINE_JOB
+	DECISION_RECORD
+	OWNERSHIP_RULE
+	METRIC_OBSERVATION
+	INTEGRATION_CONTRACT
+	SECURITY_BOUNDARY
+	GLOSSARY_TERM
 }
 
 type PageInfo {
@@ -885,11 +2184,27 @@ type Project {
 	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	httpSearch(terms: [String!]!, first: Int): HttpSearchResult!
+	httpHeaderProducers(headerName: String!, first: Int): [HttpHeaderProducer!]!
+	httpLifecycleBoundaries(terms: [String!], first: Int): [HttpPrimitive!]!
+	httpLossyTransforms(around: HttpLossyTransformAroundInput, first: Int): [HttpPrimitive!]!
+	httpPatchImpact(input: HttpPatchImpactInput!): HttpPatchImpactResult!
+	navigationContext(filter: NavigationContextFilterInput, first: Int! = 500, after: String): NavigationContextSnapshot!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	tests(filter: ArtefactFilterInput, minConfidence: Float, linkageSource: String, first: Int! = 100): [TestHarnessTestsResult!]!
 	coverage(filter: ArtefactFilterInput, first: Int! = 100): [TestHarnessCoverageResult!]!
 	testsSummary: TestHarnessCommitSummary!
+	architectureGraph(filter: ArchitectureGraphFilterInput, first: Int, after: String): ArchitectureGraph!
+	architectureEntryPoints(kind: String, first: Int): [ArchitectureGraphNode!]!
+	architectureFlows(entryPointId: String, first: Int): [ArchitectureGraphFlow!]!
+	architectureContainers(systemKey: String, first: Int): [ArchitectureContainer!]!
+	codeCityWorld(first: Int! = 500, includeDependencyArcs: Boolean, includeBoundaries: Boolean, includeArchitecture: Boolean, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean, includeHealth: Boolean, analysisWindowMonths: Int): CodeCityWorldResult!
+	codeCitySnapshotStatus(projectPath: String): CodeCitySnapshotStatusResult!
+	codeCityArchitecture(first: Int! = 500, includeMacroEdges: Boolean, includeZoneDiagnostics: Boolean, architectureEnabled: Boolean): CodeCityArchitectureResult!
+	codeCityViolations(filter: CodeCityViolationFilterInput, first: Int, after: String, last: Int, before: String): CodeCityViolationConnectionResult!
+	codeCityFile(path: String!, incomingFirst: Int, outgoingFirst: Int): CodeCityFileDetailResult!
+	codeCityArcs(filter: CodeCityArcFilterInput, first: Int, after: String, last: Int, before: String): CodeCityArcConnectionResult!
 }
 
 input RefreshKnowledgeInput {
@@ -902,6 +2217,12 @@ type RefreshKnowledgeResult {
 	contentChanged: Boolean!
 	newVersionCreated: Boolean!
 	knowledgeItem: KnowledgeItem!
+}
+
+type RevokeArchitectureGraphAssertionResult {
+	success: Boolean!
+	id: String!
+	revoked: Boolean!
 }
 
 enum SaveSelector {
@@ -927,6 +2248,9 @@ type SlimQueryRoot {
 	health: HealthStatus!
 	asOf(input: AsOfInput!): TemporalScope!
 	defaultBranch: String!
+	project(path: String!): Project!
+	architectureSystems(systemKey: String, first: Int): [ArchitectureSystem!]!
+	architectureSystem(key: String!): ArchitectureSystem
 	commits(branch: String, author: String, since: DateTime, until: DateTime, first: Int, after: String, last: Int, before: String): CommitConnection!
 	branches(since: DateTime, until: DateTime): [Branch!]!
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!

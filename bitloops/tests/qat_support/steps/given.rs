@@ -171,6 +171,63 @@ pub(super) fn given_init_bitloops_with_agent_sync_true(
     })
 }
 
+pub(super) fn given_init_bitloops_with_agent_sync_ingest(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let sync = ctx.matches[2].1.parse::<bool>().expect("parse sync bool");
+        let ingest = ctx.matches[3].1.parse::<bool>().expect("parse ingest bool");
+        let repo_name = ctx.matches[4].1.clone();
+        run_step(
+            "I run bitloops init --agent --sync --ingest",
+            helpers::run_init_bitloops_with_agent_sync_ingest(
+                world,
+                &repo_name,
+                &agent_name,
+                sync,
+                ingest,
+            ),
+        );
+    })
+}
+
+pub(super) fn given_set_devql_producer_policy(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let sync = ctx.matches[1].1.parse::<bool>().expect("parse sync bool");
+        let ingest = ctx.matches[2].1.parse::<bool>().expect("parse ingest bool");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I set DevQL producer policy",
+            helpers::set_devql_producer_policy_for_repo(world, &repo_name, sync, ingest),
+        );
+    })
+}
+
+pub(super) fn given_init_bitloops_producer_contract(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let sync = ctx.matches[2].1.parse::<bool>().expect("parse sync bool");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I run bitloops producer-contract init",
+            helpers::run_init_bitloops_producer_contract_for_repo(
+                world,
+                &repo_name,
+                &agent_name,
+                sync,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_init_bitloops_with_agent_sync_false_ingest_true_backfill(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -600,6 +657,19 @@ pub(super) fn given_create_rust_project_with_tests(
     })
 }
 
+pub(super) fn given_create_bitloops_inference_cli_fixture(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I create a bitloops-inference CLI fixture",
+            helpers::create_bitloops_inference_cli_fixture(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_testlens_ingest_tests(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -721,6 +791,19 @@ pub(super) fn given_configure_semantic_clones_fake_runtime(
         run_step(
             "I configure semantic clones with fake embeddings runtime",
             helpers::configure_semantic_clones_with_fake_runtime(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_configure_context_guidance_fake_runtime(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I configure context guidance with fake text-generation runtime",
+            helpers::configure_context_guidance_with_fake_runtime(world, &repo_name),
         );
     })
 }
@@ -1050,6 +1133,24 @@ pub(super) fn given_wait_for_devql_task_queue_idle(
     })
 }
 
+pub(super) fn given_snapshot_completed_sync_task_source(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let expected_source = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I snapshot completed DevQL sync task source",
+            helpers::snapshot_completed_sync_task_source_for_repo(
+                world,
+                &repo_name,
+                &expected_source,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_run_devql_tasks_list(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,
@@ -1263,6 +1364,93 @@ pub(super) fn given_commit_without_hooks(
             "I commit changes without hooks",
             helpers::ensure_bitloops_repo_name(&repo_name)
                 .and_then(|_| helpers::commit_without_hooks(world)),
+        );
+    })
+}
+
+pub(super) fn given_commit_with_hooks(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I commit changes with hooks",
+            helpers::ensure_bitloops_repo_name(&repo_name)
+                .and_then(|_| helpers::commit_with_hooks(world)),
+        );
+    })
+}
+
+pub(super) fn given_create_branch_with_source_file_and_return(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let branch_name = ctx.matches[1].1.clone();
+        let path = ctx.matches[2].1.clone();
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I create a branch with a source file and return",
+            helpers::create_branch_with_source_file_and_return_for_repo(
+                world,
+                &repo_name,
+                &branch_name,
+                &path,
+            ),
+        );
+    })
+}
+
+pub(super) fn given_checkout_previous_branch(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I checkout the previous branch",
+            helpers::checkout_previous_branch_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_checkout_branch(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let branch_name = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "I checkout branch",
+            helpers::checkout_branch_for_repo(world, &repo_name, &branch_name),
+        );
+    })
+}
+
+pub(super) fn given_git_reset_hard_head(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run git reset --hard HEAD",
+            helpers::git_reset_hard_head_for_repo(world, &repo_name),
+        );
+    })
+}
+
+pub(super) fn given_git_clean_fd(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I run git clean -fd",
+            helpers::git_clean_fd_for_repo(world, &repo_name),
         );
     })
 }

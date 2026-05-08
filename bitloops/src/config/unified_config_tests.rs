@@ -372,10 +372,9 @@ fn merge_enabled_coexists_with_stores() {
 // ---------------------------------------------------------------------------
 
 fn write_config_file(dir: &std::path::Path, filename: &str, value: serde_json::Value) {
-    let config_dir = dir.join(".bitloops");
-    fs::create_dir_all(&config_dir).unwrap();
+    fs::create_dir_all(dir).unwrap();
     fs::write(
-        config_dir.join(filename),
+        dir.join(filename),
         serde_json::to_vec_pretty(&value).unwrap(),
     )
     .unwrap();

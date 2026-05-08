@@ -305,10 +305,17 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     assert_eq!(sdl_status, StatusCode::OK);
     assert_eq!(sdl_body, crate::api::runtime_schema_sdl());
     assert!(sdl_body.contains("type RuntimeQueryRoot"));
+    assert!(sdl_body.contains("configTargets: [RuntimeConfigTargetObject!]!"));
+    assert!(sdl_body.contains("configSnapshot(targetId: ID!): RuntimeConfigSnapshotObject!"));
     assert!(sdl_body.contains("runtimeSnapshot(repoId: String!): RuntimeSnapshotObject!"));
+    assert!(
+        sdl_body
+            .contains("updateConfig(input: UpdateRuntimeConfigInput!): UpdateRuntimeConfigResult!")
+    );
     assert!(
         sdl_body.contains("startInit(repoId: String!, input: StartInitInput!): StartInitResult!")
     );
+    assert!(sdl_body.contains("validateSync(repoId: String!): RuntimeTaskEnqueueResultObject!"));
     assert!(
         sdl_body.contains("runtimeEvents(repoId: String!, initSessionId: ID): RuntimeEventObject!")
     );
@@ -316,12 +323,467 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     let slim_sdl = crate::graphql::slim_schema_sdl();
     assert!(!slim_sdl.contains("runtimeSnapshot("));
     assert!(!slim_sdl.contains("startInit("));
+    assert!(!slim_sdl.contains("validateSync("));
     assert!(!slim_sdl.contains("runtimeEvents("));
 
     let global_sdl = crate::graphql::schema_sdl();
+    assert!(!global_sdl.contains("configTargets"));
+    assert!(!global_sdl.contains("updateConfig("));
     assert!(!global_sdl.contains("runtimeSnapshot("));
     assert!(!global_sdl.contains("startInit("));
+    assert!(!global_sdl.contains("validateSync("));
     assert!(!global_sdl.contains("runtimeEvents("));
+}
+
+#[tokio::test]
+async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    fs::write(repo.path().join("README.md"), "# debug fixture\n").expect("write readme");
+    git_ok(repo.path(), &["add", "README.md"]);
+    git_ok(repo.path(), &["commit", "-m", "initial"]);
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src").join("lib.rs"),
+        "pub fn debug_fixture() {}\n",
+    )
+    .expect("write source");
+    git_ok(repo.path(), &["add", "src/lib.rs"]);
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        repo.path(),
+        "merge-head",
+        &["src/lib.rs".to_string()],
+    )
+    .expect("enqueue post-merge refresh");
+    crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo.path())
+        .expect("open repo runtime store")
+        .save_watcher_registration(
+            12345,
+            "restart-token",
+            repo.path(),
+            crate::host::runtime_store::RepoWatcherRegistrationState::Ready,
+        )
+        .expect("save watcher registration");
+
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+    let headers = runtime_binding_headers(repo.path());
+    let headers_ref = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    let (status, payload) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        &headers_ref,
+        Body::from(
+            json!({
+                "query": r#"
+                    query RuntimeDebug($repoId: String!) {
+                      runtimeDebugSnapshot(repoId: $repoId) {
+                        repoId
+                        producerSpool {
+                          pendingCount
+                          runningCount
+                          jobs {
+                            jobId
+                            status
+                            payloadKind
+                            source
+                            dedupeKey
+                            attempts
+                            pathCount
+                            paths
+                            headSha
+                            lastError
+                          }
+                        }
+                        repoState {
+                          branch
+                          headSha
+                          mergeState
+                          stagedPaths
+                          unstagedPaths
+                          untrackedPaths
+                          deletedPaths
+                        }
+                        watcher {
+                          registered
+                          repoRoot
+                          pid
+                          state
+                        }
+                        supportingLogs {
+                          available
+                          path
+                          lines {
+                            level
+                            message
+                            raw
+                            timestampUnix
+                          }
+                        }
+                      }
+                    }
+                "#,
+                "variables": {
+                    "repoId": repo_id,
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let snapshot = &payload["data"]["runtimeDebugSnapshot"];
+    assert_eq!(snapshot["repoId"], repo_id);
+    assert_eq!(snapshot["producerSpool"]["pendingCount"], 1);
+    assert_eq!(snapshot["producerSpool"]["runningCount"], 0);
+    let first_job = &snapshot["producerSpool"]["jobs"][0];
+    assert_eq!(first_job["status"], "pending");
+    assert_eq!(first_job["payloadKind"], "post_merge_refresh");
+    assert_eq!(first_job["dedupeKey"], "post_merge:merge-head");
+    assert_eq!(first_job["pathCount"], 1);
+    assert_eq!(first_job["paths"][0], "src/lib.rs");
+    assert_eq!(first_job["headSha"], "merge-head");
+
+    assert_eq!(snapshot["repoState"]["branch"], "main");
+    assert_eq!(snapshot["repoState"]["mergeState"], "none");
+    assert_eq!(snapshot["repoState"]["stagedPaths"][0], "src/lib.rs");
+    assert_eq!(
+        snapshot["repoState"]["unstagedPaths"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    assert_eq!(snapshot["watcher"]["registered"], true);
+    assert_eq!(snapshot["watcher"]["state"], "ready");
+    assert_eq!(snapshot["watcher"]["pid"], 12345);
+    assert_eq!(
+        snapshot["watcher"]["repoRoot"],
+        repo.path().to_string_lossy().to_string()
+    );
+
+    assert!(snapshot["supportingLogs"]["available"].is_boolean());
+    assert!(snapshot["supportingLogs"]["lines"].is_array());
+}
+
+#[tokio::test]
+async fn devql_runtime_debug_snapshot_counts_full_producer_spool_queue() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    fs::write(repo.path().join("README.md"), "# debug fixture\n").expect("write readme");
+    git_ok(repo.path(), &["add", "README.md"]);
+    git_ok(repo.path(), &["commit", "-m", "initial"]);
+
+    for idx in 0..101 {
+        crate::host::devql::enqueue_spooled_post_merge_refresh(
+            repo.path(),
+            &format!("merge-head-{idx:03}"),
+            &["README.md".to_string()],
+        )
+        .expect("enqueue post-merge refresh");
+    }
+
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+    let headers = runtime_binding_headers(repo.path());
+    let headers_ref = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    let (status, payload) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        &headers_ref,
+        Body::from(
+            json!({
+                "query": r#"
+                    query RuntimeDebug($repoId: String!) {
+                      runtimeDebugSnapshot(repoId: $repoId) {
+                        producerSpool {
+                          pendingCount
+                          runningCount
+                          jobs { jobId }
+                        }
+                      }
+                    }
+                "#,
+                "variables": {
+                    "repoId": repo_id,
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let producer_spool = &payload["data"]["runtimeDebugSnapshot"]["producerSpool"];
+    assert_eq!(producer_spool["pendingCount"], 101);
+    assert_eq!(producer_spool["runningCount"], 0);
+    assert_eq!(
+        producer_spool["jobs"]
+            .as_array()
+            .expect("recent jobs")
+            .len(),
+        100,
+        "debug snapshot should still limit returned job records"
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_config_targets_list_existing_config_files() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    fs::write(
+        repo.path().join(crate::config::REPO_POLICY_FILE_NAME),
+        "[capture]\nenabled = true\n",
+    )
+    .expect("write shared policy");
+    let nested = repo.path().join("packages").join("app");
+    fs::create_dir_all(&nested).expect("create nested package");
+    fs::write(
+        nested.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        "[capture]\nstrategy = \"manual-commit\"\n",
+    )
+    .expect("write nested local policy");
+    fs::create_dir_all(repo.path().join("target").join("ignored")).expect("create target dir");
+    fs::write(
+        repo.path()
+            .join("target")
+            .join("ignored")
+            .join(crate::config::REPO_POLICY_FILE_NAME),
+        "[capture]\nenabled = false\n",
+    )
+    .expect("write ignored policy");
+
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "{ configTargets { kind label group path exists } }"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let targets = payload["data"]["configTargets"]
+        .as_array()
+        .expect("config targets");
+    let paths = targets
+        .iter()
+        .map(|target| target["path"].as_str().expect("target path").to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH)),
+        "expected daemon config target in {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with(crate::config::REPO_POLICY_FILE_NAME)),
+        "expected shared repo target in {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.ends_with("packages/app/.bitloops.local.toml")),
+        "expected nested local repo target in {paths:?}"
+    );
+    assert!(
+        paths.iter().all(|path| !path.contains("/target/ignored/")),
+        "target scan should skip heavy target directories: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn devql_runtime_config_snapshot_and_update_config_mutation() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, targets_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "{ configTargets { id kind path } }"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let daemon_target = targets_payload["data"]["configTargets"]
+        .as_array()
+        .expect("targets")
+        .iter()
+        .find(|target| target["kind"] == "daemon")
+        .expect("daemon target");
+    let target_id = daemon_target["id"].as_str().expect("target id");
+
+    let (status, snapshot_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "query Snapshot($targetId: ID!) { configSnapshot(targetId: $targetId) { revision valid restartRequired sections { key fields { key fieldType value allowedValues } } } }",
+                "variables": { "targetId": target_id }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        snapshot_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        snapshot_payload.get("errors")
+    );
+    let revision = snapshot_payload["data"]["configSnapshot"]["revision"]
+        .as_str()
+        .expect("snapshot revision");
+    assert_eq!(snapshot_payload["data"]["configSnapshot"]["valid"], true);
+    assert_eq!(
+        snapshot_payload["data"]["configSnapshot"]["restartRequired"],
+        true
+    );
+
+    let (status, update_payload) = request_json_with_method_and_content_type(
+        app.clone(),
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { restartRequired snapshot { revision sections { key fields { key value } } } } }",
+                "variables": {
+                    "input": {
+                        "targetId": target_id,
+                        "expectedRevision": revision,
+                        "patches": [{
+                            "path": ["runtime", "local_dev"],
+                            "value": true
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        update_payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        update_payload.get("errors")
+    );
+    assert_ne!(
+        update_payload["data"]["updateConfig"]["snapshot"]["revision"]
+            .as_str()
+            .expect("updated revision"),
+        revision
+    );
+    let config_text = fs::read_to_string(
+        repo.path()
+            .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("read config");
+    assert!(config_text.contains("local_dev = true"));
+
+    let (status, stale_payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation Update($input: UpdateRuntimeConfigInput!) { updateConfig(input: $input) { snapshot { revision } } }",
+                "variables": {
+                    "input": {
+                        "targetId": target_id,
+                        "expectedRevision": revision,
+                        "patches": [{
+                            "path": ["runtime", "local_dev"],
+                            "value": false
+                        }]
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        stale_payload["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("changed on disk")),
+        "unexpected stale response: {stale_payload}"
+    );
 }
 
 #[tokio::test]
@@ -373,6 +835,53 @@ async fn devql_runtime_route_executes_start_init_mutations() {
         .as_str()
         .expect("init session id");
     assert!(init_session_id.starts_with("init-session-"));
+}
+
+#[tokio::test]
+async fn devql_runtime_route_executes_validate_sync_mutation() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation ValidateSync($repoId: String!) { validateSync(repoId: $repoId) { merged task { kind source status syncSpec { mode paths } syncProgress { phase pathsTotal pathsCompleted pathsRemaining } } } }",
+                "variables": {
+                    "repoId": repo_id,
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let task = &payload["data"]["validateSync"]["task"];
+    assert_eq!(task["kind"], "SYNC");
+    assert_eq!(task["source"], "manual_cli");
+    assert_eq!(task["status"], "QUEUED");
+    assert_eq!(task["syncSpec"]["mode"], "validate");
+    assert_eq!(
+        task["syncSpec"]["paths"].as_array().expect("paths").len(),
+        0
+    );
+    assert_eq!(task["syncProgress"]["phase"], "queued");
 }
 
 #[test]
@@ -1003,6 +1512,459 @@ async fn devql_interaction_queries_work_in_slim_and_global_scopes() {
             .as_u64(),
         Some(1)
     );
+}
+
+#[tokio::test]
+async fn devql_post_route_resolves_historical_context_captured_evidence() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          target: selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext {
+              overview
+              schema
+              items(first: 10) {
+                checkpointId
+                sessionId
+                turnId
+                agentType
+                model
+                matchReason
+                matchStrength
+                promptPreview
+                turnSummary
+                transcriptPreview
+                filesModified
+                fileRelations {
+                  filepath
+                  changeKind
+                  pathAfter
+                }
+                toolEvents {
+                  toolKind
+                  inputSummary
+                  outputSummary
+                  command
+                }
+              }
+            }
+          }
+          caller: selectArtefacts(by: { path: "src/caller.ts" }) {
+            historicalContext {
+              items(first: 10) {
+                checkpointId
+                turnId
+                promptPreview
+                turnSummary
+                transcriptPreview
+                filesModified
+                toolEvents {
+                  toolKind
+                }
+              }
+            }
+          }
+          symbolOnly: selectArtefacts(by: { symbolFqn: "src/target.ts::target" }) {
+            historicalContext(evidenceKind: SYMBOL_PROVENANCE) {
+              items(first: 10) {
+                checkpointId
+                matchReason
+              }
+            }
+          }
+          geminiSince: selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext(agent: "gemini", since: "2026-03-26T09:25:00Z") {
+              items(first: 10) {
+                checkpointId
+                agentType
+                matchReason
+              }
+            }
+          }
+          sinceOnly: selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext(since: "2026-03-26T09:25:00Z") {
+              items(first: 10) {
+                checkpointId
+                agentType
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+
+    let target = &payload["data"]["target"]["historicalContext"];
+    assert_eq!(target["overview"]["totalCount"], 2);
+    assert_eq!(target["overview"]["evidenceCounts"]["symbolProvenance"], 1);
+    assert_eq!(target["overview"]["evidenceCounts"]["fileRelation"], 2);
+    assert!(target["schema"].as_str().is_some_and(|schema| {
+        schema.contains("promptPreview") && schema.contains("HistoricalToolEvent")
+    }));
+
+    let target_items = target["items"].as_array().expect("target items array");
+    let symbol_item = target_items
+        .iter()
+        .find(|item| item["checkpointId"] == "checkpoint-historical-primary")
+        .expect("symbol provenance item");
+    assert_eq!(symbol_item["matchReason"], "SYMBOL_PROVENANCE");
+    assert_eq!(symbol_item["matchStrength"], "HIGH");
+    assert_eq!(symbol_item["turnId"], "turn-historical-primary");
+    assert_eq!(symbol_item["agentType"], "codex");
+    assert_eq!(symbol_item["model"], "gpt-5.4");
+    assert_eq!(
+        symbol_item["promptPreview"],
+        "Captured prompt for target change"
+    );
+    assert_eq!(
+        symbol_item["turnSummary"],
+        "Captured summary for target change"
+    );
+    assert_eq!(
+        symbol_item["transcriptPreview"],
+        "Captured transcript fragment for target change"
+    );
+    assert_eq!(symbol_item["filesModified"], json!(["src/target.ts"]));
+    assert!(
+        symbol_item["fileRelations"]
+            .as_array()
+            .expect("file relations")
+            .iter()
+            .any(|relation| relation["pathAfter"] == "src/target.ts"
+                && relation["changeKind"] == "modify"),
+        "expected target file relation in {symbol_item:?}"
+    );
+    assert_eq!(symbol_item["toolEvents"][0]["toolKind"], "edit");
+    assert_eq!(
+        symbol_item["toolEvents"][0]["inputSummary"],
+        "Edit src/target.ts"
+    );
+    assert_eq!(
+        symbol_item["toolEvents"][0]["outputSummary"],
+        "Updated target implementation"
+    );
+    assert_eq!(
+        symbol_item["toolEvents"][0]["command"],
+        "apply_patch src/target.ts"
+    );
+
+    let path_only_item = target_items
+        .iter()
+        .find(|item| item["checkpointId"] == "checkpoint-historical-gemini")
+        .expect("path-only file relation item");
+    assert_eq!(path_only_item["matchReason"], "FILE_RELATION");
+    assert_eq!(path_only_item["matchStrength"], "MEDIUM");
+    assert!(path_only_item["turnId"].is_null());
+    assert_eq!(path_only_item["filesModified"], json!(["src/target.ts"]));
+    assert_eq!(path_only_item["toolEvents"], json!([]));
+
+    let caller_items = payload["data"]["caller"]["historicalContext"]["items"]
+        .as_array()
+        .expect("caller items array");
+    let partial = caller_items
+        .iter()
+        .find(|item| item["checkpointId"] == "checkpoint-historical-partial")
+        .expect("partial checkpoint evidence item");
+    assert!(partial["turnId"].is_null());
+    assert_eq!(partial["promptPreview"], "Touch caller only");
+    assert!(partial["turnSummary"].is_null());
+    assert!(partial["transcriptPreview"].is_null());
+    assert_eq!(partial["filesModified"], json!(["src/caller.ts"]));
+    assert_eq!(partial["toolEvents"], json!([]));
+
+    assert_eq!(
+        payload["data"]["symbolOnly"]["historicalContext"]["items"],
+        json!([{
+            "checkpointId": "checkpoint-historical-primary",
+            "matchReason": "SYMBOL_PROVENANCE"
+        }])
+    );
+    assert_eq!(
+        payload["data"]["geminiSince"]["historicalContext"]["items"],
+        json!([{
+            "checkpointId": "checkpoint-historical-gemini",
+            "agentType": "gemini",
+            "matchReason": "FILE_RELATION"
+        }])
+    );
+    assert_eq!(
+        payload["data"]["sinceOnly"]["historicalContext"]["items"],
+        json!([{
+            "checkpointId": "checkpoint-historical-gemini",
+            "agentType": "gemini"
+        }])
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_resolves_context_guidance_from_history() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    seed_graphql_context_guidance_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          selectArtefacts(by: { path: "src/target.ts" }) {
+            contextGuidance {
+              overview
+              schema
+              items(first: 10) {
+                id
+                category
+                kind
+                label
+                guidance
+                evidenceExcerpt
+                confidence
+                relevanceScore
+                generatedAt
+                sourceModel
+                sourceCount
+                sources {
+                  sourceType
+                  sourceId
+                  checkpointId
+                  sessionId
+                  turnId
+                  toolKind
+                  excerpt
+                }
+              }
+            }
+          }
+          filtered: selectArtefacts(by: { path: "src/target.ts" }) {
+            contextGuidance(evidenceKind: FILE_RELATION, category: VERIFICATION, kind: "test_success") {
+              items(first: 10) {
+                category
+                kind
+                sources {
+                  sourceType
+                }
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+
+    let guidance = &payload["data"]["selectArtefacts"]["contextGuidance"];
+    assert!(guidance["overview"]["totalCount"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        guidance["overview"]["categoryCounts"]["DECISION"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(
+        guidance["overview"]["kindCounts"]["rejected_approach"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(guidance["schema"].as_str().is_some_and(|schema| {
+        schema.contains("ContextGuidanceItem") && schema.contains("evidenceExcerpt")
+    }));
+    let items = guidance["items"].as_array().expect("guidance items");
+    assert!(
+        items
+            .iter()
+            .all(|item| item["sourceModel"] == "gpt-guidance")
+    );
+    assert!(items.iter().all(|item| {
+        item["sources"]
+            .as_array()
+            .is_some_and(|sources| !sources.is_empty())
+    }));
+    assert!(items.iter().any(|item| {
+        item["sources"]
+            .as_array()
+            .expect("sources")
+            .iter()
+            .any(|source| source["sourceType"] == "history.turn")
+    }));
+
+    let filtered = payload["data"]["filtered"]["contextGuidance"]["items"]
+        .as_array()
+        .expect("filtered items");
+    assert!(!filtered.is_empty());
+    assert!(
+        filtered
+            .iter()
+            .all(|item| item["category"] == "VERIFICATION" && item["kind"] == "test_success")
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_surfaces_architectural_decision_guidance_for_selected_file() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    seed_graphql_context_guidance_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          selectArtefacts(by: { path: "src/target.ts" }) {
+            historicalContext(evidenceKind: SYMBOL_PROVENANCE) {
+              items(first: 5) {
+                checkpointId
+                turnId
+                promptPreview
+                filesModified
+              }
+            }
+            contextGuidance(evidenceKind: SYMBOL_PROVENANCE, category: DECISION, kind: "architectural_boundary") {
+              overview
+              items(first: 5) {
+                category
+                kind
+                guidance
+                evidenceExcerpt
+                confidence
+                sources {
+                  checkpointId
+                  turnId
+                }
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+
+    let historical_items = payload["data"]["selectArtefacts"]["historicalContext"]["items"]
+        .as_array()
+        .expect("historical context items");
+    assert!(
+        historical_items.iter().any(|item| {
+            item["checkpointId"] == "checkpoint-historical-primary"
+                && item["turnId"] == "turn-historical-primary"
+                && item["promptPreview"] == "Captured prompt for target change"
+                && item["filesModified"] == json!(["src/target.ts"])
+        }),
+        "expected prior target-file history in {historical_items:?}"
+    );
+
+    let guidance = &payload["data"]["selectArtefacts"]["contextGuidance"];
+    assert_eq!(guidance["overview"]["totalCount"], 1);
+    assert_eq!(guidance["overview"]["categoryCounts"]["DECISION"], 1);
+    assert_eq!(
+        guidance["overview"]["kindCounts"]["architectural_boundary"],
+        1
+    );
+
+    let items = guidance["items"].as_array().expect("guidance items");
+    assert_eq!(items.len(), 1);
+    let decision = &items[0];
+    assert_eq!(decision["category"], "DECISION");
+    assert_eq!(decision["kind"], "architectural_boundary");
+    assert_eq!(decision["confidence"], "HIGH");
+    assert!(decision["guidance"].as_str().is_some_and(|text| {
+        text.contains("Keep `target()` as the architectural boundary")
+            && text.contains("future edits to src/target.ts")
+    }));
+    assert_eq!(
+        decision["evidenceExcerpt"],
+        "Decided target result calculation stays behind target(), with caller.ts delegating through target()."
+    );
+    assert!(
+        decision["sources"]
+            .as_array()
+            .expect("decision sources")
+            .iter()
+            .any(|source| {
+                source["checkpointId"] == "checkpoint-historical-primary"
+                    && source["turnId"] == "turn-historical-primary"
+            })
+    );
+}
+
+#[tokio::test]
+async fn devql_post_route_returns_empty_historical_context_for_empty_history() {
+    let repo = seed_graphql_devql_repo();
+    seed_graphql_historical_context_data(repo.path());
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+
+    let (status, payload) = request_slim_query(
+        app,
+        repo.path(),
+        r#"
+        {
+          selectArtefacts(by: { path: "src/orphan.ts" }) {
+            historicalContext {
+              overview
+              schema
+              items(first: 10) {
+                checkpointId
+              }
+            }
+          }
+        }
+        "#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let historical_context = &payload["data"]["selectArtefacts"]["historicalContext"];
+    assert_eq!(historical_context["overview"]["totalCount"], 0);
+    assert!(historical_context["schema"].is_null());
+    assert_eq!(historical_context["items"], json!([]));
 }
 
 #[tokio::test]
@@ -1755,6 +2717,7 @@ async fn devql_graphql_task_progress_subscription_receives_published_task_events
         kind: crate::daemon::DevqlTaskKind::Ingest,
         source: crate::daemon::DevqlTaskSource::ManualCli,
         spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+            commits: Vec::new(),
             backfill: Some(1),
         }),
         init_session_id: None,
@@ -1852,6 +2815,7 @@ async fn devql_task_and_checkpoint_events_publish_to_subscription_hub() {
         super::super::db::DashboardDbPools::default(),
     );
     let mut progress_rx = context.subscriptions().subscribe_task_progress();
+    let mut runtime_rx = context.subscriptions().subscribe_runtime_events();
     let mut checkpoint_rx = context.subscriptions().subscribe_checkpoints();
     let checkpoint_info = crate::host::checkpoints::strategy::manual_commit::CommittedInfo {
         checkpoint_id: "checkpoint-1".to_string(),
@@ -1921,4 +2885,12 @@ async fn devql_task_and_checkpoint_events_publish_to_subscription_hub() {
         progress.task.status,
         crate::daemon::DevqlTaskStatus::Completed
     );
+
+    let runtime_event = tokio::time::timeout(std::time::Duration::from_secs(5), runtime_rx.recv())
+        .await
+        .expect("runtime task event should arrive")
+        .expect("runtime task event subscription payload");
+    assert_eq!(runtime_event.domain, "task_queue");
+    assert_eq!(runtime_event.repo_id, "repo-1");
+    assert_eq!(runtime_event.task_id.as_deref(), Some("ingest-task-1"));
 }

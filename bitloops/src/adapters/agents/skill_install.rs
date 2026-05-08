@@ -17,6 +17,14 @@ pub fn write_managed_file(path: &Path, content: &str) -> Result<bool> {
     Ok(true)
 }
 
+pub fn strip_skill_frontmatter(skill: &str) -> &str {
+    skill
+        .splitn(3, "---")
+        .nth(2)
+        .map(str::trim_start)
+        .unwrap_or(skill)
+}
+
 pub fn remove_managed_file(path: &Path) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -49,6 +57,8 @@ pub fn prune_empty_parents(path: &Path, stop_at: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
+
     #[test]
     fn write_managed_file_is_idempotent() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -59,6 +69,13 @@ mod tests {
         assert!(write_managed_file(&path, "hello").expect("initial write"));
         assert!(!write_managed_file(&path, "hello").expect("idempotent write"));
         assert_eq!(fs::read_to_string(&path).expect("read"), "hello");
+    }
+
+    #[test]
+    fn strip_skill_frontmatter_returns_body() {
+        let body = strip_skill_frontmatter(DEVQL_EXPLORE_FIRST_SKILL);
+        assert!(!body.starts_with("---"));
+        assert!(body.contains("primary discovery tool"));
     }
 
     #[test]

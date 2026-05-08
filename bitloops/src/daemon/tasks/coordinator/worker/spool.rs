@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::host::devql::{DevqlConfig, RepoIdentity};
 
@@ -58,6 +58,24 @@ impl DevqlTaskCoordinator {
     ) -> Result<()> {
         match &job.payload {
             crate::host::devql::ProducerSpoolJobPayload::Task { source, spec } => {
+                match spec {
+                    crate::daemon::DevqlTaskSpec::Sync(_)
+                        if !crate::config::settings::devql_sync_enabled(&job.repo_root).context(
+                            "loading DevQL sync producer policy for spooled sync task",
+                        )? =>
+                    {
+                        return Ok(());
+                    }
+                    crate::daemon::DevqlTaskSpec::Ingest(_)
+                        if !crate::config::settings::devql_ingest_enabled(&job.repo_root)
+                            .context(
+                                "loading DevQL ingest producer policy for spooled ingest task",
+                            )? =>
+                    {
+                        return Ok(());
+                    }
+                    _ => {}
+                }
                 let cfg = self.devql_config_from_producer_spool_job(job)?;
                 self.enqueue(&cfg, *source, spec.clone())?;
                 Ok(())
@@ -66,6 +84,11 @@ impl DevqlTaskCoordinator {
                 commit_sha,
                 changed_files,
             } => {
+                if !crate::config::settings::devql_sync_enabled(&job.repo_root)
+                    .context("loading DevQL sync producer policy for post-commit refresh")?
+                {
+                    return Ok(());
+                }
                 let cfg = self.devql_config_from_producer_spool_job(job)?;
                 crate::host::checkpoints::strategy::manual_commit::execute_devql_post_commit_refresh(
                     &cfg,
@@ -74,22 +97,67 @@ impl DevqlTaskCoordinator {
                 )
                 .await
             }
+            crate::host::devql::ProducerSpoolJobPayload::PostCommitDerivation {
+                commit_sha,
+                committed_files,
+                is_rebase_in_progress,
+            } => {
+                crate::host::checkpoints::strategy::manual_commit::execute_devql_post_commit_derivation(
+                    &job.repo_root,
+                    commit_sha,
+                    committed_files,
+                    *is_rebase_in_progress,
+                )
+            }
             crate::host::devql::ProducerSpoolJobPayload::PostMergeRefresh {
-                head_sha,
                 changed_files,
+                ..
             } => {
                 let cfg = self.devql_config_from_producer_spool_job(job)?;
-                crate::host::checkpoints::strategy::manual_commit::execute_devql_post_merge_refresh(
-                    &cfg,
-                    head_sha,
-                    changed_files,
-                )
-                .await
+                let ingest_enabled = crate::config::settings::devql_ingest_enabled(&job.repo_root)
+                    .context("loading DevQL ingest producer policy for post-merge refresh")?;
+                if ingest_enabled {
+                    let backfill =
+                        crate::host::checkpoints::strategy::manual_commit::default_post_merge_history_backfill();
+                    self.enqueue(
+                        &cfg,
+                        crate::daemon::DevqlTaskSource::PostMerge,
+                        crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+                            commits: Vec::new(),
+                            backfill: Some(backfill),
+                        }),
+                    )?;
+                }
+                let sync_enabled = crate::config::settings::devql_sync_enabled(&job.repo_root)
+                    .context("loading DevQL sync producer policy for post-merge refresh")?;
+                if sync_enabled {
+                    let paths = crate::host::devql::refresh_paths_for_sync(
+                        &cfg,
+                        changed_files,
+                        "post-merge",
+                    )?;
+                    if !paths.is_empty() {
+                        self.enqueue(
+                            &cfg,
+                            crate::daemon::DevqlTaskSource::PostMerge,
+                            crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                                mode: crate::daemon::SyncTaskMode::Paths { paths },
+                                post_commit_snapshot: None,
+                            }),
+                        )?;
+                    }
+                }
+                Ok(())
             }
             crate::host::devql::ProducerSpoolJobPayload::PrePushSync {
                 remote,
                 stdin_lines,
             } => {
+                if !crate::config::settings::devql_sync_enabled(&job.repo_root)
+                    .context("loading DevQL sync producer policy for pre-push sync")?
+                {
+                    return Ok(());
+                }
                 crate::host::checkpoints::strategy::manual_commit::execute_devql_pre_push_sync(
                     &job.repo_root,
                     remote,

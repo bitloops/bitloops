@@ -385,7 +385,7 @@ impl DevqlTaskCoordinator {
         .map(|_: ()| ())
     }
 
-    fn load_state(&self) -> Result<PersistedDevqlTaskQueueState> {
+    pub(super) fn load_state(&self) -> Result<PersistedDevqlTaskQueueState> {
         Ok(self
             .runtime_store
             .load_devql_task_queue_state()?

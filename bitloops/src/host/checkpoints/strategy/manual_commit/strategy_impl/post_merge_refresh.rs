@@ -2,16 +2,20 @@ use super::*;
 
 const DEFAULT_POST_MERGE_HISTORY_BACKFILL: usize = 200;
 
-pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, _is_squash: bool) -> Result<()> {
+pub(crate) fn default_post_merge_history_backfill() -> usize {
+    DEFAULT_POST_MERGE_HISTORY_BACKFILL
+}
+
+pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, is_squash: bool) -> Result<()> {
     let Some(head_sha) = try_head_hash(repo_root)? else {
         return Ok(());
     };
 
-    let changed_files = match files_changed_since_previous_head(repo_root) {
+    let changed_files = match files_changed_for_post_merge(repo_root, is_squash) {
         Ok(files) => files,
         Err(err) if is_missing_previous_head_error(&err) => Vec::new(),
         Err(err) => {
-            return Err(err).context("listing changed files between HEAD@{1} and HEAD");
+            return Err(err).context("listing changed files for post-merge DevQL refresh");
         }
     };
     if changed_files.is_empty() {
@@ -51,6 +55,7 @@ pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, _is_squash: bool) -
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn execute_devql_post_merge_refresh(
     cfg: &crate::host::devql::DevqlConfig,
     head_sha: &str,
@@ -88,8 +93,26 @@ pub(crate) async fn execute_devql_post_merge_refresh(
     Ok(())
 }
 
+fn files_changed_for_post_merge(repo_root: &Path, is_squash: bool) -> Result<Vec<String>> {
+    if is_squash {
+        return files_changed_since_head(repo_root);
+    }
+    files_changed_since_previous_head(repo_root)
+}
+
 fn files_changed_since_previous_head(repo_root: &Path) -> Result<Vec<String>> {
-    let mut changed_files = run_git(repo_root, &["diff", "--name-only", "HEAD@{1}", "HEAD"])?
+    collect_changed_files(run_git(
+        repo_root,
+        &["diff", "--name-only", "HEAD@{1}", "HEAD"],
+    )?)
+}
+
+fn files_changed_since_head(repo_root: &Path) -> Result<Vec<String>> {
+    collect_changed_files(run_git(repo_root, &["diff", "--name-only", "HEAD", "--"])?)
+}
+
+fn collect_changed_files(output: String) -> Result<Vec<String>> {
+    let mut changed_files = output
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())

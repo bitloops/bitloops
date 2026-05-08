@@ -101,16 +101,16 @@ fn empty_gateway_rejects_unknown_text_generation_slots() {
 }
 
 #[test]
-fn remote_drivers_default_text_generation_pool_to_four_workers() {
+fn remote_drivers_default_text_generation_pool_to_eight_workers() {
     let _guard = test_lock();
 
     assert_eq!(
         text_generation_session_pool_size(BITLOOPS_PLATFORM_CHAT_DRIVER),
-        4
+        8
     );
     assert_eq!(
         text_generation_session_pool_size(crate::host::inference::OPENAI_CHAT_COMPLETIONS_DRIVER),
-        4
+        8
     );
     assert_eq!(text_generation_session_pool_size("ollama_chat"), 1);
 }

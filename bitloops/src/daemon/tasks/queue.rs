@@ -85,7 +85,12 @@ pub(super) fn merge_existing_task(
                 && (source != DevqlTaskSource::RepoPolicyChange
                     || task.status == DevqlTaskStatus::Queued)
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing_spec| {
-                    sync_specs_have_compatible_snapshots(
+                    !should_keep_distinct_producer_sources(
+                        task.source,
+                        source,
+                        &existing_spec.mode,
+                        mode,
+                    ) && sync_specs_have_compatible_snapshots(
                         existing_spec,
                         sync_spec_from_task_spec(spec).expect("sync spec"),
                     ) && match (&existing_spec.mode, mode) {
@@ -96,20 +101,30 @@ pub(super) fn merge_existing_task(
                         {
                             true
                         }
+                        (SyncTaskMode::Paths { .. }, incoming_mode)
+                            if task.status == DevqlTaskStatus::Queued
+                                && is_stronger_than_paths(incoming_mode) =>
+                        {
+                            true
+                        }
                         _ => false,
                     }
                 })
         })
     {
-        if source == DevqlTaskSource::RepoPolicyChange {
-            existing.source = DevqlTaskSource::RepoPolicyChange;
-        }
+        let mut use_incoming_source = source == DevqlTaskSource::RepoPolicyChange;
         if let Some(existing_spec) = sync_spec_from_task_spec_mut(&mut existing.spec) {
+            use_incoming_source |= existing.source != DevqlTaskSource::RepoPolicyChange
+                && matches!(existing_spec.mode, SyncTaskMode::Paths { .. })
+                && is_stronger_than_paths(mode);
             existing_spec.mode = merge_sync_modes(&existing_spec.mode, mode);
             merge_sync_snapshot_metadata(
                 existing_spec,
                 sync_spec_from_task_spec(spec).expect("sync spec"),
             );
+        }
+        if use_incoming_source {
+            existing.source = source;
         }
         existing.updated_at_unix = unix_timestamp_now();
         existing.error = None;
@@ -123,7 +138,12 @@ pub(super) fn merge_existing_task(
                 && task.status == DevqlTaskStatus::Queued
                 && task.init_session_id.as_deref() == init_session_id
                 && sync_spec_from_task_spec(&task.spec).is_some_and(|existing| {
-                    matches!(existing.mode, SyncTaskMode::Paths { .. })
+                    !should_keep_distinct_producer_sources(
+                        task.source,
+                        source,
+                        &existing.mode,
+                        mode,
+                    ) && matches!(existing.mode, SyncTaskMode::Paths { .. })
                         && sync_specs_have_compatible_snapshots(
                             existing,
                             sync_spec_from_task_spec(spec).expect("sync spec"),
@@ -161,7 +181,15 @@ pub(super) fn merge_existing_task(
     None
 }
 
+#[cfg(test)]
 pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -> Vec<usize> {
+    next_runnable_task_indexes_blocking_repo_ids(state, &HashSet::new())
+}
+
+pub(super) fn next_runnable_task_indexes_blocking_repo_ids(
+    state: &PersistedDevqlTaskQueueState,
+    blocked_repo_ids: &HashSet<String>,
+) -> Vec<usize> {
     let paused_repo_ids = state
         .repo_controls
         .iter()
@@ -200,6 +228,9 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
         {
             continue;
         }
+        if blocked_repo_ids.contains(&task.repo_id) {
+            continue;
+        }
         if repo_policy_change_blocked_repo_ids.contains(task.repo_id.as_str())
             && !(task.kind == DevqlTaskKind::Sync
                 && task.source == DevqlTaskSource::RepoPolicyChange)
@@ -233,26 +264,111 @@ pub(super) fn next_runnable_task_indexes(state: &PersistedDevqlTaskQueueState) -
     selected.into_iter().map(|(index, _)| index).collect()
 }
 
+pub(super) fn post_commit_derivation_claim_guards(
+    state: &PersistedDevqlTaskQueueState,
+) -> crate::host::devql::PostCommitDerivationClaimGuards {
+    let mut guards = crate::host::devql::PostCommitDerivationClaimGuards::default();
+    for task in state.tasks.iter().filter(|task| {
+        task.kind == DevqlTaskKind::Sync && task.source == DevqlTaskSource::PostCommit
+    }) {
+        let Some(snapshot) = task
+            .sync_spec()
+            .and_then(|spec| spec.post_commit_snapshot.as_ref())
+        else {
+            continue;
+        };
+        let key = (task.repo_id.clone(), snapshot.commit_sha.clone());
+        match task.status {
+            DevqlTaskStatus::Queued | DevqlTaskStatus::Running => {
+                guards.blocked.insert(key);
+            }
+            DevqlTaskStatus::Failed | DevqlTaskStatus::Cancelled => {
+                guards.abandoned.insert(key);
+            }
+            DevqlTaskStatus::Completed => {}
+        }
+    }
+    guards
+}
+
 fn pending_sort_key(index: usize, task: &DevqlTaskRecord) -> (u8, u64, usize) {
     (
         if task.kind == DevqlTaskKind::Sync && task.source == DevqlTaskSource::RepoPolicyChange {
             0
+        } else if is_git_hook_sync_task(task) {
+            1
         } else if matches!(
             task.kind,
             DevqlTaskKind::EmbeddingsBootstrap | DevqlTaskKind::SummaryBootstrap
         ) {
-            2
+            3
         } else if task.kind == DevqlTaskKind::Sync
             && task
                 .sync_spec()
                 .is_some_and(|spec| matches!(spec.mode, SyncTaskMode::Validate))
         {
-            3
+            4
         } else {
-            1
+            2
         },
         task.submitted_at_unix,
         index,
+    )
+}
+
+fn is_git_hook_sync_task(task: &DevqlTaskRecord) -> bool {
+    task.kind == DevqlTaskKind::Sync
+        && matches!(
+            task.source,
+            DevqlTaskSource::PostCheckout
+                | DevqlTaskSource::PostCommit
+                | DevqlTaskSource::PostMerge
+        )
+        && task
+            .sync_spec()
+            .is_none_or(|spec| !matches!(spec.mode, SyncTaskMode::Validate))
+}
+
+fn should_keep_distinct_producer_sources(
+    existing: DevqlTaskSource,
+    incoming: DevqlTaskSource,
+    existing_mode: &SyncTaskMode,
+    incoming_mode: &SyncTaskMode,
+) -> bool {
+    if existing == incoming {
+        return false;
+    }
+    if existing == DevqlTaskSource::RepoPolicyChange
+        || incoming == DevqlTaskSource::RepoPolicyChange
+    {
+        return false;
+    }
+    if !is_background_producer_source(existing) || !is_background_producer_source(incoming) {
+        return false;
+    }
+    if existing == DevqlTaskSource::PostCheckout
+        && incoming == DevqlTaskSource::Watcher
+        && is_full_like(existing_mode)
+    {
+        return false;
+    }
+    if existing == DevqlTaskSource::Watcher
+        && incoming == DevqlTaskSource::PostCheckout
+        && matches!(existing_mode, SyncTaskMode::Paths { .. })
+        && is_stronger_than_paths(incoming_mode)
+    {
+        return false;
+    }
+    true
+}
+
+fn is_background_producer_source(source: DevqlTaskSource) -> bool {
+    matches!(
+        source,
+        DevqlTaskSource::Watcher
+            | DevqlTaskSource::PostCheckout
+            | DevqlTaskSource::PostCommit
+            | DevqlTaskSource::PostMerge
     )
 }
 
@@ -612,6 +728,13 @@ fn is_weaker_than_repair(mode: &SyncTaskMode) -> bool {
     )
 }
 
+fn is_stronger_than_paths(mode: &SyncTaskMode) -> bool {
+    matches!(
+        mode,
+        SyncTaskMode::Auto | SyncTaskMode::Full | SyncTaskMode::Repair
+    )
+}
+
 fn merge_sync_modes(existing: &SyncTaskMode, incoming: &SyncTaskMode) -> SyncTaskMode {
     match (existing, incoming) {
         (SyncTaskMode::Repair, _) | (_, SyncTaskMode::Repair) => SyncTaskMode::Repair,
@@ -663,57 +786,5 @@ fn task_lane(task: &DevqlTaskRecord) -> TaskLaneKey {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-    use std::path::PathBuf;
-
-    use super::super::super::types::{
-        DevqlTaskProgress, DevqlTaskRecord, DevqlTaskSource, DevqlTaskSpec, DevqlTaskStatus,
-        SyncTaskMode, SyncTaskSpec,
-    };
-    use super::prune_terminal_tasks;
-
-    fn completed_sync_task(task_id: &str, updated_at_unix: u64) -> DevqlTaskRecord {
-        DevqlTaskRecord {
-            task_id: task_id.to_string(),
-            repo_id: "repo-1".to_string(),
-            repo_name: "repo".to_string(),
-            repo_provider: "local".to_string(),
-            repo_organisation: "local".to_string(),
-            repo_identity: "repo".to_string(),
-            daemon_config_root: PathBuf::from("/tmp/config-1"),
-            repo_root: PathBuf::from("/tmp/repo-1"),
-            init_session_id: Some("init-session-1".to_string()),
-            kind: super::super::super::types::DevqlTaskKind::Sync,
-            source: DevqlTaskSource::Init,
-            spec: DevqlTaskSpec::Sync(SyncTaskSpec {
-                mode: SyncTaskMode::Full,
-                post_commit_snapshot: None,
-            }),
-            status: DevqlTaskStatus::Completed,
-            submitted_at_unix: updated_at_unix,
-            started_at_unix: Some(updated_at_unix),
-            updated_at_unix,
-            completed_at_unix: Some(updated_at_unix),
-            queue_position: None,
-            tasks_ahead: None,
-            progress: DevqlTaskProgress::Sync(Default::default()),
-            error: None,
-            result: None,
-        }
-    }
-
-    #[test]
-    fn prune_terminal_tasks_keeps_ids_referenced_by_active_init_sessions() {
-        let mut tasks = (0..66)
-            .map(|index| completed_sync_task(&format!("sync-task-{index}"), index as u64 + 1))
-            .collect::<Vec<_>>();
-        let protected = HashSet::from(["sync-task-0".to_string()]);
-
-        prune_terminal_tasks(&mut tasks, &protected);
-
-        assert_eq!(tasks.len(), 65);
-        assert!(tasks.iter().any(|task| task.task_id == "sync-task-0"));
-        assert!(!tasks.iter().any(|task| task.task_id == "sync-task-1"));
-    }
-}
+#[path = "queue_tests.rs"]
+mod tests;

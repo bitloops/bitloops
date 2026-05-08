@@ -5,9 +5,10 @@ use anyhow::Result;
 use crate::adapters::agents::skill_install::{
     prune_empty_parents, remove_managed_file, write_managed_file,
 };
-use crate::host::hooks::augmentation::skill_content::USING_DEVQL_SKILL;
+use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
-pub const OPEN_CODE_SKILL_RELATIVE_PATH: &str = ".opencode/skills/bitloops/using-devql/SKILL.md";
+pub const OPEN_CODE_SKILL_RELATIVE_PATH: &str =
+    ".opencode/skills/bitloops/devql-explore-first/SKILL.md";
 
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
     repo_root.join(OPEN_CODE_SKILL_RELATIVE_PATH)
@@ -15,7 +16,8 @@ pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
     let path = repo_skill_path(repo_root);
-    write_managed_file(&path, USING_DEVQL_SKILL)
+    let changed = write_managed_file(&path, DEVQL_EXPLORE_FIRST_SKILL)?;
+    Ok(changed)
 }
 
 pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
@@ -45,6 +47,10 @@ mod tests {
         assert!(install_repo_skill(repo_root).expect("install should succeed"));
         let path = repo_skill_path(repo_root);
         assert!(path.exists(), "skill file should exist after install");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read skill"),
+            DEVQL_EXPLORE_FIRST_SKILL
+        );
         assert!(
             path.to_string_lossy()
                 .contains(OPEN_CODE_SKILL_RELATIVE_PATH)
@@ -88,7 +94,7 @@ mod tests {
         );
         assert!(
             !repo_root
-                .join(".opencode/skills/bitloops/using-devql")
+                .join(".opencode/skills/bitloops/devql-explore-first")
                 .exists(),
             "managed skill directory should be removed"
         );

@@ -31,6 +31,7 @@ mod status;
 pub(crate) use enqueue::{
     enqueue_workplane_clone_rebuild, enqueue_workplane_embedding_jobs,
     enqueue_workplane_embedding_repo_backfill_job, enqueue_workplane_summary_jobs,
+    enqueue_workplane_summary_repo_backfill_job,
 };
 pub(crate) use job_claim::claim_next_workplane_job;
 #[cfg(test)]
@@ -57,7 +58,7 @@ pub(crate) use maintenance::{
 pub(crate) use readiness::current_workplane_mailbox_blocked_statuses;
 pub(crate) use readiness::current_workplane_mailbox_blocked_statuses_for_repo;
 pub(crate) use setup::{default_state, migrate_legacy_semantic_workplane_rows};
-pub(crate) use sql::{fallback_repo_identity, sql_i64};
+pub(crate) use sql::{repo_identity_from_runtime_metadata, sql_i64};
 pub(crate) use status::{
     iter_workplane_job_config_roots, last_failed_embedding_job_from_workplane,
     project_workplane_status,

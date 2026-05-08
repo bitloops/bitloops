@@ -1,6 +1,6 @@
 [package]
 name = "bitloops"
-version = "0.0.20"
+version = "0.0.21"
 edition = "2024"
 autotests = false
 
@@ -120,6 +120,11 @@ required-features = ["qat-tests"]
 [[test]]
 name = "qat_devql_sync"
 path = "tests/qat_devql_sync.rs"
+required-features = ["qat-tests"]
+
+[[test]]
+name = "qat_devql_sync_producer"
+path = "tests/qat_devql_sync_producer.rs"
 required-features = ["qat-tests"]
 
 [[test]]

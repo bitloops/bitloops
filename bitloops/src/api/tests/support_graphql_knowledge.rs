@@ -342,6 +342,312 @@ pub(super) fn seed_graphql_devql_repo() -> TempDir {
     dir
 }
 
+pub(super) fn seed_graphql_historical_context_data(repo_root: &Path) {
+    use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
+    use crate::host::interactions::db_store::{SqliteInteractionSpool, interaction_spool_db_path};
+    use crate::host::interactions::store::InteractionSpool;
+    use crate::host::interactions::types::{
+        InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
+    };
+    use crate::storage::sqlite::SqliteConnectionPool;
+
+    let commit_sha = git_ok(repo_root, &["rev-parse", "HEAD"]);
+    let primary_sessions = [SeedCheckpointSession {
+        session_index: 0,
+        session_id: "session-historical-primary",
+        agent: "codex",
+        created_at: "2026-03-26T09:10:00Z",
+        checkpoints_count: 1,
+        transcript: r#"{"role":"user","content":"Update caller and target"}"#,
+        prompts: "Update caller and target",
+        context: "",
+    }];
+    seed_checkpoint_storage_for_dashboard(
+        repo_root,
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-historical-primary",
+            branch: "main",
+            files_touched: &["src/caller.ts", "src/target.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({"input_tokens": 10, "output_tokens": 5}),
+            sessions: &primary_sessions,
+            insert_mapping: false,
+        },
+    );
+
+    let partial_sessions = [SeedCheckpointSession {
+        session_index: 0,
+        session_id: "session-historical-partial",
+        agent: "codex",
+        created_at: "2026-03-26T09:20:00Z",
+        checkpoints_count: 1,
+        transcript: r#"{"role":"user","content":"Touch caller only"}"#,
+        prompts: "Touch caller only",
+        context: "",
+    }];
+    seed_checkpoint_storage_for_dashboard(
+        repo_root,
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-historical-partial",
+            branch: "main",
+            files_touched: &["src/caller.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({"input_tokens": 7, "output_tokens": 3}),
+            sessions: &partial_sessions,
+            insert_mapping: false,
+        },
+    );
+
+    let other_agent_sessions = [SeedCheckpointSession {
+        session_index: 0,
+        session_id: "session-historical-gemini",
+        agent: "gemini",
+        created_at: "2026-03-26T09:30:00Z",
+        checkpoints_count: 1,
+        transcript: r#"{"role":"user","content":"Update target as Gemini"}"#,
+        prompts: "Update target as Gemini",
+        context: "",
+    }];
+    seed_checkpoint_storage_for_dashboard(
+        repo_root,
+        SeedCheckpointStorage {
+            commit_sha: &commit_sha,
+            checkpoint_id: "checkpoint-historical-gemini",
+            branch: "main",
+            files_touched: &["src/target.ts"],
+            checkpoints_count: 1,
+            token_usage: json!({"input_tokens": 6, "output_tokens": 2}),
+            sessions: &other_agent_sessions,
+            insert_mapping: false,
+        },
+    );
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let conn = rusqlite::Connection::open(checkpoint_sqlite_path(repo_root))
+        .expect("open historical context sqlite");
+    conn.execute(
+        "INSERT INTO checkpoint_artefacts (
+            relation_id, repo_id, checkpoint_id, session_id, event_time, agent, branch, strategy,
+            commit_sha, change_kind, before_symbol_id, after_symbol_id, before_artefact_id,
+            after_artefact_id
+        ) VALUES (
+            'checkpoint-historical-primary-target-symbol', ?1, 'checkpoint-historical-primary',
+            'session-historical-primary', '2026-03-26T09:10:00Z', 'codex', 'main',
+            'manual-commit', ?2, 'modify', NULL, 'sym::target', NULL, 'artefact::target'
+        )",
+        rusqlite::params![repo_id.as_str(), commit_sha.as_str()],
+    )
+    .expect("insert symbol provenance row");
+
+    insert_checkpoint_file_snapshot_row(
+        &conn,
+        repo_id.as_str(),
+        "checkpoint-historical-gemini",
+        "session-historical-gemini",
+        "2026-03-26T09:30:00Z",
+        "gemini",
+        "main",
+        "manual-commit",
+        &commit_sha,
+        "src/target.ts",
+        "blob-target",
+    );
+
+    let spool_path = interaction_spool_db_path(repo_root).expect("resolve interaction spool path");
+    let sqlite = SqliteConnectionPool::connect(spool_path).expect("connect interaction spool");
+    let spool = SqliteInteractionSpool::new(sqlite, repo_id).expect("initialise interaction spool");
+    let session = InteractionSession {
+        session_id: "session-historical-primary".to_string(),
+        repo_id: spool.repo_id().to_string(),
+        branch: "main".to_string(),
+        actor_id: "actor-historical".to_string(),
+        actor_name: "Alice".to_string(),
+        actor_email: "alice@example.com".to_string(),
+        actor_source: "seed".to_string(),
+        agent_type: "codex".to_string(),
+        model: "gpt-5.4".to_string(),
+        first_prompt: "Update caller and target".to_string(),
+        transcript_path: repo_root
+            .join("historical-transcript.jsonl")
+            .to_string_lossy()
+            .to_string(),
+        worktree_path: repo_root.to_string_lossy().to_string(),
+        worktree_id: "main".to_string(),
+        started_at: "2026-03-26T09:09:00Z".to_string(),
+        ended_at: Some("2026-03-26T09:11:00Z".to_string()),
+        last_event_at: "2026-03-26T09:11:00Z".to_string(),
+        updated_at: "2026-03-26T09:11:00Z".to_string(),
+    };
+    spool
+        .record_session(&session)
+        .expect("record historical interaction session");
+    spool
+        .record_turn(&InteractionTurn {
+            turn_id: "turn-historical-primary".to_string(),
+            session_id: session.session_id.clone(),
+            repo_id: spool.repo_id().to_string(),
+            branch: "main".to_string(),
+            actor_id: session.actor_id.clone(),
+            actor_name: session.actor_name.clone(),
+            actor_email: session.actor_email.clone(),
+            actor_source: session.actor_source.clone(),
+            turn_number: 1,
+            prompt: "Captured prompt for target change".to_string(),
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            started_at: "2026-03-26T09:09:30Z".to_string(),
+            ended_at: Some("2026-03-26T09:10:30Z".to_string()),
+            token_usage: Some(TokenUsageMetadata {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_creation_tokens: 0,
+                cache_read_tokens: 0,
+                api_call_count: 1,
+                subagent_tokens: None,
+            }),
+            summary: "Captured summary for target change".to_string(),
+            prompt_count: 1,
+            transcript_offset_start: Some(0),
+            transcript_offset_end: Some(64),
+            transcript_fragment: "Captured transcript fragment for target change".to_string(),
+            files_modified: vec!["src/target.ts".to_string()],
+            checkpoint_id: Some("checkpoint-historical-primary".to_string()),
+            updated_at: "2026-03-26T09:10:30Z".to_string(),
+        })
+        .expect("record historical interaction turn");
+    spool
+        .record_event(&InteractionEvent {
+            event_id: "event-historical-tool".to_string(),
+            session_id: session.session_id,
+            turn_id: Some("turn-historical-primary".to_string()),
+            repo_id: spool.repo_id().to_string(),
+            branch: "main".to_string(),
+            actor_id: "actor-historical".to_string(),
+            actor_name: "Alice".to_string(),
+            actor_email: "alice@example.com".to_string(),
+            actor_source: "seed".to_string(),
+            event_type: InteractionEventType::ToolInvocationObserved,
+            event_time: "2026-03-26T09:10:00Z".to_string(),
+            source: "test".to_string(),
+            sequence_number: 1,
+            agent_type: "codex".to_string(),
+            model: "gpt-5.4".to_string(),
+            tool_use_id: "toolu-historical-edit".to_string(),
+            tool_kind: "edit".to_string(),
+            task_description: "Edit src/target.ts".to_string(),
+            subagent_id: String::new(),
+            payload: json!({
+                "tool_name": "edit",
+                "input_summary": "Edit src/target.ts",
+                "output_summary": "Updated target implementation",
+                "command": "apply_patch src/target.ts",
+                "command_binary": "apply_patch",
+                "command_argv": ["apply_patch", "src/target.ts"]
+            }),
+        })
+        .expect("record historical interaction tool event");
+}
+
+pub(super) fn seed_graphql_context_guidance_data(repo_root: &Path) {
+    use crate::capability_packs::context_guidance::distillation::{
+        GuidanceDistillationInput, GuidanceToolEvidence,
+    };
+    use crate::capability_packs::context_guidance::storage::{
+        ContextGuidanceRepository, SqliteContextGuidanceRepository,
+    };
+    use crate::capability_packs::context_guidance::types::{
+        GuidanceAppliesTo, GuidanceDistillationOutput, GuidanceFactCategory,
+        GuidanceFactConfidence, GuidanceFactDraft, GuidanceSessionSummary,
+    };
+    use crate::host::relational_store::DefaultRelationalStore;
+
+    let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
+    let relational_store =
+        DefaultRelationalStore::open_local_for_repo_root(repo_root).expect("open relational store");
+    let sqlite = relational_store
+        .local_sqlite_pool_allow_create()
+        .expect("sqlite pool");
+    let repository = SqliteContextGuidanceRepository::new(sqlite);
+    repository
+        .initialise_schema()
+        .expect("context guidance schema");
+    let input = GuidanceDistillationInput {
+        checkpoint_id: Some("checkpoint-historical-primary".to_string()),
+        session_id: "session-historical-primary".to_string(),
+        turn_id: Some("turn-historical-primary".to_string()),
+        event_time: Some("2026-03-26T09:10:00Z".to_string()),
+        agent_type: Some("codex".to_string()),
+        model: Some("gpt-5.4".to_string()),
+        prompt: Some("Improve attr parsing".to_string()),
+        transcript_fragment: Some("Rejected std::any::type_name parsing.".to_string()),
+        files_modified: vec!["src/target.ts".to_string()],
+        tool_events: vec![GuidanceToolEvidence {
+            tool_kind: Some("shell".to_string()),
+            input_summary: Some("cargo nextest run --lib context_guidance".to_string()),
+            output_summary: Some("nextest passed".to_string()),
+            command: Some("cargo nextest run --lib context_guidance".to_string()),
+        }],
+    };
+    let output = GuidanceDistillationOutput {
+        summary: GuidanceSessionSummary {
+            intent: "Improve target implementation.".to_string(),
+            outcome: "Stored guidance for target.".to_string(),
+            decisions: vec!["Use token rendering.".to_string()],
+            rejected_approaches: vec!["Avoid std::any::type_name parsing.".to_string()],
+            patterns: Vec::new(),
+            verification: vec!["nextest passed.".to_string()],
+            open_items: Vec::new(),
+        },
+        guidance_facts: vec![
+            GuidanceFactDraft {
+                category: GuidanceFactCategory::Decision,
+                kind: "rejected_approach".to_string(),
+                guidance: "Do not derive attribute keyword names from std::any::type_name."
+                    .to_string(),
+                evidence_excerpt: "Rejected std::any::type_name parsing.".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.ts".to_string()],
+                    symbols: Vec::new(),
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+            GuidanceFactDraft {
+                category: GuidanceFactCategory::Decision,
+                kind: "architectural_boundary".to_string(),
+                guidance: "Keep `target()` as the architectural boundary for target result calculation; future edits to src/target.ts should preserve caller delegation instead of moving target logic into callers.".to_string(),
+                evidence_excerpt: "Decided target result calculation stays behind target(), with caller.ts delegating through target().".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.ts".to_string()],
+                    symbols: vec!["src/target.ts::target".to_string()],
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+            GuidanceFactDraft {
+                category: GuidanceFactCategory::Verification,
+                kind: "test_success".to_string(),
+                guidance: "The context guidance path was verified with nextest.".to_string(),
+                evidence_excerpt: "cargo nextest run --lib context_guidance passed.".to_string(),
+                applies_to: GuidanceAppliesTo {
+                    paths: vec!["src/target.ts".to_string()],
+                    symbols: Vec::new(),
+                },
+                confidence: GuidanceFactConfidence::High,
+            },
+        ],
+    };
+    repository
+        .persist_history_guidance_distillation(
+            repo_id.as_str(),
+            &input,
+            &output,
+            Some("gpt-guidance"),
+            Some("guidance-profile"),
+        )
+        .expect("persist context guidance");
+}
+
 pub(super) fn seed_graphql_mutation_repo() -> TempDir {
     let dir = TempDir::new().expect("temp dir");
     let repo_root = dir.path();

@@ -13,11 +13,13 @@ use crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPa
 use crate::host::capability_host::CapabilityMailboxRegistration;
 use crate::host::capability_host::gateways::{
     CanonicalGraphGateway, CapabilityMailboxStatus, CapabilityWorkplaneEnqueueResult,
-    CapabilityWorkplaneGateway, CapabilityWorkplaneJob, ProvenanceBuilder, StoreHealthGateway,
+    CapabilityWorkplaneGateway, CapabilityWorkplaneJob, FileHistoryEvent, GitHistoryGateway,
+    GitHistoryRequest, ProvenanceBuilder, StoreHealthGateway,
 };
+use crate::host::checkpoints::strategy::manual_commit::{run_git, try_head_hash};
 use crate::host::runtime_store::{
-    RepoSqliteRuntimeStore, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
-    SemanticSummaryMailboxItemInsert,
+    CapabilityWorkplaneJobInsert, RepoSqliteRuntimeStore, SemanticEmbeddingMailboxItemInsert,
+    SemanticMailboxItemKind, SemanticSummaryMailboxItemInsert,
 };
 
 pub struct LocalCanonicalGraphGateway;
@@ -52,37 +54,155 @@ impl StoreHealthGateway for LocalStoreHealthGateway {
     }
 }
 
+pub struct LocalGitHistoryGateway;
+
+impl GitHistoryGateway for LocalGitHistoryGateway {
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn resolve_head(&self, repo_root: &Path) -> Result<Option<String>> {
+        try_head_hash(repo_root)
+    }
+
+    fn load_file_history(
+        &self,
+        repo_root: &Path,
+        request: GitHistoryRequest<'_>,
+    ) -> Result<Vec<FileHistoryEvent>> {
+        if request.paths.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let since = format!("--since=@{}", request.since_unix);
+        let revision = request.until_commit_sha.unwrap_or("HEAD");
+        let format = "--format=%x1e%H%x1f%an%x1f%ae%x1f%ct%x1f%s";
+        let mut args = vec![
+            "log".to_string(),
+            revision.to_string(),
+            since,
+            "--name-only".to_string(),
+            format.to_string(),
+            "--no-color".to_string(),
+            "--".to_string(),
+        ];
+        args.extend(request.paths.iter().cloned());
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let raw = run_git(repo_root, &arg_refs)?;
+        Ok(parse_file_history_log(&raw, request.bug_patterns))
+    }
+}
+
+fn parse_file_history_log(raw: &str, bug_patterns: &[String]) -> Vec<FileHistoryEvent> {
+    let mut events = Vec::new();
+    for record in raw.split('\u{1e}') {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+        let mut lines = record.lines();
+        let Some(header) = lines.next() else {
+            continue;
+        };
+        let mut parts = header.split('\u{1f}');
+        let Some(commit_sha) = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let author_name = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let author_email = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let committed_at_unix = parts
+            .next()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .unwrap_or_default();
+        let message = parts.next().unwrap_or_default().trim().to_string();
+        let is_bug_fix = message_matches_bug_patterns(&message, bug_patterns);
+
+        for path in lines.map(str::trim).filter(|line| !line.is_empty()) {
+            events.push(FileHistoryEvent {
+                path: path.to_string(),
+                commit_sha: commit_sha.to_string(),
+                author_name: author_name.clone(),
+                author_email: author_email.clone(),
+                committed_at_unix,
+                message: message.clone(),
+                is_bug_fix,
+                changed_ranges: Vec::new(),
+            });
+        }
+    }
+    events
+}
+
+fn message_matches_bug_patterns(message: &str, bug_patterns: &[String]) -> bool {
+    let message = message.to_ascii_lowercase();
+    bug_patterns
+        .iter()
+        .map(|pattern| pattern.trim().to_ascii_lowercase())
+        .filter(|pattern| !pattern.is_empty())
+        .any(|pattern| message.contains(&pattern))
+}
+
 #[derive(Clone)]
 pub struct LocalCapabilityWorkplaneGateway {
     capability_id: String,
     runtime_store: RepoSqliteRuntimeStore,
-    declared_mailboxes: BTreeSet<String>,
+    declared_mailboxes: BTreeMap<String, BTreeSet<String>>,
     init_session_id: Option<String>,
 }
 
 impl LocalCapabilityWorkplaneGateway {
     pub fn new(
         repo_root: &Path,
+        repo_id: &str,
         capability_id: &str,
         declared_mailboxes: &[CapabilityMailboxRegistration],
         init_session_id: Option<String>,
     ) -> Result<Self> {
+        let mut declared_mailboxes_by_capability = BTreeMap::<String, BTreeSet<String>>::new();
+        for registration in declared_mailboxes {
+            declared_mailboxes_by_capability
+                .entry(registration.capability_id.to_string())
+                .or_default()
+                .insert(registration.mailbox_name.to_string());
+        }
+
         Ok(Self {
             capability_id: capability_id.to_string(),
-            runtime_store: RepoSqliteRuntimeStore::open(repo_root)?,
-            declared_mailboxes: declared_mailboxes
-                .iter()
-                .map(|registration| registration.mailbox_name.to_string())
-                .collect(),
+            runtime_store: RepoSqliteRuntimeStore::open_with_repo_id(repo_root, repo_id)?,
+            declared_mailboxes: declared_mailboxes_by_capability,
             init_session_id,
         })
     }
 
-    fn ensure_mailbox_declared(&self, mailbox_name: &str) -> Result<()> {
+    fn target_capability_id<'a>(&'a self, job: &'a CapabilityWorkplaneJob) -> &'a str {
+        job.target_capability_id
+            .as_deref()
+            .unwrap_or(self.capability_id.as_str())
+    }
+
+    fn ensure_mailbox_declared(
+        &self,
+        target_capability_id: &str,
+        mailbox_name: &str,
+    ) -> Result<()> {
         anyhow::ensure!(
-            self.declared_mailboxes.contains(mailbox_name),
+            self.declared_mailboxes
+                .get(target_capability_id)
+                .is_some_and(|mailboxes| mailboxes.contains(mailbox_name)),
             "mailbox `{mailbox_name}` is not declared for capability `{}`",
-            self.capability_id
+            target_capability_id
         );
         Ok(())
     }
@@ -94,14 +214,18 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
         jobs: Vec<CapabilityWorkplaneJob>,
     ) -> Result<CapabilityWorkplaneEnqueueResult> {
         for job in &jobs {
-            self.ensure_mailbox_declared(&job.mailbox_name)?;
+            self.ensure_mailbox_declared(self.target_capability_id(job), &job.mailbox_name)?;
         }
-        let mut workplane_jobs = Vec::new();
+        let mut workplane_jobs = BTreeMap::<String, Vec<CapabilityWorkplaneJobInsert>>::new();
         let mut summary_items = Vec::new();
         let mut embedding_items = Vec::new();
 
         for job in jobs {
-            if self.capability_id == SEMANTIC_CLONES_CAPABILITY_ID {
+            let target_capability_id = job
+                .target_capability_id
+                .clone()
+                .unwrap_or_else(|| self.capability_id.clone());
+            if target_capability_id == SEMANTIC_CLONES_CAPABILITY_ID {
                 match job.mailbox_name.as_str() {
                     SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => {
                         summary_items.push(summary_mailbox_item_from_job(
@@ -138,21 +262,22 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
                 }
             }
 
-            workplane_jobs.push(
-                crate::host::runtime_store::CapabilityWorkplaneJobInsert::new(
+            workplane_jobs
+                .entry(target_capability_id)
+                .or_default()
+                .push(CapabilityWorkplaneJobInsert::new(
                     job.mailbox_name,
                     self.init_session_id.clone(),
                     job.dedupe_key,
                     job.payload,
-                ),
-            );
+                ));
         }
 
         let mut totals = CapabilityWorkplaneEnqueueResult::default();
-        if !workplane_jobs.is_empty() {
+        for (target_capability_id, jobs) in workplane_jobs {
             let result = self
                 .runtime_store
-                .enqueue_capability_workplane_jobs(&self.capability_id, workplane_jobs)?;
+                .enqueue_capability_workplane_jobs(&target_capability_id, jobs)?;
             totals.inserted_jobs += result.inserted_jobs;
             totals.updated_jobs += result.updated_jobs;
         }
@@ -181,7 +306,10 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
         self.runtime_store
             .load_capability_workplane_mailbox_status(
                 &self.capability_id,
-                self.declared_mailboxes.iter().map(String::as_str),
+                self.declared_mailboxes
+                    .get(self.capability_id.as_str())
+                    .into_iter()
+                    .flat_map(|mailboxes| mailboxes.iter().map(String::as_str)),
             )
             .map(|status_by_mailbox| {
                 status_by_mailbox

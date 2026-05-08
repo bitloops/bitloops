@@ -10,7 +10,8 @@ use crate::cli::embeddings::{
     with_managed_platform_embeddings_install_hook,
 };
 use crate::cli::inference::{
-    OllamaAvailability, with_ollama_probe_hook, with_summary_generation_configured_hook,
+    OllamaAvailability, with_context_guidance_generation_configured_hook, with_ollama_probe_hook,
+    with_summary_generation_configured_hook,
 };
 use crate::cli::login::with_ensure_logged_in_hook;
 use crate::cli::telemetry_consent::{
@@ -139,11 +140,16 @@ fn with_temp_app_dirs_and_summary_configured<T>(
     with_summary_generation_configured_hook(
         move |_| summary_configured,
         || {
-            with_test_platform_dir_overrides(app_dir_overrides(temp), || {
-                with_test_tty_override(tty, || {
-                    with_test_assume_daemon_running(assume_daemon_running, f)
-                })
-            })
+            with_context_guidance_generation_configured_hook(
+                |_| true,
+                || {
+                    with_test_platform_dir_overrides(app_dir_overrides(temp), || {
+                        with_test_tty_override(tty, || {
+                            with_test_assume_daemon_running(assume_daemon_running, f)
+                        })
+                    })
+                },
+            )
         },
     )
 }
@@ -173,6 +179,10 @@ fn init_status_command_args(status_args: InitStatusArgs) -> InitArgs {
         embeddings_runtime: None,
         no_embeddings: false,
         no_summaries: false,
+        context_guidance_runtime: None,
+        no_context_guidance: false,
+        context_guidance_gateway_url: None,
+        context_guidance_api_key_env: None,
         embeddings_gateway_url: None,
         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
     }
@@ -246,6 +256,10 @@ fn render_install_default_daemon_handoff_with_mkcert(
                                         embeddings_runtime: None,
                                         no_embeddings: true,
                                         no_summaries: false,
+                                        context_guidance_runtime: None,
+                                        no_context_guidance: false,
+                                        context_guidance_gateway_url: None,
+                                        context_guidance_api_key_env: None,
                                         embeddings_gateway_url: None,
                                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                             .to_string(),
@@ -685,6 +699,84 @@ fn init_args_support_no_summaries_flag() {
     };
 
     assert!(args.no_summaries);
+}
+
+#[test]
+fn init_args_support_context_guidance_runtime_flags() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--context-guidance-runtime",
+        "platform",
+        "--context-guidance-gateway-url",
+        "https://gateway.example/v1/chat/completions",
+        "--context-guidance-api-key-env",
+        "CUSTOM_CONTEXT_GUIDANCE_TOKEN",
+    ])
+    .expect("parse init context guidance flags");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+
+    assert_eq!(
+        args.context_guidance_runtime,
+        Some(crate::cli::inference::TextGenerationRuntime::Platform)
+    );
+    assert_eq!(
+        args.context_guidance_gateway_url.as_deref(),
+        Some("https://gateway.example/v1/chat/completions")
+    );
+    assert_eq!(
+        args.context_guidance_api_key_env.as_deref(),
+        Some("CUSTOM_CONTEXT_GUIDANCE_TOKEN")
+    );
+}
+
+#[test]
+fn init_args_reject_conflicting_no_context_guidance_and_runtime_flags() {
+    let err = Cli::try_parse_from([
+        "bitloops",
+        "init",
+        "--no-context-guidance",
+        "--context-guidance-runtime",
+        "platform",
+    ])
+    .err()
+    .expect("conflicting context guidance flags should fail");
+
+    assert!(err.to_string().contains("--no-context-guidance"));
+}
+
+#[test]
+fn choose_context_guidance_setup_during_init_skips_noninteractive_without_explicit_choice() {
+    let repo = tempfile::tempdir().expect("tempdir");
+    let parsed =
+        Cli::try_parse_from(["bitloops", "init", "--install-default-daemon"]).expect("parse init");
+    let Some(Commands::Init(args)) = parsed.command else {
+        panic!("expected init command");
+    };
+    let mut out = Vec::new();
+    let mut input = Cursor::new("");
+
+    let selection = with_test_tty_override(false, || {
+        with_context_guidance_generation_configured_hook(
+            |_| false,
+            || {
+                test_runtime().block_on(choose_context_guidance_setup_during_init(
+                    repo.path(),
+                    &args,
+                    &mut out,
+                    &mut input,
+                ))
+            },
+        )
+    })
+    .expect("choose context guidance setup");
+
+    assert_eq!(
+        selection,
+        crate::cli::inference::ContextGuidanceSetupSelection::Skip
+    );
 }
 
 #[test]
@@ -1231,6 +1323,10 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1244,13 +1340,27 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         assert!(!rendered.contains("Initialising DevQL schema"));
         assert!(!rendered.contains("Bitloops project bootstrap is ready."));
         assert!(repo.path().join(".bitloops.local.toml").exists());
+        let local_policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+            .expect("read local repo policy");
+        assert!(
+            local_policy.contains("[devql]"),
+            "expected [devql] table in local policy:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("sync_enabled = false"),
+            "expected init --sync=false to persist sync_enabled=false:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("ingest_enabled = false"),
+            "expected init --ingest=false to persist ingest_enabled=false:\n{local_policy}"
+        );
         assert_eq!(
             crate::cli::enable::initialized_agents(repo.path()),
             vec![DEFAULT_AGENT.to_string()]
         );
         let repo_skill = repo
             .path()
-            .join(".claude/skills/bitloops/using-devql/SKILL.md");
+            .join(".claude/skills/bitloops/devql-explore-first/SKILL.md");
         assert!(
             repo_skill.exists(),
             "expected repo-local DevQL Guidance to be installed at {}",
@@ -1259,8 +1369,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
-        assert!(exclude.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!exclude.contains(".bitloops/"));
+        assert!(exclude.contains(".claude/skills/bitloops/devql-explore-first/SKILL.md"));
         assert!(!exclude.contains("config.local.json"));
         assert!(!exclude.contains(".bitloops/config.local.json"));
     });
@@ -1302,6 +1411,10 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1318,7 +1431,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
         assert!(repo.path().join(".cursor/hooks.json").exists());
         assert!(
             repo.path()
-                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
     });
@@ -1358,6 +1471,10 @@ keep = true
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1414,6 +1531,10 @@ fn run_init_binds_repo_to_running_daemon_config() {
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1439,7 +1560,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
 }
 
 #[test]
-fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
+fn run_init_reports_repo_watcher_disabled_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -1451,11 +1572,11 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
                 let repo_root = repo_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "init should only reconcile watchers when capture is enabled"
+                        !watcher_enabled,
+                        "init --sync=false should not reconcile/start a DevQL watcher"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1481,6 +1602,10 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         no_embeddings: false,
                         no_summaries: false,
+                        context_guidance_runtime: None,
+                        no_context_guidance: false,
+                        context_guidance_gateway_url: None,
+                        context_guidance_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1516,11 +1641,11 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
         crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
             {
                 let repo_root = repo_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "init should only reconcile watchers when capture is enabled"
+                        !watcher_enabled,
+                        "init --sync=false should surface watcher reconcile failures with watcher disabled"
                     );
                     anyhow::bail!("watcher reconcile exploded");
                 }
@@ -1545,6 +1670,10 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         no_embeddings: false,
                         no_summaries: false,
+                        context_guidance_runtime: None,
+                        no_context_guidance: false,
+                        context_guidance_gateway_url: None,
+                        context_guidance_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1565,7 +1694,7 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
 }
 
 #[test]
-fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
+fn run_init_reports_nested_repo_watcher_disabled_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let project_root = repo.path().join("apps/nested-project");
@@ -1578,11 +1707,11 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
                 let project_root = project_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, project_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "nested init should reconcile watchers when nested-project capture is enabled"
+                        !watcher_enabled,
+                        "nested init --sync=false should not reconcile/start a DevQL watcher"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1608,6 +1737,10 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         no_embeddings: false,
                         no_summaries: false,
+                        context_guidance_runtime: None,
+                        no_context_guidance: false,
+                        context_guidance_gateway_url: None,
+                        context_guidance_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1649,7 +1782,7 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
         crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
-                move |_repo_root, _capture_enabled| {
+                move |_repo_root, _watcher_enabled| {
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
                 }
@@ -1674,6 +1807,10 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         no_embeddings: false,
                         no_summaries: false,
+                        context_guidance_runtime: None,
+                        no_context_guidance: false,
+                        context_guidance_gateway_url: None,
+                        context_guidance_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1728,6 +1865,10 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1780,6 +1921,10 @@ fn run_init_rewrites_existing_daemon_binding() {
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1840,6 +1985,10 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -1855,7 +2004,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         assert!(repo.path().join(".cursor/hooks.json").exists());
         assert!(
             repo.path()
-                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
                 .exists()
         );
         assert!(!repo.path().join(".claude/settings.json").exists());
@@ -1896,6 +2045,10 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                         embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                         no_embeddings: false,
                         no_summaries: false,
+                        context_guidance_runtime: None,
+                        no_context_guidance: false,
+                        context_guidance_gateway_url: None,
+                        context_guidance_api_key_env: None,
                         embeddings_gateway_url: None,
                         embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                     },
@@ -1911,14 +2064,14 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 assert!(config.contains("codex_hooks = true"));
                 let repo_skill = repo
                     .path()
-                    .join(".agents/skills/bitloops/using-devql/SKILL.md");
+                    .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
                 assert!(
                     repo_skill.exists(),
                     "expected Codex repo-local skill to be installed"
                 );
                 let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                     .expect("read git exclude");
-                assert!(exclude.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
+                assert!(exclude.contains(".agents/skills/bitloops/devql-explore-first/SKILL.md"));
                 assert!(!repo.path().join(".claude/settings.json").exists());
             });
         },
@@ -1952,6 +2105,10 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                     embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                     no_embeddings: false,
                     no_summaries: false,
+                    context_guidance_runtime: None,
+                    no_context_guidance: false,
+                    context_guidance_gateway_url: None,
+                    context_guidance_api_key_env: None,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -1963,15 +2120,15 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
 
             let gemini_md =
                 std::fs::read_to_string(repo.path().join("GEMINI.md")).expect("read GEMINI.md");
-            assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+            assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
             assert!(
                 repo.path()
-                    .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                    .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
                     .exists()
             );
             let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                 .expect("read exclude");
-            assert!(exclude.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
+            assert!(exclude.contains(".gemini/skills/bitloops/devql-explore-first/SKILL.md"));
         });
     });
 }
@@ -2002,6 +2159,10 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2014,12 +2175,12 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
         assert!(repo.path().join(".github/hooks/bitloops.json").exists());
         assert!(
             repo.path()
-                .join(".github/skills/bitloops/using-devql/SKILL.md")
+                .join(".github/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let exclude =
             std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".github/skills/bitloops/using-devql/SKILL.md"));
+        assert!(exclude.contains(".github/skills/bitloops/devql-explore-first/SKILL.md"));
     });
 }
 
@@ -2049,6 +2210,10 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2061,12 +2226,12 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
         assert!(repo.path().join(".opencode/plugins/bitloops.ts").exists());
         assert!(
             repo.path()
-                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let exclude =
             std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".opencode/skills/bitloops/using-devql/SKILL.md"));
+        assert!(exclude.contains(".opencode/skills/bitloops/devql-explore-first/SKILL.md"));
     });
 }
 
@@ -2103,6 +2268,10 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2121,38 +2290,38 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         assert!(
             !repo
                 .path()
-                .join(".claude/skills/bitloops/using-devql/SKILL.md")
+                .join(".claude/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".agents/skills/bitloops/using-devql/SKILL.md")
+                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(!repo.path().join("GEMINI.md").exists());
         assert!(
             !repo
                 .path()
-                .join(".github/skills/bitloops/using-devql/SKILL.md")
+                .join(".github/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let local_policy =
@@ -2190,7 +2359,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
 
         let plugin = std::fs::read_to_string(repo.path().join(".opencode/plugins/bitloops.ts"))
             .expect("read OpenCode plugin");
-        assert!(!plugin.contains("name: using-devql"));
+        assert!(!plugin.contains("name: devql-explore-first"));
         assert!(!plugin.contains("bitloops devql query"));
     });
 }
@@ -2221,6 +2390,10 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2232,7 +2405,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
 
         let repo_skill = repo
             .path()
-            .join(".agents/skills/bitloops/using-devql/SKILL.md");
+            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
         assert!(repo.path().join(".codex/hooks.json").exists());
         assert!(
             repo_skill.exists(),
@@ -2264,10 +2437,10 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
             },
         )
         .expect("codex session-start route");
-        let stdout = outcome.stdout.expect("stdout");
-        assert!(stdout.contains("This repo has DevQL"));
-        assert!(stdout.contains("use DevQL first"));
-        assert!(stdout.contains(".agents/skills/bitloops/using-devql/SKILL.md"));
+        assert!(
+            outcome.stdout.is_none(),
+            "Codex session start should validate the minimal skill without injecting bootstrap text"
+        );
     });
 }
 
@@ -2297,6 +2470,10 @@ fn run_init_with_invalid_explicit_agent_errors() {
                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                 no_embeddings: false,
                 no_summaries: false,
+                context_guidance_runtime: None,
+                no_context_guidance: false,
+                context_guidance_gateway_url: None,
+                context_guidance_api_key_env: None,
                 embeddings_gateway_url: None,
                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
             },
@@ -2674,6 +2851,10 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             ),
                             no_embeddings: false,
                             no_summaries: false,
+                            context_guidance_runtime: None,
+                            no_context_guidance: false,
+                            context_guidance_gateway_url: None,
+                            context_guidance_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -2736,6 +2917,10 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             ),
                             no_embeddings: false,
                             no_summaries: false,
+                            context_guidance_runtime: None,
+                            no_context_guidance: false,
+                            context_guidance_gateway_url: None,
+                            context_guidance_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -2782,6 +2967,10 @@ fn run_init_noninteractive_fresh_daemon_bootstrap_requires_explicit_telemetry_fl
                     embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                     no_embeddings: false,
                     no_summaries: false,
+                    context_guidance_runtime: None,
+                    no_context_guidance: false,
+                    context_guidance_gateway_url: None,
+                    context_guidance_api_key_env: None,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -2874,6 +3063,10 @@ fn run_init_with_install_default_daemon_shows_shell_escaped_config_path() {
                                                                 embeddings_runtime: None,
                                                                 no_embeddings: true,
                                                                 no_summaries: false,
+                                                                context_guidance_runtime: None,
+                                                                no_context_guidance: false,
+                                                                context_guidance_gateway_url: None,
+                                                                context_guidance_api_key_env: None,
                                                                 embeddings_gateway_url: None,
                                                                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                                                     .to_string(),
@@ -3010,6 +3203,10 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                             ),
                             no_embeddings: false,
                             no_summaries: false,
+                            context_guidance_runtime: None,
+                            no_context_guidance: false,
+                            context_guidance_gateway_url: None,
+                            context_guidance_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -3087,6 +3284,10 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                                     ),
                                     no_embeddings: false,
                                     no_summaries: false,
+                                    context_guidance_runtime: None,
+                                    no_context_guidance: false,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
                                     embeddings_gateway_url: None,
                                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                         .to_string(),
@@ -3431,6 +3632,10 @@ fn run_init_with_install_default_daemon_sends_summary_bootstrap_when_prompt_is_a
                                                                             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                                             no_embeddings: false,
                                                                             no_summaries: false,
+                                                                            context_guidance_runtime: None,
+                                                                            no_context_guidance: false,
+                                                                            context_guidance_gateway_url: None,
+                                                                            context_guidance_api_key_env: None,
                                                                             embeddings_gateway_url: None,
                                                                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                         },
@@ -3607,6 +3812,10 @@ fn run_init_with_install_default_daemon_auto_installs_embeddings() {
                                             ),
                                             no_embeddings: false,
                                             no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -3711,6 +3920,10 @@ fn run_init_with_install_default_daemon_requires_explicit_embeddings_choice_when
                                     embeddings_runtime: None,
                                     no_embeddings: false,
                                     no_summaries: false,
+                                    context_guidance_runtime: None,
+                                    no_context_guidance: false,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
                                     embeddings_gateway_url: None,
                                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                         .to_string(),
@@ -3781,6 +3994,10 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
                                 embeddings_runtime: None,
                                 no_embeddings: true,
                                 no_summaries: false,
+                                context_guidance_runtime: None,
+                                no_context_guidance: false,
+                                context_guidance_gateway_url: None,
+                                context_guidance_api_key_env: None,
                                 embeddings_gateway_url: None,
                                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
                                     .to_string(),
@@ -4008,6 +4225,10 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                     embeddings_runtime: None,
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
+                                                                    context_guidance_runtime: None,
+                                                                    no_context_guidance: false,
+                                                                    context_guidance_gateway_url: None,
+                                                                    context_guidance_api_key_env: None,
                                                                     embeddings_gateway_url: None,
                                                                     embeddings_api_key_env:
                                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -4202,6 +4423,10 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_without_g
                                                                 embeddings_runtime: None,
                                                                 no_embeddings: false,
                                                                 no_summaries: false,
+                                                                context_guidance_runtime: None,
+                                                                no_context_guidance: false,
+                                                                context_guidance_gateway_url: None,
+                                                                context_guidance_api_key_env: None,
                                                                 embeddings_gateway_url: None,
                                                                 embeddings_api_key_env:
                                                                     "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -4389,6 +4614,10 @@ fn run_init_with_install_default_daemon_logs_in_once_for_cloud_embeddings_and_su
                                                                     embeddings_runtime: None,
                                                                     no_embeddings: false,
                                                                     no_summaries: false,
+                                                                    context_guidance_runtime: None,
+                                                                    no_context_guidance: false,
+                                                                    context_guidance_gateway_url: None,
+                                                                    context_guidance_api_key_env: None,
                                                                     embeddings_gateway_url: None,
                                                                     embeddings_api_key_env:
                                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -4548,6 +4777,10 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                                 embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                 no_embeddings: false,
                                                 no_summaries: false,
+                                                context_guidance_runtime: None,
+                                                no_context_guidance: false,
+                                                context_guidance_gateway_url: None,
+                                                context_guidance_api_key_env: None,
                                                 embeddings_gateway_url: None,
                                                 embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                 },
@@ -4714,6 +4947,10 @@ fn run_init_with_install_default_daemon_renders_follow_up_sync_waiting_state() {
                                                         Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                     no_embeddings: false,
                                                     no_summaries: false,
+                                                    context_guidance_runtime: None,
+                                                    no_context_guidance: false,
+                                                    context_guidance_gateway_url: None,
+                                                    context_guidance_api_key_env: None,
                                                     embeddings_gateway_url: None,
                                                     embeddings_api_key_env:
                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -4874,6 +5111,10 @@ fn run_init_with_install_default_daemon_does_not_mark_summaries_complete_while_w
                                                         Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                     no_embeddings: false,
                                                     no_summaries: false,
+                                                    context_guidance_runtime: None,
+                                                    no_context_guidance: false,
+                                                    context_guidance_gateway_url: None,
+                                                    context_guidance_api_key_env: None,
                                                     embeddings_gateway_url: None,
                                                     embeddings_api_key_env:
                                                         "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
@@ -5021,6 +5262,10 @@ fn run_init_with_install_default_daemon_renders_separate_summaries_lane() {
                                                                             embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                                                                             no_embeddings: false,
                                                                             no_summaries: false,
+                                                                            context_guidance_runtime: None,
+                                                                            no_context_guidance: false,
+                                                                            context_guidance_gateway_url: None,
+                                                                            context_guidance_api_key_env: None,
                                                                             embeddings_gateway_url: None,
                                                                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                                                                         },
@@ -5110,6 +5355,10 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             ),
                             no_embeddings: false,
                             no_summaries: false,
+                            context_guidance_runtime: None,
+                            no_context_guidance: false,
+                            context_guidance_gateway_url: None,
+                            context_guidance_api_key_env: None,
                             embeddings_gateway_url: None,
                             embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                         },
@@ -5295,6 +5544,10 @@ fn run_init_with_install_default_daemon_enables_auto_start_when_confirmed() {
                                             embeddings_runtime: None,
                                             no_embeddings: true,
                                             no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -5389,6 +5642,10 @@ fn run_init_with_install_default_daemon_can_skip_auto_start() {
                                             embeddings_runtime: None,
                                             no_embeddings: true,
                                             no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -5442,6 +5699,10 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
                     no_embeddings: false,
                     no_summaries: false,
+                    context_guidance_runtime: None,
+                    no_context_guidance: false,
+                    context_guidance_gateway_url: None,
+                    context_guidance_api_key_env: None,
                     embeddings_gateway_url: None,
                     embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
                 },
@@ -5566,6 +5827,10 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             ),
                                             no_embeddings: false,
                                             no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
@@ -5713,6 +5978,10 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             ),
                                             no_embeddings: false,
                                             no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
                                             embeddings_gateway_url: None,
                                             embeddings_api_key_env:
                                                 "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),

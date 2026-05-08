@@ -69,7 +69,7 @@ pub(crate) use self::classification::{
 };
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_ingest::{
-    execute_ingest_with_backfill_window, execute_ingest_with_observer,
+    execute_ingest_with_backfill_window, execute_ingest_with_commits, execute_ingest_with_observer,
 };
 #[cfg(test)]
 pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
@@ -82,12 +82,16 @@ pub(crate) use self::commands_query::{
     format_query_output, use_raw_graphql_mode,
 };
 pub use self::commands_query::{execute_query_json_for_repo_root, run_query};
-pub(crate) use self::commands_refresh::snapshot_committed_current_rows_for_commit_for_config;
 pub use self::commands_refresh::{
     PostCommitArtefactRefreshStats, QueuedSyncTaskMetadata, run_post_checkout_branch_seed,
     run_post_commit_artefact_refresh, run_post_commit_checkpoint_projection_refresh,
     run_post_merge_artefact_refresh,
 };
+pub(crate) use self::commands_refresh::{
+    refresh_paths_for_sync, snapshot_committed_current_rows_for_commit_for_config,
+};
+#[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_validation_with_observer;
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::run_sync_with_summary_and_stats_and_observer_and_diffs;
 pub use self::commands_sync::{
@@ -99,12 +103,20 @@ pub use self::connection_status::run_connection_status;
 pub(crate) use self::plain_text::{
     PLAIN_TEXT_LANGUAGE_ID, indexing_language_for_path, plain_text_content_is_allowed,
 };
+#[cfg(test)]
+pub(crate) use self::producer_spool::claim_next_producer_spool_jobs;
+#[cfg(not(test))]
+pub(crate) use self::producer_spool::enqueue_spooled_ingest_task_for_repo_root;
+#[cfg(test)]
+pub(crate) use self::producer_spool::enqueue_spooled_post_commit_derivation;
 pub(crate) use self::producer_spool::{
-    ProducerSpoolJobPayload, ProducerSpoolJobRecord, claim_next_producer_spool_jobs,
+    PostCommitDerivationClaimGuards, ProducerSpoolJobCounts, ProducerSpoolJobPayload,
+    ProducerSpoolJobRecord, claim_next_producer_spool_jobs_excluding, count_producer_spool_jobs,
     delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
     enqueue_spooled_post_merge_refresh, enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
-    enqueue_spooled_sync_task_for_repo_root, producer_spool_schema_sql_sqlite,
-    recover_running_producer_spool_jobs, requeue_producer_spool_job,
+    enqueue_spooled_sync_task_for_repo_root, list_recent_producer_spool_jobs,
+    producer_spool_schema_sql_sqlite, recover_running_producer_spool_jobs,
+    requeue_producer_spool_job, running_producer_spool_repo_ids,
 };
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;

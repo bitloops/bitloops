@@ -1,8 +1,9 @@
 use super::*;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::clear_repo_symbol_embedding_rows;
-use crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider;
-use crate::capability_packs::semantic_clones::runtime_config::resolve_semantic_clones_config;
+use crate::capability_packs::semantic_clones::runtime_config::{
+    SummaryProviderMode, resolve_semantic_clones_config, resolve_summary_provider,
+};
 use crate::capability_packs::semantic_clones::upsert_semantic_feature_rows;
 use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::host::checkpoints::strategy::manual_commit::{WriteCommittedOptions, write_committed};
@@ -413,13 +414,13 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
                 WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE
             );
             assert_eq!(artefact_ids.first().map(String::as_str), Some("artefact-0"));
-            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-15"));
+            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-23"));
         }
         other => panic!("expected summary-embedding follow-up, got {other:?}"),
     }
 
     match &plan.follow_ups[1] {
-        FollowUpJob::SemanticSummaries {
+        FollowUpJob::RepoBackfillSummaries {
             target,
             artefact_ids,
         } => {
@@ -428,10 +429,10 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
                 target.config_root,
                 PathBuf::from("/tmp/config-summary-plan")
             );
-            assert_eq!(artefact_ids.len(), 24);
+            assert_eq!(artefact_ids.len(), 16);
             assert_eq!(
                 artefact_ids.first().map(String::as_str),
-                Some("artefact-16")
+                Some("artefact-24")
             );
             assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-39"));
         }
@@ -802,8 +803,19 @@ async fn seed_current_state_and_semantics(
         !inputs.is_empty(),
         "expected current semantic inputs after sync for daemon embedding test"
     );
-    let summary_provider = Arc::new(NoopSemanticSummaryProvider);
-    upsert_semantic_feature_rows(&relational, &inputs, summary_provider)
+    let repo = resolve_repo_identity(repo_root).expect("resolve repo identity for summary seed");
+    let capability_host =
+        build_capability_host(repo_root, repo).expect("build capability host for summary seed");
+    let semantic_clones =
+        resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
+    let summary_provider = resolve_summary_provider(
+        &semantic_clones,
+        &capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID),
+        SummaryProviderMode::ConfiguredStrict,
+    )
+    .expect("resolve summary provider for semantic seed")
+    .provider;
+    upsert_semantic_feature_rows(&relational, &inputs, Arc::clone(&summary_provider))
         .await
         .expect("upsert semantic rows");
 
@@ -814,7 +826,7 @@ async fn seed_current_state_and_semantics(
                 input.artefact_id.clone(),
                 semantic_features::build_semantic_feature_input_hash(
                     input,
-                    &NoopSemanticSummaryProvider,
+                    summary_provider.as_ref(),
                 ),
             )
         })
@@ -1140,7 +1152,7 @@ async fn daemon_embedding_job_keeps_incremental_behavior_when_setup_is_unchanged
 }
 
 #[tokio::test]
-async fn daemon_summary_embedding_job_recommends_clone_rebuild_when_setup_is_unchanged() {
+async fn daemon_summary_embedding_job_skips_clone_rebuild_without_summary_provider() {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, _relational, inputs, input_hashes) = seed_current_state_and_semantics(
         repo.path(),
@@ -1206,11 +1218,10 @@ async fn daemon_summary_embedding_job_recommends_clone_rebuild_when_setup_is_unc
     .await;
 
     assert!(second_summary.error.is_none());
-    assert_eq!(second_summary.follow_ups.len(), 1);
-    assert!(matches!(
-        second_summary.follow_ups.first(),
-        Some(FollowUpJob::CloneEdgesRebuild { .. })
-    ));
+    assert!(
+        second_summary.follow_ups.is_empty(),
+        "providerless summary embeddings should not keep scheduling clone rebuild follow-ups"
+    );
 }
 
 #[tokio::test]
@@ -1749,6 +1760,261 @@ async fn prepare_embedding_mailbox_batch_persists_multiple_rows_from_one_batch()
 }
 
 #[tokio::test]
+async fn prepare_embedding_mailbox_batch_repairs_current_feature_projection_for_code_embeddings() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "feature-repair-model",
+        "3",
+    )
+    .await;
+    let requested_ids = inputs
+        .iter()
+        .take(2)
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(requested_ids.len(), 2, "fixture should include two inputs");
+
+    relational
+        .exec(&format!(
+            "DELETE FROM symbol_features_current WHERE repo_id = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("remove current feature projection");
+
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "feature-repair-code-embedding-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "feature-repair-code-embedding-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::json!(requested_ids)),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("feature-repair-code-embedding-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare embedding batch");
+
+    assert!(
+        prepared
+            .commit
+            .embedding_statements
+            .iter()
+            .any(|sql| sql.contains("symbol_features_current")),
+        "code embedding batches should repair current feature projection before clone rebuild"
+    );
+}
+
+#[tokio::test]
+async fn prepare_embedding_mailbox_batch_keeps_current_feature_hash_aligned_with_summary_hash() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "feature-repair-model",
+        "3",
+    )
+    .await;
+    let requested_inputs = inputs.iter().take(2).cloned().collect::<Vec<_>>();
+    let requested_ids = requested_inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(requested_ids.len(), 2, "fixture should include two inputs");
+
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "feature-hash-alignment-code-embedding-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "feature-hash-alignment-code-embedding-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::json!(requested_ids)),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("feature-hash-alignment-code-embedding-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare embedding batch");
+
+    let repair_sql = prepared.commit.embedding_statements.join("\n");
+    assert!(
+        repair_sql.contains("symbol_features_current"),
+        "expected the embedding batch to repair current feature rows"
+    );
+    for input in &requested_inputs {
+        let expected_hash = input_hashes
+            .get(&input.artefact_id)
+            .expect("expected summary-backed input hash");
+        let noop_hash =
+            crate::capability_packs::semantic_clones::features::build_semantic_feature_input_hash(
+                input,
+                &crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider,
+            );
+
+        assert!(
+            repair_sql.contains(expected_hash),
+            "code embedding repairs should preserve the summary-backed feature hash for {}",
+            input.artefact_id
+        );
+        assert!(
+            !repair_sql.contains(&noop_hash),
+            "code embedding repairs should not stamp the noop summary hash for {}",
+            input.artefact_id
+        );
+    }
+}
+
+#[tokio::test]
+async fn prepare_summary_mailbox_batch_splits_repo_wide_backfill_before_hydrating_later_paths() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let generated_dir = repo.path().join("src/generated");
+    fs::create_dir_all(&generated_dir).expect("create generated source dir");
+    for index in 0..24 {
+        fs::write(
+            generated_dir.join(format!("summary_worker_{index:02}.ts")),
+            format!(
+                "export function generatedSummaryWorker{index:02}(input: string): string {{\n  return `${{input}}:{index}`;\n}}\n"
+            ),
+        )
+        .expect("write generated source");
+    }
+    git_ok(repo.path(), &["add", "src/generated"]);
+    git_ok(
+        repo.path(),
+        &["commit", "-m", "add summary backfill sources"],
+    );
+
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    assert!(
+        inputs.len() > super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE,
+        "fixture should exceed one summary mailbox batch"
+    );
+    let unrelated = inputs
+        .get(super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE)
+        .expect("fixture should include a later path outside the first summary batch");
+
+    relational
+        .exec(&format!(
+            "UPDATE current_file_state \
+SET head_content_id = 'missing-summary-repo-wide-backfill-blob' \
+WHERE repo_id = '{}' AND path = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::esc_pg(&unrelated.path),
+        ))
+        .await
+        .expect("break later current projection path");
+
+    super::helpers::load_current_semantic_inputs(&relational, repo.path(), &cfg.repo.repo_id, None)
+        .await
+        .expect_err("full current hydration should still fail on the broken later path");
+
+    let batch = super::super::workplane::ClaimedSummaryMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        lease_token: "repo-wide-summary-backfill-lease".to_string(),
+        items: vec![SemanticSummaryMailboxItemRecord {
+            item_id: "repo-wide-summary-backfill-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: None,
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("repo-wide-summary-backfill-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_summary_mailbox_batch(&batch, |_, _| {})
+        .await
+        .expect("repo-wide summary backfill should hydrate only the first chunk");
+
+    assert_eq!(
+        prepared.expanded_count,
+        super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE
+    );
+    assert!(prepared.commit.replacement_backfill_item.is_some());
+}
+
+#[tokio::test]
 async fn prepare_summary_mailbox_batch_with_explicit_repo_backfill_ids_skips_unrelated_current_paths()
  {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
@@ -1825,7 +2091,7 @@ WHERE repo_id = '{}' AND path = '{}'",
 }
 
 #[tokio::test]
-async fn prepare_summary_mailbox_batch_skipped_fresh_input_repairs_current_and_enqueues_summary_embedding()
+async fn prepare_summary_mailbox_batch_skipped_fresh_input_without_docstring_summary_repairs_current_without_summary_embedding_follow_up()
  {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
@@ -1906,27 +2172,9 @@ WHERE repo_id = '{}' AND artefact_id = '{}'",
             .any(|sql| sql.contains("symbol_semantics_current")),
         "expected current semantic projection repair SQL"
     );
-    assert_eq!(prepared.commit.embedding_follow_ups.len(), 1);
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0].representation_kind,
-        "summary"
-    );
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0]
-            .artefact_id
-            .as_deref(),
-        Some(selected.artefact_id.as_str())
-    );
-    let expected_dedupe_key = format!(
-        "{}:{}",
-        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-        selected.artefact_id
-    );
-    assert_eq!(
-        prepared.commit.embedding_follow_ups[0]
-            .dedupe_key
-            .as_deref(),
-        Some(expected_dedupe_key.as_str())
+    assert!(
+        prepared.commit.embedding_follow_ups.is_empty(),
+        "summary embeddings should only enqueue when the selected input still persists a summary"
     );
 }
 
@@ -2077,6 +2325,104 @@ async fn workplane_clone_rebuild_job_populates_current_clone_edges() {
     assert!(
         load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
         "clone rebuild job should populate current clone edges after deferred embeddings finish"
+    );
+}
+
+#[tokio::test]
+async fn workplane_clone_rebuild_populates_edges_when_feature_projection_was_missing_before_embedding()
+ {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "clone-feature-repair-model",
+        "3",
+    )
+    .await;
+    relational
+        .exec(&format!(
+            "DELETE FROM symbol_features_current WHERE repo_id = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("remove current feature projection");
+
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let embedding_job = WorkplaneJobRecord {
+        job_id: "workplane-code-embedding-feature-repair".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        init_session_id: None,
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(2),
+                artefact_ids: None,
+            },
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+    let clone_rebuild_job = WorkplaneJobRecord {
+        job_id: "workplane-clone-feature-repair".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        init_session_id: None,
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX
+                .to_string(),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(1),
+                artefact_ids: None,
+            },
+        )
+        .expect("serialize clone rebuild payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let embedding_outcome = execute_workplane_job(&embedding_job).await;
+    assert!(embedding_outcome.error.is_none());
+
+    let rebuild_outcome = execute_workplane_job(&clone_rebuild_job).await;
+    assert!(rebuild_outcome.error.is_none());
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "clone rebuild should populate current clone edges after code embeddings repair feature rows"
     );
 }
 

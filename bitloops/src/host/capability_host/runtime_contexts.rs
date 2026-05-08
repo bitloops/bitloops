@@ -10,8 +10,11 @@ mod local_runtime;
 mod tests;
 
 pub use language_services::BuiltinLanguageServicesGateway;
+#[cfg(test)]
+pub(crate) use language_services::builtin_language_services;
 pub use local_gateways::{
-    DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalStoreHealthGateway,
+    DefaultProvenanceBuilder, LocalCanonicalGraphGateway, LocalGitHistoryGateway,
+    LocalStoreHealthGateway,
 };
 pub use local_resources::LocalCapabilityRuntimeResources;
 pub use local_runtime::LocalCapabilityRuntime;

@@ -1,7 +1,9 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use rusqlite::{OptionalExtension, params};
 
-use crate::daemon::capability_events::queue::{load_run_by_id, load_runs};
+use crate::daemon::capability_events::queue::{
+    ConsumerRunRequest, force_consumer_run, latest_generation_seq, load_run_by_id, load_runs,
+};
 use crate::daemon::types::{
     CapabilityEventQueueState, CapabilityEventQueueStatus, CapabilityEventRunRecord,
     CapabilityEventRunStatus,
@@ -10,6 +12,55 @@ use crate::daemon::types::{
 use super::types::CapabilityEventCoordinator;
 
 impl CapabilityEventCoordinator {
+    pub(crate) fn latest_generation_seq(&self, repo_id: &str) -> Result<Option<u64>> {
+        self.runtime_store
+            .with_connection(|conn| latest_generation_seq(conn, repo_id))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn force_consumer_run(
+        &self,
+        repo_id: &str,
+        repo_root: &std::path::Path,
+        capability_id: &str,
+        mailbox_name: &str,
+        handler_id: &str,
+        init_session_id: Option<&str>,
+        now: u64,
+    ) -> Result<CapabilityEventRunRecord> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
+        let run = self.runtime_store.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+                .context("starting forced current-state consumer transaction")?;
+            let request = ConsumerRunRequest {
+                repo_id,
+                repo_root,
+                capability_id,
+                mailbox_name,
+                handler_id,
+                init_session_id,
+                now,
+            };
+            let result = force_consumer_run(conn, request);
+            match result {
+                Ok(run) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing forced current-state consumer transaction")?;
+                    Ok(run)
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })?;
+        self.notify.notify_waiters();
+        Ok(run.record)
+    }
+
     pub(crate) fn clear_queued_runs_for_repo(&self, repo_id: &str) -> Result<u64> {
         let _guard = self
             .lock

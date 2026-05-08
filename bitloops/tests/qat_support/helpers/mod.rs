@@ -4,19 +4,22 @@ use bitloops::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
     AGENT_NAME_GEMINI, AGENT_NAME_OPEN_CODE,
 };
-use bitloops::config::settings::load_settings;
+use bitloops::config::settings::{load_settings, set_devql_producer_settings, settings_local_path};
 use bitloops::config::{
     resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
     resolve_store_backend_config_for_repo,
 };
 use bitloops::daemon::resolve_daemon_config;
+use bitloops::daemon::{DevqlTaskKind, DevqlTaskSource, DevqlTaskStatus};
 use bitloops::host::checkpoints::session::create_session_backend_or_local;
 use bitloops::host::checkpoints::strategy::manual_commit::{
     read_commit_checkpoint_mappings, read_committed,
 };
 use bitloops::host::interactions::store::InteractionSpool;
 use bitloops::host::interactions::types::{InteractionSession, InteractionTurn};
-use bitloops::host::runtime_store::RepoSqliteRuntimeStore;
+use bitloops::host::runtime_store::{
+    DaemonSqliteRuntimeStore as QatDaemonSqliteRuntimeStore, RepoSqliteRuntimeStore,
+};
 use serde::Serialize;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
@@ -142,6 +145,10 @@ struct RunMetadata<'a> {
     terminal_log: String,
     binary_path: String,
     created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
 }
 
 include!("core.rs");

@@ -10,7 +10,9 @@ use crate::host::capability_host::registrar::{
     IngesterRegistration, QueryExample, SchemaModule, StageHandler, StageRegistration,
     StageRequest, StageResponse,
 };
+use crate::host::capability_host::runtime_contexts::builtin_language_services;
 use crate::host::devql::RepoIdentity;
+use crate::host::language_adapter::{LanguageHttpFactArtefact, LanguageHttpFactFile};
 use crate::utils::paths;
 use anyhow::Result;
 use serde::Deserialize;
@@ -210,10 +212,14 @@ impl CapabilityPack for IngesterOnlyPack {
 
 fn prepare_repo_root(temp: &TempDir) -> PathBuf {
     let repo_root = temp.path().join("repo");
-    fs::create_dir_all(repo_root.join(paths::BITLOOPS_RELATIONAL_STORE_DIR))
-        .expect("create relational dir");
-    fs::create_dir_all(repo_root.join(paths::BITLOOPS_EVENT_STORE_DIR)).expect("create event dir");
-    fs::create_dir_all(repo_root.join(paths::BITLOOPS_BLOB_STORE_DIR)).expect("create blob dir");
+    for path in [
+        paths::default_relational_db_path(&repo_root),
+        paths::default_events_db_path(&repo_root),
+    ] {
+        fs::create_dir_all(path.parent().expect("default store path has parent"))
+            .expect("create store dir");
+    }
+    fs::create_dir_all(paths::default_blob_store_path(&repo_root)).expect("create blob dir");
     repo_root
 }
 
@@ -347,4 +353,64 @@ fn run_health_checks_returns_prefixed_results() {
     assert_eq!(results[1].0, "knowledge.unhealthy");
     assert!(!results[1].1.healthy);
     assert_eq!(results[1].1.details.as_deref(), Some("details"));
+}
+
+#[test]
+fn current_state_context_language_services_forward_http_fact_extraction() {
+    let gateway = RuntimeLanguageServicesGateway {
+        inner: builtin_language_services().expect("built-in language services"),
+    };
+    let file = LanguageHttpFactFile {
+        repo_id: "repo-1".to_string(),
+        path: "axum/src/routing/route.rs".to_string(),
+        language: "rust".to_string(),
+        content_id: "content-1".to_string(),
+        parser_version: "tree-sitter-rust@1".to_string(),
+        extractor_version: "rust-language-pack@1".to_string(),
+    };
+    let content = r#"
+impl<B> Future for RouteFuture<B> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Response<BoxBody>> {
+        if self.method == Method::HEAD {
+            let res = ready!(self.inner.poll(cx));
+            Poll::Ready(res.map(|_| boxed(Empty::new())))
+        } else {
+            ready!(self.inner.poll(cx))
+        }
+    }
+}
+"#;
+    let start_byte = content.find("fn poll").expect("poll function") as i32;
+    let artefacts = vec![LanguageHttpFactArtefact {
+        symbol_id: "symbol-route-future-poll".to_string(),
+        artefact_id: "artefact-route-future-poll".to_string(),
+        symbol_fqn: "axum/src/routing/route.rs::impl@1::poll".to_string(),
+        canonical_kind: Some("method".to_string()),
+        language_kind: "method_declaration".to_string(),
+        start_line: 3,
+        end_line: 10,
+        start_byte,
+        end_byte: i32::try_from(content.len()).expect("fixture length fits i32"),
+        signature: Some(
+            "fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Response<BoxBody>>"
+                .to_string(),
+        ),
+    }];
+
+    let (owner, facts) = gateway
+        .http_facts_for_file(&file, content, &artefacts)
+        .expect("HTTP facts from runtime language services");
+
+    assert_eq!(owner, "rust-language-pack");
+    assert_eq!(facts.len(), 1);
+    assert!(
+        facts[0]
+            .roles
+            .contains(&"http.response.body_replacement".to_string())
+    );
+    assert!(
+        facts[0]
+            .roles
+            .contains(&"http.response.body_stripping".to_string())
+    );
 }

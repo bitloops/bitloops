@@ -105,8 +105,10 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
     stop_daemon_for_scenario(world).ok();
 
     let stderr_log_path = daemon_stderr_log_path(world.run_dir());
+    let daemon_started = Instant::now();
     let mut attempt_errors = Vec::new();
     for port in daemon_candidate_ports(world.run_dir()) {
+        let attempt_started = Instant::now();
         append_world_log(
             world,
             &format!("Starting foreground daemon for scenario using port candidate {port}.\n"),
@@ -115,6 +117,16 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
         let mut child = spawn_daemon_process(world, &port, &stderr_log_path)?;
         match wait_for_daemon_ready(world.run_dir(), &mut child, &stderr_log_path) {
             Ok((runtime_state_path, runtime_state)) => {
+                append_timing_log(
+                    world,
+                    "daemon startup",
+                    daemon_started.elapsed(),
+                    format!(
+                        "port={port} attempts={} pid={}",
+                        attempt_errors.len() + 1,
+                        runtime_state.pid
+                    ),
+                )?;
                 append_world_log(
                     world,
                     &format!(
@@ -138,6 +150,12 @@ pub fn ensure_daemon_for_scenario(world: &mut QatWorld) -> Result<()> {
                 return Ok(());
             }
             Err(err) => {
+                append_timing_log(
+                    world,
+                    "daemon startup attempt",
+                    attempt_started.elapsed(),
+                    format!("port={port} status=failed"),
+                )?;
                 append_world_log(
                     world,
                     &format!("Daemon startup attempt failed for port candidate {port}: {err:#}\n"),
@@ -191,6 +209,339 @@ fn open_scenario_runtime_sqlite(
         .initialise_runtime_checkpoint_schema()
         .context("initialising scenario runtime checkpoint schema")?;
     Ok(sqlite)
+}
+
+fn open_scenario_daemon_runtime_store(world: &QatWorld) -> Result<QatDaemonSqliteRuntimeStore> {
+    with_scenario_app_env(world, QatDaemonSqliteRuntimeStore::open)
+        .context("opening scenario daemon runtime store")
+}
+
+fn latest_completed_sync_task_source(world: &QatWorld) -> Result<Option<DevqlTaskSource>> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for latest completed sync task source")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(None);
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .enumerate()
+        .filter(|task| {
+            task.1.repo_id == repo_id
+                && task.1.kind == DevqlTaskKind::Sync
+                && task.1.status == DevqlTaskStatus::Completed
+        })
+        .max_by_key(|(index, task)| {
+            (
+                task.completed_at_unix.unwrap_or(0),
+                task.updated_at_unix,
+                *index,
+            )
+        })
+        .map(|(_, task)| task.source))
+}
+
+fn completed_sync_task_source_count(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+) -> Result<usize> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for completed sync task source count")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(0);
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Sync
+                && task.status == DevqlTaskStatus::Completed
+                && task.source == expected_source
+        })
+        .count())
+}
+
+fn ingest_task_source_count(world: &QatWorld, expected_source: DevqlTaskSource) -> Result<usize> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for ingest task source count")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(0);
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Ingest
+                && task.source == expected_source
+        })
+        .count())
+}
+
+fn ingest_task_source_diagnostics_after_snapshot(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+    snapshot_count: usize,
+) -> Result<Vec<String>> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for ingest task source diagnostics")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Ingest
+                && task.source == expected_source
+        })
+        .skip(snapshot_count)
+        .map(|task| {
+            format!(
+                "id={} status={:?} source={} submitted_at={} started_at={:?} updated_at={} completed_at={:?}",
+                task.task_id,
+                task.status,
+                task.source,
+                task.submitted_at_unix,
+                task.started_at_unix,
+                task.updated_at_unix,
+                task.completed_at_unix
+            )
+        })
+        .collect())
+}
+
+fn completed_sync_task_with_source_exists(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+) -> Result<bool> {
+    Ok(completed_sync_task_source_count(world, expected_source)? > 0)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SyncTaskSummaryField {
+    Work,
+    Added,
+    Changed,
+    Removed,
+    Unchanged,
+    CacheHits,
+    CacheMisses,
+    ParseErrors,
+}
+
+impl SyncTaskSummaryField {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Work => "work",
+            Self::Added => "added",
+            Self::Changed => "changed",
+            Self::Removed => "removed",
+            Self::Unchanged => "unchanged",
+            Self::CacheHits => "cache hits",
+            Self::CacheMisses => "cache misses",
+            Self::ParseErrors => "parse errors",
+        }
+    }
+}
+
+fn parse_sync_task_summary_field(raw: &str) -> Result<SyncTaskSummaryField> {
+    let normalised = raw
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['_', '-'], " ");
+    match normalised.as_str() {
+        "work" => Ok(SyncTaskSummaryField::Work),
+        "added" => Ok(SyncTaskSummaryField::Added),
+        "changed" => Ok(SyncTaskSummaryField::Changed),
+        "removed" => Ok(SyncTaskSummaryField::Removed),
+        "unchanged" => Ok(SyncTaskSummaryField::Unchanged),
+        "cache hits" => Ok(SyncTaskSummaryField::CacheHits),
+        "cache misses" => Ok(SyncTaskSummaryField::CacheMisses),
+        "parse errors" => Ok(SyncTaskSummaryField::ParseErrors),
+        other => bail!("unsupported DevQL sync task summary field `{other}`"),
+    }
+}
+
+fn sync_task_summary_field_value(
+    summary: &bitloops::host::devql::SyncSummary,
+    field: SyncTaskSummaryField,
+) -> usize {
+    match field {
+        SyncTaskSummaryField::Work => {
+            summary.paths_added
+                + summary.paths_changed
+                + summary.paths_removed
+                + summary.paths_unchanged
+        }
+        SyncTaskSummaryField::Added => summary.paths_added,
+        SyncTaskSummaryField::Changed => summary.paths_changed,
+        SyncTaskSummaryField::Removed => summary.paths_removed,
+        SyncTaskSummaryField::Unchanged => summary.paths_unchanged,
+        SyncTaskSummaryField::CacheHits => summary.cache_hits,
+        SyncTaskSummaryField::CacheMisses => summary.cache_misses,
+        SyncTaskSummaryField::ParseErrors => summary.parse_errors,
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CompletedSyncTaskSummaryBrief {
+    task_id: String,
+    source: String,
+    mode: String,
+    paths_added: usize,
+    paths_changed: usize,
+    paths_removed: usize,
+    paths_unchanged: usize,
+    cache_hits: usize,
+    cache_misses: usize,
+    parse_errors: usize,
+}
+
+fn completed_sync_task_summary_brief(
+    task: &bitloops::daemon::DevqlTaskRecord,
+) -> CompletedSyncTaskSummaryBrief {
+    let Some(summary) = task.sync_result() else {
+        return CompletedSyncTaskSummaryBrief {
+            task_id: task.task_id.clone(),
+            source: task.source.to_string(),
+            mode: "<missing sync result>".to_string(),
+            ..Default::default()
+        };
+    };
+
+    CompletedSyncTaskSummaryBrief {
+        task_id: task.task_id.clone(),
+        source: task.source.to_string(),
+        mode: summary.mode.clone(),
+        paths_added: summary.paths_added,
+        paths_changed: summary.paths_changed,
+        paths_removed: summary.paths_removed,
+        paths_unchanged: summary.paths_unchanged,
+        cache_hits: summary.cache_hits,
+        cache_misses: summary.cache_misses,
+        parse_errors: summary.parse_errors,
+    }
+}
+
+fn completed_sync_task_summary_brief_field_value(
+    brief: &CompletedSyncTaskSummaryBrief,
+    field: SyncTaskSummaryField,
+) -> usize {
+    match field {
+        SyncTaskSummaryField::Work => {
+            brief.paths_added + brief.paths_changed + brief.paths_removed + brief.paths_unchanged
+        }
+        SyncTaskSummaryField::Added => brief.paths_added,
+        SyncTaskSummaryField::Changed => brief.paths_changed,
+        SyncTaskSummaryField::Removed => brief.paths_removed,
+        SyncTaskSummaryField::Unchanged => brief.paths_unchanged,
+        SyncTaskSummaryField::CacheHits => brief.cache_hits,
+        SyncTaskSummaryField::CacheMisses => brief.cache_misses,
+        SyncTaskSummaryField::ParseErrors => brief.parse_errors,
+    }
+}
+
+fn completed_sync_task_summary_field_exceeds_min(
+    tasks: &[CompletedSyncTaskSummaryBrief],
+    field: SyncTaskSummaryField,
+    min: usize,
+) -> bool {
+    tasks
+        .iter()
+        .any(|task| completed_sync_task_summary_brief_field_value(task, field) > min)
+}
+
+fn format_completed_sync_task_summary_diagnostics(
+    tasks: &[CompletedSyncTaskSummaryBrief],
+) -> String {
+    if tasks.is_empty() {
+        return "no post-snapshot completed sync tasks".to_string();
+    }
+
+    tasks
+        .iter()
+        .map(|task| {
+            format!(
+                "task_id={} source={} mode={} added={} changed={} removed={} unchanged={} cache_hits={} cache_misses={} parse_errors={}",
+                task.task_id,
+                task.source,
+                task.mode,
+                task.paths_added,
+                task.paths_changed,
+                task.paths_removed,
+                task.paths_unchanged,
+                task.cache_hits,
+                task.cache_misses,
+                task.parse_errors
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn completed_sync_task_summary_briefs_after_source_snapshot(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+    snapshot_count: usize,
+) -> Result<Vec<CompletedSyncTaskSummaryBrief>> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for completed sync task summary assertion")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Sync
+                && task.status == DevqlTaskStatus::Completed
+                && task.source == expected_source
+        })
+        .skip(snapshot_count)
+        .map(completed_sync_task_summary_brief)
+        .collect())
+}
+
+fn parse_devql_task_source(raw: &str) -> Result<DevqlTaskSource> {
+    match raw.trim() {
+        "init" => Ok(DevqlTaskSource::Init),
+        "manual_cli" | "manual-cli" | "manual" => Ok(DevqlTaskSource::ManualCli),
+        "watcher" => Ok(DevqlTaskSource::Watcher),
+        "post_commit" | "post-commit" => Ok(DevqlTaskSource::PostCommit),
+        "post_merge" | "post-merge" => Ok(DevqlTaskSource::PostMerge),
+        "post_checkout" | "post-checkout" => Ok(DevqlTaskSource::PostCheckout),
+        "repo_policy_change" | "repo-policy-change" => Ok(DevqlTaskSource::RepoPolicyChange),
+        other => bail!("unsupported expected DevQL task source `{other}`"),
+    }
 }
 
 fn watcher_process_is_running(pid: u32) -> Result<bool> {
@@ -343,6 +694,44 @@ fn stop_registered_watcher_for_scenario(world: &QatWorld) -> Result<()> {
         .context("clearing scenario watcher registration")?;
     append_world_log(world, "Cleared DevQL watcher registration for scenario.\n")?;
 
+    Ok(())
+}
+
+pub fn assert_devql_watcher_registered_and_running_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let repo_root = world.repo_dir().to_string_lossy().to_string();
+    let sqlite = open_scenario_runtime_sqlite(world)?;
+    let Some((pid, state)) = sqlite
+        .with_connection(|conn| {
+            use rusqlite::OptionalExtension as _;
+
+            conn.query_row(
+                "SELECT pid, state
+                 FROM repo_watcher_registrations
+                 WHERE repo_root = ?1
+                 LIMIT 1",
+                rusqlite::params![repo_root.as_str()],
+                |row| Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+        })
+        .context("loading DevQL watcher registration")?
+    else {
+        bail!("expected DevQL watcher registration for repo `{repo_name}`");
+    };
+
+    ensure!(
+        state == "ready",
+        "expected DevQL watcher registration state `ready`, got `{state}`"
+    );
+    ensure!(
+        watcher_process_is_running(pid)?,
+        "expected DevQL watcher pid {pid} to be running"
+    );
     Ok(())
 }
 
@@ -642,6 +1031,21 @@ pub fn run_init_bitloops_for_repo(world: &mut QatWorld, repo_name: &str) -> Resu
     run_init_bitloops_with_agent(world, repo_name, "claude-code", false, None)
 }
 
+pub fn set_devql_producer_policy_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    sync_enabled: bool,
+    ingest_enabled: bool,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    set_devql_producer_settings(
+        &settings_local_path(world.repo_dir()),
+        sync_enabled,
+        ingest_enabled,
+    )
+    .context("writing repo-local DevQL producer policy")
+}
+
 fn normalise_onboarding_agent_name(agent_name: &str) -> &str {
     if agent_name.eq_ignore_ascii_case("claude") {
         AGENT_NAME_CLAUDE_CODE
@@ -689,6 +1093,24 @@ pub fn run_init_bitloops_with_agents(
     sync: Option<bool>,
 ) -> Result<()> {
     run_init_bitloops_with_agent_config(world, repo_name, agent_names, force, sync, None, None)
+}
+
+pub fn run_init_bitloops_with_agent_sync_ingest(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    sync: bool,
+    ingest: bool,
+) -> Result<()> {
+    run_init_bitloops_with_agent_config(
+        world,
+        repo_name,
+        &[agent_name],
+        false,
+        Some(sync),
+        Some(ingest),
+        None,
+    )
 }
 
 pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
@@ -800,6 +1222,42 @@ fn build_init_bitloops_args_with_options(
     }
 
     args
+}
+
+fn build_init_bitloops_args_with_producer_contract_options(
+    agent_name: &str,
+    sync: bool,
+) -> Vec<String> {
+    vec![
+        "init".to_string(),
+        "--install-default-daemon".to_string(),
+        "--agent".to_string(),
+        agent_name.to_string(),
+        "--no-embeddings".to_string(),
+        "--no-summaries".to_string(),
+        format!("--sync={sync}"),
+        "--ingest=false".to_string(),
+    ]
+}
+
+pub fn run_init_bitloops_producer_contract_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    sync: bool,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    enable_watcher_autostart_for_scenario(world)?;
+
+    let normalised_agent_name = normalise_onboarding_agent_name(agent_name);
+    world.agent_name = Some(normalised_agent_name.to_string());
+    let args_owned =
+        build_init_bitloops_args_with_producer_contract_options(normalised_agent_name, sync);
+    let label = format!("bitloops {}", args_owned.join(" "));
+    let args = args_owned.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = run_command_capture(world, &label, build_bitloops_command(world, &args)?)
+        .with_context(|| format!("running {label}"))?;
+    ensure_success(&output, &label)
 }
 
 pub fn run_bitloops_enable_with_flags(
@@ -1711,7 +2169,7 @@ pub fn run_devql_tasks_status_for_repo(world: &mut QatWorld, repo_name: &str) ->
 }
 
 fn devql_task_queue_status_is_idle(snapshot: &DevqlTaskQueueStatusSnapshot) -> bool {
-    snapshot.queued == 0 && snapshot.running == 0
+    snapshot.queued == 0 && snapshot.running == 0 && snapshot.failed == 0
 }
 
 pub fn wait_for_devql_task_queue_idle_for_repo(
@@ -1719,30 +2177,204 @@ pub fn wait_for_devql_task_queue_idle_for_repo(
     repo_name: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
-    let status = wait_for_qat_condition(
-        qat_eventual_timeout(),
-        qat_eventual_poll_interval(),
-        "DevQL task queue to become idle",
-        || {
-            run_devql_tasks_status_for_repo(world, repo_name)?;
-            parse_task_queue_status(world.last_command_stdout.as_deref().unwrap_or(""))
-        },
-        devql_task_queue_status_is_idle,
-        |snapshot| {
-            format!(
-                "queued={}, running={}, failed={}, current_repo_tasks={}",
-                snapshot.queued,
-                snapshot.running,
-                snapshot.failed,
-                snapshot.current_repo_tasks.len()
-            )
-        },
-    )?;
+    let timeout = qat_eventual_timeout();
+    let started = Instant::now();
+    let mut attempts = 0_usize;
+
+    let status = loop {
+        attempts += 1;
+        run_devql_tasks_status_for_repo(world, repo_name)?;
+        let status =
+            parse_task_queue_status(world.last_command_stdout.as_deref().unwrap_or(""))?;
+        let observation = format!(
+            "queued={}, running={}, failed={}, current_repo_tasks={}",
+            status.queued,
+            status.running,
+            status.failed,
+            status.current_repo_tasks.len()
+        );
+        ensure!(
+            status.failed == 0,
+            "DevQL task queue has failed tasks while waiting for idle; attempts={attempts}; observation={observation}"
+        );
+        if devql_task_queue_status_is_idle(&status) {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            bail!(
+                "timed out after {}s waiting for DevQL task queue to become idle; attempts={attempts}; last observation: {observation}",
+                timeout.as_secs()
+            );
+        }
+        std::thread::sleep(qat_eventual_poll_interval());
+    };
     world.last_command_exit_code = Some(0);
     world.last_command_stdout = Some(format!(
         "DevQL task queue reached idle state: queued={}, running={}",
         status.queued, status.running
     ));
+    append_timing_log(
+        world,
+        "wait DevQL task queue idle",
+        started.elapsed(),
+        format!("repo={repo_name} attempts={attempts}"),
+    )?;
+    Ok(())
+}
+
+pub fn wait_for_completed_sync_task_source_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let source_key = expected_source.to_string();
+    if let Some(snapshot_count) = world
+        .completed_sync_task_source_snapshots
+        .get(&source_key)
+        .copied()
+    {
+        wait_for_qat_condition(
+            qat_eventual_timeout(),
+            qat_eventual_poll_interval(),
+            &format!(
+                "completed DevQL sync task with source `{expected_source}` after snapshot count {snapshot_count}"
+            ),
+            || completed_sync_task_source_count(world, expected_source),
+            |count| *count > snapshot_count,
+            |count| format!("count={count}, snapshot={snapshot_count}"),
+        )?;
+    } else {
+        wait_for_qat_condition(
+            qat_eventual_timeout(),
+            qat_eventual_poll_interval(),
+            &format!("completed DevQL sync task with source `{expected_source}`"),
+            || completed_sync_task_with_source_exists(world, expected_source),
+            |exists| *exists,
+            |exists| format!("exists={exists}"),
+        )?;
+    }
+    append_timing_log(
+        world,
+        "wait completed sync task source",
+        started.elapsed(),
+        format!("repo={repo_name} source={expected_source}"),
+    )?;
+    Ok(())
+}
+
+pub fn wait_for_completed_sync_task_source_summary_field_greater_than_since_snapshot_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+    field: &str,
+    min: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let source_key = expected_source.to_string();
+    let snapshot_count = world
+        .completed_sync_task_source_snapshots
+        .get(&source_key)
+        .copied()
+        .ok_or_else(|| {
+            anyhow!(
+                "no completed DevQL sync task source snapshot captured for `{expected_source}`"
+            )
+        })?;
+    let field = parse_sync_task_summary_field(field)?;
+
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!(
+            "completed DevQL sync task with source `{expected_source}` to show {} > {min} after snapshot count {snapshot_count}",
+            field.label()
+        ),
+        || {
+            completed_sync_task_summary_briefs_after_source_snapshot(
+                world,
+                expected_source,
+                snapshot_count,
+            )
+        },
+        |tasks| completed_sync_task_summary_field_exceeds_min(tasks, field, min),
+        |tasks| format_completed_sync_task_summary_diagnostics(tasks),
+    )?;
+    append_timing_log(
+        world,
+        "wait completed sync task summary",
+        started.elapsed(),
+        format!("repo={repo_name} source={expected_source} field={}", field.label()),
+    )?;
+    Ok(())
+}
+
+pub fn snapshot_completed_sync_task_source_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let sync_count = completed_sync_task_source_count(world, expected_source)?;
+    let ingest_count = ingest_task_source_count(world, expected_source)?;
+    let source_key = expected_source.to_string();
+    world
+        .completed_sync_task_source_snapshots
+        .insert(source_key.clone(), sync_count);
+    world
+        .ingest_task_source_snapshots
+        .insert(source_key, ingest_count);
+    Ok(())
+}
+
+pub fn assert_no_devql_ingest_task_source_since_snapshot(
+    world: &QatWorld,
+    repo_name: &str,
+    source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(source)?;
+    let source_key = expected_source.to_string();
+    let snapshot_count = world
+        .ingest_task_source_snapshots
+        .get(&source_key)
+        .copied()
+        .ok_or_else(|| anyhow!("no DevQL ingest task source snapshot captured for `{expected_source}`"))?;
+    let current_count = ingest_task_source_count(world, expected_source)?;
+    if current_count <= snapshot_count {
+        return Ok(());
+    }
+
+    let new_tasks = ingest_task_source_diagnostics_after_snapshot(
+        world,
+        expected_source,
+        snapshot_count,
+    )?
+    .join("; ");
+    bail!(
+        "expected no new DevQL ingest task with source `{expected_source}` since snapshot count {snapshot_count}, found {}; new tasks: {}",
+        current_count - snapshot_count,
+        new_tasks
+    )
+}
+
+pub fn assert_latest_completed_sync_task_source_for_repo(
+    world: &QatWorld,
+    repo_name: &str,
+    expected_source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(expected_source)?;
+    let actual = latest_completed_sync_task_source(world)?;
+    ensure!(
+        actual == Some(expected_source),
+        "expected latest completed sync task source `{expected_source}`, got `{actual:?}`"
+    );
     Ok(())
 }
 
@@ -1880,6 +2512,99 @@ pub fn commit_without_hooks(world: &mut QatWorld) -> Result<()> {
     Ok(())
 }
 
+pub fn commit_with_hooks(world: &mut QatWorld) -> Result<()> {
+    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
+    let diff_output = run_command_capture(
+        world,
+        "git diff --cached --quiet",
+        build_git_command(world, &["diff", "--cached", "--quiet"], &[]),
+    )?;
+    let diff_code = diff_output.status.code().unwrap_or_default();
+    let mut args = vec!["commit", "-m", "QAT change (hooks enabled)"];
+    if diff_code == 0 {
+        args.insert(1, "--allow-empty");
+    }
+    let output = run_command_capture(
+        world,
+        "git commit (hooks enabled)",
+        build_git_command(world, &args, &[]),
+    )?;
+    ensure_success(&output, "git commit (hooks enabled)")?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn create_branch_with_source_file_and_return_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    branch_name: &str,
+    relative_path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let base_branch = current_branch_name(world)?;
+    run_git_success(
+        world,
+        &["checkout", "-b", branch_name],
+        &[],
+        &format!("git checkout -b {branch_name}"),
+    )?;
+    write_deterministic_source_file(world.repo_dir(), relative_path, false)?;
+    commit_without_hooks(world)?;
+    run_git_success(
+        world,
+        &["checkout", base_branch.as_str()],
+        &[],
+        &format!("git checkout {base_branch}"),
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn checkout_branch_for_repo(
+    world: &mut QatWorld,
+    repo_name: &str,
+    branch_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(
+        world,
+        &["checkout", branch_name],
+        &[],
+        &format!("git checkout {branch_name}"),
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn checkout_previous_branch_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(
+        world,
+        &["checkout", "-"],
+        &[],
+        "git checkout previous branch",
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn git_reset_hard_head_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(
+        world,
+        &["reset", "--hard", "HEAD"],
+        &[],
+        "git reset --hard HEAD",
+    )?;
+    capture_head_sha(world)?;
+    Ok(())
+}
+
+pub fn git_clean_fd_for_repo(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_git_success(world, &["clean", "-fd"], &[], "git clean -fd")
+}
+
 pub fn stage_changes_without_committing(world: &QatWorld) -> Result<()> {
     let output = run_command_capture(
         world,
@@ -1902,13 +2627,7 @@ pub fn simulate_git_pull_with_changes(world: &mut QatWorld) -> Result<()> {
         "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
     )
     .with_context(|| format!("writing {}", file_path.display()))?;
-    run_git_success(world, &["add", "-A"], &[], "git add -A")?;
-    run_git_success(
-        world,
-        &["commit", "-m", "feat: add utils module from remote"],
-        &[],
-        "git commit utils",
-    )?;
+    commit_without_hooks(world)?;
     run_git_success(
         world,
         &["checkout", "-"],
@@ -3462,6 +4181,757 @@ pub fn assert_devql_select_artefacts_search_returns_symbol(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArchitectureEntryPointObservation {
+    id: String,
+    path: Option<String>,
+    entry_kind: Option<String>,
+    label: String,
+    computed: bool,
+    asserted: bool,
+    suppressed: bool,
+    effective: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArchitectureContainerObservation {
+    id: String,
+    key: Option<String>,
+    kind: Option<String>,
+    label: String,
+    deployment_kinds: Vec<String>,
+    entry_points: Vec<(String, String)>,
+    component_keys: Vec<String>,
+}
+
+struct ContextGuidanceObservation {
+    total_count: usize,
+    kinds: Vec<String>,
+}
+
+fn build_architecture_entry_points_query(kind: &str) -> String {
+    format!(
+        r#"query {{
+  project(path: ".") {{
+    architectureEntryPoints(kind: "{}", first: 50) {{
+      id
+      path
+      entryKind
+      label
+      computed
+      asserted
+      suppressed
+      effective
+    }}
+  }}
+}}"#,
+        escape_devql_string(kind)
+    )
+}
+
+fn extract_architecture_entry_points(
+    value: &serde_json::Value,
+) -> Result<Vec<ArchitectureEntryPointObservation>> {
+    let nodes = value
+        .get("project")
+        .and_then(|project| project.get("architectureEntryPoints"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected project.architectureEntryPoints array"))?;
+
+    nodes
+        .iter()
+        .map(|node| {
+            Ok(ArchitectureEntryPointObservation {
+                id: node
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| anyhow!("architecture entry point missing id"))?
+                    .to_string(),
+                path: node
+                    .get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                entry_kind: node
+                    .get("entryKind")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                label: node
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                computed: node
+                    .get("computed")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                asserted: node
+                    .get("asserted")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                suppressed: node
+                    .get("suppressed")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                effective: node
+                    .get("effective")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn observe_architecture_entry_points(
+    world: &mut QatWorld,
+    _repo_name: &str,
+    kind: &str,
+) -> Result<Vec<ArchitectureEntryPointObservation>> {
+    let query = build_architecture_entry_points_query(kind);
+    let value = run_devql_graphql_query(world, &query)?;
+    extract_architecture_entry_points(&value)
+}
+
+fn find_architecture_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<Option<ArchitectureEntryPointObservation>> {
+    Ok(observe_architecture_entry_points(world, repo_name, kind)?
+        .into_iter()
+        .find(|entry_point| {
+            entry_point.entry_kind.as_deref() == Some(kind)
+                && entry_point.path.as_deref() == Some(path)
+                && entry_point.effective
+        }))
+}
+
+fn build_architecture_containers_query(system_key: Option<&str>) -> String {
+    let system_key_arg = system_key
+        .map(|system_key| format!(r#"systemKey: "{}","#, escape_devql_string(system_key)))
+        .unwrap_or_default();
+
+    format!(
+        r#"query {{
+  project(path: ".") {{
+    architectureContainers({system_key_arg} first: 50) {{
+      id
+      key
+      kind
+      label
+      deploymentUnits {{
+        properties
+      }}
+      entryPoints {{
+        path
+        entryKind
+      }}
+      components {{
+        properties
+      }}
+    }}
+  }}
+}}"#
+    )
+}
+
+fn extract_architecture_containers(
+    value: &serde_json::Value,
+) -> Result<Vec<ArchitectureContainerObservation>> {
+    let containers = value
+        .get("project")
+        .and_then(|project| project.get("architectureContainers"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("expected project.architectureContainers array"))?;
+
+    containers
+        .iter()
+        .map(|container| {
+            let deployment_kinds = container
+                .get("deploymentUnits")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|deployment| {
+                    deployment
+                        .get("properties")
+                        .and_then(|properties| properties.get("deployment_kind"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>();
+
+            let entry_points = container
+                .get("entryPoints")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry_point| {
+                    Some((
+                        entry_point
+                            .get("entryKind")
+                            .and_then(serde_json::Value::as_str)?
+                            .to_string(),
+                        entry_point
+                            .get("path")
+                            .and_then(serde_json::Value::as_str)?
+                            .to_string(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+
+            let component_keys = container
+                .get("components")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|component| {
+                    component
+                        .get("properties")
+                        .and_then(|properties| properties.get("component_key"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToString::to_string)
+                })
+                .collect::<Vec<_>>();
+
+            Ok(ArchitectureContainerObservation {
+                id: container
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| anyhow!("architecture container missing id"))?
+                    .to_string(),
+                key: container
+                    .get("key")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                kind: container
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                label: container
+                    .get("label")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                deployment_kinds,
+                entry_points,
+                component_keys,
+            })
+        })
+        .collect()
+}
+
+fn observe_architecture_containers(
+    world: &mut QatWorld,
+    system_key: Option<&str>,
+) -> Result<Vec<ArchitectureContainerObservation>> {
+    let query = build_architecture_containers_query(system_key);
+    let value = run_devql_graphql_query(world, &query)?;
+    extract_architecture_containers(&value)
+}
+
+fn find_architecture_container_for_entry_point(
+    world: &mut QatWorld,
+    entry_kind: &str,
+    path: &str,
+) -> Result<Option<ArchitectureContainerObservation>> {
+    Ok(observe_architecture_containers(world, None)?
+        .into_iter()
+        .find(|container| {
+            container
+                .entry_points
+                .iter()
+                .any(|(kind, entry_path)| kind == entry_kind && entry_path == path)
+        }))
+}
+
+fn build_context_guidance_query(path: &str, kind: Option<&str>) -> String {
+    let kind_arg = kind
+        .map(|kind| format!(r#", kind: "{}""#, escape_devql_string(kind)))
+        .unwrap_or_default();
+
+    format!(
+        r#"query {{
+  selectArtefacts(by: {{ path: "{}" }}) {{
+    contextGuidance(category: DECISION{kind_arg}) {{
+      overview
+      items(first: 10) {{
+        category
+        kind
+        guidance
+        evidenceExcerpt
+      }}
+    }}
+  }}
+}}"#,
+        escape_devql_string(path),
+        kind_arg = kind_arg
+    )
+}
+
+fn observe_context_guidance(
+    world: &mut QatWorld,
+    path: &str,
+    kind: Option<&str>,
+) -> Result<ContextGuidanceObservation> {
+    let query = build_context_guidance_query(path, kind);
+    let value = run_devql_graphql_query(world, &query)?;
+
+    let guidance = value
+        .get("selectArtefacts")
+        .and_then(|value| value.get("contextGuidance"))
+        .ok_or_else(|| {
+            anyhow!("expected selectArtefacts.contextGuidance payload in GraphQL response")
+        })?;
+
+    let total_count = guidance
+        .get("overview")
+        .and_then(|overview| overview.get("totalCount"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0);
+
+    let kinds = match guidance.get("items").and_then(serde_json::Value::as_array) {
+        Some(items) => items
+            .iter()
+            .filter_map(|item| item.get("kind").and_then(serde_json::Value::as_str))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+
+    Ok(ContextGuidanceObservation { total_count, kinds })
+}
+
+pub fn assert_architecture_entry_point_effective(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture entry point `{kind}` at `{path}` to be effective"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        Option::is_some,
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| {
+                    format!(
+                        "id={}; label={}; computed={}; asserted={}",
+                        entry_point.id,
+                        entry_point.label,
+                        entry_point.computed,
+                        entry_point.asserted
+                    )
+                })
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?;
+
+    ensure!(
+        observation.is_some(),
+        "expected architecture entry point `{kind}` at `{path}` to be effective"
+    );
+
+    Ok(())
+}
+
+pub fn assert_architecture_container_exposes_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    container_kind: &str,
+    entry_kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let container = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture container `{container_kind}` exposing `{entry_kind}` at `{path}`"),
+        || find_architecture_container_for_entry_point(world, entry_kind, path),
+        |container| {
+            container.as_ref().is_some_and(|container| {
+                container.kind.as_deref() == Some(container_kind)
+                    && !container.deployment_kinds.is_empty()
+                    && !container.component_keys.is_empty()
+            })
+        },
+        |container| {
+            container
+                .as_ref()
+                .map(|container| {
+                    format!(
+                        "id={}; key={:?}; kind={:?}; label={}; deployment_kinds={:?}; component_keys={:?}",
+                        container.id,
+                        container.key,
+                        container.kind,
+                        container.label,
+                        container.deployment_kinds,
+                        container.component_keys
+                    )
+                })
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?;
+
+    ensure!(
+        container
+            .as_ref()
+            .is_some_and(|container| container.kind.as_deref() == Some(container_kind)),
+        "expected architecture container `{container_kind}` exposing `{entry_kind}` at `{path}`"
+    );
+
+    Ok(())
+}
+
+pub fn assert_architecture_system_membership_for_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    system_key: &str,
+    entry_kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let container = find_architecture_container_for_entry_point(world, entry_kind, path)?
+        .ok_or_else(|| anyhow!("container for `{entry_kind}` at `{path}` was not available"))?;
+
+    let mutation = format!(
+        r#"mutation {{
+  assertArchitectureSystemMembership(input: {{
+    systemKey: "{}",
+    systemLabel: "QAT Shared System",
+    containerId: "{}",
+    reason: "QAT shared architecture system membership",
+    source: "qat",
+    confidence: 0.92
+  }}) {{
+    success
+    systemId
+    containerId
+    assertionIds
+  }}
+}}"#,
+        escape_devql_string(system_key),
+        escape_devql_string(&container.id)
+    );
+
+    let value = run_devql_graphql_query(world, &mutation)?;
+
+    ensure!(
+        value
+            .get("assertArchitectureSystemMembership")
+            .and_then(|result| result.get("success"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        "expected assertArchitectureSystemMembership to succeed"
+    );
+
+    let query = format!(
+        r#"query {{
+  project(path: ".") {{
+    architectureContainers(systemKey: "{}", first: 50) {{
+      id
+      entryPoints {{
+        path
+        entryKind
+      }}
+    }}
+  }}
+}}"#,
+        escape_devql_string(system_key)
+    );
+
+    let observed = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture system `{system_key}` to include container `{}`", container.id),
+        || run_devql_graphql_query(world, &query),
+        |value| {
+            value
+                .get("project")
+                .and_then(|project| project.get("architectureContainers"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|containers| {
+                    containers.iter().any(|observed| {
+                        observed.get("id").and_then(serde_json::Value::as_str)
+                            == Some(container.id.as_str())
+                            && observed
+                                .get("entryPoints")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some_and(|entry_points| {
+                                    entry_points.iter().any(|entry_point| {
+                                        entry_point
+                                            .get("entryKind")
+                                            .and_then(serde_json::Value::as_str)
+                                            == Some(entry_kind)
+                                            && entry_point
+                                                .get("path")
+                                                .and_then(serde_json::Value::as_str)
+                                                == Some(path)
+                                    })
+                                })
+                    })
+                })
+        },
+        |value| value.to_string(),
+    )?;
+
+    ensure!(
+        observed
+            .get("project")
+            .and_then(|project| project.get("architectureContainers"))
+            .is_some(),
+        "expected architecture system `{system_key}` membership to be queryable"
+    );
+
+    Ok(())
+}
+
+pub fn assert_architecture_suppression_revoke_roundtrip(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let entry_point = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture entry point `{kind}` at `{path}` before suppression"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        Option::is_some,
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| entry_point.id.clone())
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?
+    .ok_or_else(|| anyhow!("entry point `{kind}` at `{path}` was not available"))?;
+
+    let suppress_query = format!(
+        r#"mutation {{
+  assertArchitectureGraphFact(input: {{
+    action: SUPPRESS,
+    targetKind: NODE,
+    node: {{ id: "{}", kind: ENTRY_POINT }},
+    reason: "QAT suppression round-trip",
+    source: "qat"
+  }}) {{
+    success
+    assertionId
+  }}
+}}"#,
+        escape_devql_string(&entry_point.id)
+    );
+
+    let suppress_value = run_devql_graphql_query(world, &suppress_query)?;
+
+    let assertion_id = suppress_value
+        .get("assertArchitectureGraphFact")
+        .and_then(|result| result.get("assertionId"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow!("expected architecture suppression assertion id"))?
+        .to_string();
+
+    let hidden = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("architecture entry point `{kind}` at `{path}` to be suppressed"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        Option::is_none,
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| format!("still effective as {}", entry_point.id))
+                .unwrap_or_else(|| "hidden".to_string())
+        },
+    )?;
+
+    ensure!(
+        hidden.is_none(),
+        "expected architecture entry point `{kind}` at `{path}` to be hidden after suppression"
+    );
+
+    let revoke_query = format!(
+        r#"mutation {{
+  revokeArchitectureGraphAssertion(id: "{}") {{
+    success
+    revoked
+    id
+  }}
+}}"#,
+        escape_devql_string(&assertion_id)
+    );
+
+    let revoke_value = run_devql_graphql_query(world, &revoke_query)?;
+
+    let revoked = revoke_value
+        .get("revokeArchitectureGraphAssertion")
+        .and_then(|result| result.get("revoked"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    ensure!(
+        revoked,
+        "expected revokeArchitectureGraphAssertion to revoke `{assertion_id}`"
+    );
+
+    assert_architecture_entry_point_effective(world, repo_name, kind, path)
+}
+
+pub fn assert_architecture_manual_entry_point(
+    world: &mut QatWorld,
+    repo_name: &str,
+    kind: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let assert_query = format!(
+        r#"mutation {{
+  assertArchitectureGraphFact(input: {{
+    action: ASSERT,
+    targetKind: NODE,
+    node: {{
+      kind: ENTRY_POINT,
+      label: "QAT manual entry point",
+      path: "{}",
+      entryKind: "{}"
+    }},
+    reason: "QAT manual architecture graph assertion",
+    source: "qat",
+    confidence: 0.91
+  }}) {{
+    success
+    assertionId
+  }}
+}}"#,
+        escape_devql_string(path),
+        escape_devql_string(kind)
+    );
+
+    let value = run_devql_graphql_query(world, &assert_query)?;
+
+    ensure!(
+        value
+            .get("assertArchitectureGraphFact")
+            .and_then(|result| result.get("success"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        "expected assertArchitectureGraphFact to succeed"
+    );
+
+    let entry_point = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("manual architecture entry point `{kind}` at `{path}` to be effective"),
+        || find_architecture_entry_point(world, repo_name, kind, path),
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .is_some_and(|entry_point| entry_point.asserted && !entry_point.computed)
+        },
+        |entry_point| {
+            entry_point
+                .as_ref()
+                .map(|entry_point| {
+                    format!(
+                        "id={}; computed={}; asserted={}; suppressed={}",
+                        entry_point.id,
+                        entry_point.computed,
+                        entry_point.asserted,
+                        entry_point.suppressed
+                    )
+                })
+                .unwrap_or_else(|| "not found".to_string())
+        },
+    )?;
+
+    ensure!(
+        entry_point
+            .as_ref()
+            .is_some_and(|entry_point| entry_point.asserted && !entry_point.computed),
+        "expected manual architecture entry point `{kind}` at `{path}` to be asserted-only"
+    );
+
+    Ok(())
+}
+
+pub fn assert_devql_context_guidance_returns_at_least(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    min_count: usize,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to return at least {min_count} items"),
+        || observe_context_guidance(world, path, None),
+        |observation| observation.total_count >= min_count,
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+
+    ensure!(
+        observation.total_count >= min_count,
+        "expected DevQL context guidance for `{path}` to return at least {min_count} items, got {} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+
+    Ok(())
+}
+
+pub fn assert_devql_context_guidance_includes_kind(
+    world: &mut QatWorld,
+    repo_name: &str,
+    path: &str,
+    expected_kind: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+
+    let observation = wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("DevQL context guidance for `{path}` to include kind `{expected_kind}`"),
+        || observe_context_guidance(world, path, Some(expected_kind)),
+        |observation| observation.kinds.iter().any(|kind| kind == expected_kind),
+        |observation| {
+            format!(
+                "total_count={}, kinds=[{}]",
+                observation.total_count,
+                observation.kinds.join(", ")
+            )
+        },
+    )?;
+
+    ensure!(
+        observation.kinds.iter().any(|kind| kind == expected_kind),
+        "expected DevQL context guidance for `{path}` to include kind `{expected_kind}`, got total_count={} with kinds [{}]",
+        observation.total_count,
+        observation.kinds.join(", ")
+    );
+
+    Ok(())
+}
+
 fn checkpoint_agent_candidates(agent: &str) -> Vec<String> {
     let mut candidates = vec![agent.to_string()];
     if agent == "claude" {
@@ -3626,6 +5096,7 @@ fn resolve_repo_id(conn: &rusqlite::Connection) -> Result<String> {
         "SELECT repo_id FROM symbol_embeddings LIMIT 1",
         "SELECT repo_id FROM artefacts_current LIMIT 1",
         "SELECT repo_id FROM current_file_state LIMIT 1",
+        "SELECT repo_id FROM commit_checkpoints ORDER BY created_at DESC LIMIT 1",
         "SELECT repo_id FROM repositories WHERE provider = 'local' ORDER BY created_at DESC LIMIT 1",
         "SELECT repo_id FROM repositories ORDER BY created_at DESC LIMIT 1",
     ] {
@@ -4321,6 +5792,7 @@ pub fn assert_artefacts_current_contains_path_eventually(
     path: &str,
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
     let expected = format!("artefacts_current to eventually contain `{path}`");
     let first_attempt = wait_for_qat_condition(
         qat_eventual_timeout(),
@@ -4352,6 +5824,36 @@ pub fn assert_artefacts_current_contains_path_eventually(
             )
         })?;
     }
+    append_timing_log(
+        world,
+        "wait artefacts_current contains",
+        started.elapsed(),
+        format!("repo={repo_name} path={path} nudge=allowed"),
+    )?;
+    Ok(())
+}
+
+pub fn assert_artefacts_current_contains_path_eventually_without_nudge(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("artefacts_current to contain `{path}` without nudge"),
+        || assert_artefacts_current_contains_path(world, repo_name, path),
+        |_| true,
+        |_| format!("artefacts_current contains `{path}`"),
+    )?;
+    append_timing_log(
+        world,
+        "wait artefacts_current contains",
+        started.elapsed(),
+        format!("repo={repo_name} path={path} nudge=disabled"),
+    )?;
     Ok(())
 }
 
@@ -4366,6 +5868,33 @@ pub fn assert_artefacts_current_lacks_path(
         count == 0,
         "expected artefacts_current to omit `{path}`, got {count} rows"
     );
+    Ok(())
+}
+
+pub fn assert_artefacts_current_lacks_path_eventually(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("artefacts_current to omit `{path}`"),
+        || {
+            assert_artefacts_current_lacks_path(world, repo_name, path)?;
+            Ok(true)
+        },
+        |ready| *ready,
+        |ready| format!("ready={ready}"),
+    )?;
+    append_timing_log(
+        world,
+        "wait artefacts_current lacks",
+        started.elapsed(),
+        format!("repo={repo_name} path={path}"),
+    )?;
     Ok(())
 }
 
@@ -4404,6 +5933,35 @@ pub fn assert_current_file_state_content_id_changed_since_snapshot_for_path(
         after != before,
         "expected current_file_state effective_content_id for `{path}` to change, but both snapshots were {after:?}"
     );
+    Ok(())
+}
+
+pub fn assert_current_file_state_content_id_changed_eventually_for_path(
+    world: &QatWorld,
+    repo_name: &str,
+    path: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let started = Instant::now();
+    wait_for_qat_condition(
+        qat_eventual_timeout(),
+        qat_eventual_poll_interval(),
+        &format!("current_file_state content id for `{path}` to change"),
+        || {
+            assert_current_file_state_content_id_changed_since_snapshot_for_path(
+                world, repo_name, path,
+            )?;
+            Ok(true)
+        },
+        |ready| *ready,
+        |ready| format!("ready={ready}"),
+    )?;
+    append_timing_log(
+        world,
+        "wait current_file_state content id changed",
+        started.elapsed(),
+        format!("repo={repo_name} path={path}"),
+    )?;
     Ok(())
 }
 

@@ -15,7 +15,8 @@ use super::{
     LanguageAdapterMigrationDescriptor, LanguageAdapterMigrationExecution,
     LanguageAdapterMigrationFailure, LanguageAdapterMigrationRunReport,
     LanguageAdapterMigrationStatus, LanguageAdapterMigrationStep, LanguageAdapterPack,
-    LanguageArtefact, LanguageTestSupport,
+    LanguageArtefact, LanguageEntryPointSupport, LanguageHttpFact, LanguageHttpFactArtefact,
+    LanguageHttpFactFile, LanguageTestSupport,
 };
 
 #[derive(Debug, Default)]
@@ -111,6 +112,20 @@ impl LanguageAdapterRegistry {
         self.packs.get(pack_id)?.extract_file_docstring(content)
     }
 
+    pub(crate) fn extract_http_facts(
+        &self,
+        pack_id: &str,
+        file: &LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[LanguageHttpFactArtefact],
+    ) -> Result<Vec<LanguageHttpFact>> {
+        let pack = self
+            .packs
+            .get(pack_id)
+            .ok_or_else(|| anyhow::anyhow!("language adapter pack `{pack_id}` not found"))?;
+        pack.extract_http_facts(file, content, artefacts)
+    }
+
     pub(crate) fn registered_pack_ids(&self) -> Vec<&str> {
         let mut ids: Vec<&str> = self.packs.keys().map(String::as_str).collect();
         ids.sort();
@@ -122,6 +137,13 @@ impl LanguageAdapterRegistry {
         pack_id: &str,
     ) -> Option<Arc<dyn LanguageTestSupport>> {
         self.packs.get(pack_id)?.test_support()
+    }
+
+    pub(crate) fn entry_point_support_for_pack(
+        &self,
+        pack_id: &str,
+    ) -> Option<Arc<dyn LanguageEntryPointSupport>> {
+        self.packs.get(pack_id)?.entry_point_support()
     }
 
     pub(crate) fn all_test_supports(&self) -> Vec<Arc<dyn LanguageTestSupport>> {

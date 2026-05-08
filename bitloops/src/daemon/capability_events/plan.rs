@@ -53,7 +53,13 @@ pub(super) fn build_execution_plan(
     let Some(latest_generation_seq) = latest_generation_seq(conn, &run.repo_id)? else {
         return Ok(None);
     };
-    let from_generation_seq_exclusive = cursor.last_applied_generation_seq.unwrap_or(0);
+    let requested_full_reconcile = run.reconcile_mode == "full_reconcile";
+    let from_generation_seq_exclusive = if requested_full_reconcile {
+        run.from_generation_seq
+            .min(latest_generation_seq.saturating_sub(1))
+    } else {
+        cursor.last_applied_generation_seq.unwrap_or(0)
+    };
     if latest_generation_seq <= from_generation_seq_exclusive {
         return Ok(None);
     }
@@ -72,7 +78,8 @@ pub(super) fn build_execution_plan(
         .last()
         .expect("checked non-empty generations before building execution plan");
     let from_generation_seq = from_generation_seq_exclusive + 1;
-    let forced_full_reconcile = cursor.last_applied_generation_seq.is_none()
+    let forced_full_reconcile = requested_full_reconcile
+        || cursor.last_applied_generation_seq.is_none()
         || generations
             .iter()
             .any(|generation| generation.requires_full_reconcile)
@@ -191,6 +198,7 @@ pub(super) fn build_execution_plan(
         record,
         repo_root: repo_root.to_path_buf(),
         request: CurrentStateConsumerRequest {
+            run_id: Some(run_id),
             repo_id: run.repo_id.clone(),
             repo_root: repo_root.to_path_buf(),
             active_branch: latest_generation.active_branch.clone(),

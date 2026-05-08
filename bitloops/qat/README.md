@@ -44,6 +44,7 @@ The suite is intentionally DB-first and artifact-first. Many assertions do not s
 - `bitloops/tests/qat_develop_gate.rs`
 - `bitloops/tests/qat_devql_capabilities.rs`
 - `bitloops/tests/qat_devql_sync.rs`
+- `bitloops/tests/qat_devql_sync_producer.rs`
 - `bitloops/tests/qat_devql_ingest.rs`
 - `bitloops/tests/qat_onboarding.rs`
 - `bitloops/tests/qat_agents_checkpoints.rs`
@@ -64,6 +65,7 @@ The suite is intentionally DB-first and artifact-first. Many assertions do not s
 The source of truth for the current QAT commands is:
 
 - `.cargo/config.toml` for the repo-root aliases
+- `bitloops/.cargo/config.toml` for crate-local aliases
 - `bitloops/Cargo.toml` for the `[[test]]` targets and required features
 
 Current checked-in aliases:
@@ -74,12 +76,19 @@ cargo qat-agent-smoke
 cargo qat-develop-gate
 cargo qat-devql-capabilities
 cargo qat-devql-sync
+cargo qat-devql-sync-producer
 cargo qat-devql-ingest
 cargo qat-onboarding
 cargo qat-agents-checkpoints
 ```
 
-All of those run through `cargo-nextest` from the repository root and enable the `qat-tests` feature on the `bitloops` crate.
+All of those route through `xtask qat`, which runs the matching `cargo-nextest` target from the repository root and enables the `qat-tests` feature on the `bitloops` crate. By default they keep serial QAT behavior. To shard a lane across multiple test-binary processes, pass `--parallel N` to the same alias:
+
+```bash
+cargo qat-devql-sync --parallel 5
+cargo qat-devql-sync-producer --parallel 5
+cargo qat-develop-gate --parallel 5
+```
 
 There is also an internal-only harness target:
 
@@ -100,6 +109,7 @@ Examples:
 
 - `qat_agent_smoke` runs `Suite::AgentSmoke`
 - `qat_devql_sync` runs `Suite::DevqlSync`
+- `qat_devql_sync_producer` runs `Suite::DevqlSync` filtered to `@sync_producer`
 - `qat_develop_gate` runs a serial filtered orchestration entrypoint instead of a single suite
 - `qat` runs the bundled multi-suite lane
 
@@ -176,6 +186,8 @@ Purpose of the develop gate:
 
 In practice, `cargo qat-develop-gate` walks the existing suite set above, applies an explicit Cucumber tag expression of `@develop_gate`, and runs only the tagged subset. That is how the same scenarios can participate both in their full focused lane and in the smaller CI gate for `develop`.
 
+For DevQL Sync specifically, `@develop_gate` coverage is producer-contract coverage. Sync scenarios in the gate must also be tagged `@sync_producer`, and manual sync plus legacy init-sync scenarios stay out of the gate.
+
 Because of that design, the source of truth for the gate is in code and feature tags:
 
 - suite selection in `bitloops/tests/qat_support/subsets.rs`
@@ -200,6 +212,25 @@ BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS=4
 ```
 
 If unset or invalid, it falls back to `1`.
+
+For daemon-heavy DevQL sync lanes, prefer process sharding over in-process scenario concurrency:
+
+```bash
+cargo qat-devql-sync --parallel 5
+cargo qat-devql-sync-producer --parallel 5
+cargo qat-devql-sync --parallel 3
+```
+
+The `--parallel` path runs through `xtask qat`. The coordinator prebuilds the selected QAT test binary once, then starts one compiled test-binary process per shard. Each child process receives:
+
+- `BITLOOPS_QAT_SCENARIO_SHARD_INDEX`
+- `BITLOOPS_QAT_SCENARIO_SHARD_COUNT`
+- `BITLOOPS_QAT_MAX_CONCURRENT_SCENARIOS=1`
+- `BITLOOPS_QAT_RUNS_ROOT=<shard-specific artifact root>`
+
+Each shard writes its test stdout and stderr to `stdout.log` and `stderr.log` under its shard directory. That keeps the parent terminal readable while still preserving full diagnostics in artifacts.
+
+That shape avoids the current-thread Cucumber/Tokio bottleneck where blocking QAT steps can make multiple active in-process scenarios appear concurrent while still effectively serializing execution. It also avoids spawning multiple nested Cargo/nextest builds for the same sharded run.
 
 ### Tag filtering
 
@@ -696,6 +727,7 @@ Those Claude-specific variables mainly matter for the older external-Claude help
 ```bash
 cargo qat-agent-smoke
 cargo qat-agents-checkpoints
+cargo qat-devql-sync-producer
 cargo qat-devql-sync
 cargo qat-devql-ingest
 cargo qat-devql-capabilities
@@ -785,55 +817,43 @@ New QAT coverage should preserve the current design principles:
 | 12  | Uninstall removes agent and git hooks              | `uninstall-repo`               |
 | 13  | Full uninstall removes all artefacts               | `uninstall-full`               |
 
-### 3. DevQL Sync (`cargo qat-devql-sync`, 23 scenarios)
+### 3. DevQL Sync (`cargo qat-devql-sync`, 31 scenarios)
 
-Exercises the queue-backed `bitloops devql tasks enqueue --kind sync` workspace
-reconciliation flow: full indexing, TestHarness current-state sync, incremental
-add/modify/delete detection, branch checkout, daemon downtime catch-up, git pull,
-validation and repair, explicit full and path-scoped modes, task queue control,
-`--require-daemon` failure handling, and watcher-driven `init --sync=true`
-added-file materialization.
+Exercises sync reconciliation across three lanes:
+
+- `@sync_producer` is the primary product-contract inventory. It simulates real user usage after `bitloops init`: watcher, git hook, daemon restart/downtime, branch checkout, merge, reset, clean, and validation flows.
+- `@sync_manual_smoke` is the small manual sync smoke subset for explicit enqueue/validate/repair/path-scoped behavior.
+- `@sync_legacy` is retained for historical `init --sync=true` manual convergence behavior and should not be treated as the main correctness signal.
 
 ```bash
 cargo qat-devql-sync
+cargo qat-devql-sync-producer
 ```
 
 Or equivalently:
 
 ```bash
 cargo nextest run --features qat-tests --test qat_devql_sync --run-ignored only -- qat_devql_sync --exact
+cargo nextest run --features qat-tests --test qat_devql_sync_producer --run-ignored only -- qat_devql_sync_producer --exact
 ```
 
-**Active scenarios:**
+Useful focused filters:
 
-| #   | Scenario                                                                  | Flow                            |
-| --- | ------------------------------------------------------------------------- | ------------------------------- |
-| 1   | Full sync indexes workspace source files                                  | `SyncFullIndex`                 |
-| 2   | Sync materializes test-harness coverage for discovered tests              | `SyncTestHarnessPopulate`       |
-| 3   | Sync removes test-harness coverage when test files are deleted            | `SyncTestHarnessDeleteTestFile` |
-| 4   | Sync detects newly added source files                                     | `SyncNewFiles`                  |
-| 5   | Sync detects and re-indexes modified source files                         | `SyncModifiedFiles`             |
-| 6   | Sync removes artefacts for deleted source files                           | `SyncDeletedFiles`              |
-| 7   | No-op sync reports zero changes                                           | `SyncNoop`                      |
-| 8   | Sync after branch checkout reflects the new branch state                  | `SyncBranchCheckout`            |
-| 9   | Sync catches up after daemon downtime with accumulated changes            | `SyncDaemonDowntime`            |
-| 10  | Sync indexes changes introduced by git pull                               | `SyncGitPull`                   |
-| 11  | Sync validate reports clean after a full sync                             | `SyncValidateClean`             |
-| 12  | Sync repair restores clean state after drift                              | `SyncRepair`                    |
-| 13  | Init with sync=true makes immediate follow-up sync report no changes      | `SyncInitSyncTrueNoop`          |
-| 14  | Watcher-driven materialization after init --sync=true                     | `SyncInitSyncTrueIncremental`   |
-| 15  | Init with sync=true keeps sync validation clean without workspace changes | `SyncInitSyncTrueValidateClean` |
+```bash
+CUCUMBER_FILTER_TAGS='@sync_manual_smoke' cargo qat-devql-sync
+CUCUMBER_FILTER_TAGS='@sync_legacy' cargo qat-devql-sync
+```
 
-The helper layer still supports negative drift assertions, and the active sync set now
-includes drift validation plus accumulated-drift coverage.
+The producer alias supplies an explicit `@sync_producer` filter in code, so it is not affected by `CUCUMBER_FILTER_TAGS`. The develop gate also supplies its filter explicitly and only admits producer-tagged DevQL Sync scenarios.
 
-### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 24 scenarios)
+### 4. DevQL Capabilities (`cargo qat-devql-capabilities`, 25 scenarios)
 
 Exercises the strict offline DevQL capability surface: agent queryability,
 checkpoint and chat-history retrieval, artefact-scoped dependency blast radius,
 artefact-scoped TestHarness proof-map queries, guide-aligned deterministic
-semantic clones, deterministic Confluence knowledge add/query/associate/refresh,
-knowledge rejection handling, and one final integrated cross-capability smoke.
+semantic clones, architecture graph entry-point/assertion reads, deterministic
+Confluence knowledge add/query/associate/refresh, knowledge rejection handling,
+and one final integrated cross-capability smoke.
 The semantic-clones lane validates the offline fake-runtime path rather than real
 local-model warm-cache behavior.
 
@@ -870,6 +890,8 @@ cargo nextest run --features qat-tests --test qat_devql_capabilities --run-ignor
   - handler-clone ranking, explanations, and filtering
   - DevQL clone summary grouped counts
   - GraphQL clone summary grouped counts
+- Architecture graph (1 scenario)
+  - CLI entry points from language/config evidence plus assert, suppress, and revoke behaviour
 - Deterministic Confluence knowledge flows (3 scenarios)
   - add/query/associate happy path for deterministic fixtures
   - refresh creates a new version

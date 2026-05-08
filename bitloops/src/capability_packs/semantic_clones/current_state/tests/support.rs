@@ -135,9 +135,12 @@ pub(super) async fn test_context(
         storage: Arc::clone(&storage),
         relational: Arc::new(NoopRelationalGateway),
         language_services: Arc::new(EmptyLanguageServicesGateway),
+        git_history: Arc::new(crate::host::capability_host::gateways::EmptyGitHistoryGateway),
+        inference: Arc::new(crate::host::inference::EmptyInferenceGateway),
         host_services: Arc::new(DefaultHostServicesGateway::new(request.repo_id.clone()))
             as Arc<dyn HostServicesGateway>,
         workplane: Arc::new(workplane.clone()),
+        test_harness: None,
         init_session_id: None,
     };
 
@@ -161,6 +164,7 @@ pub(super) fn request(
     artefact_removals: Vec<RemovedArtefact>,
 ) -> CurrentStateConsumerRequest {
     CurrentStateConsumerRequest {
+        run_id: None,
         repo_id: repo_id.to_string(),
         repo_root: repo_root.to_path_buf(),
         active_branch: Some("main".to_string()),

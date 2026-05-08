@@ -8,18 +8,23 @@ use crate::graphql::{DevqlGraphqlContext, backend_error, bad_cursor_error, bad_u
 
 use super::types::artefact_selection::ArtefactSelectorMode;
 use super::types::{
-    Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput, ArtefactSelection,
-    ArtefactSelectorInput, AsOfInput, Branch, CheckpointConnection, CheckpointEdge,
-    CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection, CommitEdge,
-    ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, FileContext, HealthStatus, InteractionEventConnection, InteractionEventEdge,
-    InteractionFilterInput, InteractionSearchInputObject, InteractionSessionConnection,
-    InteractionSessionEdge, InteractionSessionSearchHitObject, InteractionTurnConnection,
-    InteractionTurnEdge, InteractionTurnSearchHitObject, KnowledgeItemConnection,
-    KnowledgeItemEdge, KnowledgeProvider, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus,
-    TelemetryEventConnection, TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary,
-    TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    ArchitectureSystem, Artefact, ArtefactConnection, ArtefactEdge, ArtefactFilterInput,
+    ArtefactSelection, ArtefactSelectorInput, AsOfInput, Branch, CheckpointConnection,
+    CheckpointEdge, CloneConnection, CloneEdge, CloneSummary, ClonesFilterInput, CommitConnection,
+    CommitEdge, ConnectionPagination, DateTimeScalar, DependencyConnectionEdge,
+    DependencyEdgeConnection, DepsFilterInput, FileContext, HealthStatus,
+    InteractionEventConnection, InteractionEventEdge, InteractionFilterInput,
+    InteractionSearchInputObject, InteractionSessionConnection, InteractionSessionEdge,
+    InteractionSessionSearchHitObject, InteractionTurnConnection, InteractionTurnEdge,
+    InteractionTurnSearchHitObject, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
+    Project, TaskKind, TaskObject, TaskQueueStatusObject, TaskStatus, TelemetryEventConnection,
+    TelemetryEventEdge, TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
+
+mod stages;
+
+use stages::*;
 
 #[derive(Default)]
 pub struct SlimQueryRoot;
@@ -67,6 +72,55 @@ impl SlimQueryRoot {
         Ok(context
             .default_branch_name_for_scope(&context.slim_root_scope())
             .await)
+    }
+
+    async fn project(&self, ctx: &Context<'_>, path: String) -> Result<Project> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let scope = context.slim_root_scope();
+        let project_path = context
+            .validate_project_path(&scope, &path)
+            .map_err(bad_user_input_error)?;
+        Ok(Project::new(
+            project_path.clone(),
+            scope.with_project_path(project_path),
+        ))
+    }
+
+    #[graphql(name = "architectureSystems")]
+    async fn architecture_systems(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "systemKey")] system_key: Option<String>,
+        first: Option<i32>,
+    ) -> Result<Vec<ArchitectureSystem>> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        let first = optional_positive_limit("first", first)?;
+        context
+            .list_architecture_systems(system_key.as_deref(), first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query architecture systems: {err:#}")))
+    }
+
+    #[graphql(name = "architectureSystem")]
+    async fn architecture_system(
+        &self,
+        ctx: &Context<'_>,
+        key: String,
+    ) -> Result<Option<ArchitectureSystem>> {
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        context
+            .require_slim_request_scope()
+            .map_err(|err| bad_user_input_error(err.to_string()))?;
+        context
+            .architecture_system(&key)
+            .await
+            .map_err(|err| backend_error(format!("failed to query architecture system: {err:#}")))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -568,7 +622,12 @@ impl SlimQueryRoot {
             }
             ArtefactSelectorMode::Search { query, mode } => {
                 let bundle = select_search_artefacts(context, &scope, query, *mode).await?;
-                ArtefactSelection::new_search(bundle.unified, bundle.breakdown, scope)
+                ArtefactSelection::new_search(
+                    bundle.unified,
+                    bundle.breakdown,
+                    query.clone(),
+                    scope,
+                )
             }
             ArtefactSelectorMode::Path { path, lines } => {
                 let normalized = context
@@ -853,87 +912,4 @@ impl SlimQueryRoot {
             .map_err(|err| map_stage_adapter_error("tests summary", err))?;
         decode_stage_single("test_harness_tests_summary", rows)
     }
-}
-
-fn stage_limit(first: i32) -> Result<usize> {
-    if first <= 0 {
-        return Err(bad_user_input_error("`first` must be greater than 0"));
-    }
-    Ok(first as usize)
-}
-
-fn build_tests_stage_args(
-    min_confidence: Option<f64>,
-    linkage_source: Option<String>,
-) -> Result<Value> {
-    if let Some(min_confidence) = min_confidence
-        && !(0.0..=1.0).contains(&min_confidence)
-    {
-        return Err(bad_user_input_error(
-            "`minConfidence` must be between 0 and 1",
-        ));
-    }
-
-    let mut args = serde_json::Map::new();
-    if let Some(min_confidence) = min_confidence {
-        args.insert("min_confidence".to_string(), json!(min_confidence));
-    }
-    if let Some(linkage_source) = linkage_source
-        && !linkage_source.trim().is_empty()
-    {
-        args.insert(
-            "linkage_source".to_string(),
-            Value::String(linkage_source.trim().to_string()),
-        );
-    }
-    Ok(Value::Object(args))
-}
-
-fn project_stage_row_from_artefact(artefact: &Artefact) -> Value {
-    json!({
-        "artefact_id": artefact.id.as_ref(),
-        "symbol_id": &artefact.symbol_id,
-        "symbol_fqn": &artefact.symbol_fqn,
-        "canonical_kind": artefact.canonical_kind.map(|kind| kind.as_devql_value()),
-        "path": &artefact.path,
-        "start_line": artefact.start_line,
-        "end_line": artefact.end_line,
-    })
-}
-
-fn decode_stage_rows<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Result<Vec<T>> {
-    rows.into_iter()
-        .map(|row| {
-            serde_json::from_value(row).map_err(|err| {
-                backend_error(format!(
-                    "failed to decode `{stage}` stage payload into typed GraphQL result: {err}"
-                ))
-            })
-        })
-        .collect()
-}
-
-fn decode_stage_single<T: DeserializeOwned>(stage: &str, rows: Vec<Value>) -> Result<T> {
-    let Some(row) = rows.into_iter().next() else {
-        return Err(backend_error(format!(
-            "failed to decode `{stage}` stage payload: empty result"
-        )));
-    };
-    serde_json::from_value(row).map_err(|err| {
-        backend_error(format!(
-            "failed to decode `{stage}` stage payload into typed GraphQL result: {err}"
-        ))
-    })
-}
-
-fn map_stage_adapter_error(scope: &str, err: anyhow::Error) -> async_graphql::Error {
-    let message = format!("{err:#}");
-    if message.contains("unsupported DevQL stage")
-        || message.contains("ambiguous DevQL stage")
-        || message.contains("extension args must")
-        || message.contains("requires a resolved commit")
-    {
-        return bad_user_input_error(message);
-    }
-    backend_error(format!("failed to resolve {scope}: {message}"))
 }

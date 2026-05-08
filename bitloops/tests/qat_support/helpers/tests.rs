@@ -339,6 +339,27 @@ fn build_init_bitloops_args_with_backfill_enables_ingest_and_sets_window() {
 }
 
 #[test]
+fn build_init_bitloops_args_supports_explicit_ingest_choice() {
+    let args = build_init_bitloops_args_with_options(
+        &["claude-code"],
+        false,
+        Some(false),
+        Some(true),
+        None,
+    );
+    assert_eq!(
+        args,
+        vec![
+            "init",
+            "--agent",
+            "claude-code",
+            "--sync=false",
+            "--ingest=true",
+        ]
+    );
+}
+
+#[test]
 fn build_init_bitloops_args_supports_repeated_agent_flags() {
     let args =
         build_init_bitloops_args_with_options(&["claude-code", "codex"], false, None, None, None);
@@ -367,6 +388,96 @@ fn parse_ingest_summary_field_reads_key_value_pairs() {
         parse_ingest_summary_field(stdout, "artefacts_upserted"),
         Some(0)
     );
+}
+
+#[test]
+fn sync_task_summary_field_parsing_accepts_supported_labels() {
+    assert_eq!(
+        parse_sync_task_summary_field("work").expect("parse work"),
+        SyncTaskSummaryField::Work
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("added").expect("parse added"),
+        SyncTaskSummaryField::Added
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("changed").expect("parse changed"),
+        SyncTaskSummaryField::Changed
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("removed").expect("parse removed"),
+        SyncTaskSummaryField::Removed
+    );
+    assert_eq!(
+        parse_sync_task_summary_field("cache hits").expect("parse cache hits"),
+        SyncTaskSummaryField::CacheHits
+    );
+    assert!(parse_sync_task_summary_field("not-a-field").is_err());
+}
+
+#[test]
+fn sync_task_summary_field_reads_values_from_summary() {
+    let summary = bitloops::host::devql::SyncSummary {
+        paths_added: 2,
+        paths_changed: 3,
+        paths_removed: 4,
+        paths_unchanged: 5,
+        cache_hits: 6,
+        cache_misses: 7,
+        parse_errors: 8,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Work),
+        14
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Added),
+        2
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Changed),
+        3
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::Removed),
+        4
+    );
+    assert_eq!(
+        sync_task_summary_field_value(&summary, SyncTaskSummaryField::CacheMisses),
+        7
+    );
+}
+
+#[test]
+fn completed_sync_task_summary_diagnostics_include_post_snapshot_counts() {
+    let tasks = vec![CompletedSyncTaskSummaryBrief {
+        task_id: "sync-task-1".to_string(),
+        source: "watcher".to_string(),
+        mode: "incremental".to_string(),
+        paths_added: 1,
+        paths_changed: 2,
+        paths_removed: 3,
+        paths_unchanged: 4,
+        ..Default::default()
+    }];
+
+    assert!(
+        completed_sync_task_summary_field_exceeds_min(&tasks, SyncTaskSummaryField::Changed, 1),
+        "expected changed count to exceed min"
+    );
+    assert!(
+        !completed_sync_task_summary_field_exceeds_min(&tasks, SyncTaskSummaryField::Removed, 3),
+        "expected removed count equal to min not to match"
+    );
+
+    let diagnostics = format_completed_sync_task_summary_diagnostics(&tasks);
+    assert!(diagnostics.contains("task_id=sync-task-1"));
+    assert!(diagnostics.contains("source=watcher"));
+    assert!(diagnostics.contains("mode=incremental"));
+    assert!(diagnostics.contains("added=1 changed=2 removed=3 unchanged=4"));
+    assert!(diagnostics.contains("cache_hits=0 cache_misses=0 parse_errors=0"));
 }
 
 #[test]
@@ -484,6 +595,100 @@ fn update_last_task_id_from_output_read_only_mode_can_seed_empty_world_once() {
 }
 
 #[test]
+fn run_command_capture_logs_elapsed_millis() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let terminal_log_path = temp.path().join("terminal.log");
+    let world = QatWorld {
+        terminal_log_path: Some(terminal_log_path.clone()),
+        ..Default::default()
+    };
+
+    let output = run_command_capture(&world, "git version", {
+        let mut command = Command::new("git");
+        command.arg("--version");
+        command
+    })
+    .expect("run command");
+    assert!(output.status.success());
+
+    let terminal_log = fs::read_to_string(terminal_log_path).expect("read terminal log");
+    assert!(
+        terminal_log.contains("elapsed_ms:"),
+        "terminal log should include command elapsed timing\n{terminal_log}"
+    );
+}
+
+#[test]
+fn finish_run_metadata_records_completed_at_and_duration() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let run_dir = temp.path().join("run");
+    let repo_dir = run_dir.join("repo");
+    fs::create_dir_all(&repo_dir).expect("create repo dir");
+    let metadata_path = run_dir.join("run.json");
+    let terminal_log_path = run_dir.join("terminal.log");
+    let suite_root = temp.path().join("suite");
+    fs::create_dir_all(&suite_root).expect("create suite root");
+    let world = QatWorld {
+        scenario_name: Some("Scenario timing".to_string()),
+        scenario_slug: Some("scenario-timing".to_string()),
+        flow_name: Some("ScenarioTiming".to_string()),
+        run_config: Some(Arc::new(QatRunConfig {
+            binary_path: temp.path().join("bitloops"),
+            suite_root,
+        })),
+        run_dir: Some(run_dir),
+        repo_dir: Some(repo_dir),
+        terminal_log_path: Some(terminal_log_path),
+        metadata_path: Some(metadata_path.clone()),
+        ..Default::default()
+    };
+
+    write_run_metadata(&world).expect("write run metadata");
+    finish_run_metadata(&world).expect("finish run metadata");
+
+    let payload = fs::read_to_string(metadata_path).expect("read metadata");
+    let metadata: serde_json::Value = serde_json::from_str(&payload).expect("parse metadata");
+    assert!(
+        metadata
+            .get("completed_at")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "run metadata should include completed_at\n{payload}"
+    );
+    assert!(
+        metadata
+            .get("duration_ms")
+            .and_then(|value| value.as_u64())
+            .is_some(),
+        "run metadata should include duration_ms\n{payload}"
+    );
+}
+
+#[test]
+fn append_timing_log_records_label_elapsed_and_details() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let terminal_log_path = temp.path().join("terminal.log");
+    let world = QatWorld {
+        terminal_log_path: Some(terminal_log_path.clone()),
+        ..Default::default()
+    };
+
+    append_timing_log(
+        &world,
+        "daemon startup",
+        StdDuration::from_millis(1234),
+        "port=0",
+    )
+    .expect("append timing log");
+
+    let terminal_log = fs::read_to_string(terminal_log_path).expect("read terminal log");
+    assert!(
+        terminal_log.contains("QAT timing: daemon startup elapsed_ms=1234 port=0"),
+        "terminal log should include timing label, elapsed, and details\n{terminal_log}"
+    );
+}
+
+#[test]
 fn parse_task_briefs_reads_task_summary_lines() {
     let stdout = "task task-123: kind=sync status=completed repo=bitloops\n\
 task task-456: kind=ingest status=queued repo=bitloops";
@@ -540,7 +745,7 @@ task task-123: kind=sync status=queued repo=bitloops\n";
 }
 
 #[test]
-fn devql_task_queue_status_is_idle_requires_zero_queued_and_running_tasks() {
+fn devql_task_queue_status_is_idle_requires_zero_queued_running_and_failed_tasks() {
     let busy = DevqlTaskQueueStatusSnapshot {
         state: "running".to_string(),
         queued: 1,
@@ -556,8 +761,15 @@ fn devql_task_queue_status_is_idle_requires_zero_queued_and_running_tasks() {
         running: 0,
         ..busy.clone()
     };
+    let failed = DevqlTaskQueueStatusSnapshot {
+        queued: 0,
+        running: 0,
+        failed: 1,
+        ..busy.clone()
+    };
 
     assert!(!devql_task_queue_status_is_idle(&busy));
+    assert!(!devql_task_queue_status_is_idle(&failed));
     assert!(devql_task_queue_status_is_idle(&idle));
 }
 
@@ -606,18 +818,27 @@ fn render_guide_aligned_semantic_clones_config_uses_auto_summary_fake_profile_an
         ..Default::default()
     };
 
-    let config =
-        render_guide_aligned_semantic_clones_config(&world, "sh", &["fake-runtime.sh".to_string()]);
+    let config = render_guide_aligned_semantic_clones_config(
+        &world,
+        "sh",
+        &["fake-embeddings-runtime.sh".to_string()],
+        "sh",
+        &["fake-summary-runtime.sh".to_string()],
+    );
 
     assert!(config.contains("summary_mode = \"auto\""));
     assert!(config.contains("embedding_mode = \"deterministic\""));
     assert!(config.contains("enrichment_workers = 2"));
     assert!(config.contains("[semantic_clones.inference]"));
+    assert!(config.contains("summary_generation = \"summary_fake\""));
     assert!(config.contains("code_embeddings = \"fake\""));
     assert!(config.contains("summary_embeddings = \"fake\""));
+    assert!(config.contains("[inference.runtimes.bitloops_local_semantic_summary]"));
     assert!(config.contains("[inference.profiles.fake]"));
+    assert!(config.contains("[inference.profiles.summary_fake]"));
     assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
     assert!(config.contains("model = \"qat-test-model\""));
+    assert!(config.contains("model = \"qat-summary-model\""));
 }
 
 #[test]

@@ -87,6 +87,7 @@ pub struct EnrichmentControlResult {
 pub struct EnrichmentJobTarget {
     pub(crate) config_root: PathBuf,
     pub(crate) repo_root: PathBuf,
+    pub(crate) repo_id: Option<String>,
     pub(crate) init_session_id: Option<String>,
 }
 
@@ -95,8 +96,14 @@ impl EnrichmentJobTarget {
         Self {
             config_root,
             repo_root,
+            repo_id: None,
             init_session_id: None,
         }
+    }
+
+    pub fn with_repo_id(mut self, repo_id: impl Into<String>) -> Self {
+        self.repo_id = Some(repo_id.into());
+        self
     }
 
     pub fn with_init_session_id(mut self, init_session_id: Option<String>) -> Self {
@@ -107,7 +114,7 @@ impl EnrichmentJobTarget {
 
 #[derive(Debug, Clone)]
 pub(crate) enum FollowUpJob {
-    SemanticSummaries {
+    RepoBackfillSummaries {
         target: EnrichmentJobTarget,
         artefact_ids: Vec<String>,
     },

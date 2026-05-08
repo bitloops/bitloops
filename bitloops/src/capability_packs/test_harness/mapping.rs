@@ -19,7 +19,7 @@ use crate::capability_packs::test_harness::mapping::materialize::{
     MaterializationContext, materialize_enumerated_scenarios, materialize_source_discovery,
 };
 use crate::capability_packs::test_harness::mapping::model::{
-    StructuralMappingOutput, StructuralMappingStats, TestDiscoveryBatch,
+    DiscoveryIssue, StructuralMappingOutput, StructuralMappingStats, TestDiscoveryBatch,
 };
 use crate::host::capability_host::gateways::LanguageServicesGateway;
 use crate::host::language_adapter::{LanguageAdapterContext, LanguageTestSupport};
@@ -55,14 +55,31 @@ pub(crate) fn execute(
 
     for candidate in candidates {
         let absolute_path = repo_dir.join(&candidate.relative_path);
-        let content_id = crate::host::devql::sync::content_identity::compute_blob_oid(&fs::read(
-            &absolute_path,
-        )?);
-        content_ids.insert(candidate.relative_path.clone(), content_id);
+        let content_id = match fs::read(&absolute_path) {
+            Ok(bytes) => crate::host::devql::sync::content_identity::compute_blob_oid(&bytes),
+            Err(err) => {
+                record_discovery_issue(
+                    &mut discovery_batch,
+                    &candidate.relative_path,
+                    format!("failed reading test file: {err}"),
+                );
+                continue;
+            }
+        };
         let provider = find_language_support(&supports, &candidate.language_id)?;
-        discovery_batch
-            .files
-            .push(provider.discover_tests(&absolute_path, &candidate.relative_path)?);
+        match provider.discover_tests(&absolute_path, &candidate.relative_path) {
+            Ok(discovered) => {
+                content_ids.insert(candidate.relative_path.clone(), content_id);
+                discovery_batch.files.push(discovered);
+            }
+            Err(err) => {
+                record_discovery_issue(
+                    &mut discovery_batch,
+                    &candidate.relative_path,
+                    format!("{err:#}"),
+                );
+            }
+        }
     }
 
     let mut stats = StructuralMappingStats::default();
@@ -119,4 +136,12 @@ fn find_language_support<'a>(
         .find(|support| support.language_id() == language_id)
         .map(Arc::as_ref)
         .ok_or_else(|| anyhow!("language test support `{language_id}` is not registered"))
+}
+
+fn record_discovery_issue(batch: &mut TestDiscoveryBatch, path: &str, message: String) {
+    log::warn!("test_harness mapping: failed discovering tests for {path}: {message}");
+    batch.issues.push(DiscoveryIssue {
+        path: path.to_string(),
+        message,
+    });
 }

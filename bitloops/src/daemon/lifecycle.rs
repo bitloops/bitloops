@@ -214,9 +214,12 @@ pub(super) async fn stop() -> Result<()> {
             } else if runtime.is_some() {
                 stop_service_managed_repo_runtime()?;
             }
-            let runtime_path = runtime_state_path(Path::new("."));
-            if runtime_path.exists() {
-                wait_for_runtime_cleanup(&runtime_path, STOP_TIMEOUT)?;
+            if let Some(runtime) = runtime.as_ref() {
+                wait_for_shutdown_cleanup(
+                    runtime.pid,
+                    &runtime_state_path(Path::new(".")),
+                    STOP_TIMEOUT,
+                )?;
             }
             stop_supervisor_service_if_idle();
             log::info!("daemon stop completed for service-managed runtime");
@@ -233,7 +236,11 @@ pub(super) async fn stop() -> Result<()> {
         );
         stop_current_repo_watcher_if_present();
         terminate_process(runtime.pid)?;
-        wait_for_runtime_cleanup(&runtime_state_path(Path::new(".")), STOP_TIMEOUT)?;
+        wait_for_shutdown_cleanup(
+            runtime.pid,
+            &runtime_state_path(Path::new(".")),
+            STOP_TIMEOUT,
+        )?;
         log::info!("daemon stop completed");
         Ok(())
     }
@@ -256,7 +263,14 @@ pub(super) async fn status() -> Result<DaemonStatusReport> {
         Some(state) => query_health(state).await.ok(),
         None => None,
     };
-    let enrichment = enrichment_status().ok();
+    let enrichment = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::task::spawn_blocking(enrichment_status),
+    )
+    .await
+    .ok()
+    .and_then(|join| join.ok())
+    .and_then(Result::ok);
     let current_repo = current_repo_scope();
     let current_repo_snapshot = current_repo.as_ref().and_then(|(repo_root, repo)| {
         current_repo_init_runtime_snapshot(repo_root, repo, runtime.as_ref(), service.as_ref())
