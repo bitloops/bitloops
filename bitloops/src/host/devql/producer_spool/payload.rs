@@ -1,4 +1,5 @@
 use crate::daemon::{DevqlTaskSource, DevqlTaskSpec, SyncTaskMode};
+use std::collections::HashSet;
 
 use super::ProducerSpoolJobPayload;
 
@@ -125,9 +126,7 @@ pub(super) fn spool_task_dedupe_key(
         )),
         DevqlTaskSpec::Ingest(spec) => Some(format!(
             "task:{source}:ingest:{}",
-            spec.backfill
-                .map(|backfill| backfill.to_string())
-                .unwrap_or_else(|| "all".to_string())
+            spool_ingest_spec_key(spec)
         )),
         DevqlTaskSpec::EmbeddingsBootstrap(_) | DevqlTaskSpec::SummaryBootstrap(_) => None,
     }
@@ -169,6 +168,30 @@ fn spool_sync_mode_key(mode: &SyncTaskMode) -> String {
         SyncTaskMode::Validate => "validate".to_string(),
         SyncTaskMode::Paths { .. } => "paths".to_string(),
     }
+}
+
+fn spool_ingest_spec_key(spec: &crate::daemon::IngestTaskSpec) -> String {
+    if !spec.commits.is_empty() {
+        let mut seen = HashSet::new();
+        let commits = spec
+            .commits
+            .iter()
+            .filter_map(|commit| {
+                let commit = commit.trim();
+                if commit.is_empty() || !seen.insert(commit.to_string()) {
+                    None
+                } else {
+                    Some(commit.to_string())
+                }
+            })
+            .collect::<Vec<_>>();
+        if !commits.is_empty() {
+            return format!("commits:{}", commits.join(","));
+        }
+    }
+    spec.backfill
+        .map(|backfill| backfill.to_string())
+        .unwrap_or_else(|| "all".to_string())
 }
 
 fn normalize_repo_path(path: &str) -> String {

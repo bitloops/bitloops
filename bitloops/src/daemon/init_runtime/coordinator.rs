@@ -124,6 +124,7 @@ impl InitRuntimeCoordinator {
                 cfg,
                 crate::daemon::DevqlTaskSource::Init,
                 DevqlTaskSpec::Ingest(IngestTaskSpec {
+                    commits: Vec::new(),
                     backfill: selections.ingest_backfill,
                 }),
                 Some(init_session_id.clone()),
@@ -224,7 +225,10 @@ impl InitRuntimeCoordinator {
             let queued = crate::daemon::shared_devql_task_coordinator().enqueue_with_init_session(
                 &cfg,
                 crate::daemon::DevqlTaskSource::Init,
-                DevqlTaskSpec::Ingest(IngestTaskSpec { backfill }),
+                DevqlTaskSpec::Ingest(IngestTaskSpec {
+                    commits: Vec::new(),
+                    backfill,
+                }),
                 Some(init_session_id.clone()),
             )?;
             self.runtime_store.mutate_init_session_state(|state| {

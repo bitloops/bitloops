@@ -1,10 +1,36 @@
 use rusqlite::Connection;
 use std::fs;
+use std::sync::Mutex;
 use tempfile::tempdir;
 
 use super::fixtures::{
     seed_full_sync_repo, sqlite_relational_store_with_sync_schema, sync_test_cfg_for_repo,
 };
+
+struct CapturingSyncObserver {
+    phases: Mutex<Vec<String>>,
+}
+
+impl CapturingSyncObserver {
+    fn new() -> Self {
+        Self {
+            phases: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn phases(&self) -> Vec<String> {
+        self.phases.lock().expect("observer phases lock").clone()
+    }
+}
+
+impl crate::host::devql::SyncObserver for CapturingSyncObserver {
+    fn on_progress(&self, update: crate::host::devql::SyncProgressUpdate) {
+        self.phases
+            .lock()
+            .expect("observer phases lock")
+            .push(update.phase.as_str().to_string());
+    }
+}
 
 #[tokio::test]
 async fn full_sync_indexes_all_supported_files() {
@@ -258,6 +284,54 @@ async fn sync_validate_reports_clean_state_then_detects_stale_rows() {
             .iter()
             .any(|file| file.stale_artefacts >= 1),
         "stale artefact drift should be attributed to at least one file"
+    );
+}
+
+#[tokio::test]
+async fn sync_validate_emits_progress_before_final_validation_result() {
+    let repo = seed_full_sync_repo();
+    let cfg = sync_test_cfg_for_repo(repo.path());
+    let sqlite_path = repo.path().join("devql.sqlite");
+    let relational = sqlite_relational_store_with_sync_schema(&sqlite_path).await;
+
+    crate::host::devql::execute_sync(
+        &cfg,
+        &relational,
+        crate::host::devql::sync::types::SyncMode::Full,
+    )
+    .await
+    .expect("execute full sync before validation");
+
+    let observer = CapturingSyncObserver::new();
+    let summary = crate::host::devql::execute_sync_validation_with_observer(
+        &cfg,
+        &relational,
+        Some(&observer),
+    )
+    .await
+    .expect("execute sync validation with progress observer");
+
+    let validation = summary.validation.expect("validation report");
+    assert!(validation.valid, "validation should pass for clean state");
+
+    let phases = observer.phases();
+    assert!(
+        phases
+            .iter()
+            .any(|phase| phase == "building_validation_projection"),
+        "validate should report expected projection progress, got {phases:?}"
+    );
+    assert!(
+        phases
+            .iter()
+            .any(|phase| phase == "loading_validation_rows"),
+        "validate should report row loading progress, got {phases:?}"
+    );
+    assert!(
+        phases
+            .iter()
+            .any(|phase| phase == "comparing_validation_rows"),
+        "validate should report row comparison progress, got {phases:?}"
     );
 }
 

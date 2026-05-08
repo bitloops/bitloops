@@ -477,7 +477,10 @@ pub fn enqueue_ingest_for_config(
     enqueue_task_for_config(
         cfg,
         source,
-        DevqlTaskSpec::Ingest(IngestTaskSpec { backfill }),
+        DevqlTaskSpec::Ingest(IngestTaskSpec {
+            commits: Vec::new(),
+            backfill,
+        }),
     )
 }
 

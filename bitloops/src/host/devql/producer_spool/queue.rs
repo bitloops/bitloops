@@ -9,8 +9,8 @@ use super::storage::{
     unix_timestamp_now,
 };
 use super::{
-    CLAIM_BATCH_LIMIT, PostCommitDerivationClaimGuards, ProducerSpoolJobPayload,
-    ProducerSpoolJobRecord, ProducerSpoolJobStatus, REQUEUE_BACKOFF_SECS,
+    CLAIM_BATCH_LIMIT, PostCommitDerivationClaimGuards, ProducerSpoolJobCounts,
+    ProducerSpoolJobPayload, ProducerSpoolJobRecord, ProducerSpoolJobStatus, REQUEUE_BACKOFF_SECS,
 };
 
 pub(crate) fn recover_running_producer_spool_jobs(config_root: &Path) -> Result<u64> {
@@ -215,6 +215,55 @@ pub(crate) fn running_producer_spool_repo_ids(config_root: &Path) -> Result<Hash
         let rows = stmt.query_map([ProducerSpoolJobStatus::Running.as_str()], |row| row.get(0))?;
         rows.collect::<rusqlite::Result<HashSet<String>>>()
             .map_err(anyhow::Error::from)
+    })
+}
+
+pub(crate) fn list_recent_producer_spool_jobs(
+    config_root: &Path,
+    repo_id: &str,
+    limit: usize,
+) -> Result<Vec<ProducerSpoolJobRecord>> {
+    let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
+    let limit = i64::try_from(limit.max(1)).unwrap_or(i64::MAX);
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT job_id, repo_id, repo_root, config_root, repo_name, repo_provider,
+                    repo_organisation, repo_identity, dedupe_key, payload, status, attempts,
+                    available_at_unix, submitted_at_unix, updated_at_unix, last_error
+             FROM devql_producer_spool_jobs
+             WHERE repo_id = ?1
+             ORDER BY updated_at_unix DESC, submitted_at_unix DESC, job_id ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![repo_id, limit], map_producer_spool_job_record_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)
+    })
+}
+
+pub(crate) fn count_producer_spool_jobs(
+    config_root: &Path,
+    repo_id: &str,
+) -> Result<ProducerSpoolJobCounts> {
+    let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
+    sqlite.with_connection(|conn| {
+        let (pending, running): (i64, i64) = conn.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN status = ?2 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = ?3 THEN 1 ELSE 0 END), 0)
+             FROM devql_producer_spool_jobs
+             WHERE repo_id = ?1",
+            params![
+                repo_id,
+                ProducerSpoolJobStatus::Pending.as_str(),
+                ProducerSpoolJobStatus::Running.as_str(),
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(ProducerSpoolJobCounts {
+            pending: u64::try_from(pending).unwrap_or_default(),
+            running: u64::try_from(running).unwrap_or_default(),
+        })
     })
 }
 

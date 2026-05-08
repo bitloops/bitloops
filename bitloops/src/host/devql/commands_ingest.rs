@@ -36,5 +36,5 @@ mod shared;
 
 pub use self::orchestrator::run_ingest;
 pub(crate) use self::orchestrator::{
-    execute_ingest_with_backfill_window, execute_ingest_with_observer,
+    execute_ingest_with_backfill_window, execute_ingest_with_commits, execute_ingest_with_observer,
 };

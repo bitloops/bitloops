@@ -49,6 +49,50 @@ pub(crate) fn run_devql_post_commit_refresh(
     }
 }
 
+pub(crate) fn run_devql_post_commit_ingest(repo_root: &Path, commit_sha: &str) -> Result<()> {
+    if should_skip_post_commit_devql_refresh() {
+        return Ok(());
+    }
+    if !crate::config::settings::devql_ingest_enabled(repo_root)
+        .context("loading DevQL ingest producer policy for post-commit ingest")?
+    {
+        return Ok(());
+    }
+
+    let commit_sha = commit_sha.trim();
+    if commit_sha.is_empty() {
+        return Ok(());
+    }
+    let commits = vec![commit_sha.to_string()];
+
+    #[cfg(not(test))]
+    {
+        crate::host::devql::enqueue_spooled_ingest_task_for_repo_root(
+            repo_root,
+            crate::daemon::DevqlTaskSource::PostCommit,
+            crate::daemon::IngestTaskSpec {
+                commits,
+                backfill: None,
+            },
+        )
+        .context("queueing post-commit DevQL ingest in repo-local spool")?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    {
+        run_post_commit_future(repo_root, async {
+            let repo = crate::host::devql::resolve_repo_identity(repo_root)
+                .context("resolving repository identity for post-commit DevQL ingest")?;
+            let cfg = crate::host::devql::DevqlConfig::from_env(repo_root.to_path_buf(), repo)
+                .context("building DevQL config for post-commit ingest")?;
+            crate::host::devql::execute_ingest_with_commits(&cfg, false, commits, None, None)
+                .await?;
+            Ok(())
+        })
+    }
+}
+
 pub(crate) async fn execute_devql_post_commit_refresh(
     cfg: &crate::host::devql::DevqlConfig,
     commit_sha: &str,

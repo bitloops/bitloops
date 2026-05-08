@@ -91,6 +91,7 @@ fn running_ingest_task(task_id: &str, updated_at_unix: u64) -> DevqlTaskRecord {
         kind: DevqlTaskKind::Ingest,
         source: DevqlTaskSource::Init,
         spec: crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+            commits: Vec::new(),
             backfill: None,
         }),
         status: DevqlTaskStatus::Running,

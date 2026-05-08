@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use uuid::Uuid;
 
+use super::progress::{SyncObserver, SyncProgressPhase, SyncProgressUpdate};
 use super::summary::{SyncSummary, SyncValidationFileDrift, SyncValidationSummary};
 use super::*;
 
@@ -33,9 +34,18 @@ impl Drop for TempValidationDirCleanup {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn execute_sync_validation(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
+) -> Result<SyncSummary> {
+    execute_sync_validation_with_observer(cfg, relational, None).await
+}
+
+pub(crate) async fn execute_sync_validation_with_observer(
+    cfg: &DevqlConfig,
+    relational: &RelationalStorage,
+    observer: Option<&dyn SyncObserver>,
 ) -> Result<SyncSummary> {
     let temp_parent = std::env::temp_dir().join("bitloops").join("sync-validate");
     fs::create_dir_all(&temp_parent).with_context(|| {
@@ -60,15 +70,39 @@ pub(crate) async fn execute_sync_validation(
         .context("initialising temporary SQLite schema for sync validation")?;
     let expected_store =
         crate::host::relational_store::DefaultRelationalStore::local_only(sqlite_path).into_inner();
-    let expected_projection =
-        super::orchestrator::execute_sync(cfg, &expected_store, sync::types::SyncMode::Full)
-            .await?;
+    emit_validation_progress(
+        observer,
+        SyncProgressPhase::BuildingValidationProjection,
+        None,
+    );
+    let expected_projection = if let Some(observer) = observer {
+        let validation_observer = ValidationProjectionObserver { inner: observer };
+        super::orchestrator::execute_sync_with_observer(
+            cfg,
+            &expected_store,
+            sync::types::SyncMode::Full,
+            Some(&validation_observer),
+        )
+        .await?
+    } else {
+        super::orchestrator::execute_sync(cfg, &expected_store, sync::types::SyncMode::Full).await?
+    };
 
+    emit_validation_progress(
+        observer,
+        SyncProgressPhase::LoadingValidationRows,
+        Some(&expected_projection),
+    );
     let expected_artefacts = load_artefact_rows(&expected_store, &cfg.repo.repo_id).await?;
     let actual_artefacts = load_artefact_rows(relational, &cfg.repo.repo_id).await?;
     let expected_edges = load_edge_rows(&expected_store, &cfg.repo.repo_id).await?;
     let actual_edges = load_edge_rows(relational, &cfg.repo.repo_id).await?;
 
+    emit_validation_progress(
+        observer,
+        SyncProgressPhase::ComparingValidationRows,
+        Some(&expected_projection),
+    );
     let artefact_diff = compare_rows_by_key(
         &expected_artefacts,
         &actual_artefacts,
@@ -114,6 +148,59 @@ pub(crate) async fn execute_sync_validation(
         parse_errors: expected_projection.parse_errors,
         validation: Some(validation),
     })
+}
+
+struct ValidationProjectionObserver<'a> {
+    inner: &'a dyn SyncObserver,
+}
+
+impl SyncObserver for ValidationProjectionObserver<'_> {
+    fn on_progress(&self, mut update: SyncProgressUpdate) {
+        update.phase = SyncProgressPhase::BuildingValidationProjection;
+        self.inner.on_progress(update);
+    }
+}
+
+fn emit_validation_progress(
+    observer: Option<&dyn SyncObserver>,
+    phase: SyncProgressPhase,
+    summary: Option<&SyncSummary>,
+) {
+    let Some(observer) = observer else {
+        return;
+    };
+
+    let progress = summary
+        .map(|summary| validation_progress_from_summary(summary, phase))
+        .unwrap_or_else(|| SyncProgressUpdate {
+            phase,
+            ..SyncProgressUpdate::default()
+        });
+    observer.on_progress(progress);
+}
+
+fn validation_progress_from_summary(
+    summary: &SyncSummary,
+    phase: SyncProgressPhase,
+) -> SyncProgressUpdate {
+    let total = summary.paths_unchanged
+        + summary.paths_added
+        + summary.paths_changed
+        + summary.paths_removed;
+    SyncProgressUpdate {
+        phase,
+        current_path: None,
+        paths_total: total,
+        paths_completed: total,
+        paths_remaining: 0,
+        paths_unchanged: summary.paths_unchanged,
+        paths_added: summary.paths_added,
+        paths_changed: summary.paths_changed,
+        paths_removed: summary.paths_removed,
+        cache_hits: summary.cache_hits,
+        cache_misses: summary.cache_misses,
+        parse_errors: summary.parse_errors,
+    }
 }
 
 async fn load_artefact_rows(
