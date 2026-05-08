@@ -236,21 +236,21 @@ Optional connectors, remote stores, telemetry, and inference providers are contr
 
 Supported agent integrations:
 
-- Claude Code
-- Codex
-- Cursor
-- Gemini
-- Copilot
-- OpenCode
+- [x] Claude Code
+- [x] Codex
+- [x] Cursor
+- [x] Gemini
+- [x] Copilot
+- [x] OpenCode
 
 Built-in language adapters:
 
-- Rust
-- TypeScript / JavaScript
-- Python
-- Go
-- Java
-- C#
+- [x] Rust
+- [x] TypeScript / JavaScript
+- [x] Python
+- [x] Go
+- [x] Java
+- [x] C#
 
 ## Documentation For Technical Teams
 
