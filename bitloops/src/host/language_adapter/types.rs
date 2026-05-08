@@ -101,6 +101,56 @@ pub(crate) struct DependencyEdge {
     pub(crate) metadata: EdgeMetadata,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct LanguageHttpFactFile {
+    pub(crate) repo_id: String,
+    pub(crate) path: String,
+    pub(crate) language: String,
+    pub(crate) content_id: String,
+    pub(crate) parser_version: String,
+    pub(crate) extractor_version: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LanguageHttpFactArtefact {
+    pub(crate) symbol_id: String,
+    pub(crate) artefact_id: String,
+    pub(crate) symbol_fqn: String,
+    pub(crate) canonical_kind: Option<String>,
+    pub(crate) language_kind: String,
+    pub(crate) start_line: i32,
+    pub(crate) end_line: i32,
+    pub(crate) start_byte: i32,
+    pub(crate) end_byte: i32,
+    pub(crate) signature: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LanguageHttpFactEvidence {
+    pub(crate) path: String,
+    pub(crate) artefact_id: Option<String>,
+    pub(crate) symbol_id: Option<String>,
+    pub(crate) content_id: String,
+    pub(crate) start_line: Option<i32>,
+    pub(crate) end_line: Option<i32>,
+    pub(crate) start_byte: Option<i32>,
+    pub(crate) end_byte: Option<i32>,
+    pub(crate) properties: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LanguageHttpFact {
+    pub(crate) stable_key: String,
+    pub(crate) primitive_type: String,
+    pub(crate) subject: String,
+    pub(crate) roles: Vec<String>,
+    pub(crate) terms: Vec<String>,
+    pub(crate) properties: Value,
+    pub(crate) confidence_level: String,
+    pub(crate) confidence_score: f64,
+    pub(crate) evidence: Vec<LanguageHttpFactEvidence>,
+}
+
 #[derive(Debug)]
 pub(crate) struct RustUseExportEntry {
     pub(crate) path: String,

@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use super::{
     CanonicalMapping, DependencyEdge, LanguageAdapterHealthCheck,
-    LanguageAdapterMigrationDescriptor, LanguageArtefact, LanguageEntryPointSupport, LanguageKind,
+    LanguageAdapterMigrationDescriptor, LanguageArtefact, LanguageEntryPointSupport,
+    LanguageHttpFact, LanguageHttpFactArtefact, LanguageHttpFactFile, LanguageKind,
     LanguageTestSupport,
 };
 use crate::host::extension_host::LanguagePackDescriptor;
@@ -22,6 +23,16 @@ pub(crate) trait LanguageAdapterPack: Send + Sync {
     fn extract_file_docstring(&self, content: &str) -> Option<String> {
         let _ = content;
         None
+    }
+
+    fn extract_http_facts(
+        &self,
+        file: &LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[LanguageHttpFactArtefact],
+    ) -> Result<Vec<LanguageHttpFact>> {
+        let _ = (file, content, artefacts);
+        Ok(Vec::new())
     }
 
     fn test_support(&self) -> Option<Arc<dyn LanguageTestSupport>> {

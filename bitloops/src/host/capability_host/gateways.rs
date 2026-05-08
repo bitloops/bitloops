@@ -15,7 +15,7 @@ pub use crate::adapters::connectors::{
 };
 use crate::host::language_adapter::{
     LanguageEntryPointArtefact, LanguageEntryPointCandidate, LanguageEntryPointFile,
-    LanguageTestSupport,
+    LanguageHttpFact, LanguageHttpFactArtefact, LanguageHttpFactFile, LanguageTestSupport,
 };
 pub use blob_payloads::{BlobPayloadGateway, BlobPayloadRef};
 pub use documents::DocumentStoreGateway;
@@ -54,6 +54,16 @@ pub trait LanguageServicesGateway: Send + Sync {
     ) -> Vec<LanguageEntryPointCandidate> {
         let _ = (file, artefacts);
         Vec::new()
+    }
+
+    fn http_facts_for_file(
+        &self,
+        file: &LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[LanguageHttpFactArtefact],
+    ) -> Option<(String, Vec<LanguageHttpFact>)> {
+        let _ = (file, content, artefacts);
+        None
     }
 }
 

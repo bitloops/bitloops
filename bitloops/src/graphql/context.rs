@@ -5,6 +5,7 @@ mod enrichment;
 mod events;
 mod git_history;
 mod historical_context;
+mod http;
 mod interactions;
 mod knowledge;
 mod navigation_context;

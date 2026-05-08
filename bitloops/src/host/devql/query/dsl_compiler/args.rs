@@ -326,6 +326,108 @@ pub(super) fn compile_coverage_args(
     Ok(args)
 }
 
+pub(super) fn compile_http_search_args(
+    stage: &RegisteredStageCall,
+    first: Option<usize>,
+) -> Result<Vec<GraphqlArgument>> {
+    let mut args = vec![GraphqlArgument::new(
+        "terms",
+        compile_terms_list(required_stage_arg(stage, "terms")?),
+    )];
+    args.extend(first_arg(first));
+    Ok(args)
+}
+
+pub(super) fn compile_http_header_producers_args(
+    stage: &RegisteredStageCall,
+    first: Option<usize>,
+) -> Result<Vec<GraphqlArgument>> {
+    let header = stage
+        .args
+        .get("header")
+        .or_else(|| stage.args.get("header_name"))
+        .or_else(|| stage.args.get("headerName"))
+        .ok_or_else(|| anyhow::anyhow!("httpHeaderProducers() requires header:"))?;
+    let mut args = vec![GraphqlArgument::new(
+        "headerName",
+        quote_graphql_string(header),
+    )];
+    args.extend(first_arg(first));
+    Ok(args)
+}
+
+pub(super) fn compile_http_lifecycle_boundaries_args(
+    stage: &RegisteredStageCall,
+    first: Option<usize>,
+) -> Vec<GraphqlArgument> {
+    let mut args = Vec::new();
+    if let Some(terms) = stage.args.get("terms") {
+        args.push(GraphqlArgument::new("terms", compile_terms_list(terms)));
+    }
+    args.extend(first_arg(first));
+    args
+}
+
+pub(super) fn compile_http_lossy_transforms_args(
+    stage: &RegisteredStageCall,
+    first: Option<usize>,
+    include_around: bool,
+) -> Vec<GraphqlArgument> {
+    let mut args = Vec::new();
+    if include_around {
+        let mut around_fields = Vec::new();
+        if let Some(symbol_fqn) = stage
+            .args
+            .get("symbol_fqn")
+            .or_else(|| stage.args.get("symbolFqn"))
+        {
+            around_fields.push(format!("symbolFqn: {}", quote_graphql_string(symbol_fqn)));
+        }
+        if let Some(symbol_id) = stage
+            .args
+            .get("symbol_id")
+            .or_else(|| stage.args.get("symbolId"))
+        {
+            around_fields.push(format!("symbolId: {}", quote_graphql_string(symbol_id)));
+        }
+        if let Some(artefact_id) = stage
+            .args
+            .get("artefact_id")
+            .or_else(|| stage.args.get("artefactId"))
+        {
+            around_fields.push(format!("artefactId: {}", quote_graphql_string(artefact_id)));
+        }
+        if let Some(path) = stage.args.get("path") {
+            around_fields.push(format!("path: {}", quote_graphql_string(path)));
+        }
+        if !around_fields.is_empty() {
+            args.push(GraphqlArgument::new(
+                "around",
+                format!("{{ {} }}", around_fields.join(", ")),
+            ));
+        }
+    }
+    args.extend(first_arg(first));
+    args
+}
+
+pub(super) fn compile_http_patch_impact_args(
+    stage: &RegisteredStageCall,
+) -> Result<Vec<GraphqlArgument>> {
+    let fingerprint = stage
+        .args
+        .get("patch_fingerprint")
+        .or_else(|| stage.args.get("patchFingerprint"))
+        .ok_or_else(|| anyhow::anyhow!("httpPatchImpact() requires patch_fingerprint:"))?;
+    Ok(vec![GraphqlArgument::new(
+        "input",
+        format!(
+            "{{ patchFingerprint: {} }}",
+            quote_graphql_string(fingerprint)
+        ),
+    )])
+}
+
 pub(super) fn compile_artefact_filter_input(parsed: &ParsedDevqlQuery) -> Result<Option<String>> {
     let mut fields = Vec::new();
     if let Some(kind) = parsed.artefacts.kind.as_deref() {
@@ -388,6 +490,24 @@ pub(super) fn compile_clones_filter_input(parsed: &ParsedDevqlQuery) -> Option<S
     }
 
     (!fields.is_empty()).then(|| format!("{{ {} }}", fields.join(", ")))
+}
+
+fn required_stage_arg<'a>(stage: &'a RegisteredStageCall, name: &str) -> Result<&'a str> {
+    stage
+        .args
+        .get(name)
+        .map(String::as_str)
+        .ok_or_else(|| anyhow::anyhow!("{}() requires {name}:", stage.stage_name))
+}
+
+fn compile_terms_list(raw: &str) -> String {
+    let terms = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(quote_graphql_string)
+        .collect::<Vec<_>>();
+    format!("[{}]", terms.join(", "))
 }
 
 pub(super) fn connection_field(

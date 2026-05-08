@@ -11,6 +11,7 @@ pub mod dependency_edge;
 pub mod expand_hint;
 pub mod file_context;
 pub mod health;
+pub mod http;
 pub mod ingestion;
 pub mod interaction;
 pub mod knowledge;
@@ -65,6 +66,12 @@ pub use dependency_edge::{
 pub use expand_hint::{ExpandHint, ExpandHintParameter};
 pub use file_context::FileContext;
 pub use health::{HealthBackendStatus, HealthStatus};
+pub use http::{
+    HttpBundle, HttpCausalChainLink, HttpConfidence, HttpContextResult, HttpEvidence,
+    HttpHeaderProducer, HttpInvalidatedAssumption, HttpLossyTransformAroundInput,
+    HttpPatchImpactInput, HttpPatchImpactResult, HttpPrimitive, HttpPropagationObligation,
+    HttpSearchResult, HttpUpstreamFact,
+};
 pub use ingestion::IngestionProgressEvent;
 pub use interaction::{
     InteractionEventObject, InteractionFilterInput, InteractionSearchInputObject,
