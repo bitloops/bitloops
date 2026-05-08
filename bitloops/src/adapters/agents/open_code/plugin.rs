@@ -26,7 +26,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
-  const BITLOOPS_CMD = "__BITLOOPS_CMD__"
+  const BITLOOPS_CMD = __BITLOOPS_CMD__
   const BOOTSTRAP_CONTEXT = __BOOTSTRAP_CONTEXT__
   // Store transcripts in a temp directory - these are ephemeral handoff files
   // between the plugin and the hook handler. Once checkpointed, the data
@@ -55,7 +55,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
   async function callHook(hookName: string, payload: Record<string, unknown>) {
     try {
       const json = JSON.stringify(payload)
-      const proc = Bun.spawn(["sh", "-c", `${BITLOOPS_CMD} hooks opencode ${hookName}`], {
+      const proc = Bun.spawn([...BITLOOPS_CMD, "hooks", "opencode", hookName], {
         cwd: directory,
         stdin: new TextEncoder().encode(json + "\n"),
         stdout: "ignore",
@@ -75,7 +75,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
   function callHookSync(hookName: string, payload: Record<string, unknown>) {
     try {
       const json = JSON.stringify(payload)
-      Bun.spawnSync(["sh", "-c", `${BITLOOPS_CMD} hooks opencode ${hookName}`], {
+      Bun.spawnSync([...BITLOOPS_CMD, "hooks", "opencode", hookName], {
         cwd: directory,
         stdin: new TextEncoder().encode(json + "\n"),
         stdout: "ignore",
