@@ -1,4 +1,6 @@
 pub const HTTP_CAPABILITY_ID: &str = "http";
+pub const HTTP_CONSUMER_ID: &str = "http.current_state";
+pub const HTTP_OWNER: &str = "http";
 
 pub const HTTP_PRIMITIVE_BEHAVIOUR_INVARIANT: &str = "BehaviourInvariant";
 pub const HTTP_PRIMITIVE_HEADER_SEMANTIC: &str = "HeaderSemantic";

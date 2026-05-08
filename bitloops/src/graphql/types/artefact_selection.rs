@@ -160,6 +160,8 @@ pub struct ArtefactSelection {
     #[graphql(skip)]
     pub(crate) search_breakdown: Option<SearchBreakdown>,
     #[graphql(skip)]
+    pub(crate) search_query: Option<String>,
+    #[graphql(skip)]
     pub(crate) scope: ResolverScope,
 }
 
@@ -177,6 +179,7 @@ impl ArtefactSelection {
             artefacts,
             directory_entries,
             search_breakdown: None,
+            search_query: None,
             scope,
         }
     }
@@ -184,6 +187,7 @@ impl ArtefactSelection {
     pub(crate) fn new_search(
         artefacts: Vec<Artefact>,
         search_breakdown: Option<SearchBreakdown>,
+        search_query: String,
         scope: ResolverScope,
     ) -> Self {
         Self {
@@ -192,6 +196,7 @@ impl ArtefactSelection {
             artefacts,
             directory_entries: Vec::new(),
             search_breakdown,
+            search_query: Some(search_query),
             scope,
         }
     }
@@ -206,6 +211,7 @@ impl ArtefactSelection {
             artefacts: Vec::new(),
             directory_entries,
             search_breakdown: None,
+            search_query: None,
             scope,
         }
     }

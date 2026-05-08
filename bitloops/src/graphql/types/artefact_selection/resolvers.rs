@@ -16,8 +16,8 @@ use super::stages::{
 };
 use super::support::{
     CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA, CONTEXT_GUIDANCE_STAGE_SCHEMA,
-    DEPENDENCY_STAGE_SCHEMA, HISTORICAL_CONTEXT_STAGE_SCHEMA, TESTS_STAGE_SCHEMA,
-    build_checkpoint_summary, build_clone_expand_hint, build_clone_summary,
+    DEPENDENCY_STAGE_SCHEMA, HISTORICAL_CONTEXT_STAGE_SCHEMA, SelectionSummaryStages,
+    TESTS_STAGE_SCHEMA, build_checkpoint_summary, build_clone_expand_hint, build_clone_summary,
     build_dependency_expand_hint, build_dependency_summary, build_historical_context_summary,
     build_selection_summary, build_tests_stage_args, build_tests_summary, decode_stage_rows,
     dedup_dependency_edges, selection_stage_row_from_artefact,
@@ -49,13 +49,15 @@ impl ArtefactSelection {
 
         Ok(async_graphql::types::Json(build_selection_summary(
             self.artefacts.len(),
-            &checkpoints,
-            &clones,
-            &deps,
-            &tests,
-            &historical_context,
-            &context_guidance,
-            &http.overview.0,
+            SelectionSummaryStages {
+                checkpoints: &checkpoints,
+                clones: &clones,
+                deps: &deps,
+                tests: &tests,
+                historical_context: &historical_context,
+                context_guidance: &context_guidance,
+                http: &http.overview.0,
+            },
         )))
     }
 
@@ -495,7 +497,8 @@ impl ArtefactSelection {
         if first <= 0 {
             return Err(bad_user_input_error("`first` must be greater than 0"));
         }
-        ctx.data_unchecked::<DevqlGraphqlContext>()
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let target_context = context
             .http_context_for_targets(
                 &self.scope,
                 &self.artefact_ids(),
@@ -506,8 +509,49 @@ impl ArtefactSelection {
             .await
             .map_err(|err| {
                 backend_error(format!("failed to resolve selected HTTP context: {err:#}"))
+            })?;
+        if !target_context.bundles.is_empty() || !target_context.primitives.is_empty() {
+            return Ok(target_context);
+        }
+
+        let terms = self.http_search_terms();
+        if terms.is_empty() {
+            return Ok(target_context);
+        }
+
+        context
+            .http_context_for_terms(&self.scope, &terms, first as usize)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected HTTP context from search terms: {err:#}"
+                ))
             })
     }
+
+    fn http_search_terms(&self) -> Vec<String> {
+        self.search_query
+            .as_deref()
+            .map(split_http_selection_terms)
+            .unwrap_or_default()
+    }
+}
+
+pub(super) fn split_http_selection_terms(query: &str) -> Vec<String> {
+    query
+        .split(|character: char| character.is_whitespace() || character == ',')
+        .map(|term| {
+            term.trim_matches(|character: char| {
+                matches!(
+                    character,
+                    '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '{' | '}'
+                )
+            })
+        })
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn build_context_guidance_stage_args(

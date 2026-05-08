@@ -327,37 +327,41 @@ pub(super) fn build_historical_context_summary(rows: &[HistoricalContextItem]) -
     payload
 }
 
+pub(super) struct SelectionSummaryStages<'a> {
+    pub(super) checkpoints: &'a CheckpointStageData,
+    pub(super) clones: &'a CloneStageData,
+    pub(super) deps: &'a DependencyStageData,
+    pub(super) tests: &'a TestsStageData,
+    pub(super) historical_context: &'a HistoricalContextStageData,
+    pub(super) context_guidance: &'a ContextGuidanceStageData,
+    pub(super) http: &'a Value,
+}
+
 pub(super) fn build_selection_summary(
     selected_artefact_count: usize,
-    checkpoints: &CheckpointStageData,
-    clones: &CloneStageData,
-    deps: &DependencyStageData,
-    tests: &TestsStageData,
-    historical_context: &HistoricalContextStageData,
-    context_guidance: &ContextGuidanceStageData,
-    http: &Value,
+    stages: SelectionSummaryStages<'_>,
 ) -> Value {
     json!({
         "selectedArtefactCount": selected_artefact_count,
-        "checkpoints": selection_stage_entry(&checkpoints.summary, None, checkpoints.schema.as_deref()),
-        "codeMatches": selection_stage_entry(&clones.summary, None, clones.schema.as_deref()),
+        "checkpoints": selection_stage_entry(&stages.checkpoints.summary, None, stages.checkpoints.schema.as_deref()),
+        "codeMatches": selection_stage_entry(&stages.clones.summary, None, stages.clones.schema.as_deref()),
         "dependencies": selection_stage_entry(
-            &deps.summary,
-            deps.expand_hint.as_ref(),
-            deps.schema.as_deref(),
+            &stages.deps.summary,
+            stages.deps.expand_hint.as_ref(),
+            stages.deps.schema.as_deref(),
         ),
-        "tests": selection_stage_entry(&tests.summary, None, tests.schema.as_deref()),
+        "tests": selection_stage_entry(&stages.tests.summary, None, stages.tests.schema.as_deref()),
         "historicalContext": selection_stage_entry(
-            &historical_context.summary,
+            &stages.historical_context.summary,
             None,
-            historical_context.schema.as_deref(),
+            stages.historical_context.schema.as_deref(),
         ),
         "contextGuidance": selection_stage_entry(
-            &context_guidance.summary,
+            &stages.context_guidance.summary,
             None,
-            context_guidance.schema.as_deref(),
+            stages.context_guidance.schema.as_deref(),
         ),
-        "http": http,
+        "http": stages.http,
     })
 }
 

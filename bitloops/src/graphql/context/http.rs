@@ -116,6 +116,41 @@ impl DevqlGraphqlContext {
         })
     }
 
+    pub(crate) async fn http_context_for_terms(
+        &self,
+        scope: &ResolverScope,
+        terms: &[String],
+        first: usize,
+    ) -> Result<HttpContextResult> {
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let limit = first.max(1);
+        let rows = match self
+            .query_devql_sqlite_rows(&http_search_index_sql(&repo_id, terms, limit))
+            .await
+        {
+            Ok(rows) => rows,
+            Err(err) if is_missing_http_table_error(&err) => Vec::new(),
+            Err(err) => return Err(err),
+        };
+        let primitive_ids = dedup(rows.iter().filter_map(|row| string_opt(row, "fact_id")));
+        let bundle_ids = dedup(rows.iter().filter_map(|row| string_opt(row, "bundle_id")));
+        let bundles = self.load_http_bundles(&repo_id, &bundle_ids, limit).await?;
+        let primitives = self
+            .load_http_primitives(&repo_id, &primitive_ids, limit)
+            .await?;
+        let obligations = dedup_obligations(
+            bundles
+                .iter()
+                .flat_map(|bundle| bundle.obligations.iter().cloned()),
+        );
+        Ok(HttpContextResult {
+            overview: Json(http_context_overview(&bundles)),
+            bundles,
+            primitives,
+            obligations,
+        })
+    }
+
     pub(crate) async fn http_header_producers(
         &self,
         scope: &ResolverScope,

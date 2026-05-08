@@ -6,8 +6,8 @@ use crate::capability_packs::semantic_clones::scoring::{
 use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineRangeInput};
 
 use super::support::{
-    CONTEXT_GUIDANCE_STAGE_SCHEMA, build_clone_expand_hint, build_dependency_expand_hint,
-    build_dependency_summary, build_historical_context_expand_hint,
+    CONTEXT_GUIDANCE_STAGE_SCHEMA, SelectionSummaryStages, build_clone_expand_hint,
+    build_dependency_expand_hint, build_dependency_summary, build_historical_context_expand_hint,
     build_historical_context_summary, build_selection_summary, captured_preview, take_stage_items,
 };
 use super::{
@@ -161,20 +161,22 @@ fn selection_summary_includes_historical_context_stage() {
 
     let summary = build_selection_summary(
         1,
-        &checkpoints,
-        &clones,
-        &deps,
-        &tests,
-        &historical_context,
-        &context_guidance,
-        &serde_json::json!({
+        SelectionSummaryStages {
+            checkpoints: &checkpoints,
+            clones: &clones,
+            deps: &deps,
+            tests: &tests,
+            historical_context: &historical_context,
+            context_guidance: &context_guidance,
+            http: &serde_json::json!({
             "bundleCount": 0,
             "riskCount": 0,
             "topRisks": [],
             "expandHint": {
                 "template": "selectArtefacts(...){ httpContext { bundles { ... } } }"
             }
-        }),
+            }),
+        },
     );
 
     assert_eq!(
@@ -201,6 +203,25 @@ fn context_guidance_stage_item_pagination_rejects_non_positive_first() {
         .expect_err("context guidance item pagination should reject zero");
 
     assert!(err.message.contains("`first` must be greater than 0"));
+}
+
+#[test]
+fn http_selection_terms_split_search_query_for_index_fallback() {
+    let terms = super::resolvers::split_http_selection_terms(
+        "HEAD, Content-Length RouteFuture strip_body `Empty` (Hyper)",
+    );
+
+    assert_eq!(
+        terms,
+        vec![
+            "HEAD",
+            "Content-Length",
+            "RouteFuture",
+            "strip_body",
+            "Empty",
+            "Hyper"
+        ]
+    );
 }
 
 #[test]
