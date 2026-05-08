@@ -42,6 +42,8 @@ pub struct RoleAdjudicationRequest {
     pub repo_id: String,
     pub generation: u64,
     #[serde(default)]
+    pub target_kind: Option<String>,
+    #[serde(default)]
     pub artefact_id: Option<String>,
     #[serde(default)]
     pub symbol_id: Option<String>,
@@ -62,6 +64,7 @@ pub struct RoleAdjudicationRequest {
 
 impl RoleAdjudicationRequest {
     pub fn scope_key(&self) -> String {
+        let target_kind = self.target_kind.as_deref().unwrap_or("target");
         let target = self
             .symbol_id
             .as_deref()
@@ -69,9 +72,10 @@ impl RoleAdjudicationRequest {
             .or(self.path.as_deref())
             .unwrap_or("<unknown>");
         format!(
-            "{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}",
             self.repo_id,
             self.generation,
+            target_kind,
             target,
             self.reason.as_str()
         )

@@ -160,6 +160,50 @@ fn paths_to_refresh(
     paths.into_iter().collect()
 }
 
+fn add_path_facts(
+    context: FactContext<'_>,
+    path: &str,
+    source: &'static str,
+    out: &mut Vec<ArchitectureArtefactFact>,
+) {
+    push_fact(context, fact_seed("path", "full", path, source, 1.0), out);
+
+    if let Some(extension) = path.rsplit('.').next().filter(|part| *part != path) {
+        push_fact(
+            context,
+            fact_seed("path", "extension", extension, source, 1.0),
+            out,
+        );
+    }
+
+    for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+        push_fact(
+            context,
+            fact_seed("path", "segment", segment, source, 0.95),
+            out,
+        );
+    }
+}
+
+fn add_language_facts(
+    context: FactContext<'_>,
+    declared_language: &str,
+    resolved_language: &str,
+    source: &'static str,
+    out: &mut Vec<ArchitectureArtefactFact>,
+) {
+    push_fact(
+        context,
+        fact_seed("language", "declared", declared_language, source, 1.0),
+        out,
+    );
+    push_fact(
+        context,
+        fact_seed("language", "resolved", resolved_language, source, 1.0),
+        out,
+    );
+}
+
 fn add_file_facts(
     repo_id: &str,
     generation_seq: u64,
@@ -175,53 +219,12 @@ fn add_file_facts(
         language,
     };
 
-    push_fact(
+    add_path_facts(context, &file.path, "canonical_file", out);
+    add_language_facts(
         context,
-        fact_seed("path", "full", &file.path, "canonical_file", 1.0),
-        out,
-    );
-
-    if let Some(extension) = file
-        .path
-        .rsplit('.')
-        .next()
-        .filter(|part| *part != file.path.as_str())
-    {
-        push_fact(
-            context,
-            fact_seed("path", "extension", extension, "canonical_file", 1.0),
-            out,
-        );
-    }
-
-    for segment in file.path.split('/').filter(|segment| !segment.is_empty()) {
-        push_fact(
-            context,
-            fact_seed("path", "segment", segment, "canonical_file", 0.95),
-            out,
-        );
-    }
-
-    push_fact(
-        context,
-        fact_seed(
-            "language",
-            "declared",
-            &file.language,
-            "canonical_file",
-            1.0,
-        ),
-        out,
-    );
-    push_fact(
-        context,
-        fact_seed(
-            "language",
-            "resolved",
-            &file.resolved_language,
-            "canonical_file",
-            1.0,
-        ),
+        &file.language,
+        &file.resolved_language,
+        "canonical_file",
         out,
     );
     push_fact(
@@ -260,6 +263,15 @@ fn add_artefact_facts(
         target: &target,
         language,
     };
+
+    add_path_facts(context, &artefact.path, "canonical_artefact", out);
+    add_language_facts(
+        context,
+        &artefact.language,
+        &artefact.language,
+        "canonical_artefact",
+        out,
+    );
 
     if let Some(kind) = artefact.canonical_kind.as_deref() {
         push_fact(
@@ -631,6 +643,60 @@ mod tests {
             fact.fact_kind == "language" && fact.fact_key == "resolved" && fact.fact_value == "rust"
         }));
         assert_eq!(result.refreshed_paths, vec!["bitloops/src/cli/main.rs"]);
+    }
+
+    #[test]
+    fn extracts_path_and_language_facts_for_artefact_targets() {
+        let artefacts = vec![artefact_fixture(
+            "src/application/create_user.rs",
+            "create_user_use_case",
+        )];
+        let affected_paths = BTreeSet::from(["src/application/create_user.rs".to_string()]);
+
+        let result = extract_architecture_role_facts(ArchitectureRoleFactExtractionInput {
+            repo_id: "repo-1",
+            generation_seq: 10,
+            affected_paths: &affected_paths,
+            files: &[],
+            artefacts: &artefacts,
+            dependency_edges: &[],
+        });
+
+        let artefact_target = RoleTarget::artefact(
+            "artefact-create_user_use_case".to_string(),
+            "symbol-create_user_use_case".to_string(),
+            "src/application/create_user.rs".to_string(),
+        );
+        let target_facts = result
+            .facts
+            .iter()
+            .filter(|fact| fact.target == artefact_target)
+            .collect::<Vec<_>>();
+
+        assert!(target_facts.iter().any(|fact| {
+            fact.fact_kind == "path"
+                && fact.fact_key == "full"
+                && fact.fact_value == "src/application/create_user.rs"
+        }));
+        assert!(target_facts.iter().any(|fact| {
+            fact.fact_kind == "path"
+                && fact.fact_key == "segment"
+                && fact.fact_value == "application"
+        }));
+        assert!(target_facts.iter().any(|fact| {
+            fact.fact_kind == "path" && fact.fact_key == "extension" && fact.fact_value == "rs"
+        }));
+        assert!(target_facts.iter().any(|fact| {
+            fact.fact_kind == "language" && fact.fact_key == "declared" && fact.fact_value == "rust"
+        }));
+        assert!(target_facts.iter().any(|fact| {
+            fact.fact_kind == "language" && fact.fact_key == "resolved" && fact.fact_value == "rust"
+        }));
+        assert!(target_facts.iter().any(|fact| {
+            fact.fact_kind == "symbol"
+                && fact.fact_key == "fqn"
+                && fact.fact_value == "crate::create_user_use_case"
+        }));
     }
 
     #[test]

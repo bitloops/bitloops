@@ -36,6 +36,30 @@ fn file_fixture(path: &str) -> crate::models::CurrentCanonicalFileRecord {
     }
 }
 
+fn artefact_fixture(path: &str, name: &str) -> crate::models::CurrentCanonicalArtefactRecord {
+    crate::models::CurrentCanonicalArtefactRecord {
+        repo_id: "repo-1".to_string(),
+        path: path.to_string(),
+        content_id: format!("content:{path}"),
+        symbol_id: format!("symbol-{name}"),
+        artefact_id: format!("artefact-{name}"),
+        language: "rust".to_string(),
+        extraction_fingerprint: format!("fingerprint-{name}"),
+        canonical_kind: Some("function".to_string()),
+        language_kind: Some("function_item".to_string()),
+        symbol_fqn: Some(format!("src/application/create_user.rs::{name}")),
+        parent_symbol_id: None,
+        parent_artefact_id: None,
+        start_line: 1,
+        end_line: 5,
+        start_byte: 0,
+        end_byte: 40,
+        signature: Some(format!("pub fn {name}(name: &str) -> String")),
+        modifiers: String::new(),
+        docstring: None,
+    }
+}
+
 #[test]
 fn aggregate_role_assignments_marks_low_confidence_needs_review() {
     let target = RoleTarget::file("src/main.rs");
@@ -223,6 +247,37 @@ fn aggregate_role_assignments_carries_signal_evidence_payload() {
         assignments[0].evidence[1]["evidence"][0]["factId"],
         "fact-1"
     );
+}
+
+#[test]
+fn adjudication_requests_encode_artefact_targets_without_symbol_target_promotion() {
+    let target = RoleTarget::artefact(
+        "artefact-1".to_string(),
+        "symbol-1".to_string(),
+        "src/main.rs".to_string(),
+    );
+    let assignments = vec![ArchitectureRoleAssignment {
+        repo_id: "repo-1".to_string(),
+        assignment_id: super::super::taxonomy::assignment_id("repo-1", "role-1", &target),
+        role_id: "role-1".to_string(),
+        target,
+        priority: AssignmentPriority::Primary,
+        status: AssignmentStatus::NeedsReview,
+        source: AssignmentSource::Rule,
+        confidence: 0.6,
+        evidence: serde_json::json!([]),
+        provenance: serde_json::json!({ "source": "test" }),
+        classifier_version: "test".to_string(),
+        rule_version: Some(1),
+        generation_seq: 7,
+    }];
+
+    let requests = adjudication_requests_from_assignments(&assignments);
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target_kind.as_deref(), Some("artefact"));
+    assert_eq!(requests[0].artefact_id.as_deref(), Some("artefact-1"));
+    assert_eq!(requests[0].symbol_id.as_deref(), Some("symbol-1"));
 }
 
 #[test]
@@ -509,6 +564,106 @@ async fn classification_extracts_facts_runs_rules_and_writes_assignment() -> any
             && assignment.status == AssignmentStatus::Stale
             && assignment.generation_seq == 0
     }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn classification_matches_seeded_artefact_rule_with_path_language_and_symbol_facts()
+-> anyhow::Result<()> {
+    let (_temp, relational) = classifier_storage()?;
+
+    let role = super::super::taxonomy::ArchitectureRole {
+        repo_id: "repo-1".to_string(),
+        role_id: super::super::taxonomy::stable_role_id("repo-1", "application", "use_case"),
+        family: "application".to_string(),
+        slug: "use_case".to_string(),
+        display_name: "Use Case".to_string(),
+        description: "Application use case role".to_string(),
+        lifecycle: super::super::taxonomy::RoleLifecycle::Active,
+        provenance: serde_json::json!({ "source": "test" }),
+    };
+    super::super::storage::upsert_classification_role(&relational, &role).await?;
+    super::super::storage::upsert_detection_rule(
+        &relational,
+        &super::super::taxonomy::ArchitectureRoleDetectionRule {
+            repo_id: "repo-1".to_string(),
+            rule_id: super::super::taxonomy::rule_id("repo-1", &role.role_id, "seeded-use-case"),
+            role_id: role.role_id.clone(),
+            version: 1,
+            lifecycle: super::super::taxonomy::RoleRuleLifecycle::Active,
+            priority: 10,
+            score: 1.0,
+            candidate_selector: serde_json::json!({
+                "path_prefixes": ["src/application/"],
+                "path_suffixes": [".rs"],
+                "path_contains": ["create_user"],
+                "languages": ["rust"],
+                "canonical_kinds": ["function"],
+                "symbol_fqn_contains": ["_use_case"]
+            }),
+            positive_conditions: serde_json::json!([
+                { "kind": "path_contains", "value": "create_user.rs" }
+            ]),
+            negative_conditions: serde_json::json!([]),
+            provenance: serde_json::json!({ "source": "test" }),
+        },
+    )
+    .await?;
+
+    let files = vec![file_fixture("src/application/create_user.rs")];
+    let artefacts = vec![artefact_fixture(
+        "src/application/create_user.rs",
+        "create_user_use_case",
+    )];
+
+    let outcome = classify_architecture_roles_for_current_state(
+        &relational,
+        ArchitectureRoleClassificationInput {
+            repo_id: "repo-1",
+            generation_seq: 1,
+            scope: ArchitectureRoleClassificationScope {
+                full_reconcile: false,
+                affected_paths: std::collections::BTreeSet::from([
+                    "src/application/create_user.rs".to_string(),
+                ]),
+                removed_paths: std::collections::BTreeSet::new(),
+            },
+            files: &files,
+            artefacts: &artefacts,
+            dependency_edges: &[],
+        },
+    )
+    .await?;
+
+    let assignments = super::super::storage::load_assignments_for_path(
+        &relational,
+        "repo-1",
+        "src/application/create_user.rs",
+    )
+    .await?;
+    let signal_rows = relational
+        .query_rows(
+            "SELECT target_kind, path, role_id, polarity, score
+             FROM architecture_role_rule_signals_current
+             WHERE repo_id = 'repo-1'",
+        )
+        .await?;
+
+    assert_eq!(outcome.metrics.rules_loaded, 1);
+    assert_eq!(outcome.metrics.signals_written, 1);
+    assert_eq!(outcome.metrics.assignments_written, 1);
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].role_id, role.role_id);
+    assert_eq!(assignments[0].status, AssignmentStatus::Active);
+    assert_eq!(
+        assignments[0].target.target_kind,
+        super::super::taxonomy::TargetKind::Artefact
+    );
+    assert_eq!(signal_rows.len(), 1);
+    assert_eq!(signal_rows[0]["target_kind"], "artefact");
+    assert_eq!(signal_rows[0]["path"], "src/application/create_user.rs");
+    assert_eq!(signal_rows[0]["role_id"], assignments[0].role_id);
+    assert_eq!(signal_rows[0]["polarity"], "positive");
     Ok(())
 }
 

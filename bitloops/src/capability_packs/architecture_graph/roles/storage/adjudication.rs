@@ -254,6 +254,44 @@ fn target_from_request(request: &RoleAdjudicationRequest) -> Result<RoleTarget> 
         .path
         .clone()
         .unwrap_or_else(|| "<unknown>".to_string());
+    match request.target_kind.as_deref() {
+        Some("file") => {
+            return Ok(RoleTarget::file(path));
+        }
+        Some("artefact") => {
+            let Some(artefact_id) = request.artefact_id.as_ref() else {
+                return Err(anyhow!(
+                    "role adjudication request target_kind=artefact did not include artefact_id"
+                ));
+            };
+            return Ok(RoleTarget {
+                target_kind: TargetKind::Artefact,
+                artefact_id: Some(artefact_id.clone()),
+                symbol_id: request.symbol_id.clone(),
+                path,
+            });
+        }
+        Some("symbol") => {
+            let Some(symbol_id) = request.symbol_id.as_ref() else {
+                return Err(anyhow!(
+                    "role adjudication request target_kind=symbol did not include symbol_id"
+                ));
+            };
+            return Ok(RoleTarget {
+                target_kind: TargetKind::Symbol,
+                artefact_id: request.artefact_id.clone(),
+                symbol_id: Some(symbol_id.clone()),
+                path,
+            });
+        }
+        Some(other) => {
+            return Err(anyhow!(
+                "unsupported role adjudication request target_kind `{other}`"
+            ));
+        }
+        None => {}
+    }
+
     if let Some(symbol_id) = request.symbol_id.as_ref() {
         return Ok(RoleTarget {
             target_kind: TargetKind::Symbol,
@@ -580,6 +618,7 @@ mod tests {
         RoleAdjudicationRequest {
             repo_id: "repo-1".to_string(),
             generation: 7,
+            target_kind: Some("artefact".to_string()),
             artefact_id: Some("artefact-1".to_string()),
             symbol_id: Some("symbol-1".to_string()),
             path: Some("src/main.rs".to_string()),

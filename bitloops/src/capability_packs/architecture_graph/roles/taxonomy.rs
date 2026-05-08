@@ -8,7 +8,8 @@ mod seed;
 pub use seed::{
     RoleRuleCandidateSelector, RoleRuleCondition, RoleRuleScore, RoleSplitSpecFile,
     RoleSplitTargetRole, RuleSpecFile, SeededArchitectureRole, SeededArchitectureRuleCandidate,
-    SeededArchitectureTaxonomy, architecture_roles_seed_schema, generic_role_family_examples,
+    SeededArchitectureTaxonomy, allowed_rule_condition_kinds, architecture_roles_seed_schema,
+    generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
     validate_role_split_spec, validate_rule_spec_file, validate_seeded_taxonomy,
 };
 
@@ -669,6 +670,7 @@ pub fn role_rule_condition_contract(condition: &RoleRuleCondition) -> Result<Rol
         .to_string();
     let (kind, key, op) = match condition.kind.trim() {
         "path_contains" => ("path", "full", RoleFactConditionOp::Contains),
+        "path_equals" => ("path", "full", RoleFactConditionOp::Eq),
         "path_prefix" => ("path", "full", RoleFactConditionOp::Prefix),
         "path_suffix" => ("path", "full", RoleFactConditionOp::Suffix),
         "language_is" => ("language", "resolved", RoleFactConditionOp::Eq),

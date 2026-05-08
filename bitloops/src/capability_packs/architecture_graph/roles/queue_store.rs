@@ -252,6 +252,7 @@ mod tests {
         RoleAdjudicationRequest {
             repo_id: "repo".to_string(),
             generation: 1,
+            target_kind: Some("artefact".to_string()),
             artefact_id: Some("artefact-1".to_string()),
             symbol_id: None,
             path: Some("src/main.rs".to_string()),

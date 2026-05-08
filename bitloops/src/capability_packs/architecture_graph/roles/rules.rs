@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRoleDetectionRule, ArchitectureRoleRuleSignal,
     RoleCandidateSelector, RoleFactCondition, RoleFactConditionOp, RoleSignalPolarity, RoleTarget,
-    parse_rule_conditions, parse_rule_selector, role_rule_candidate_selector_contract,
+    TargetKind, parse_rule_conditions, parse_rule_selector, role_rule_candidate_selector_contract,
     role_rule_conditions_contract, rule_signal_id,
 };
 
@@ -77,6 +77,7 @@ pub fn evaluate_rules_over_facts(
     let mut signals = Vec::new();
 
     for rule in rules {
+        let mut rule_signals = Vec::new();
         for (target, target_facts) in &facts_by_target {
             if !selector_matches(&rule.selector, target, target_facts)? {
                 continue;
@@ -84,7 +85,7 @@ pub fn evaluate_rules_over_facts(
 
             let positive_match = matched_facts(&rule.positive_conditions, target_facts)?;
             if positive_match.score > 0.0 {
-                signals.push(signal_for(
+                rule_signals.push(signal_for(
                     rule,
                     target,
                     RoleSignalPolarity::Positive,
@@ -95,7 +96,7 @@ pub fn evaluate_rules_over_facts(
 
             let negative_match = matched_facts(&rule.negative_conditions, target_facts)?;
             if negative_match.score > 0.0 {
-                signals.push(signal_for(
+                rule_signals.push(signal_for(
                     rule,
                     target,
                     RoleSignalPolarity::Negative,
@@ -104,9 +105,37 @@ pub fn evaluate_rules_over_facts(
                 ));
             }
         }
+        signals.extend(disambiguate_implicit_target_signals(
+            &rule.selector,
+            rule_signals,
+        ));
     }
 
     Ok(RuleEvaluationResult { signals })
+}
+
+fn disambiguate_implicit_target_signals(
+    selector: &RoleCandidateSelector,
+    mut signals: Vec<ArchitectureRoleRuleSignal>,
+) -> Vec<ArchitectureRoleRuleSignal> {
+    if !selector.target_kinds.is_empty() {
+        return signals;
+    }
+
+    let specific_signal_paths = signals
+        .iter()
+        .filter(|signal| signal.target.target_kind != TargetKind::File)
+        .map(|signal| (signal.target.path.clone(), signal.polarity))
+        .collect::<std::collections::BTreeSet<_>>();
+    if specific_signal_paths.is_empty() {
+        return signals;
+    }
+
+    signals.retain(|signal| {
+        signal.target.target_kind != TargetKind::File
+            || !specific_signal_paths.contains(&(signal.target.path.clone(), signal.polarity))
+    });
+    signals
 }
 
 fn group_facts_by_target(
@@ -460,6 +489,95 @@ mod tests {
         assert_eq!(rules[0].positive_conditions.len(), 1);
         assert_eq!(rules[0].positive_conditions[0].kind, "path");
         assert_eq!(rules[0].positive_conditions[0].key, "full");
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_legacy_rule_prefers_artefact_signal_over_file_signal_for_same_path()
+    -> anyhow::Result<()> {
+        let file_target = RoleTarget::file("src/cli/commands/run.rs");
+        let artefact_target = RoleTarget::artefact(
+            "artefact-1".to_string(),
+            "symbol-1".to_string(),
+            "src/cli/commands/run.rs".to_string(),
+        );
+        let facts = vec![
+            ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "file-path".to_string(),
+                target: file_target.clone(),
+                language: Some("rust".to_string()),
+                fact_kind: "path".to_string(),
+                fact_key: "full".to_string(),
+                fact_value: "src/cli/commands/run.rs".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: serde_json::json!([]),
+                generation_seq: 1,
+            },
+            ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "file-language".to_string(),
+                target: file_target,
+                language: Some("rust".to_string()),
+                fact_kind: "language".to_string(),
+                fact_key: "resolved".to_string(),
+                fact_value: "rust".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: serde_json::json!([]),
+                generation_seq: 1,
+            },
+            ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "artefact-path".to_string(),
+                target: artefact_target.clone(),
+                language: Some("rust".to_string()),
+                fact_kind: "path".to_string(),
+                fact_key: "full".to_string(),
+                fact_value: "src/cli/commands/run.rs".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: serde_json::json!([]),
+                generation_seq: 1,
+            },
+            ArchitectureArtefactFact {
+                repo_id: "repo-1".to_string(),
+                fact_id: "artefact-language".to_string(),
+                target: artefact_target,
+                language: Some("rust".to_string()),
+                fact_kind: "language".to_string(),
+                fact_key: "resolved".to_string(),
+                fact_value: "rust".to_string(),
+                source: "test".to_string(),
+                confidence: 1.0,
+                evidence: serde_json::json!([]),
+                generation_seq: 1,
+            },
+        ];
+        let rules = compile_detection_rules(vec![ArchitectureRoleDetectionRule {
+            repo_id: "repo-1".to_string(),
+            rule_id: "rule-1".to_string(),
+            role_id: "role-1".to_string(),
+            version: 1,
+            lifecycle: RoleRuleLifecycle::Active,
+            priority: 10,
+            score: 1.0,
+            candidate_selector: serde_json::json!({
+                "path_suffixes": ["run.rs"],
+                "languages": ["rust"]
+            }),
+            positive_conditions: serde_json::json!([
+                { "kind": "path_contains", "value": "commands" }
+            ]),
+            negative_conditions: serde_json::json!([]),
+            provenance: serde_json::json!({ "source": "test" }),
+        }])?;
+
+        let result = evaluate_rules_over_facts(&rules, &facts)?;
+
+        assert_eq!(result.signals.len(), 1);
+        assert_eq!(result.signals[0].target.target_kind.as_db(), "artefact");
         Ok(())
     }
 

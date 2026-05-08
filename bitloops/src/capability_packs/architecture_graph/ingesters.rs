@@ -476,7 +476,7 @@ mod tests {
     };
     use crate::capability_packs::architecture_graph::roles::taxonomy::{
         ArchitectureRole, AssignmentSource, AssignmentStatus, RoleLifecycle, RoleTarget,
-        assignment_id, stable_role_id,
+        TargetKind, assignment_id, stable_role_id,
     };
     use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
     use crate::host::devql::RelationalStorage;
@@ -592,6 +592,7 @@ mod tests {
             request: super::super::roles::RoleAdjudicationRequest {
                 repo_id: "repo-ingester-1".to_string(),
                 generation: 301,
+                target_kind: Some("artefact".to_string()),
                 artefact_id: Some("artefact-1".to_string()),
                 symbol_id: Some("symbol-1".to_string()),
                 path: Some("src/main.rs".to_string()),
@@ -626,7 +627,12 @@ mod tests {
             &relational,
         )?;
 
-        let target = RoleTarget::symbol("artefact-1", "symbol-1", "src/main.rs");
+        let target = RoleTarget {
+            target_kind: TargetKind::Artefact,
+            artefact_id: Some("artefact-1".to_string()),
+            symbol_id: Some("symbol-1".to_string()),
+            path: "src/main.rs".to_string(),
+        };
         let assignment_id = assignment_id("repo-ingester-1", &role.role_id, &target);
         let assignment = test_runtime()
             .block_on(load_current_assignment_by_id(

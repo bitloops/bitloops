@@ -6,7 +6,8 @@ use crate::host::capability_host::CurrentStateConsumerContext;
 use crate::host::inference::{StructuredGenerationRequest, StructuredGenerationService};
 
 use super::taxonomy::{
-    SeededArchitectureTaxonomy, architecture_roles_seed_schema, generic_role_family_examples,
+    SeededArchitectureTaxonomy, allowed_rule_condition_kinds, architecture_roles_seed_schema,
+    generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
     validate_seeded_taxonomy,
 };
 
@@ -98,8 +99,9 @@ pub(crate) async fn collect_seed_evidence(
 }
 
 pub(crate) fn architecture_roles_seed_system_prompt() -> &'static str {
-    "You infer repository-specific architectural role taxonomies. Return JSON only. \
-Do not hardcode Bitloops-specific roles. Use the supplied evidence to propose role identities and reviewable deterministic rule candidates for this repository."
+    "You infer repository-specific architectural role taxonomies. Return JSON only that matches the supplied schema. \
+Do not hardcode Bitloops-specific roles. Use the supplied repository evidence to propose role identities and reviewable deterministic rule candidates for this repository. \
+Rule candidates must use only condition kinds listed in rule_authoring_contract.allowed_condition_kinds."
 }
 
 pub(crate) fn architecture_roles_seed_user_prompt(
@@ -113,6 +115,9 @@ pub(crate) fn architecture_roles_seed_user_prompt(
             "Generic role families are examples only; adapt them to the repository evidence.",
             "Return only stable role identities that are justified by the repository evidence.",
             "Detection rules must be reviewable and safe for deterministic use.",
+            "Use only rule condition kinds from rule_authoring_contract.allowed_condition_kinds.",
+            "Do not invent additional condition kind names or aliases.",
+            "Use rule_authoring_contract.rule_candidate_examples as shape examples only; adapt role keys, paths, languages, kinds, and symbols to the repository evidence.",
             "Prefer fewer strong roles over many weak or redundant roles."
         ],
         "repository_identity": {
@@ -122,6 +127,11 @@ pub(crate) fn architecture_roles_seed_user_prompt(
             "name": scope.repo.name,
             "identity": scope.repo.identity,
             "branch_name": scope.branch_name,
+        },
+        "rule_authoring_contract": {
+            "allowed_condition_kinds": allowed_rule_condition_kinds(),
+            "condition_catalog": role_rule_condition_catalog(),
+            "rule_candidate_examples": role_rule_candidate_examples(),
         },
         "evidence": evidence,
     })
@@ -323,6 +333,58 @@ mod tests {
         let prompt = architecture_roles_seed_user_prompt(&test_scope(), &json!({"files": []}));
         assert!(prompt.contains("project-specific architecture role taxonomy"));
         assert!(prompt.contains("Generic role families are examples only"));
+    }
+
+    #[test]
+    fn seed_prompt_includes_rule_authoring_contract_visible_to_llm() {
+        let prompt =
+            architecture_roles_seed_user_prompt(&test_scope(), &json!({"canonical_files": []}));
+        let value: Value = serde_json::from_str(&prompt).expect("prompt is JSON");
+
+        let contract = value
+            .get("rule_authoring_contract")
+            .and_then(Value::as_object)
+            .expect("prompt includes rule_authoring_contract");
+
+        let allowed = contract
+            .get("allowed_condition_kinds")
+            .and_then(Value::as_array)
+            .expect("prompt includes allowed condition kinds");
+        assert!(
+            allowed
+                .iter()
+                .any(|kind| kind.as_str() == Some("path_equals"))
+        );
+        assert!(
+            allowed
+                .iter()
+                .any(|kind| kind.as_str() == Some("canonical_kind_is"))
+        );
+
+        let catalog = contract
+            .get("condition_catalog")
+            .and_then(Value::as_array)
+            .expect("prompt includes condition catalog");
+        assert!(catalog.iter().any(|entry| {
+            entry.get("kind").and_then(Value::as_str) == Some("path_prefix")
+                && entry.get("fact").and_then(Value::as_str) == Some("path.full")
+        }));
+
+        let examples = contract
+            .get("rule_candidate_examples")
+            .and_then(Value::as_array)
+            .expect("prompt includes rule examples");
+        assert!(examples.iter().any(|example| {
+            example
+                .get("positive_conditions")
+                .and_then(Value::as_array)
+                .map(|conditions| {
+                    conditions.iter().any(|condition| {
+                        condition.get("kind").and_then(Value::as_str) == Some("path_contains")
+                    })
+                })
+                .unwrap_or(false)
+        }));
     }
 
     #[test]

@@ -100,6 +100,183 @@ mod deterministic_tests {
 mod seeded_tests {
     use super::super::*;
 
+    fn assert_schema_objects_require_every_property(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                let strict_object = map.get("type").and_then(serde_json::Value::as_str)
+                    == Some("object")
+                    && matches!(
+                        map.get("additionalProperties"),
+                        Some(serde_json::Value::Bool(false))
+                    );
+                if let Some(properties) =
+                    map.get("properties").and_then(serde_json::Value::as_object)
+                {
+                    let required = map
+                        .get("required")
+                        .and_then(serde_json::Value::as_array)
+                        .expect("object with properties must declare required fields")
+                        .iter()
+                        .map(|value| value.as_str().expect("required field must be a string"))
+                        .collect::<std::collections::BTreeSet<_>>();
+                    let property_keys = properties
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    assert_eq!(required, property_keys);
+                } else if strict_object {
+                    panic!("strict object schemas must declare properties and required fields");
+                }
+                for child in map.values() {
+                    assert_schema_objects_require_every_property(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    assert_schema_objects_require_every_property(item);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn architecture_roles_seed_schema_requires_all_declared_properties() {
+        let schema = architecture_roles_seed_schema();
+
+        assert_schema_objects_require_every_property(&schema);
+    }
+
+    #[test]
+    fn rule_condition_catalog_documents_all_supported_condition_kinds() {
+        let allowed: std::collections::BTreeSet<_> =
+            allowed_rule_condition_kinds().iter().copied().collect();
+
+        assert_eq!(
+            allowed,
+            std::collections::BTreeSet::from([
+                "path_contains",
+                "path_equals",
+                "path_prefix",
+                "path_suffix",
+                "language_is",
+                "canonical_kind_is",
+                "symbol_fqn_contains",
+            ])
+        );
+
+        let catalog = role_rule_condition_catalog();
+        let entries = catalog.as_array().expect("catalog is an array");
+        let catalog_kinds: std::collections::BTreeSet<_> = entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("catalog entry has kind")
+            })
+            .collect();
+
+        assert_eq!(catalog_kinds, allowed);
+        for entry in entries {
+            assert!(
+                entry
+                    .get("fact")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            );
+            assert!(
+                entry
+                    .get("value")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            );
+            assert!(
+                entry
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+            );
+        }
+    }
+
+    #[test]
+    fn rule_candidate_examples_use_only_supported_condition_kinds() {
+        let allowed: std::collections::BTreeSet<_> =
+            allowed_rule_condition_kinds().iter().copied().collect();
+        let examples = role_rule_candidate_examples();
+        let examples = examples.as_array().expect("examples are an array");
+
+        assert!(
+            !examples.is_empty(),
+            "seed prompt should include at least one rule example"
+        );
+
+        for example in examples {
+            let selector = example
+                .get("candidate_selector")
+                .and_then(serde_json::Value::as_object)
+                .expect("example includes selector");
+            for key in [
+                "path_prefixes",
+                "path_suffixes",
+                "path_contains",
+                "languages",
+                "canonical_kinds",
+                "symbol_fqn_contains",
+            ] {
+                assert!(
+                    selector
+                        .get(key)
+                        .and_then(serde_json::Value::as_array)
+                        .is_some()
+                );
+            }
+
+            for conditions_key in ["positive_conditions", "negative_conditions"] {
+                let conditions = example
+                    .get(conditions_key)
+                    .and_then(serde_json::Value::as_array)
+                    .expect("example includes condition arrays");
+                for condition in conditions {
+                    let kind = condition
+                        .get("kind")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("condition has kind");
+                    assert!(allowed.contains(kind), "unsupported example kind `{kind}`");
+                    assert!(
+                        condition
+                            .get("value")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn seed_schema_enumerates_supported_rule_condition_kinds() {
+        let expected: std::collections::BTreeSet<_> =
+            allowed_rule_condition_kinds().iter().copied().collect();
+        let schema = architecture_roles_seed_schema();
+
+        for pointer in [
+            "/properties/rule_candidates/items/properties/positive_conditions/items/properties/kind/enum",
+            "/properties/rule_candidates/items/properties/negative_conditions/items/properties/kind/enum",
+        ] {
+            let enum_values = schema
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_array)
+                .unwrap_or_else(|| panic!("missing schema enum at {pointer}"));
+            let actual: std::collections::BTreeSet<_> = enum_values
+                .iter()
+                .map(|value| value.as_str().expect("enum value is string"))
+                .collect();
+            assert_eq!(actual, expected);
+        }
+    }
+
     #[test]
     fn validates_seeded_taxonomy_and_rejects_unknown_target_roles() {
         let valid = SeededArchitectureTaxonomy {
@@ -196,6 +373,44 @@ mod seeded_tests {
         assert!(role_rule_matches(
             &selector, &positive, &negative, &artefact
         ));
+    }
+
+    #[test]
+    fn path_equals_condition_validates_and_maps_to_exact_path_match() -> anyhow::Result<()> {
+        let taxonomy = SeededArchitectureTaxonomy {
+            roles: vec![SeededArchitectureRole {
+                canonical_key: "command_dispatcher".to_string(),
+                display_name: "Command Dispatcher".to_string(),
+                description: String::new(),
+                family: Some("entrypoint".to_string()),
+                lifecycle_status: Some("active".to_string()),
+                provenance: json!({}),
+                evidence: json!({}),
+            }],
+            rule_candidates: vec![SeededArchitectureRuleCandidate {
+                target_role_key: "command_dispatcher".to_string(),
+                candidate_selector: RoleRuleCandidateSelector::default(),
+                positive_conditions: vec![RoleRuleCondition {
+                    kind: "path_equals".to_string(),
+                    value: json!("src/cli/commands/run.rs"),
+                }],
+                negative_conditions: vec![],
+                score: RoleRuleScore::default(),
+                evidence: json!({}),
+                metadata: json!({}),
+            }],
+        };
+
+        validate_seeded_taxonomy(&taxonomy)?;
+        let conditions =
+            role_rule_conditions_contract(&taxonomy.rule_candidates[0].positive_conditions)?;
+
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0].kind, "path");
+        assert_eq!(conditions[0].key, "full");
+        assert_eq!(conditions[0].op, RoleFactConditionOp::Eq);
+        assert_eq!(conditions[0].value, "src/cli/commands/run.rs");
+        Ok(())
     }
 
     #[test]

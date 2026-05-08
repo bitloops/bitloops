@@ -889,7 +889,17 @@ mod deterministic_tests {
             )?;
         assert!(write_outcome.persisted);
 
-        let target = taxonomy::RoleTarget::file("src/cli/commands/run.rs");
+        let target = taxonomy::RoleTarget {
+            target_kind: match request.target_kind.as_deref() {
+                Some("symbol") => taxonomy::TargetKind::Symbol,
+                Some("artefact") => taxonomy::TargetKind::Artefact,
+                Some("file") | None => taxonomy::TargetKind::File,
+                Some(other) => panic!("unexpected request target kind {other}"),
+            },
+            artefact_id: request.artefact_id.clone(),
+            symbol_id: request.symbol_id.clone(),
+            path: request.path.clone().expect("request path"),
+        };
         let assignment_id = taxonomy::assignment_id("repo-1", &role.role_id, &target);
         let adjudicated_assignment =
             load_current_assignment_by_id(&relational, "repo-1", &assignment_id)

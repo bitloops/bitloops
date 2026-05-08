@@ -98,6 +98,7 @@ fn role_requests_from_delta(
             Some(RoleAdjudicationRequest {
                 repo_id: repo_id.to_string(),
                 generation,
+                target_kind: Some("artefact".to_string()),
                 artefact_id: Some(artefact.artefact_id.clone()),
                 symbol_id: Some(artefact.symbol_id.clone()),
                 path: Some(artefact.path.clone()),
@@ -340,6 +341,7 @@ mod tests {
         let request = RoleAdjudicationRequest {
             repo_id: "repo".to_string(),
             generation: 7,
+            target_kind: Some("artefact".to_string()),
             artefact_id: Some("a1".to_string()),
             symbol_id: Some("s1".to_string()),
             path: Some("src/main.rs".to_string()),
@@ -394,6 +396,7 @@ mod tests {
         let request = RoleAdjudicationRequest {
             repo_id: "repo".to_string(),
             generation: 7,
+            target_kind: Some("artefact".to_string()),
             artefact_id: Some("a1".to_string()),
             symbol_id: Some("s1".to_string()),
             path: Some("src/main.rs".to_string()),
@@ -448,6 +451,7 @@ mod tests {
         let request = RoleAdjudicationRequest {
             repo_id: "repo".to_string(),
             generation: 7,
+            target_kind: Some("artefact".to_string()),
             artefact_id: Some("a1".to_string()),
             symbol_id: Some("s1".to_string()),
             path: Some("src/main.rs".to_string()),
@@ -487,6 +491,7 @@ mod tests {
         let request = RoleAdjudicationRequest {
             repo_id: "repo".to_string(),
             generation: 1,
+            target_kind: Some("artefact".to_string()),
             artefact_id: Some("a1".to_string()),
             symbol_id: None,
             path: Some("src/lib.rs".to_string()),

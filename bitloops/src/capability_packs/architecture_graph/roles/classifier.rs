@@ -503,11 +503,13 @@ fn unknown_or_high_impact_requests(
             })
             .unwrap_or(AdjudicationReason::Unknown);
             let target = summary.target;
+            let (target_kind, artefact_id, symbol_id) = request_target_fields(&target);
             RoleAdjudicationRequest {
                 repo_id: repo_id.to_string(),
                 generation: generation_seq,
-                artefact_id: target.artefact_id,
-                symbol_id: target.symbol_id,
+                target_kind,
+                artefact_id,
+                symbol_id,
                 path: Some(target.path),
                 language: summary.language,
                 canonical_kind: summary.canonical_kind,
@@ -559,11 +561,13 @@ pub fn adjudication_requests_from_assignments(
                 .iter()
                 .map(|assignment| assignment.role_id.clone())
                 .collect::<Vec<_>>();
+            let (target_kind, artefact_id, symbol_id) = request_target_fields(&target);
             Some(RoleAdjudicationRequest {
                 repo_id: primary.repo_id.clone(),
                 generation: primary.generation_seq,
-                artefact_id: target.artefact_id.clone(),
-                symbol_id: target.symbol_id.clone(),
+                target_kind,
+                artefact_id,
+                symbol_id,
                 path: Some(target.path.clone()),
                 language: None,
                 canonical_kind: None,
@@ -578,6 +582,14 @@ pub fn adjudication_requests_from_assignments(
             })
         })
         .collect()
+}
+
+fn request_target_fields(target: &RoleTarget) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        Some(target.target_kind.as_db().to_string()),
+        target.artefact_id.clone(),
+        target.symbol_id.clone(),
+    )
 }
 
 fn refreshed_paths_with_removals(

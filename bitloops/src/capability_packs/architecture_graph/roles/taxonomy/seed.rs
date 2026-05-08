@@ -120,6 +120,21 @@ pub struct RoleSplitTargetRole {
     #[serde(default)]
     pub alias_keys: Vec<String>,
 }
+
+pub const SUPPORTED_RULE_CONDITION_KINDS: [&str; 7] = [
+    "path_contains",
+    "path_equals",
+    "path_prefix",
+    "path_suffix",
+    "language_is",
+    "canonical_kind_is",
+    "symbol_fqn_contains",
+];
+
+pub fn allowed_rule_condition_kinds() -> &'static [&'static str] {
+    &SUPPORTED_RULE_CONDITION_KINDS
+}
+
 pub fn validate_seeded_taxonomy(taxonomy: &SeededArchitectureTaxonomy) -> Result<()> {
     if taxonomy.roles.is_empty() {
         bail!("seeded taxonomy response did not include any roles");
@@ -198,10 +213,133 @@ pub fn generic_role_family_examples() -> Value {
     ])
 }
 
+pub fn role_rule_condition_catalog() -> Value {
+    json!([
+        {
+            "kind": "path_contains",
+            "fact": "path.full",
+            "value": "Substring that must appear in the repository-relative path.",
+            "description": "Use for stable path segments such as `src/cli`, `commands`, or `tests`."
+        },
+        {
+            "kind": "path_equals",
+            "fact": "path.full",
+            "value": "Exact repository-relative path.",
+            "description": "Use only when one specific file or artefact path is the intended deterministic match."
+        },
+        {
+            "kind": "path_prefix",
+            "fact": "path.full",
+            "value": "Repository-relative path prefix.",
+            "description": "Use for directories or stable source tree areas."
+        },
+        {
+            "kind": "path_suffix",
+            "fact": "path.full",
+            "value": "Repository-relative path suffix.",
+            "description": "Use for file names, extensions, or stable suffixes such as `_test.rs`."
+        },
+        {
+            "kind": "language_is",
+            "fact": "language.name",
+            "value": "Language identifier from evidence, such as `rust` or `typescript`.",
+            "description": "Use to keep a rule scoped to one language."
+        },
+        {
+            "kind": "canonical_kind_is",
+            "fact": "symbol.canonical_kind",
+            "value": "Canonical artefact kind from evidence, such as `function`, `method`, `class`, or `test`.",
+            "description": "Use to constrain rules to specific artefact kinds."
+        },
+        {
+            "kind": "symbol_fqn_contains",
+            "fact": "symbol.fqn",
+            "value": "Substring that must appear in the fully qualified symbol name.",
+            "description": "Use for stable module, namespace, type, or function naming patterns."
+        }
+    ])
+}
+
+pub fn role_rule_candidate_examples() -> Value {
+    json!([
+        {
+            "target_role_key": "cli_command_surface",
+            "candidate_selector": {
+                "path_prefixes": ["src/cli"],
+                "path_suffixes": [".rs"],
+                "path_contains": ["commands"],
+                "languages": ["rust"],
+                "canonical_kinds": ["function"],
+                "symbol_fqn_contains": []
+            },
+            "positive_conditions": [
+                { "kind": "path_prefix", "value": "src/cli" },
+                { "kind": "path_contains", "value": "commands" },
+                { "kind": "language_is", "value": "rust" }
+            ],
+            "negative_conditions": [
+                { "kind": "path_suffix", "value": "_test.rs" }
+            ],
+            "score": {
+                "base_confidence": 0.82,
+                "weight": 1.0
+            },
+            "evidence": {
+                "example_only": true,
+                "why": "CLI command files under src/cli/commands in Rust are likely command-surface artefacts."
+            },
+            "metadata": {
+                "example_only": true
+            }
+        },
+        {
+            "target_role_key": "domain_policy",
+            "candidate_selector": {
+                "path_prefixes": ["src/domain"],
+                "path_suffixes": [],
+                "path_contains": [],
+                "languages": ["rust"],
+                "canonical_kinds": ["struct", "enum", "function"],
+                "symbol_fqn_contains": ["policy"]
+            },
+            "positive_conditions": [
+                { "kind": "canonical_kind_is", "value": "function" },
+                { "kind": "symbol_fqn_contains", "value": "policy" }
+            ],
+            "negative_conditions": [],
+            "score": {
+                "base_confidence": 0.74,
+                "weight": 1.0
+            },
+            "evidence": {
+                "example_only": true,
+                "why": "Domain path and policy naming are stable enough for reviewable deterministic suggestions."
+            },
+            "metadata": {
+                "example_only": true
+            }
+        }
+    ])
+}
+
 pub fn architecture_roles_seed_schema() -> Value {
     let strict_object = json!({
         "type": "object",
+        "properties": {},
+        "required": [],
         "additionalProperties": false
+    });
+    let condition_schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "value"],
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": SUPPORTED_RULE_CONDITION_KINDS
+            },
+            "value": { "type": "string", "minLength": 1 }
+        }
     });
     json!({
         "type": "object",
@@ -214,7 +352,15 @@ pub fn architecture_roles_seed_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["canonical_key", "display_name"],
+                    "required": [
+                        "canonical_key",
+                        "display_name",
+                        "description",
+                        "family",
+                        "lifecycle_status",
+                        "provenance",
+                        "evidence"
+                    ],
                     "properties": {
                         "canonical_key": { "type": "string", "minLength": 1 },
                         "display_name": { "type": "string", "minLength": 1 },
@@ -231,12 +377,28 @@ pub fn architecture_roles_seed_schema() -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["target_role_key", "candidate_selector"],
+                    "required": [
+                        "target_role_key",
+                        "candidate_selector",
+                        "positive_conditions",
+                        "negative_conditions",
+                        "score",
+                        "evidence",
+                        "metadata"
+                    ],
                     "properties": {
                         "target_role_key": { "type": "string", "minLength": 1 },
                         "candidate_selector": {
                             "type": "object",
                             "additionalProperties": false,
+                            "required": [
+                                "path_prefixes",
+                                "path_suffixes",
+                                "path_contains",
+                                "languages",
+                                "canonical_kinds",
+                                "symbol_fqn_contains"
+                            ],
                             "properties": {
                                 "path_prefixes": { "type": "array", "items": { "type": "string" } },
                                 "path_suffixes": { "type": "array", "items": { "type": "string" } },
@@ -248,34 +410,19 @@ pub fn architecture_roles_seed_schema() -> Value {
                         },
                         "positive_conditions": {
                             "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["kind", "value"],
-                                "properties": {
-                                    "kind": { "type": "string", "minLength": 1 },
-                                    "value": { "type": "string", "minLength": 1 }
-                                }
-                            }
+                            "items": condition_schema.clone()
                         },
                         "negative_conditions": {
                             "type": "array",
-                            "items": {
-                                "type": "object",
-                                "additionalProperties": false,
-                                "required": ["kind", "value"],
-                                "properties": {
-                                    "kind": { "type": "string", "minLength": 1 },
-                                    "value": { "type": "string", "minLength": 1 }
-                                }
-                            }
+                            "items": condition_schema.clone()
                         },
                         "score": {
                             "type": "object",
                             "additionalProperties": false,
+                            "required": ["base_confidence", "weight"],
                             "properties": {
-                                "base_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                                "weight": { "type": "number" }
+                                "base_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+                                "weight": { "type": ["number", "null"] }
                             }
                         },
                         "evidence": strict_object.clone(),
@@ -351,14 +498,8 @@ fn validate_condition(field_name: &str, condition: &RoleRuleCondition) -> Result
     if kind.is_empty() {
         bail!("{field_name}.kind must not be empty");
     }
-    match kind {
-        "path_contains"
-        | "path_prefix"
-        | "path_suffix"
-        | "language_is"
-        | "canonical_kind_is"
-        | "symbol_fqn_contains" => {}
-        _ => bail!("unsupported rule condition kind `{kind}`"),
+    if !SUPPORTED_RULE_CONDITION_KINDS.contains(&kind) {
+        bail!("unsupported rule condition kind `{kind}`");
     }
     if condition.value.as_str().is_none() {
         bail!("{field_name}.{kind} must use a string value");
