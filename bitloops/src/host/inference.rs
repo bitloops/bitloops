@@ -23,7 +23,7 @@ pub const BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID: &str = "bitloops_platform_emb
 pub const BITLOOPS_PLATFORM_CHAT_DRIVER: &str = "bitloops_platform_chat";
 pub const BITLOOPS_INFERENCE_RUNTIME_ID: &str = "bitloops_inference";
 pub const OPENAI_CHAT_COMPLETIONS_DRIVER: &str = "openai_chat_completions";
-pub const DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY: usize = 4;
+pub const DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {

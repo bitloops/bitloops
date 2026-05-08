@@ -12,6 +12,7 @@ use super::runtime_events::publish_workplane_runtime_event;
 use super::workplane::{
     enqueue_workplane_clone_rebuild, enqueue_workplane_embedding_jobs,
     enqueue_workplane_embedding_repo_backfill_job, enqueue_workplane_summary_jobs,
+    enqueue_workplane_summary_repo_backfill_job,
 };
 use super::{EnrichmentJobTarget, FollowUpJob};
 
@@ -151,11 +152,11 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
 
     pub(crate) async fn enqueue_follow_up(&self, follow_up: FollowUpJob) -> Result<()> {
         match follow_up {
-            FollowUpJob::SemanticSummaries {
+            FollowUpJob::RepoBackfillSummaries {
                 target,
                 artefact_ids,
             } => {
-                self.enqueue_semantic_summary_workplane_jobs(target, artefact_ids)
+                self.enqueue_repo_backfill_summary_job(target, artefact_ids)
                     .await
             }
             FollowUpJob::RepoBackfillEmbeddings {
@@ -240,12 +241,12 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
         Ok(())
     }
 
-    async fn enqueue_semantic_summary_workplane_jobs(
+    async fn enqueue_repo_backfill_summary_job(
         &self,
         target: EnrichmentJobTarget,
         artefact_ids: Vec<String>,
     ) -> Result<()> {
-        enqueue_workplane_summary_jobs(&target, artefact_ids)?;
+        enqueue_workplane_summary_repo_backfill_job(&target, artefact_ids)?;
         let mut state = self.load_state()?;
         state.last_action = Some("enqueue_semantic".to_string());
         self.save_state(&mut state)?;

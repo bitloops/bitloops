@@ -414,13 +414,13 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
                 WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE
             );
             assert_eq!(artefact_ids.first().map(String::as_str), Some("artefact-0"));
-            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-15"));
+            assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-23"));
         }
         other => panic!("expected summary-embedding follow-up, got {other:?}"),
     }
 
     match &plan.follow_ups[1] {
-        FollowUpJob::SemanticSummaries {
+        FollowUpJob::RepoBackfillSummaries {
             target,
             artefact_ids,
         } => {
@@ -429,10 +429,10 @@ fn repo_backfill_summary_refresh_plan_batches_initial_work_and_queues_follow_ups
                 target.config_root,
                 PathBuf::from("/tmp/config-summary-plan")
             );
-            assert_eq!(artefact_ids.len(), 24);
+            assert_eq!(artefact_ids.len(), 16);
             assert_eq!(
                 artefact_ids.first().map(String::as_str),
-                Some("artefact-16")
+                Some("artefact-24")
             );
             assert_eq!(artefact_ids.last().map(String::as_str), Some("artefact-39"));
         }
@@ -1919,6 +1919,99 @@ async fn prepare_embedding_mailbox_batch_keeps_current_feature_hash_aligned_with
             input.artefact_id
         );
     }
+}
+
+#[tokio::test]
+async fn prepare_summary_mailbox_batch_splits_repo_wide_backfill_before_hydrating_later_paths() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let generated_dir = repo.path().join("src/generated");
+    fs::create_dir_all(&generated_dir).expect("create generated source dir");
+    for index in 0..24 {
+        fs::write(
+            generated_dir.join(format!("summary_worker_{index:02}.ts")),
+            format!(
+                "export function generatedSummaryWorker{index:02}(input: string): string {{\n  return `${{input}}:{index}`;\n}}\n"
+            ),
+        )
+        .expect("write generated source");
+    }
+    git_ok(repo.path(), &["add", "src/generated"]);
+    git_ok(
+        repo.path(),
+        &["commit", "-m", "add summary backfill sources"],
+    );
+
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    assert!(
+        inputs.len() > super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE,
+        "fixture should exceed one summary mailbox batch"
+    );
+    let unrelated = inputs
+        .get(super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE)
+        .expect("fixture should include a later path outside the first summary batch");
+
+    relational
+        .exec(&format!(
+            "UPDATE current_file_state \
+SET head_content_id = 'missing-summary-repo-wide-backfill-blob' \
+WHERE repo_id = '{}' AND path = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+            crate::host::devql::esc_pg(&unrelated.path),
+        ))
+        .await
+        .expect("break later current projection path");
+
+    super::helpers::load_current_semantic_inputs(&relational, repo.path(), &cfg.repo.repo_id, None)
+        .await
+        .expect_err("full current hydration should still fail on the broken later path");
+
+    let batch = super::super::workplane::ClaimedSummaryMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        lease_token: "repo-wide-summary-backfill-lease".to_string(),
+        items: vec![SemanticSummaryMailboxItemRecord {
+            item_id: "repo-wide-summary-backfill-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: None,
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("repo-wide-summary-backfill-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_summary_mailbox_batch(&batch, |_, _| {})
+        .await
+        .expect("repo-wide summary backfill should hydrate only the first chunk");
+
+    assert_eq!(
+        prepared.expanded_count,
+        super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE
+    );
+    assert!(prepared.commit.replacement_backfill_item.is_some());
 }
 
 #[tokio::test]

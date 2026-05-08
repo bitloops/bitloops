@@ -24,7 +24,7 @@ use super::mailbox_persistence::{
 use super::readiness::{mailbox_claim_readiness, mailbox_readiness_job};
 use super::sql::{sql_i64, sql_string_list};
 
-pub(crate) const SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE: usize = 10;
+pub(crate) const SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE: usize = 16;
 pub(crate) const SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE: usize = 32;
 const SEMANTIC_MAILBOX_LEASE_SECS: u64 = 300;
 pub(crate) const WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT: usize = 32;
@@ -57,39 +57,28 @@ pub(crate) fn claim_summary_mailbox_batch(
         return Ok(None);
     }
     workplane_store.with_connection(|conn| {
-        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
-            .context("starting semantic summary mailbox claim transaction")?;
-        let result = (|| {
-            let now = unix_timestamp_now();
-            let candidates = load_summary_mailbox_repo_candidates(conn, now)?;
-            let mut readiness_cache = BTreeMap::new();
-            for (repo_id, repo_root, config_root) in candidates {
-                let job = mailbox_readiness_job(
-                    &repo_id,
-                    &repo_root,
-                    &config_root,
-                    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
-                );
-                if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
-                    continue;
-                }
-                if let Some(batch) = lease_summary_mailbox_batch_for_repo(conn, &repo_id, now)? {
-                    return Ok(Some(batch));
-                }
+        let candidates = load_summary_mailbox_repo_candidates(conn, unix_timestamp_now())?;
+        let mut readiness_cache = BTreeMap::new();
+        for (repo_id, repo_root, config_root) in candidates {
+            let job = mailbox_readiness_job(
+                &repo_id,
+                &repo_root,
+                &config_root,
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+            );
+            if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
+                continue;
             }
-            Ok(None)
-        })();
-        match result {
-            Ok(batch) => {
-                conn.execute_batch("COMMIT;")
-                    .context("committing semantic summary mailbox claim transaction")?;
-                Ok(batch)
-            }
-            Err(err) => {
-                let _ = conn.execute_batch("ROLLBACK;");
-                Err(err)
+            if let Some(batch) = with_immediate_mailbox_claim_transaction(
+                conn,
+                "starting semantic summary mailbox claim transaction",
+                "committing semantic summary mailbox claim transaction",
+                || lease_summary_mailbox_batch_for_repo(conn, &repo_id, unix_timestamp_now()),
+            )? {
+                return Ok(Some(batch));
             }
         }
+        Ok(None)
     })
 }
 
@@ -102,49 +91,58 @@ pub(crate) fn claim_embedding_mailbox_batch(
         return Ok(None);
     }
     workplane_store.with_connection(|conn| {
-        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
-            .context("starting semantic embedding mailbox claim transaction")?;
-        let result = (|| {
-            let now = unix_timestamp_now();
-            let candidates = load_embedding_mailbox_repo_candidates(conn, now)?;
-            let mut readiness_cache = BTreeMap::new();
-            for (repo_id, repo_root, config_root, representation_kind) in candidates {
-                let mailbox_name = match representation_kind {
-                    EmbeddingRepresentationKind::Summary => {
-                        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
-                    }
-                    EmbeddingRepresentationKind::Identity => {
-                        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
-                    }
-                    EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-                };
-                let job = mailbox_readiness_job(&repo_id, &repo_root, &config_root, mailbox_name);
-                if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
-                    continue;
-                }
-                if let Some(batch) = lease_embedding_mailbox_batch_for_repo(
-                    conn,
-                    &repo_id,
-                    representation_kind,
-                    now,
-                )? {
-                    return Ok(Some(batch));
-                }
+        let candidates = load_embedding_mailbox_repo_candidates(conn, unix_timestamp_now())?;
+        let mut readiness_cache = BTreeMap::new();
+        for (repo_id, repo_root, config_root, representation_kind) in candidates {
+            let mailbox_name = match representation_kind {
+                EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+                EmbeddingRepresentationKind::Identity => SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                EmbeddingRepresentationKind::Code => SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            };
+            let job = mailbox_readiness_job(&repo_id, &repo_root, &config_root, mailbox_name);
+            if mailbox_claim_readiness(runtime_store, &mut readiness_cache, &job)?.blocked {
+                continue;
             }
-            Ok(None)
-        })();
-        match result {
-            Ok(batch) => {
-                conn.execute_batch("COMMIT;")
-                    .context("committing semantic embedding mailbox claim transaction")?;
-                Ok(batch)
-            }
-            Err(err) => {
-                let _ = conn.execute_batch("ROLLBACK;");
-                Err(err)
+            if let Some(batch) = with_immediate_mailbox_claim_transaction(
+                conn,
+                "starting semantic embedding mailbox claim transaction",
+                "committing semantic embedding mailbox claim transaction",
+                || {
+                    lease_embedding_mailbox_batch_for_repo(
+                        conn,
+                        &repo_id,
+                        representation_kind,
+                        unix_timestamp_now(),
+                    )
+                },
+            )? {
+                return Ok(Some(batch));
             }
         }
+        Ok(None)
     })
+}
+
+fn with_immediate_mailbox_claim_transaction<T>(
+    conn: &rusqlite::Connection,
+    start_context: &str,
+    commit_context: &str,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
+        .with_context(|| start_context.to_string())?;
+    let result = action();
+    match result {
+        Ok(value) => {
+            conn.execute_batch("COMMIT;")
+                .with_context(|| commit_context.to_string())?;
+            Ok(value)
+        }
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(err)
+        }
+    }
 }
 
 fn load_summary_mailbox_repo_candidates(

@@ -31,6 +31,7 @@ mod status;
 pub(crate) use enqueue::{
     enqueue_workplane_clone_rebuild, enqueue_workplane_embedding_jobs,
     enqueue_workplane_embedding_repo_backfill_job, enqueue_workplane_summary_jobs,
+    enqueue_workplane_summary_repo_backfill_job,
 };
 pub(crate) use job_claim::claim_next_workplane_job;
 #[cfg(test)]
