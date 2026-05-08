@@ -2,7 +2,7 @@
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
   <h1>Codebase truth maintenance for AI agents.</h1>
   <p>
-    <strong>Bitloops builds and maintains a local, typed, queryable model of your codebase so AI agents, developers, and reviewers can work from maintained system state instead of rediscovering the repository from raw text.</strong>
+    <strong>Bitloops builds and maintains a local, typed, queryable model of your codebase so AI agents, developers, and reviewers can work from shared system state instead of rediscovering the repository from raw text.</strong>
   </p>
   <p>
     <a href="https://bitloops.com">Website</a>
@@ -134,8 +134,8 @@ and external knowledge into a local queryable model.
 | **Test and coverage awareness** | Bitloops can map tests, coverage, verification signals, and confidence back to code artefacts. |
 | **Knowledge ingestion** | External knowledge from sources such as GitHub, Jira, and Confluence can become part of repository understanding. |
 | **Semantic understanding** | Summaries, embeddings, semantic clone detection, and context guidance help agents reason beyond exact text matches. |
-| **Architecture views** | Architecture graph and CodeCity-style views expose structure, boundaries, dependencies, risks, and higher-level codebase shape. |
-| **Freshness foundations** | Sync and ingest flows track current state, historical state, content ids, parser versions, extractor versions, stale rows, and generations. |
+| **Architecture views** | Architecture graph and CodeCity-style views help expose structure, boundaries, dependencies, risks, and higher-level codebase shape where enabled. |
+| **Freshness and re-evaluation** | Bitloops tracks when repository facts were produced, what code state they came from, and what should be refreshed as the repo changes. |
 | **Local-first operation** | Bitloops runs locally by default, with optional remote stores, connectors, telemetry, and inference providers controlled by configuration and consent. |
 
 ## Who Bitloops Is For
@@ -207,16 +207,15 @@ Example DevQL pipeline:
 repo("my-repo") -> asOf(ref:"main") -> artefacts(name:"findById") -> tests()
 ```
 
-## Core Surfaces
+## How You Use Bitloops
 
-| Surface | What it is for |
+| Surface | What you use it for |
 | --- | --- |
-| **CLI** | Initialize projects, manage capture, control the daemon, open the dashboard, query DevQL, inspect checkpoints, and run diagnostics. |
-| **Daemon** | Keep the local model current, serve GraphQL and dashboard surfaces, run background work, and expose operational logs through `bitloops daemon logs`. |
-| **Dashboard** | Inspect checkpoints, captured activity, DevQL data, and repository intelligence through a local browser UI. |
-| **DevQL / GraphQL** | Ask typed questions about current and historical repository state, checkpoints, tests, dependencies, knowledge, and capability-pack data. |
-| **Agent integrations** | Normalize agent-specific hooks, transcripts, prompts, tool observations, token usage, and capture behavior into one host-owned checkpoint model. |
-| **Capability packs** | Add richer intelligence such as architecture graphs, CodeCity maps visualization, HTTP facts, external knowledge, navigation context, context guidance, test mapping, and semantic clone detection. |
+| **CLI** | Initialize a repo, enable or disable capture, open the dashboard, inspect checkpoints, run diagnostics, and query DevQL. |
+| **Local dashboard** | Browse captured AI-assisted work, checkpoints, repository intelligence, and DevQL-backed views in your browser. |
+| **DevQL** | Ask precise questions about the maintained repository model instead of making agents crawl files manually. |
+| **Agent integrations** | Let supported AI coding agents feed one repository-scoped model through normalized hooks, transcripts, prompts, tool events, and checkpoint data. |
+| **Background daemon** | Keep the local model fresh, coordinate sync and ingest work, serve the dashboard, and expose logs when something needs attention. |
 
 ## Local-First Trust Model
 
@@ -267,12 +266,11 @@ This README is intentionally user-first. Technical details live in the documenta
 
 Bitloops is moving toward stronger codebase truth maintenance:
 
-- richer provenance, evidence, confidence, and freshness semantics;
-- deeper invalidation and conflict handling when source facts change;
-- better checkpoint and review experiences for AI-assisted work;
-- broader connector-backed knowledge ingestion;
-- more reusable language semantics;
-- stronger capability-pack boundaries and host-owned extension contracts;
+- more accurate freshness, stale-state, and conflict signals;
+- better review workflows for AI-assisted work;
+- richer test, coverage, architecture, semantic, and knowledge context;
+- deeper connector-backed knowledge from tools like GitHub, Jira, and Confluence;
+- more agent and language support;
 - optional team and remote backends while preserving local-first defaults;
 - governed flows that can turn useful agent discoveries into reviewable, reusable system state.
 
