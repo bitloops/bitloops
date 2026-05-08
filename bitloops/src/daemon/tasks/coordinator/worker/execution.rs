@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -449,13 +450,10 @@ fn prepared_summary_setup_plan_from_request(
 
 fn normalize_explicit_ingest_commits(commits: Vec<String>) -> Vec<String> {
     let mut normalized = Vec::new();
+    let mut seen = HashSet::new();
     for commit in commits {
         let commit = commit.trim();
-        if commit.is_empty()
-            || normalized
-                .iter()
-                .any(|existing: &String| existing.as_str() == commit)
-        {
+        if commit.is_empty() || !seen.insert(commit.to_string()) {
             continue;
         }
         normalized.push(commit.to_string());

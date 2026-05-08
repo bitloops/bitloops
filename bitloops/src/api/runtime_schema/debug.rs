@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -12,11 +13,12 @@ use super::util::{to_graphql_i32, to_graphql_i64};
 use crate::api::DashboardState;
 use crate::daemon::{DevqlTaskSpec, SyncTaskMode};
 use crate::graphql::graphql_error;
-use crate::host::devql::{ProducerSpoolJobPayload, ProducerSpoolJobRecord, ProducerSpoolJobStatus};
+use crate::host::devql::{ProducerSpoolJobCounts, ProducerSpoolJobPayload, ProducerSpoolJobRecord};
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
 const PRODUCER_SPOOL_DEBUG_LIMIT: usize = 100;
 const SUPPORTING_LOG_LINE_LIMIT: usize = 80;
+const TAIL_SCAN_BLOCK_SIZE: usize = 8 * 1024;
 
 #[derive(Debug, Clone, SimpleObject)]
 pub(crate) struct RuntimeDebugSnapshotObject {
@@ -129,6 +131,16 @@ pub(crate) async fn load_runtime_debug_snapshot(
             format!("failed to load producer spool diagnostics: {err:#}"),
         )
     })?;
+    let spool_counts = crate::host::devql::count_producer_spool_jobs(
+        &cfg.daemon_config_root,
+        cfg.repo.repo_id.as_str(),
+    )
+    .map_err(|err| {
+        graphql_error(
+            "internal",
+            format!("failed to load producer spool counts: {err:#}"),
+        )
+    })?;
     let repo_state = load_repo_state(&cfg.repo_root).map_err(|err| {
         graphql_error(
             "internal",
@@ -144,25 +156,20 @@ pub(crate) async fn load_runtime_debug_snapshot(
 
     Ok(RuntimeDebugSnapshotObject {
         repo_id: cfg.repo.repo_id,
-        producer_spool: map_producer_spool(jobs),
+        producer_spool: map_producer_spool(jobs, spool_counts),
         repo_state,
         watcher,
         supporting_logs: load_supporting_logs(),
     })
 }
 
-fn map_producer_spool(jobs: Vec<ProducerSpoolJobRecord>) -> RuntimeDebugProducerSpoolObject {
-    let pending_count = jobs
-        .iter()
-        .filter(|job| job.status == ProducerSpoolJobStatus::Pending)
-        .count();
-    let running_count = jobs
-        .iter()
-        .filter(|job| job.status == ProducerSpoolJobStatus::Running)
-        .count();
+fn map_producer_spool(
+    jobs: Vec<ProducerSpoolJobRecord>,
+    counts: ProducerSpoolJobCounts,
+) -> RuntimeDebugProducerSpoolObject {
     RuntimeDebugProducerSpoolObject {
-        pending_count: to_graphql_i32(pending_count),
-        running_count: to_graphql_i32(running_count),
+        pending_count: to_graphql_i32(counts.pending),
+        running_count: to_graphql_i32(counts.running),
         jobs: jobs.into_iter().map(map_producer_spool_job).collect(),
     }
 }
@@ -400,8 +407,8 @@ fn load_watcher_state(
 
 fn load_supporting_logs() -> RuntimeDebugLogTailObject {
     let path = crate::daemon::daemon_log_file_path();
-    let raw = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
+    let raw_lines = match tail_log_lines(&path, SUPPORTING_LOG_LINE_LIMIT) {
+        Ok(lines) => lines,
         Err(_) => {
             return RuntimeDebugLogTailObject {
                 available: false,
@@ -410,18 +417,90 @@ fn load_supporting_logs() -> RuntimeDebugLogTailObject {
             };
         }
     };
-    let mut lines = raw
-        .lines()
-        .rev()
-        .take(SUPPORTING_LOG_LINE_LIMIT)
-        .map(parse_log_line)
-        .collect::<Vec<_>>();
-    lines.reverse();
+    let lines = raw_lines
+        .into_iter()
+        .map(|line| parse_log_line(&line))
+        .collect();
     RuntimeDebugLogTailObject {
         available: true,
         path: path.to_string_lossy().to_string(),
         lines,
     }
+}
+
+fn tail_log_lines(path: &Path, lines: usize) -> anyhow::Result<Vec<String>> {
+    if lines == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut file =
+        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
+    let start = find_tail_start_offset(&mut file, lines, path)?;
+    file.seek(SeekFrom::Start(start))
+        .with_context(|| format!("seeking daemon log {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .with_context(|| format!("reading daemon log {}", path.display()))?;
+    let content = String::from_utf8(bytes)
+        .with_context(|| format!("decoding daemon log {}", path.display()))?;
+
+    Ok(content.lines().map(str::to_owned).collect())
+}
+
+fn find_tail_start_offset(file: &mut File, lines: usize, path: &Path) -> anyhow::Result<u64> {
+    let file_len = file
+        .metadata()
+        .with_context(|| format!("reading daemon log metadata {}", path.display()))?
+        .len();
+    if file_len == 0 {
+        return Ok(0);
+    }
+
+    let mut remaining = file_len;
+    let mut needed = lines;
+    let mut skip_trailing_newline = file_ends_with_newline(file, file_len, path)?;
+    let mut buffer = vec![0_u8; TAIL_SCAN_BLOCK_SIZE];
+
+    while remaining > 0 {
+        let read_size = remaining.min(TAIL_SCAN_BLOCK_SIZE as u64) as usize;
+        remaining -= read_size as u64;
+        file.seek(SeekFrom::Start(remaining))
+            .with_context(|| format!("seeking daemon log {}", path.display()))?;
+        file.read_exact(&mut buffer[..read_size])
+            .with_context(|| format!("reading daemon log {}", path.display()))?;
+
+        for idx in (0..read_size).rev() {
+            if buffer[idx] != b'\n' {
+                continue;
+            }
+
+            let newline_pos = remaining + idx as u64;
+            if skip_trailing_newline && newline_pos == file_len - 1 {
+                skip_trailing_newline = false;
+                continue;
+            }
+
+            needed -= 1;
+            if needed == 0 {
+                return Ok(newline_pos + 1);
+            }
+        }
+    }
+
+    Ok(0)
+}
+
+fn file_ends_with_newline(file: &mut File, file_len: u64, path: &Path) -> anyhow::Result<bool> {
+    if file_len == 0 {
+        return Ok(false);
+    }
+
+    let mut byte = [0_u8; 1];
+    file.seek(SeekFrom::Start(file_len - 1))
+        .with_context(|| format!("seeking daemon log {}", path.display()))?;
+    file.read_exact(&mut byte)
+        .with_context(|| format!("reading daemon log {}", path.display()))?;
+    Ok(byte[0] == b'\n')
 }
 
 fn parse_log_line(raw: &str) -> RuntimeDebugLogLineObject {
@@ -456,6 +535,8 @@ fn parse_log_line(raw: &str) -> RuntimeDebugLogLineObject {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn parse_porcelain_status_line_keeps_paths_for_two_and_one_column_statuses() {
@@ -475,5 +556,27 @@ mod tests {
             .expect("parse compact status");
         assert!(compact.staged);
         assert_eq!(compact.path, "bitloops/src/api/runtime_schema.rs");
+    }
+
+    #[test]
+    fn tail_log_lines_reads_only_requested_suffix() {
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("daemon.log");
+        let contents = (0..120)
+            .map(|idx| format!(r#"{{"level":"INFO","message":"line-{idx}"}}"#))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&log_path, format!("{contents}\n")).expect("write log");
+
+        let lines = tail_log_lines(&log_path, 3).expect("tail log lines");
+
+        assert_eq!(
+            lines,
+            vec![
+                r#"{"level":"INFO","message":"line-117"}"#.to_string(),
+                r#"{"level":"INFO","message":"line-118"}"#.to_string(),
+                r#"{"level":"INFO","message":"line-119"}"#.to_string(),
+            ]
+        );
     }
 }

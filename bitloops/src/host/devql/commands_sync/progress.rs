@@ -13,6 +13,9 @@ pub enum SyncProgressPhase {
     ExtractingPaths,
     MaterialisingPaths,
     RunningGc,
+    BuildingValidationProjection,
+    LoadingValidationRows,
+    ComparingValidationRows,
     Complete,
     Failed,
 }
@@ -30,6 +33,9 @@ impl SyncProgressPhase {
             Self::ExtractingPaths => "extracting_paths",
             Self::MaterialisingPaths => "materialising_paths",
             Self::RunningGc => "running_gc",
+            Self::BuildingValidationProjection => "building_validation_projection",
+            Self::LoadingValidationRows => "loading_validation_rows",
+            Self::ComparingValidationRows => "comparing_validation_rows",
             Self::Complete => "complete",
             Self::Failed => "failed",
         }

@@ -116,6 +116,45 @@ fn spooled_ingest_task_preserves_explicit_commits() {
 }
 
 #[test]
+fn spooled_ingest_task_dedupe_key_preserves_explicit_commit_order() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    enqueue_spooled_ingest_task_for_repo_root(
+        &repo_root,
+        DevqlTaskSource::PostCommit,
+        crate::daemon::IngestTaskSpec {
+            commits: vec!["commit-b".to_string(), "commit-a".to_string()],
+            backfill: None,
+        },
+    )
+    .expect("enqueue first post-commit ingest task");
+    enqueue_spooled_ingest_task_for_repo_root(
+        &repo_root,
+        DevqlTaskSource::PostCommit,
+        crate::daemon::IngestTaskSpec {
+            commits: vec!["commit-a".to_string(), "commit-b".to_string()],
+            backfill: None,
+        },
+    )
+    .expect("enqueue second post-commit ingest task");
+
+    let jobs = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    let dedupe_keys = jobs
+        .iter()
+        .map(|job| job.dedupe_key.as_deref())
+        .collect::<HashSet<_>>();
+
+    assert_eq!(
+        jobs.len(),
+        2,
+        "commit order should be part of the dedupe key"
+    );
+    assert!(dedupe_keys.contains(&Some("task:post_commit:ingest:commits:commit-b,commit-a")));
+    assert!(dedupe_keys.contains(&Some("task:post_commit:ingest:commits:commit-a,commit-b")));
+}
+
+#[test]
 fn producer_spool_claims_at_most_one_running_job_per_repo() {
     let (_dir, repo_root, repo, store) = seed_store();
     let cfg = crate::host::devql::DevqlConfig::from_roots(

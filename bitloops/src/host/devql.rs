@@ -90,6 +90,8 @@ pub use self::commands_refresh::{
 pub(crate) use self::commands_refresh::{
     refresh_paths_for_sync, snapshot_committed_current_rows_for_commit_for_config,
 };
+#[cfg(test)]
+pub(crate) use self::commands_sync::execute_sync_validation_with_observer;
 #[allow(unused_imports)]
 pub(crate) use self::commands_sync::run_sync_with_summary_and_stats_and_observer_and_diffs;
 pub use self::commands_sync::{
@@ -108,10 +110,10 @@ pub(crate) use self::producer_spool::enqueue_spooled_ingest_task_for_repo_root;
 #[cfg(test)]
 pub(crate) use self::producer_spool::enqueue_spooled_post_commit_derivation;
 pub(crate) use self::producer_spool::{
-    PostCommitDerivationClaimGuards, ProducerSpoolJobPayload, ProducerSpoolJobRecord,
-    ProducerSpoolJobStatus, claim_next_producer_spool_jobs_excluding, delete_producer_spool_job,
-    enqueue_spooled_post_commit_refresh, enqueue_spooled_post_merge_refresh,
-    enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
+    PostCommitDerivationClaimGuards, ProducerSpoolJobCounts, ProducerSpoolJobPayload,
+    ProducerSpoolJobRecord, claim_next_producer_spool_jobs_excluding, count_producer_spool_jobs,
+    delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
+    enqueue_spooled_post_merge_refresh, enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
     enqueue_spooled_sync_task_for_repo_root, list_recent_producer_spool_jobs,
     producer_spool_schema_sql_sqlite, recover_running_producer_spool_jobs,
     requeue_producer_spool_job, running_producer_spool_repo_ids,

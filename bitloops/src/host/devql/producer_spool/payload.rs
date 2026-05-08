@@ -1,4 +1,5 @@
 use crate::daemon::{DevqlTaskSource, DevqlTaskSpec, SyncTaskMode};
+use std::collections::HashSet;
 
 use super::ProducerSpoolJobPayload;
 
@@ -171,15 +172,19 @@ fn spool_sync_mode_key(mode: &SyncTaskMode) -> String {
 
 fn spool_ingest_spec_key(spec: &crate::daemon::IngestTaskSpec) -> String {
     if !spec.commits.is_empty() {
-        let mut commits = spec
+        let mut seen = HashSet::new();
+        let commits = spec
             .commits
             .iter()
-            .map(|commit| commit.trim())
-            .filter(|commit| !commit.is_empty())
-            .map(ToString::to_string)
+            .filter_map(|commit| {
+                let commit = commit.trim();
+                if commit.is_empty() || !seen.insert(commit.to_string()) {
+                    None
+                } else {
+                    Some(commit.to_string())
+                }
+            })
             .collect::<Vec<_>>();
-        commits.sort();
-        commits.dedup();
         if !commits.is_empty() {
             return format!("commits:{}", commits.join(","));
         }

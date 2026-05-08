@@ -29,7 +29,7 @@ pub(crate) use queue::claim_next_producer_spool_jobs;
 #[cfg(test)]
 pub(crate) use queue::claim_next_producer_spool_jobs_excluding_repo_ids;
 pub(crate) use queue::{
-    claim_next_producer_spool_jobs_excluding, delete_producer_spool_job,
+    claim_next_producer_spool_jobs_excluding, count_producer_spool_jobs, delete_producer_spool_job,
     list_recent_producer_spool_jobs, recover_running_producer_spool_jobs,
     requeue_producer_spool_job, running_producer_spool_repo_ids,
 };
@@ -141,6 +141,12 @@ pub(crate) struct ProducerSpoolJobRecord {
     pub submitted_at_unix: u64,
     pub updated_at_unix: u64,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ProducerSpoolJobCounts {
+    pub pending: u64,
+    pub running: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

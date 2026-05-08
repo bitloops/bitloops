@@ -488,6 +488,85 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
 }
 
 #[tokio::test]
+async fn devql_runtime_debug_snapshot_counts_full_producer_spool_queue() {
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+    fs::write(repo.path().join("README.md"), "# debug fixture\n").expect("write readme");
+    git_ok(repo.path(), &["add", "README.md"]);
+    git_ok(repo.path(), &["commit", "-m", "initial"]);
+
+    for idx in 0..101 {
+        crate::host::devql::enqueue_spooled_post_merge_refresh(
+            repo.path(),
+            &format!("merge-head-{idx:03}"),
+            &["README.md".to_string()],
+        )
+        .expect("enqueue post-merge refresh");
+    }
+
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let app = build_dashboard_router(test_state(
+        repo.path().to_path_buf(),
+        ServeMode::HelloWorld,
+        repo.path().to_path_buf(),
+    ));
+    let headers = runtime_binding_headers(repo.path());
+    let headers_ref = headers
+        .iter()
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+
+    let (status, payload) = request_json_with_method_content_type_and_headers(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        &headers_ref,
+        Body::from(
+            json!({
+                "query": r#"
+                    query RuntimeDebug($repoId: String!) {
+                      runtimeDebugSnapshot(repoId: $repoId) {
+                        producerSpool {
+                          pendingCount
+                          runningCount
+                          jobs { jobId }
+                        }
+                      }
+                    }
+                "#,
+                "variables": {
+                    "repoId": repo_id,
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    let producer_spool = &payload["data"]["runtimeDebugSnapshot"]["producerSpool"];
+    assert_eq!(producer_spool["pendingCount"], 101);
+    assert_eq!(producer_spool["runningCount"], 0);
+    assert_eq!(
+        producer_spool["jobs"]
+            .as_array()
+            .expect("recent jobs")
+            .len(),
+        100,
+        "debug snapshot should still limit returned job records"
+    );
+}
+
+#[tokio::test]
 async fn devql_runtime_config_targets_list_existing_config_files() {
     let repo = TempDir::new().expect("temp dir");
     init_test_repo(repo.path(), "main", "Alice", "alice@example.com");
@@ -2736,6 +2815,7 @@ async fn devql_task_and_checkpoint_events_publish_to_subscription_hub() {
         super::super::db::DashboardDbPools::default(),
     );
     let mut progress_rx = context.subscriptions().subscribe_task_progress();
+    let mut runtime_rx = context.subscriptions().subscribe_runtime_events();
     let mut checkpoint_rx = context.subscriptions().subscribe_checkpoints();
     let checkpoint_info = crate::host::checkpoints::strategy::manual_commit::CommittedInfo {
         checkpoint_id: "checkpoint-1".to_string(),
@@ -2805,4 +2885,12 @@ async fn devql_task_and_checkpoint_events_publish_to_subscription_hub() {
         progress.task.status,
         crate::daemon::DevqlTaskStatus::Completed
     );
+
+    let runtime_event = tokio::time::timeout(std::time::Duration::from_secs(5), runtime_rx.recv())
+        .await
+        .expect("runtime task event should arrive")
+        .expect("runtime task event subscription payload");
+    assert_eq!(runtime_event.domain, "task_queue");
+    assert_eq!(runtime_event.repo_id, "repo-1");
+    assert_eq!(runtime_event.task_id.as_deref(), Some("ingest-task-1"));
 }
