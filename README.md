@@ -285,7 +285,6 @@ Those can be surfaces or ingredients. The durable product is the maintained mode
 - Website: <https://bitloops.com>
 - Docs: <https://bitloops.com/docs/>
 - Issues: <https://github.com/bitloops/bitloops/issues>
-- Discussions: <https://github.com/bitloops/bitloops/discussions>
 - Security: [SECURITY.md](./SECURITY.md)
 - Code of Conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 
