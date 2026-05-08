@@ -158,7 +158,7 @@ fn body_replacement_candidates(
             let Some(closure) = extract_first_closure(call_text) else {
                 continue;
             };
-            let replacement_kind = replacement_kind(closure.body);
+            let replacement_kind = replacement_kind(closure.parameter, closure.body);
             let guard_condition = guard_condition(body, artefact);
             let receiver = if operation_pattern == "response_map_method" {
                 map_receiver(body, pattern_start)
@@ -241,7 +241,11 @@ fn extract_first_closure(call_text: &str) -> Option<ClosureParts<'_>> {
     Some(ClosureParts { parameter, body })
 }
 
-fn replacement_kind(replacement_body: &str) -> &'static str {
+fn replacement_kind(parameter: &str, replacement_body: &str) -> &'static str {
+    if closure_body_preserves_parameter(parameter, replacement_body) {
+        return "body_preserving";
+    }
+
     let lower = replacement_body.to_ascii_lowercase();
     if replacement_body.contains("Empty::new(")
         || replacement_body.contains("Body::empty(")
@@ -255,18 +259,59 @@ fn replacement_kind(replacement_body: &str) -> &'static str {
 }
 
 fn closure_parameter_ignored(parameter: &str, replacement_body: &str) -> bool {
-    let parameter = parameter
-        .trim()
-        .trim_start_matches("mut ")
-        .trim_start_matches('&')
-        .trim();
+    let Some(parameter) = closure_parameter_name(parameter) else {
+        return false;
+    };
     if parameter == "_" || parameter.starts_with('_') {
         return true;
     }
-    if parameter.is_empty() || parameter.contains(',') || parameter.contains(':') {
+    !contains_identifier(replacement_body, &parameter)
+}
+
+fn closure_body_preserves_parameter(parameter: &str, replacement_body: &str) -> bool {
+    let Some(parameter) = closure_parameter_name(parameter) else {
         return false;
+    };
+    normalise_closure_expression(replacement_body) == parameter
+}
+
+fn closure_parameter_name(parameter: &str) -> Option<String> {
+    let mut parameter = parameter.trim();
+    if parameter.contains(',') {
+        return None;
     }
-    !contains_identifier(replacement_body, parameter)
+    parameter = parameter.strip_prefix('&').unwrap_or(parameter).trim();
+    parameter = parameter.strip_prefix("mut ").unwrap_or(parameter).trim();
+    parameter = parameter.strip_prefix('&').unwrap_or(parameter).trim();
+    parameter = parameter.strip_prefix("mut ").unwrap_or(parameter).trim();
+    let parameter = parameter
+        .split_once(':')
+        .map(|(name, _)| name)
+        .unwrap_or(parameter)
+        .trim();
+    (!parameter.is_empty() && parameter.chars().all(is_identifier_char))
+        .then(|| parameter.to_string())
+}
+
+fn normalise_closure_expression(expression: &str) -> String {
+    let mut expression = expression.trim();
+    while let Some(stripped) = expression
+        .strip_suffix(')')
+        .or_else(|| expression.strip_suffix(';'))
+        .or_else(|| expression.strip_suffix(','))
+    {
+        expression = stripped.trim_end();
+    }
+    if let Some(inner) = expression
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+    {
+        expression = inner.trim();
+        while let Some(stripped) = expression.strip_suffix(';') {
+            expression = stripped.trim_end();
+        }
+    }
+    expression.trim().to_string()
 }
 
 fn map_receiver(body: &str, pattern_start: usize) -> Option<String> {
@@ -467,6 +512,17 @@ mod tests {
     use crate::adapters::languages::rust::extraction::extract_rust_artefacts;
 
     #[test]
+    fn replacement_kind_classifies_body_preserving_passthrough() {
+        assert_eq!(replacement_kind("body", "body)"), "body_preserving");
+        assert_eq!(
+            replacement_kind("&mut body: B", "{ body })"),
+            "body_preserving"
+        );
+        assert_eq!(replacement_kind("_", "boxed(Empty::new()))"), "empty_body");
+        assert_eq!(replacement_kind("body", "boxed(other))"), "unrelated_body");
+    }
+
+    #[test]
     fn rust_http_fact_detects_empty_body_replacement_without_ecosystem_names() {
         let content = r#"
 use http::Response;
@@ -516,5 +572,44 @@ fn strip_body<B>(res: Response<B>) -> Response<()> {
         );
         let fact_debug = format!("{:?}", facts[0]);
         assert!(!fact_debug.contains("axum"));
+    }
+
+    #[test]
+    fn rust_http_fact_ignores_body_preserving_response_map() {
+        let content = r#"
+use http::Response;
+
+fn preserve_body<B>(res: Response<B>) -> Response<B> {
+    res.map(|body| body)
+}
+"#;
+        let artefacts = extract_rust_artefacts(content, "src/response.rs").expect("artefacts");
+        let http_artefacts = artefacts
+            .into_iter()
+            .map(|artefact| LanguageHttpFactArtefact {
+                symbol_id: format!("symbol:{}", artefact.symbol_fqn),
+                artefact_id: format!("artefact:{}", artefact.symbol_fqn),
+                symbol_fqn: artefact.symbol_fqn,
+                canonical_kind: artefact.canonical_kind,
+                language_kind: artefact.language_kind.as_str().to_string(),
+                start_line: artefact.start_line,
+                end_line: artefact.end_line,
+                start_byte: artefact.start_byte,
+                end_byte: artefact.end_byte,
+                signature: Some(artefact.signature),
+            })
+            .collect::<Vec<_>>();
+        let file = LanguageHttpFactFile {
+            repo_id: "repo-1".to_string(),
+            path: "src/response.rs".to_string(),
+            language: "rust".to_string(),
+            content_id: "content-1".to_string(),
+            parser_version: "tree-sitter-rust@1".to_string(),
+            extractor_version: "rust-language-pack@1".to_string(),
+        };
+
+        let facts = extract_rust_http_facts(&file, content, &http_artefacts);
+
+        assert!(facts.is_empty());
     }
 }

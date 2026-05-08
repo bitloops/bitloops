@@ -375,7 +375,7 @@ pub(super) fn validate_graphql_compiler_support(
     }
 
     if matches!(registered_stage, Some(RegisteredStageKind::HttpContext(_))) {
-        bail!("httpContext() is only supported after selectArtefacts(...) in the DSL compiler");
+        bail!("httpContext() is only supported after selectArtefacts(...) in the GraphQL compiler");
     }
 
     if parsed.has_deps_stage && parsed.has_artefacts_stage {
@@ -401,7 +401,7 @@ pub(super) fn validate_graphql_compiler_support(
             Some(RegisteredStageKind::HttpLossyTransforms(_))
         )
     {
-        bail!("only httpLossyTransforms() can be nested under artefacts() in the DSL compiler");
+        bail!("only httpLossyTransforms() can be nested under artefacts() in the GraphQL compiler");
     }
 
     if mode == GraphqlCompileMode::Global
