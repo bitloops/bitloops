@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::adapters::agents::skill_install::{
-    install_canonical_repo_skill, prune_empty_parents, read_or_install_canonical_repo_skill,
-    remove_canonical_repo_skill, remove_managed_file, write_managed_file,
+    prune_empty_parents, remove_managed_file, write_managed_file,
 };
+use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
 pub const OPEN_CODE_SKILL_RELATIVE_PATH: &str =
     ".opencode/skills/bitloops/devql-explore-first/SKILL.md";
@@ -15,24 +15,19 @@ pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
 }
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
-    let canonical_changed = install_canonical_repo_skill(repo_root)?;
-    let skill = read_or_install_canonical_repo_skill(repo_root)?;
     let path = repo_skill_path(repo_root);
-    let changed = write_managed_file(&path, &skill)?;
-    Ok(changed || canonical_changed)
+    let changed = write_managed_file(&path, DEVQL_EXPLORE_FIRST_SKILL)?;
+    Ok(changed)
 }
 
 pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
     let path = repo_skill_path(repo_root);
     remove_managed_file(&path)?;
-    prune_empty_parents(&path, &repo_root.join(".opencode"))?;
-    remove_canonical_repo_skill(repo_root)
+    prune_empty_parents(&path, &repo_root.join(".opencode"))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::adapters::agents::skill_install::read_or_install_canonical_repo_skill;
-
     use super::*;
 
     #[test]
@@ -54,7 +49,7 @@ mod tests {
         assert!(path.exists(), "skill file should exist after install");
         assert_eq!(
             std::fs::read_to_string(&path).expect("read skill"),
-            read_or_install_canonical_repo_skill(repo_root).expect("read canonical skill")
+            DEVQL_EXPLORE_FIRST_SKILL
         );
         assert!(
             path.to_string_lossy()

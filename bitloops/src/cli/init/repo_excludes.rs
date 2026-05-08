@@ -142,8 +142,7 @@ fn managed_repo_skill_agents() -> [&'static str; 5] {
 }
 
 fn repo_managed_skill_paths(project_root: &Path, selected_agents: &[&str]) -> Vec<PathBuf> {
-    let mut paths =
-        vec![crate::adapters::agents::skill_install::canonical_repo_skill_path(project_root)];
+    let mut paths = Vec::new();
 
     for agent in selected_agents {
         let path = match *agent {
