@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use crate::adapters::agents::skill_install::{
-    install_canonical_repo_skill, prune_empty_parents, read_or_install_canonical_repo_skill,
-    remove_canonical_repo_skill, remove_managed_file, write_managed_file,
+    prune_empty_parents, remove_managed_file, write_managed_file,
 };
+use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
 const GEMINI_DIR_NAME: &str = ".gemini";
 const GEMINI_MD_FILE_NAME: &str = "GEMINI.md";
@@ -30,10 +30,8 @@ pub fn gemini_md_path(repo_root: &Path) -> PathBuf {
 }
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
-    let canonical_changed = install_canonical_repo_skill(repo_root)?;
-    let canonical_skill = read_or_install_canonical_repo_skill(repo_root)?;
     let skill_path = repo_skill_path(repo_root);
-    let mut changed = write_managed_file(&skill_path, &canonical_skill)?;
+    let mut changed = write_managed_file(&skill_path, DEVQL_EXPLORE_FIRST_SKILL)?;
 
     // Remove legacy skill file if present.
     let legacy_skill_path = legacy_repo_skill_path(repo_root);
@@ -80,7 +78,7 @@ pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
     changed |= write_if_changed(&gemini_md_path, &next_content)
         .with_context(|| format!("writing {}", gemini_md_path.display()))?;
 
-    Ok(changed || canonical_changed)
+    Ok(changed)
 }
 
 pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
@@ -117,7 +115,7 @@ pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
             .with_context(|| format!("writing {}", gemini_md_path.display()))?;
     }
 
-    remove_canonical_repo_skill(repo_root)
+    Ok(())
 }
 
 fn managed_block() -> String {
@@ -165,8 +163,6 @@ fn remove_managed_block(content: &str) -> String {
 mod tests {
     use tempfile::tempdir;
 
-    use crate::adapters::agents::skill_install::read_or_install_canonical_repo_skill;
-
     use super::*;
 
     #[test]
@@ -184,7 +180,7 @@ mod tests {
         let skill_path = repo_skill_path(root);
         assert_eq!(
             std::fs::read_to_string(&skill_path).expect("failed to read skill"),
-            read_or_install_canonical_repo_skill(root).expect("read canonical skill")
+            DEVQL_EXPLORE_FIRST_SKILL
         );
 
         let gemini_md =
@@ -219,8 +215,8 @@ mod tests {
         .expect("failed to seed GEMINI.md");
         std::fs::create_dir_all(repo_skill_path(root).parent().expect("skill parent"))
             .expect("failed to create skill directory");
-        let canonical_skill = read_or_install_canonical_repo_skill(root).expect("canonical skill");
-        std::fs::write(repo_skill_path(root), canonical_skill).expect("failed to seed skill");
+        std::fs::write(repo_skill_path(root), DEVQL_EXPLORE_FIRST_SKILL)
+            .expect("failed to seed skill");
 
         uninstall_repo_skill(root).expect("uninstall_repo_skill should succeed");
 
@@ -262,7 +258,7 @@ mod tests {
         assert!(skill_path.exists());
         assert_eq!(
             std::fs::read_to_string(&skill_path).expect("read skill"),
-            read_or_install_canonical_repo_skill(root).expect("read canonical skill")
+            DEVQL_EXPLORE_FIRST_SKILL
         );
 
         // GEMINI.md updated to use new import line.

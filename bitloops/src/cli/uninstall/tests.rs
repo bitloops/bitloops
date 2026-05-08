@@ -17,7 +17,6 @@ use super::{
 use crate::adapters::agents::claude_code::git_hooks;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH;
-use crate::adapters::agents::skill_install::CANONICAL_DEVQL_SKILL_RELATIVE_PATH;
 use crate::cli::embeddings::{
     managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
 };
@@ -479,9 +478,7 @@ fn uninstall_agent_hooks_keeps_repo_policy_files_and_policy_exclude_entries() {
             let exclude_path = repo.path().join(".git/info/exclude");
             fs::write(
                 &exclude_path,
-                format!(
-                    "coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n{CANONICAL_DEVQL_SKILL_RELATIVE_PATH}\n"
-                ),
+                format!("coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n"),
             )
             .unwrap();
 
@@ -508,7 +505,6 @@ fn uninstall_agent_hooks_keeps_repo_policy_files_and_policy_exclude_entries() {
             assert!(exclude.contains("coverage/"));
             assert!(exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
             assert!(!exclude.contains(CODEX_SKILL_RELATIVE_PATH));
-            assert!(!exclude.contains(CANONICAL_DEVQL_SKILL_RELATIVE_PATH));
         },
     );
 }
@@ -549,9 +545,7 @@ fn uninstall_repo_config_removes_repo_policy_files_and_policy_exclude_entries_on
             let exclude_path = repo.path().join(".git/info/exclude");
             fs::write(
                 &exclude_path,
-                format!(
-                    "coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n{CANONICAL_DEVQL_SKILL_RELATIVE_PATH}\n"
-                ),
+                format!("coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n"),
             )
             .unwrap();
 
@@ -578,7 +572,6 @@ fn uninstall_repo_config_removes_repo_policy_files_and_policy_exclude_entries_on
             assert!(exclude.contains("coverage/"));
             assert!(!exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
             assert!(exclude.contains(CODEX_SKILL_RELATIVE_PATH));
-            assert!(exclude.contains(CANONICAL_DEVQL_SKILL_RELATIVE_PATH));
         },
     );
 }
@@ -894,9 +887,7 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             let exclude_path = repo.path().join(".git/info/exclude");
             fs::write(
                 &exclude_path,
-                format!(
-                    "coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n{CANONICAL_DEVQL_SKILL_RELATIVE_PATH}\n"
-                ),
+                format!("coverage/\n{REPO_POLICY_LOCAL_FILE_NAME}\n{CODEX_SKILL_RELATIVE_PATH}\n"),
             )
             .unwrap();
             git_hooks::install_git_hooks(repo.path(), false).unwrap();
@@ -949,7 +940,6 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             assert!(exclude.contains("coverage/"));
             assert!(!exclude.contains(REPO_POLICY_LOCAL_FILE_NAME));
             assert!(!exclude.contains(CODEX_SKILL_RELATIVE_PATH));
-            assert!(!exclude.contains(CANONICAL_DEVQL_SKILL_RELATIVE_PATH));
         },
     );
 }

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **DevQL guidance no longer writes a shared canonical skill copy in .bitloops path**: init and agent guidance installation now write only the native agent prompt surfaces.
+
 ## [0.0.21] - 2026-05-07
 
 ### Added
