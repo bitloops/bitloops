@@ -220,12 +220,14 @@ fn daemon_startup_rehydrates_enabled_bound_repo_watchers_and_continues_after_fai
     let enabled_repo = temp.path().join("enabled-repo");
     let second_enabled_repo = temp.path().join("second-enabled-repo");
     let third_enabled_repo = temp.path().join("third-enabled-repo");
+    let sync_disabled_repo = temp.path().join("sync-disabled-repo");
     let disabled_repo = temp.path().join("disabled-repo");
     let unbound_repo = temp.path().join("unbound-repo");
     for repo_root in [
         &enabled_repo,
         &second_enabled_repo,
         &third_enabled_repo,
+        &sync_disabled_repo,
         &disabled_repo,
         &unbound_repo,
     ] {
@@ -257,6 +259,11 @@ fn daemon_startup_rehydrates_enabled_bound_repo_watchers_and_continues_after_fai
         .expect("write enabled repo policy");
     }
     fs::write(
+        sync_disabled_repo.join(".bitloops.local.toml"),
+        "[capture]\nenabled = true\nstrategy = \"manual-commit\"\n[devql]\nsync_enabled = false\ningest_enabled = true\n",
+    )
+    .expect("write sync-disabled repo policy");
+    fs::write(
         disabled_repo.join(".bitloops.local.toml"),
         "[capture]\nenabled = false\nstrategy = \"manual-commit\"\n",
     )
@@ -266,6 +273,7 @@ fn daemon_startup_rehydrates_enabled_bound_repo_watchers_and_continues_after_fai
         &enabled_repo,
         &second_enabled_repo,
         &third_enabled_repo,
+        &sync_disabled_repo,
         &disabled_repo,
     ] {
         crate::config::settings::write_repo_daemon_binding(
@@ -288,6 +296,7 @@ fn daemon_startup_rehydrates_enabled_bound_repo_watchers_and_continues_after_fai
         &enabled_repo,
         &second_enabled_repo,
         &third_enabled_repo,
+        &sync_disabled_repo,
         &disabled_repo,
         &unbound_repo,
     ] {

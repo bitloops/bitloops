@@ -360,6 +360,17 @@ pub(super) fn ensure_bound_repo_watchers_for_daemon_startup_with<F>(
         if !crate::config::settings::is_enabled_for_hooks(&repo_root) {
             continue;
         }
+        match crate::config::settings::devql_sync_enabled(&repo_root) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(err) => {
+                log::warn!(
+                    "failed to inspect DevQL sync settings during daemon startup for repo {}: {err:#}",
+                    repo_root.display()
+                );
+                continue;
+            }
+        }
         if let Err(err) = ensure_watcher_running(&repo_root, &daemon_config.config_root) {
             log::warn!(
                 "failed to start DevQL watcher during daemon startup for repo {}: {err:#}",

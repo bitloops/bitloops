@@ -28,10 +28,11 @@ impl Drop for WatcherReconciliationHookGuard {
 
 pub(crate) fn reconcile_repo_watcher(repo_root: &Path) -> Result<()> {
     #[cfg(test)]
-    let capture_enabled = crate::config::settings::is_enabled_for_hooks(repo_root);
+    let watcher_enabled = crate::config::settings::is_enabled_for_hooks(repo_root)
+        && crate::config::settings::devql_sync_enabled(repo_root)?;
 
     #[cfg(test)]
-    if let Some(result) = maybe_reconcile_repo_watcher_via_hook(repo_root, capture_enabled) {
+    if let Some(result) = maybe_reconcile_repo_watcher_via_hook(repo_root, watcher_enabled) {
         return result;
     }
 
@@ -44,7 +45,11 @@ pub(crate) fn reconcile_repo_watcher(repo_root: &Path) -> Result<()> {
     {
         let daemon_config_root =
             crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)?;
-        crate::host::devql::watch::restart_watcher(repo_root, &daemon_config_root)
+        if crate::config::settings::devql_sync_enabled(repo_root)? {
+            crate::host::devql::watch::restart_watcher(repo_root, &daemon_config_root)
+        } else {
+            crate::host::devql::watch::stop_watcher(repo_root, &daemon_config_root)
+        }
     }
 }
 
@@ -68,11 +73,11 @@ pub(crate) fn with_watcher_reconciliation_hook<T>(
 #[cfg(test)]
 fn maybe_reconcile_repo_watcher_via_hook(
     repo_root: &Path,
-    capture_enabled: bool,
+    watcher_enabled: bool,
 ) -> Option<Result<()>> {
     WATCHER_RECONCILIATION_HOOK.with(|hook: &RefCell<Option<Rc<WatcherReconciliationHook>>>| {
         hook.borrow()
             .as_ref()
-            .map(|hook| hook(repo_root, capture_enabled))
+            .map(|hook| hook(repo_root, watcher_enabled))
     })
 }

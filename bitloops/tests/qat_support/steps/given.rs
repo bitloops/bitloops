@@ -171,6 +171,28 @@ pub(super) fn given_init_bitloops_with_agent_sync_true(
     })
 }
 
+pub(super) fn given_init_bitloops_with_agent_sync_ingest(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let agent_name = ctx.matches[1].1.clone();
+        let sync = ctx.matches[2].1.parse::<bool>().expect("parse sync bool");
+        let ingest = ctx.matches[3].1.parse::<bool>().expect("parse ingest bool");
+        let repo_name = ctx.matches[4].1.clone();
+        run_step(
+            "I run bitloops init --agent --sync --ingest",
+            helpers::run_init_bitloops_with_agent_sync_ingest(
+                world,
+                &repo_name,
+                &agent_name,
+                sync,
+                ingest,
+            ),
+        );
+    })
+}
+
 pub(super) fn given_init_bitloops_producer_contract(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

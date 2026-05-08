@@ -1340,13 +1340,27 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         assert!(!rendered.contains("Initialising DevQL schema"));
         assert!(!rendered.contains("Bitloops project bootstrap is ready."));
         assert!(repo.path().join(".bitloops.local.toml").exists());
+        let local_policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+            .expect("read local repo policy");
+        assert!(
+            local_policy.contains("[devql]"),
+            "expected [devql] table in local policy:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("sync_enabled = false"),
+            "expected init --sync=false to persist sync_enabled=false:\n{local_policy}"
+        );
+        assert!(
+            local_policy.contains("ingest_enabled = false"),
+            "expected init --ingest=false to persist ingest_enabled=false:\n{local_policy}"
+        );
         assert_eq!(
             crate::cli::enable::initialized_agents(repo.path()),
             vec![DEFAULT_AGENT.to_string()]
         );
         let repo_skill = repo
             .path()
-            .join(".claude/skills/bitloops/using-devql/SKILL.md");
+            .join(".claude/skills/bitloops/devql-explore-first/SKILL.md");
         assert!(
             repo_skill.exists(),
             "expected repo-local DevQL Guidance to be installed at {}",
@@ -1355,8 +1369,8 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
-        assert!(exclude.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
-        assert!(!exclude.contains(".bitloops/"));
+        assert!(exclude.contains(".bitloops/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(exclude.contains(".claude/skills/bitloops/devql-explore-first/SKILL.md"));
         assert!(!exclude.contains("config.local.json"));
         assert!(!exclude.contains(".bitloops/config.local.json"));
     });
@@ -1418,7 +1432,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
         assert!(repo.path().join(".cursor/hooks.json").exists());
         assert!(
             repo.path()
-                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
     });
@@ -1547,7 +1561,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
 }
 
 #[test]
-fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
+fn run_init_reports_repo_watcher_disabled_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -1559,11 +1573,11 @@ fn run_init_bootstraps_repo_watcher_when_capture_is_enabled() {
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
                 let repo_root = repo_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "init should only reconcile watchers when capture is enabled"
+                        !watcher_enabled,
+                        "init --sync=false should not reconcile/start a DevQL watcher"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1628,11 +1642,11 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
         crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
             {
                 let repo_root = repo_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "init should only reconcile watchers when capture is enabled"
+                        !watcher_enabled,
+                        "init --sync=false should surface watcher reconcile failures with watcher disabled"
                     );
                     anyhow::bail!("watcher reconcile exploded");
                 }
@@ -1681,7 +1695,7 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
 }
 
 #[test]
-fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
+fn run_init_reports_nested_repo_watcher_disabled_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let project_root = repo.path().join("apps/nested-project");
@@ -1694,11 +1708,11 @@ fn run_init_bootstraps_repo_watcher_from_nested_project_root() {
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
                 let project_root = project_root.clone();
-                move |actual_repo_root, capture_enabled| {
+                move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, project_root.as_path());
                     assert!(
-                        capture_enabled,
-                        "nested init should reconcile watchers when nested-project capture is enabled"
+                        !watcher_enabled,
+                        "nested init --sync=false should not reconcile/start a DevQL watcher"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1769,7 +1783,7 @@ fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
         crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
-                move |_repo_root, _capture_enabled| {
+                move |_repo_root, _watcher_enabled| {
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
                 }
@@ -1991,7 +2005,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         assert!(repo.path().join(".cursor/hooks.json").exists());
         assert!(
             repo.path()
-                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
                 .exists()
         );
         assert!(!repo.path().join(".claude/settings.json").exists());
@@ -2058,6 +2072,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 );
                 let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                     .expect("read git exclude");
+                assert!(exclude.contains(".bitloops/skills/bitloops/devql-explore-first/SKILL.md"));
                 assert!(exclude.contains(".agents/skills/bitloops/devql-explore-first/SKILL.md"));
                 assert!(!repo.path().join(".claude/settings.json").exists());
             });
@@ -2107,15 +2122,16 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
 
             let gemini_md =
                 std::fs::read_to_string(repo.path().join("GEMINI.md")).expect("read GEMINI.md");
-            assert!(gemini_md.contains("@./.gemini/skills/bitloops/using-devql/SKILL.md"));
+            assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
             assert!(
                 repo.path()
-                    .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                    .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
                     .exists()
             );
             let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                 .expect("read exclude");
-            assert!(exclude.contains(".gemini/skills/bitloops/using-devql/SKILL.md"));
+            assert!(exclude.contains(".bitloops/skills/bitloops/devql-explore-first/SKILL.md"));
+            assert!(exclude.contains(".gemini/skills/bitloops/devql-explore-first/SKILL.md"));
         });
     });
 }
@@ -2162,12 +2178,13 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
         assert!(repo.path().join(".github/hooks/bitloops.json").exists());
         assert!(
             repo.path()
-                .join(".github/skills/bitloops/using-devql/SKILL.md")
+                .join(".github/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let exclude =
             std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".github/skills/bitloops/using-devql/SKILL.md"));
+        assert!(exclude.contains(".bitloops/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(exclude.contains(".github/skills/bitloops/devql-explore-first/SKILL.md"));
     });
 }
 
@@ -2213,12 +2230,13 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
         assert!(repo.path().join(".opencode/plugins/bitloops.ts").exists());
         assert!(
             repo.path()
-                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let exclude =
             std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".opencode/skills/bitloops/using-devql/SKILL.md"));
+        assert!(exclude.contains(".bitloops/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(exclude.contains(".opencode/skills/bitloops/devql-explore-first/SKILL.md"));
     });
 }
 
@@ -2277,7 +2295,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         assert!(
             !repo
                 .path()
-                .join(".claude/skills/bitloops/using-devql/SKILL.md")
+                .join(".claude/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
@@ -2289,26 +2307,26 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         assert!(
             !repo
                 .path()
-                .join(".cursor/rules/bitloops-using-devql.mdc")
+                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".gemini/skills/bitloops/using-devql/SKILL.md")
+                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(!repo.path().join("GEMINI.md").exists());
         assert!(
             !repo
                 .path()
-                .join(".github/skills/bitloops/using-devql/SKILL.md")
+                .join(".github/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".opencode/skills/bitloops/using-devql/SKILL.md")
+                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
                 .exists()
         );
         let local_policy =
@@ -2346,7 +2364,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
 
         let plugin = std::fs::read_to_string(repo.path().join(".opencode/plugins/bitloops.ts"))
             .expect("read OpenCode plugin");
-        assert!(!plugin.contains("name: using-devql"));
+        assert!(!plugin.contains("name: devql-explore-first"));
         assert!(!plugin.contains("bitloops devql query"));
     });
 }

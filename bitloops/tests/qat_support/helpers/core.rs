@@ -272,6 +272,67 @@ fn completed_sync_task_source_count(
         .count())
 }
 
+fn ingest_task_source_count(world: &QatWorld, expected_source: DevqlTaskSource) -> Result<usize> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for ingest task source count")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(0);
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Ingest
+                && task.source == expected_source
+        })
+        .count())
+}
+
+fn ingest_task_source_diagnostics_after_snapshot(
+    world: &QatWorld,
+    expected_source: DevqlTaskSource,
+    snapshot_count: usize,
+) -> Result<Vec<String>> {
+    let repo_id = bitloops::host::devql::resolve_repo_id(world.repo_dir())
+        .context("resolving repo id for ingest task source diagnostics")?;
+    let store = open_scenario_daemon_runtime_store(world)?;
+    let Some(state) = store
+        .load_devql_task_queue_state()
+        .context("loading DevQL task queue state")?
+    else {
+        return Ok(Vec::new());
+    };
+
+    Ok(state
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.repo_id == repo_id
+                && task.kind == DevqlTaskKind::Ingest
+                && task.source == expected_source
+        })
+        .skip(snapshot_count)
+        .map(|task| {
+            format!(
+                "id={} status={:?} source={} submitted_at={} started_at={:?} updated_at={} completed_at={:?}",
+                task.task_id,
+                task.status,
+                task.source,
+                task.submitted_at_unix,
+                task.started_at_unix,
+                task.updated_at_unix,
+                task.completed_at_unix
+            )
+        })
+        .collect())
+}
+
 fn completed_sync_task_with_source_exists(
     world: &QatWorld,
     expected_source: DevqlTaskSource,
@@ -1017,6 +1078,24 @@ pub fn run_init_bitloops_with_agents(
     sync: Option<bool>,
 ) -> Result<()> {
     run_init_bitloops_with_agent_config(world, repo_name, agent_names, force, sync, None, None)
+}
+
+pub fn run_init_bitloops_with_agent_sync_ingest(
+    world: &mut QatWorld,
+    repo_name: &str,
+    agent_name: &str,
+    sync: bool,
+    ingest: bool,
+) -> Result<()> {
+    run_init_bitloops_with_agent_config(
+        world,
+        repo_name,
+        &[agent_name],
+        false,
+        Some(sync),
+        Some(ingest),
+        None,
+    )
 }
 
 pub fn run_init_bitloops_with_agent_sync_ingest_backfill(
@@ -2226,11 +2305,47 @@ pub fn snapshot_completed_sync_task_source_for_repo(
 ) -> Result<()> {
     ensure_bitloops_repo_name(repo_name)?;
     let expected_source = parse_devql_task_source(expected_source)?;
-    let count = completed_sync_task_source_count(world, expected_source)?;
+    let sync_count = completed_sync_task_source_count(world, expected_source)?;
+    let ingest_count = ingest_task_source_count(world, expected_source)?;
+    let source_key = expected_source.to_string();
     world
         .completed_sync_task_source_snapshots
-        .insert(expected_source.to_string(), count);
+        .insert(source_key.clone(), sync_count);
+    world
+        .ingest_task_source_snapshots
+        .insert(source_key, ingest_count);
     Ok(())
+}
+
+pub fn assert_no_devql_ingest_task_source_since_snapshot(
+    world: &QatWorld,
+    repo_name: &str,
+    source: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    let expected_source = parse_devql_task_source(source)?;
+    let source_key = expected_source.to_string();
+    let snapshot_count = world
+        .ingest_task_source_snapshots
+        .get(&source_key)
+        .copied()
+        .ok_or_else(|| anyhow!("no DevQL ingest task source snapshot captured for `{expected_source}`"))?;
+    let current_count = ingest_task_source_count(world, expected_source)?;
+    if current_count <= snapshot_count {
+        return Ok(());
+    }
+
+    let new_tasks = ingest_task_source_diagnostics_after_snapshot(
+        world,
+        expected_source,
+        snapshot_count,
+    )?
+    .join("; ");
+    bail!(
+        "expected no new DevQL ingest task with source `{expected_source}` since snapshot count {snapshot_count}, found {}; new tasks: {}",
+        current_count - snapshot_count,
+        new_tasks
+    )
 }
 
 pub fn assert_latest_completed_sync_task_source_for_repo(
@@ -4966,6 +5081,7 @@ fn resolve_repo_id(conn: &rusqlite::Connection) -> Result<String> {
         "SELECT repo_id FROM symbol_embeddings LIMIT 1",
         "SELECT repo_id FROM artefacts_current LIMIT 1",
         "SELECT repo_id FROM current_file_state LIMIT 1",
+        "SELECT repo_id FROM commit_checkpoints ORDER BY created_at DESC LIMIT 1",
         "SELECT repo_id FROM repositories WHERE provider = 'local' ORDER BY created_at DESC LIMIT 1",
         "SELECT repo_id FROM repositories ORDER BY created_at DESC LIMIT 1",
     ] {

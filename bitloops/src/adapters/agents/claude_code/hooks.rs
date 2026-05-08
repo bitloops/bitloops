@@ -386,7 +386,7 @@ mod tests {
                 .join(".claude")
                 .join("skills")
                 .join("bitloops")
-                .join("using-devql")
+                .join("devql-explore-first")
                 .join("SKILL.md"),
         )
         .ok()
@@ -437,7 +437,7 @@ mod tests {
 
         let skill = read_repo_skill(&dir).expect("repo skill should be installed");
         assert!(
-            skill.contains("name: using-devql"),
+            skill.contains("name: devql-explore-first"),
             "installed repo skill should contain skill metadata, got:\n{skill}"
         );
         assert!(

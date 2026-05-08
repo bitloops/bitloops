@@ -59,6 +59,33 @@ fn devql_sqlite_path(repo_root: &std::path::Path) -> std::path::PathBuf {
         .expect("resolve configured sqlite path")
 }
 
+fn workspace_revision_count(repo_root: &std::path::Path, repo_id: &str) -> i64 {
+    let db_path = devql_sqlite_path(repo_root);
+    if !db_path.exists() {
+        return 0;
+    }
+
+    let conn = Connection::open(db_path).expect("open sqlite");
+    let table_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspace_revisions'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    if !table_exists {
+        return 0;
+    }
+
+    conn.query_row(
+        "SELECT COUNT(*) FROM workspace_revisions WHERE repo_id = ?1",
+        [repo_id],
+        |row| row.get(0),
+    )
+    .expect("count workspace_revisions")
+}
+
 #[test]
 fn capture_updates_current_devql_state_for_modified_file() {
     let dir = seed_repo();
@@ -556,6 +583,56 @@ fn prepare_capture_batch_does_not_consume_tree_hash_before_sync_handoff_succeeds
     assert!(
         second.is_some(),
         "retry should still produce a capture batch when the prior handoff never succeeded"
+    );
+}
+
+#[test]
+fn capture_sync_disabled_does_not_persist_workspace_revision() {
+    let dir = seed_repo();
+    crate::config::settings::set_devql_producer_settings(
+        &dir.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        false,
+        true,
+    )
+    .expect("disable producer sync");
+    fs::write(
+        dir.path().join("src/lib.rs"),
+        "pub fn sync_disabled() -> i32 {\n    2\n}\n",
+    )
+    .expect("update file");
+
+    let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+        .expect("build devql config");
+    let target = dir.path().join("src/lib.rs");
+    capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+        .expect("capture temporary checkpoint with sync disabled");
+
+    assert_eq!(
+        workspace_revision_count(dir.path(), &cfg.repo.repo_id),
+        0,
+        "policy-skipped sync must not persist workspace_revisions rows"
+    );
+
+    crate::config::settings::set_devql_producer_settings(
+        &dir.path().join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        true,
+        true,
+    )
+    .expect("enable producer sync");
+    let prepared = prepare_capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+        .expect("prepare capture after re-enabling sync");
+    assert!(
+        prepared.is_some(),
+        "same tree hash must remain eligible after policy-skipped sync"
+    );
+
+    capture_temporary_checkpoint_batch(&cfg, std::slice::from_ref(&target))
+        .expect("capture temporary checkpoint after re-enabling sync");
+    assert_eq!(
+        workspace_revision_count(dir.path(), &cfg.repo.repo_id),
+        1,
+        "completed sync should persist one workspace_revisions row"
     );
 }
 

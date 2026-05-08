@@ -120,6 +120,7 @@ pub struct QatWorld {
     pub semantic_clone_progress_observation: Option<SemanticCloneProgressObservation>,
     pub current_file_state_content_id_snapshots: HashMap<String, Option<String>>,
     pub completed_sync_task_source_snapshots: HashMap<String, usize>,
+    pub ingest_task_source_snapshots: HashMap<String, usize>,
     pub knowledge_items_by_url: HashMap<String, String>,
     pub knowledge_versions_by_ref: HashMap<String, usize>,
     pub knowledge_fixture_urls: HashMap<String, String>,
@@ -185,6 +186,7 @@ impl QatWorld {
         self.semantic_clone_progress_observation = None;
         self.current_file_state_content_id_snapshots = HashMap::new();
         self.completed_sync_task_source_snapshots = HashMap::new();
+        self.ingest_task_source_snapshots = HashMap::new();
         self.knowledge_items_by_url = HashMap::new();
         self.knowledge_versions_by_ref = HashMap::new();
         self.knowledge_fixture_urls = HashMap::new();

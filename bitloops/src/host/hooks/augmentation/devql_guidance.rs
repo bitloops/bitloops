@@ -81,7 +81,8 @@ mod tests {
 
     #[test]
     fn build_session_bootstrap_mentions_search_modes_overview_and_response_hints() {
-        let text = build_session_bootstrap(".opencode/skills/bitloops/using-devql/SKILL.md");
+        let text =
+            build_session_bootstrap(".opencode/skills/bitloops/devql-explore-first/SKILL.md");
 
         assert!(text.contains("This repo has DevQL guidance available."));
         assert!(text.contains("DevQL-capable guidance surface"));
@@ -107,7 +108,7 @@ mod tests {
 
     #[test]
     fn build_turn_guidance_mentions_search_modes_overview_and_skill_path() {
-        let guidance = build_turn_guidance(".claude/skills/bitloops/using-devql/SKILL.md");
+        let guidance = build_turn_guidance(".claude/skills/bitloops/devql-explore-first/SKILL.md");
 
         assert!(guidance.contains("when it is available in this session"));
         assert!(guidance.contains("what does this repo do?"));
@@ -117,7 +118,7 @@ mod tests {
         assert!(guidance.contains("searchBreakdown"));
         assert!(guidance.contains("overview"));
         assert!(guidance.contains("expandHint"));
-        assert!(guidance.contains(".claude/skills/bitloops/using-devql/SKILL.md"));
+        assert!(guidance.contains(".claude/skills/bitloops/devql-explore-first/SKILL.md"));
         assert!(guidance.contains("fall back to targeted repo search or file reads"));
         assert!(guidance.contains("startLine"));
         assert!(guidance.contains("endLine"));
