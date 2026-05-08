@@ -1569,6 +1569,21 @@ fn test_parse_hook_event_session_start_opencode() {
 }
 
 #[test]
+fn test_parse_hook_event_session_start_opencode_accepts_model_id_alias() {
+    let adapter = OpenCodeLifecycleAdapter;
+    let mut stdin = Cursor::new(
+        r#"{"session_id":"sess-abc123","transcript_path":"/tmp/bitloops-opencode/-project/sess-abc123.json","modelID":"gpt-5.4"}"#,
+    );
+    let event = adapter
+        .parse_hook_event(OPENCODE_HOOK_SESSION_START, &mut stdin)
+        .unwrap()
+        .expect("event should exist");
+
+    assert_eq!(Some(LifecycleEventType::SessionStart), event.event_type);
+    assert_eq!("gpt-5.4", event.model);
+}
+
+#[test]
 fn test_parse_hook_event_turn_start_opencode() {
     let adapter = OpenCodeLifecycleAdapter;
     let mut stdin = Cursor::new(

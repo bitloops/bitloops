@@ -26,7 +26,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 
 export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
-  const BITLOOPS_CMD = "__BITLOOPS_CMD__"
+  const BITLOOPS_CMD = __BITLOOPS_CMD__
   const BOOTSTRAP_CONTEXT = __BOOTSTRAP_CONTEXT__
   // Store transcripts in a temp directory - these are ephemeral handoff files
   // between the plugin and the hook handler. Once checkpointed, the data
@@ -55,7 +55,32 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
   async function callHook(hookName: string, payload: Record<string, unknown>) {
     try {
       const json = JSON.stringify(payload)
-      await $`echo ${json} | ${BITLOOPS_CMD} hooks opencode ${hookName}`.quiet().nothrow()
+      const proc = Bun.spawn([...BITLOOPS_CMD, "hooks", "opencode", hookName], {
+        cwd: directory,
+        stdin: new TextEncoder().encode(json + "\n"),
+        stdout: "ignore",
+        stderr: "ignore",
+      })
+      await proc.exited
+    } catch {
+      // Silently ignore - plugin failures must not crash OpenCode
+    }
+  }
+
+  /**
+   * Synchronous variant for hooks that fire near process exit (turn-end, session-end).
+   * `session.status` idle can be followed immediately by process shutdown, so
+   * blocking here avoids dropping the hook command before it reaches Bitloops.
+   */
+  function callHookSync(hookName: string, payload: Record<string, unknown>) {
+    try {
+      const json = JSON.stringify(payload)
+      Bun.spawnSync([...BITLOOPS_CMD, "hooks", "opencode", hookName], {
+        cwd: directory,
+        stdin: new TextEncoder().encode(json + "\n"),
+        stdout: "ignore",
+        stderr: "ignore",
+      })
     } catch {
       // Silently ignore - plugin failures must not crash OpenCode
     }
@@ -76,14 +101,87 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
     )
   }
 
+  function firstNonEmptyString(...values: any[]): string | undefined {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim()
+      }
+    }
+  }
+
+  function extractModelMetadata(...sources: any[]): Record<string, string> {
+    let model: string | undefined
+    let modelID: string | undefined
+    let providerID: string | undefined
+
+    for (const source of sources) {
+      if (!source || typeof source !== "object") continue
+
+      model = model ?? firstNonEmptyString(
+        source.model,
+        source.modelName,
+        source.model_name,
+        source.modelSlug,
+        source.model_slug,
+        source.modelId,
+        source.modelID,
+        source.model_id,
+        source.model?.id,
+        source.model?.modelID,
+        source.model?.modelId,
+        source.model?.model_id,
+        source.model?.modelName,
+        source.model?.model_name,
+        source.model?.modelSlug,
+        source.model?.model_slug,
+      )
+      modelID = modelID ?? firstNonEmptyString(
+        source.modelID,
+        source.modelId,
+        source.model_id,
+        source.model?.modelID,
+        source.model?.modelId,
+        source.model?.model_id,
+        source.model?.id,
+      )
+      providerID = providerID ?? firstNonEmptyString(
+        source.providerID,
+        source.providerId,
+        source.provider_id,
+        source.model?.providerID,
+        source.model?.providerId,
+        source.model?.provider_id,
+      )
+    }
+
+    const resolvedModel = model ?? modelID
+    return {
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(modelID ? { modelID } : {}),
+      ...(providerID ? { providerID } : {}),
+    }
+  }
+
+  function latestSessionModelMetadata(sessionID: string | null): Record<string, string> {
+    const messages = Array.from(messageStore.values())
+      .filter((msg: any) =>
+        !sessionID || msg.sessionID === sessionID || (!msg.sessionID && currentSessionID === sessionID)
+      )
+      .sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0))
+
+    return extractModelMetadata(messages[0], currentSessionInfo)
+  }
+
   /** Format a message object from its accumulated parts. */
   function formatMessageFromStore(msg: any) {
     const parts = partStore.get(msg.id) ?? []
+    const modelMetadata = extractModelMetadata(msg, currentSessionInfo)
     return {
       id: msg.id,
       role: msg.role,
       content: textFromParts(parts),
       time: msg.time,
+      ...modelMetadata,
       ...(msg.role === "assistant" ? {
         tokens: msg.tokens,
         cost: msg.cost,
@@ -98,11 +196,13 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
 
   /** Format a message from an API response (which includes parts inline). */
   function formatMessageFromAPI(info: any, parts: any[]) {
+    const modelMetadata = extractModelMetadata(info, currentSessionInfo)
     return {
       id: info.id,
       role: info.role,
       content: textFromParts(parts),
       time: info.time,
+      ...modelMetadata,
       ...(info.role === "assistant" ? {
         tokens: info.tokens,
         cost: info.cost,
@@ -215,6 +315,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("session-start", {
             session_id: session.id,
             transcript_path: `${transcriptDir}/${session.id}.jsonl`,
+            ...extractModelMetadata(session),
           })
           break
         }
@@ -253,20 +354,24 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
                 session_id: sessionID,
                 transcript_path: `${transcriptDir}/${sessionID}.jsonl`,
                 prompt: part.text ?? "",
+                ...extractModelMetadata(msg, currentSessionInfo),
               })
             }
           }
           break
         }
 
-        case "session.idle": {
-          const sessionID = (event as any).properties?.sessionID
+        case "session.status": {
+          const props = (event as any).properties
+          if (props?.status?.type !== "idle") break
+          const sessionID = props?.sessionID
           if (!sessionID) break
           const transcriptPath = await writeTranscriptWithFallback(sessionID)
           await writeExportJSON(sessionID)
-          await callHook("turn-end", {
+          callHookSync("turn-end", {
             session_id: sessionID,
             transcript_path: transcriptPath,
+            ...latestSessionModelMetadata(sessionID),
           })
           break
         }
@@ -277,6 +382,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("compaction", {
             session_id: sessionID,
             transcript_path: `${transcriptDir}/${sessionID}.jsonl`,
+            ...latestSessionModelMetadata(sessionID),
           })
           break
         }
@@ -284,6 +390,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
         case "session.deleted": {
           const session = (event as any).properties?.info
           if (!session?.id) break
+          const modelMetadata = latestSessionModelMetadata(session.id)
           // Write final transcript + export JSON before signaling session end
           if (messageStore.size > 0) {
             await writeTranscriptFromMemory(session.id)
@@ -294,9 +401,10 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           partStore.clear()
           currentSessionID = null
           currentSessionInfo = null
-          await callHook("session-end", {
+          callHookSync("session-end", {
             session_id: session.id,
             transcript_path: `${transcriptDir}/${session.id}.jsonl`,
+            ...modelMetadata,
           })
           break
         }

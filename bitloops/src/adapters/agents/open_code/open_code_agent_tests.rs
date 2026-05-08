@@ -25,6 +25,16 @@ fn write_test_transcript(content: &str) -> (TempDir, PathBuf) {
     (dir, path)
 }
 
+fn rendered_const<T: serde::de::DeserializeOwned>(rendered: &str, name: &str) -> T {
+    let prefix = format!("const {name} = ");
+    let line = rendered
+        .lines()
+        .find_map(|line| line.trim_start().strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("rendered plugin should contain {name}"));
+
+    serde_json::from_str(line).unwrap_or_else(|err| panic!("failed to parse {name}: {err}"))
+}
+
 #[test]
 #[allow(non_snake_case)]
 fn TestMetadataPresenceAndSessionPathHelpers() {
@@ -302,21 +312,26 @@ fn TestInstallHooks_FreshInstall() {
         .join("plugins")
         .join("bitloops.ts");
     let content = fs::read_to_string(&plugin_path).expect("plugin file not created");
-    assert!(
-        content.contains(r#"const BITLOOPS_CMD = "bitloops""#),
-        "plugin file does not contain production command constant"
+    assert_eq!(
+        rendered_const::<Vec<String>>(&content, "BITLOOPS_CMD"),
+        vec!["bitloops".to_string()],
+        "plugin file does not contain the production Bitloops command argv"
     );
     assert!(
-        content.contains("hooks opencode"),
-        "plugin file does not contain 'hooks opencode'"
+        content.contains(r#"[...BITLOOPS_CMD, "hooks", "opencode", hookName]"#),
+        "plugin file does not build hook argv directly from the Bitloops command"
     );
     assert!(
         content.contains("BitloopsPlugin"),
         "plugin file does not contain BitloopsPlugin export"
     );
     assert!(
-        !content.contains("cargo run --"),
+        !content.contains(r#"const BITLOOPS_CMD = ["cargo","run","--"]"#),
         "plugin file should not contain cargo run in production mode"
+    );
+    assert!(
+        !content.contains(r#"["sh", "-c""#),
+        "plugin file should not route hook execution through a shell"
     );
 }
 
@@ -354,9 +369,18 @@ fn TestInstallHooks_LocalDev() {
         .join("plugins")
         .join("bitloops.ts");
     let content = fs::read_to_string(&plugin_path).expect("plugin file not created");
+    assert_eq!(
+        rendered_const::<Vec<String>>(&content, "BITLOOPS_CMD"),
+        vec!["cargo".to_string(), "run".to_string(), "--".to_string()],
+        "local dev mode plugin should contain cargo run argv"
+    );
     assert!(
-        content.contains("cargo run --"),
-        "local dev mode plugin should contain cargo run command"
+        content.contains(r#"[...BITLOOPS_CMD, "hooks", "opencode", hookName]"#),
+        "local dev mode plugin should build hook argv directly from the Bitloops command"
+    );
+    assert!(
+        !content.contains(r#"["sh", "-c""#),
+        "local dev mode plugin should not route hook execution through a shell"
     );
 }
 

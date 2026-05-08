@@ -31,16 +31,18 @@ pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<Strin
         ));
     }
     let bitloops_cmd = if local_dev {
-        "cargo run --"
+        vec!["cargo", "run", "--"]
     } else {
-        "bitloops"
+        vec!["bitloops"]
     };
+    let bitloops_cmd = to_string(&bitloops_cmd)
+        .map_err(|err| anyhow!("failed to serialize Bitloops command argv: {err}"))?;
 
     let bootstrap_context = to_string(&session_bootstrap_text(repo_root))
         .map_err(|err| anyhow!("failed to serialize bootstrap context: {err}"))?;
 
     Ok(PLUGIN_TEMPLATE
-        .replace(BITLOOPS_CMD_PLACEHOLDER, bitloops_cmd)
+        .replace(BITLOOPS_CMD_PLACEHOLDER, &bitloops_cmd)
         .replace(BOOTSTRAP_CONTEXT_PLACEHOLDER, &bootstrap_context))
 }
 
@@ -50,6 +52,7 @@ mod tests {
     use crate::adapters::agents::open_code::skills::{
         OPEN_CODE_SKILL_RELATIVE_PATH, install_repo_skill,
     };
+    use serde::de::DeserializeOwned;
 
     struct RenderedMessage {
         role: String,
@@ -67,7 +70,7 @@ mod tests {
         }
     }
 
-    fn rendered_const(rendered: &str, name: &str) -> String {
+    fn rendered_const<T: DeserializeOwned>(rendered: &str, name: &str) -> T {
         let prefix = format!("const {name} = ");
         let line = rendered
             .lines()
@@ -90,7 +93,7 @@ mod tests {
     }
 
     fn apply_rendered_transform(rendered: &str, messages: &mut [RenderedMessage]) {
-        let bootstrap_context = rendered_const(rendered, "BOOTSTRAP_CONTEXT");
+        let bootstrap_context: String = rendered_const(rendered, "BOOTSTRAP_CONTEXT");
         if bootstrap_context.is_empty() {
             return;
         }
@@ -120,7 +123,7 @@ enabled = true
 
         let rendered = render_plugin_template(repo_root, false).expect("render should succeed");
 
-        assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
+        assert!(rendered.contains(r#"const BITLOOPS_CMD = ["bitloops"]"#));
         assert!(
             rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH),
             "bootstrap text should reference the repo-local skill path"
@@ -176,6 +179,64 @@ enabled = true
     }
 
     #[test]
+    fn render_plugin_template_preserves_model_metadata_for_transcripts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        assert!(
+            rendered.contains("extractModelMetadata"),
+            "plugin should centralize model metadata preservation"
+        );
+        assert!(
+            rendered.contains("modelID"),
+            "plugin should preserve OpenCode's uppercase modelID field"
+        );
+        assert!(
+            rendered.contains("providerID"),
+            "plugin should preserve OpenCode's uppercase providerID field"
+        );
+        assert!(
+            rendered.contains("source.model?.id"),
+            "plugin should flatten nested OpenCode session model identifiers"
+        );
+        assert!(
+            rendered.contains("source.model?.modelID"),
+            "plugin should flatten nested OpenCode message model identifiers"
+        );
+        assert!(
+            rendered.contains("source.model?.providerID"),
+            "plugin should flatten nested OpenCode provider identifiers"
+        );
+    }
+
+    #[test]
+    fn render_plugin_template_runs_hooks_from_repo_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        assert!(
+            rendered.contains("cwd: directory"),
+            "plugin should execute Bitloops hook commands from the OpenCode repo directory"
+        );
+        assert!(
+            !rendered.contains(r#"["sh", "-c""#),
+            "plugin should invoke Bitloops hooks without routing through a shell"
+        );
+        assert!(
+            rendered.contains(r#"[...BITLOOPS_CMD, "hooks", "opencode", hookName]"#),
+            "plugin should build hook command argv directly from the configured Bitloops command"
+        );
+        assert!(
+            rendered.contains("callHookSync"),
+            "plugin should provide a synchronous hook path for end-of-turn delivery"
+        );
+        assert!(
+            rendered.contains("case \"session.status\""),
+            "plugin should rely on session.status idle events for robust turn-end delivery"
+        );
+    }
+
+    #[test]
     fn render_plugin_template_omits_turn_guidance_prompt_heuristic_machinery() {
         let dir = tempfile::tempdir().expect("tempdir");
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
@@ -201,8 +262,8 @@ devql_guidance_enabled = false
 
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
 
-        assert!(rendered.contains(r#"const BITLOOPS_CMD = "bitloops""#));
-        assert_eq!(rendered_const(&rendered, "BOOTSTRAP_CONTEXT"), "");
+        assert!(rendered.contains(r#"const BITLOOPS_CMD = ["bitloops"]"#));
+        assert_eq!(rendered_const::<String>(&rendered, "BOOTSTRAP_CONTEXT"), "");
         assert!(!rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH));
         assert!(!rendered.contains("DevQL-capable guidance surface"));
         assert!(!rendered.contains("<EXTREMELY_IMPORTANT>"));
@@ -213,7 +274,10 @@ devql_guidance_enabled = false
         let dir = tempfile::tempdir().expect("tempdir");
         let rendered = render_plugin_template(dir.path(), true).expect("render should succeed");
 
-        assert!(rendered.contains(r#"const BITLOOPS_CMD = "cargo run --""#));
+        assert_eq!(
+            rendered_const::<Vec<String>>(&rendered, "BITLOOPS_CMD"),
+            vec!["cargo".to_string(), "run".to_string(), "--".to_string()]
+        );
     }
 
     #[test]
@@ -296,7 +360,7 @@ devql_guidance_enabled = false
         );
         install_repo_skill(dir.path()).expect("install skill");
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
-        assert_eq!(rendered_const(&rendered, "BOOTSTRAP_CONTEXT"), "");
+        assert_eq!(rendered_const::<String>(&rendered, "BOOTSTRAP_CONTEXT"), "");
 
         let mut messages = vec![
             rendered_message("first-user", "user", &["Initial request"]),
