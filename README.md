@@ -252,9 +252,9 @@ Built-in language adapters:
 - [x] Java
 - [x] C#
 
-## Documentation For Technical Teams
+## Technical Documentation
 
-This README is intentionally user-first. Technical details live in the documentation:
+Technical details live in the documentation:
 
 - [Quickstart](https://bitloops.com/docs/getting-started/quickstart) for setup and first use;
 - [DevQL](https://bitloops.com/docs/concepts/devql) for querying the maintained repository model;
