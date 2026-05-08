@@ -1,6 +1,7 @@
 pub mod architecture_graph;
 pub mod codecity;
 pub mod context_guidance;
+pub mod http;
 pub mod knowledge;
 pub mod navigation_context;
 pub mod semantic_clones;
@@ -12,6 +13,7 @@ use crate::host::capability_host::CapabilityPack;
 use architecture_graph::ArchitectureGraphPack;
 use codecity::CodeCityPack;
 use context_guidance::ContextGuidancePack;
+use http::HttpPack;
 use knowledge::KnowledgePack;
 use navigation_context::NavigationContextPack;
 use semantic_clones::SemanticClonesPack;
@@ -22,6 +24,7 @@ pub fn builtin_packs(repo_root: &Path) -> anyhow::Result<Vec<Box<dyn CapabilityP
     Ok(vec![
         Box::new(ArchitectureGraphPack::new()),
         Box::new(CodeCityPack::new()),
+        Box::new(HttpPack::new()),
         Box::new(KnowledgePack::new()?),
         Box::new(NavigationContextPack::new()),
         Box::new(ContextGuidancePack::new()?),
@@ -35,7 +38,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_packs_include_architecture_graph_codecity_knowledge_navigation_context_test_harness_and_semantic_clone_packs()
+    fn builtin_packs_include_architecture_graph_codecity_http_knowledge_navigation_context_test_harness_and_semantic_clone_packs()
     -> anyhow::Result<()> {
         let packs = builtin_packs(Path::new("."))?;
         let ids = packs
@@ -44,6 +47,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(ids.contains(&"architecture_graph"));
         assert!(ids.contains(&"codecity"));
+        assert!(ids.contains(&"http"));
         assert!(ids.contains(&"knowledge"));
         assert!(ids.contains(&"navigation_context"));
         assert!(ids.contains(&"test_harness"));
@@ -60,9 +64,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(ids.contains(&"context_guidance"));
+        let http_index = ids.iter().position(|id| *id == "http").unwrap();
         let knowledge_index = ids.iter().position(|id| *id == "knowledge").unwrap();
         let context_guidance_index = ids.iter().position(|id| *id == "context_guidance").unwrap();
         let test_harness_index = ids.iter().position(|id| *id == "test_harness").unwrap();
+        assert!(http_index < knowledge_index);
         assert!(knowledge_index < context_guidance_index);
         assert!(context_guidance_index < test_harness_index);
         Ok(())

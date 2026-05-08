@@ -6,7 +6,7 @@ use crate::graphql::pack_adapter::StageResolverAdapter;
 use crate::graphql::{DevqlGraphqlContext, backend_error, bad_user_input_error};
 
 use super::super::{
-    ClonesFilterInput, DateTimeScalar, DepsDirection, DepsFilterInput, EdgeKind,
+    ClonesFilterInput, DateTimeScalar, DepsDirection, DepsFilterInput, EdgeKind, HttpContextResult,
     TestHarnessTestsResult,
 };
 use super::stages::{
@@ -45,6 +45,7 @@ impl ArtefactSelection {
         let context_guidance = self
             .resolve_context_guidance_stage_data(ctx, None, None, None, None, None)
             .await?;
+        let http = self.resolve_http_context_stage_data(ctx, 10).await?;
 
         Ok(async_graphql::types::Json(build_selection_summary(
             self.artefacts.len(),
@@ -54,6 +55,7 @@ impl ArtefactSelection {
             &tests,
             &historical_context,
             &context_guidance,
+            &http.overview.0,
         )))
     }
 
@@ -198,6 +200,16 @@ impl ArtefactSelection {
             )
             .await?
             .into())
+    }
+
+    #[graphql(name = "httpContext")]
+    async fn http_context(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<HttpContextResult> {
+        self.ensure_artefact_selection("httpContext")?;
+        self.resolve_http_context_stage_data(ctx, first).await
     }
 }
 
@@ -473,6 +485,28 @@ impl ArtefactSelection {
             schema: (!items.is_empty()).then(|| CONTEXT_GUIDANCE_STAGE_SCHEMA.to_string()),
             items,
         })
+    }
+
+    async fn resolve_http_context_stage_data(
+        &self,
+        ctx: &Context<'_>,
+        first: i32,
+    ) -> Result<HttpContextResult> {
+        if first <= 0 {
+            return Err(bad_user_input_error("`first` must be greater than 0"));
+        }
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_context_for_targets(
+                &self.scope,
+                &self.artefact_ids(),
+                &self.symbol_ids(),
+                &self.paths(),
+                first as usize,
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!("failed to resolve selected HTTP context: {err:#}"))
+            })
     }
 }
 

@@ -49,6 +49,26 @@ pub(super) fn resolve_registered_stage(
     if stage.stage_name == KNOWLEDGE_STAGE_NAME {
         return Ok(Some(RegisteredStageKind::Knowledge(stage)));
     }
+    match stage.stage_name.as_str() {
+        "overview" => return Ok(Some(RegisteredStageKind::SelectionOverview)),
+        "httpSearch" | "http_search" => return Ok(Some(RegisteredStageKind::HttpSearch(stage))),
+        "httpContext" | "http_context" => {
+            return Ok(Some(RegisteredStageKind::HttpContext(stage)));
+        }
+        "httpHeaderProducers" | "http_header_producers" => {
+            return Ok(Some(RegisteredStageKind::HttpHeaderProducers(stage)));
+        }
+        "httpLifecycleBoundaries" | "http_lifecycle_boundaries" => {
+            return Ok(Some(RegisteredStageKind::HttpLifecycleBoundaries(stage)));
+        }
+        "httpLossyTransforms" | "http_lossy_transforms" => {
+            return Ok(Some(RegisteredStageKind::HttpLossyTransforms(stage)));
+        }
+        "httpPatchImpact" | "http_patch_impact" => {
+            return Ok(Some(RegisteredStageKind::HttpPatchImpact(stage)));
+        }
+        _ => {}
+    }
 
     bail!(
         "the GraphQL compiler does not support capability-pack stage `{}`; register an explicit typed GraphQL/DSL contribution",
@@ -153,8 +173,12 @@ pub(super) fn validate_graphql_compiler_support(
             );
         }
 
-        if parsed.has_limit_stage {
-            bail!("selectArtefacts(...) does not support limit(); use the stage defaults in v1");
+        if parsed.has_limit_stage
+            && !matches!(registered_stage, Some(RegisteredStageKind::HttpContext(_)))
+        {
+            bail!(
+                "selectArtefacts(...) only supports limit() with httpContext() in the GraphQL compiler"
+            );
         }
 
         let terminal_stage_count = usize::from(parsed.has_checkpoints_stage)
@@ -164,11 +188,15 @@ pub(super) fn validate_graphql_compiler_support(
             + usize::from(parsed.has_deps_stage)
             + usize::from(matches!(
                 registered_stage,
-                Some(RegisteredStageKind::Tests(_))
+                Some(
+                    RegisteredStageKind::Tests(_)
+                        | RegisteredStageKind::SelectionOverview
+                        | RegisteredStageKind::HttpContext(_)
+                )
             ));
         if terminal_stage_count == 0 {
             bail!(
-                "selectArtefacts(...) requires checkpoints(), historicalContext(), contextGuidance(), clones(), dependencies(), or tests()"
+                "selectArtefacts(...) requires overview(), checkpoints(), historicalContext(), contextGuidance(), clones(), dependencies(), tests(), or httpContext()"
             );
         }
         if terminal_stage_count > 1 {
@@ -186,6 +214,11 @@ pub(super) fn validate_graphql_compiler_support(
                     | RegisteredStageKind::DepsSummary(_)
                     | RegisteredStageKind::TestsSummary
                     | RegisteredStageKind::Knowledge(_)
+                    | RegisteredStageKind::HttpSearch(_)
+                    | RegisteredStageKind::HttpHeaderProducers(_)
+                    | RegisteredStageKind::HttpLifecycleBoundaries(_)
+                    | RegisteredStageKind::HttpLossyTransforms(_)
+                    | RegisteredStageKind::HttpPatchImpact(_)
             )
         ) {
             bail!("selectArtefacts(...) does not support that registered stage in v1");
@@ -247,6 +280,16 @@ pub(super) fn validate_graphql_compiler_support(
         matches!(registered_stage, Some(RegisteredStageKind::DepsSummary(_)));
     let has_tests_summary_stage =
         matches!(registered_stage, Some(RegisteredStageKind::TestsSummary));
+    let has_direct_http_stage = matches!(
+        registered_stage,
+        Some(
+            RegisteredStageKind::HttpSearch(_)
+                | RegisteredStageKind::HttpHeaderProducers(_)
+                | RegisteredStageKind::HttpLifecycleBoundaries(_)
+                | RegisteredStageKind::HttpLossyTransforms(_)
+                | RegisteredStageKind::HttpPatchImpact(_)
+        )
+    );
 
     if has_clone_summary_stage && !parsed.has_clones_stage {
         bail!("summary() requires a clones() stage in the query");
@@ -324,8 +367,41 @@ pub(super) fn validate_graphql_compiler_support(
         bail!("test_harness_tests_summary() does not support file() or files() scopes");
     }
 
+    if matches!(
+        registered_stage,
+        Some(RegisteredStageKind::SelectionOverview)
+    ) {
+        bail!("overview() is only supported after selectArtefacts(...) in the GraphQL compiler");
+    }
+
+    if matches!(registered_stage, Some(RegisteredStageKind::HttpContext(_))) {
+        bail!("httpContext() is only supported after selectArtefacts(...) in the DSL compiler");
+    }
+
     if parsed.has_deps_stage && parsed.has_artefacts_stage {
         bail!("dependencies() after artefacts() is not yet supported by the GraphQL compiler");
+    }
+
+    if has_direct_http_stage
+        && (parsed.has_checkpoints_stage
+            || parsed.has_telemetry_stage
+            || parsed.has_deps_stage
+            || parsed.has_clones_stage
+            || parsed.has_chat_history_stage)
+    {
+        bail!(
+            "HTTP direct lookup stages cannot be combined with checkpoints(), telemetry(), dependencies(), clones(), or chatHistory()"
+        );
+    }
+
+    if parsed.has_artefacts_stage
+        && has_direct_http_stage
+        && !matches!(
+            registered_stage,
+            Some(RegisteredStageKind::HttpLossyTransforms(_))
+        )
+    {
+        bail!("only httpLossyTransforms() can be nested under artefacts() in the DSL compiler");
     }
 
     if mode == GraphqlCompileMode::Global
@@ -392,6 +468,11 @@ pub(super) fn validate_graphql_compiler_support(
             Some(RegisteredStageKind::Knowledge(_))
                 | Some(RegisteredStageKind::TestsSummary)
                 | Some(RegisteredStageKind::DepsSummary(_))
+                | Some(RegisteredStageKind::HttpSearch(_))
+                | Some(RegisteredStageKind::HttpHeaderProducers(_))
+                | Some(RegisteredStageKind::HttpLifecycleBoundaries(_))
+                | Some(RegisteredStageKind::HttpLossyTransforms(_))
+                | Some(RegisteredStageKind::HttpPatchImpact(_))
         )
     {
         return Ok(());
@@ -476,6 +557,12 @@ pub(super) fn should_compile_project_stage(
         | RegisteredStageKind::Coverage
         | RegisteredStageKind::TestsSummary => parsed.project_path.is_some(),
         RegisteredStageKind::Knowledge(_) => false,
+        RegisteredStageKind::SelectionOverview | RegisteredStageKind::HttpContext(_) => false,
+        RegisteredStageKind::HttpSearch(_)
+        | RegisteredStageKind::HttpHeaderProducers(_)
+        | RegisteredStageKind::HttpLifecycleBoundaries(_)
+        | RegisteredStageKind::HttpLossyTransforms(_)
+        | RegisteredStageKind::HttpPatchImpact(_) => parsed.project_path.is_some(),
     }
 }
 

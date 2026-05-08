@@ -335,6 +335,7 @@ pub(super) fn build_selection_summary(
     tests: &TestsStageData,
     historical_context: &HistoricalContextStageData,
     context_guidance: &ContextGuidanceStageData,
+    http: &Value,
 ) -> Value {
     json!({
         "selectedArtefactCount": selected_artefact_count,
@@ -356,6 +357,7 @@ pub(super) fn build_selection_summary(
             None,
             context_guidance.schema.as_deref(),
         ),
+        "http": http,
     })
 }
 

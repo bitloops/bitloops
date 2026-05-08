@@ -264,6 +264,8 @@ type Artefact {
 	chatHistory(first: Int, after: String, last: Int, before: String): ChatEntryConnection!
 	tests(minConfidence: Float, linkageSource: String, first: Int! = 25): [TestHarnessTestsResult!]!
 	coverage(first: Int! = 25): [TestHarnessCoverageResult!]!
+	httpContext(first: Int! = 20): HttpContextResult!
+	httpLossyTransforms(first: Int! = 20): [HttpPrimitive!]!
 	architectureNode: ArchitectureGraphNode
 	copyLineage: [ArtefactCopyLineage!]!
 }
@@ -1381,6 +1383,120 @@ type HealthStatus {
 	blob: HealthBackendStatus!
 }
 
+type HttpBundle {
+	bundleId: String!
+	kind: String!
+	riskKind: String
+	severity: String
+	matchedRoles: [String!]!
+	status: String!
+	confidence: HttpConfidence!
+	upstreamFacts: [HttpUpstreamFact!]!
+	causalChain: [HttpCausalChainLink!]!
+	invalidatedAssumptions: [HttpInvalidatedAssumption!]!
+	obligations: [HttpPropagationObligation!]!
+}
+
+type HttpCausalChainLink {
+	owner: String!
+	factId: String!
+	role: String!
+	primitiveType: String
+	subject: String
+}
+
+type HttpConfidence {
+	level: String!
+	score: Float!
+}
+
+type HttpContextResult {
+	overview: JSON!
+	bundles: [HttpBundle!]!
+	primitives: [HttpPrimitive!]!
+	obligations: [HttpPropagationObligation!]!
+}
+
+type HttpEvidence {
+	kind: String!
+	path: String
+	artefactId: String
+	symbolId: String
+	contentId: String
+	startLine: Int
+	endLine: Int
+	dependencyPackage: String
+	dependencyVersion: String
+	sourceUrl: String
+}
+
+type HttpHeaderProducer {
+	primitiveId: String!
+	producerKind: String!
+	sourceSignal: String
+	phase: String
+	preconditions: [String!]!
+	confidence: HttpConfidence!
+}
+
+type HttpInvalidatedAssumption {
+	id: String!
+	assumption: String!
+	invalidatedByPrimitiveIds: [String!]!
+	scope: String
+}
+
+input HttpLossyTransformAroundInput {
+	symbolFqn: String = null
+	symbolId: String = null
+	artefactId: String = null
+	path: String = null
+}
+
+input HttpPatchImpactInput {
+	patchFingerprint: String!
+}
+
+type HttpPatchImpactResult {
+	patchFingerprint: String!
+	invalidatedAssumptions: [HttpInvalidatedAssumption!]!
+	propagationObligations: [HttpPropagationObligation!]!
+}
+
+type HttpPrimitive {
+	id: String!
+	owner: String!
+	primitiveType: String!
+	subject: String!
+	roles: [String!]!
+	terms: [String!]!
+	status: String!
+	confidence: HttpConfidence!
+	evidence: [HttpEvidence!]!
+	properties: JSON!
+}
+
+type HttpPropagationObligation {
+	id: String!
+	requiredFollowUp: String!
+	targetSymbols: [String!]!
+	blocking: Boolean!
+}
+
+type HttpSearchResult {
+	overview: JSON!
+	bundles: [HttpBundle!]!
+	matchedFacts: [HttpPrimitive!]!
+}
+
+type HttpUpstreamFact {
+	owner: String!
+	factId: String!
+	primitiveType: String
+	subject: String
+	roles: [String!]!
+}
+
 type IngestResult {
 	success: Boolean!
 	commitsProcessed: Int!
@@ -1912,6 +2028,11 @@ type Project {
 	dependencies(filter: DependenciesFilterInput, first: Int, after: String, last: Int, before: String): DependencyEdgeConnection!
 	checkpoints(agent: String, since: DateTime, first: Int, after: String, last: Int, before: String): CheckpointConnection!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	httpSearch(terms: [String!]!, first: Int): HttpSearchResult!
+	httpHeaderProducers(headerName: String!, first: Int): [HttpHeaderProducer!]!
+	httpLifecycleBoundaries(terms: [String!], first: Int): [HttpPrimitive!]!
+	httpLossyTransforms(around: HttpLossyTransformAroundInput, first: Int): [HttpPrimitive!]!
+	httpPatchImpact(input: HttpPatchImpactInput!): HttpPatchImpactResult!
 	navigationContext(filter: NavigationContextFilterInput, first: Int! = 500, after: String): NavigationContextSnapshot!
 	clones(filter: ClonesFilterInput, first: Int, after: String, last: Int, before: String): CloneConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
@@ -1972,6 +2093,11 @@ type Repository {
 	artefacts(filter: ArtefactFilterInput, first: Int, after: String, last: Int, before: String): ArtefactConnection!
 	cloneSummary(filter: ArtefactFilterInput, cloneFilter: ClonesFilterInput): CloneSummary!
 	knowledge(provider: KnowledgeProvider, first: Int, after: String, last: Int, before: String): KnowledgeItemConnection!
+	httpSearch(terms: [String!]!, first: Int): HttpSearchResult!
+	httpHeaderProducers(headerName: String!, first: Int): [HttpHeaderProducer!]!
+	httpLifecycleBoundaries(terms: [String!], first: Int): [HttpPrimitive!]!
+	httpLossyTransforms(around: HttpLossyTransformAroundInput, first: Int): [HttpPrimitive!]!
+	httpPatchImpact(input: HttpPatchImpactInput!): HttpPatchImpactResult!
 	interactionSessions(filter: InteractionFilterInput, first: Int, after: String, last: Int, before: String): InteractionSessionConnection!
 	interactionTurns(filter: InteractionFilterInput, first: Int, after: String, last: Int, before: String): InteractionTurnConnection!
 	interactionEvents(filter: InteractionFilterInput, first: Int, after: String, last: Int, before: String): InteractionEventConnection!

@@ -167,6 +167,14 @@ fn selection_summary_includes_historical_context_stage() {
         &tests,
         &historical_context,
         &context_guidance,
+        &serde_json::json!({
+            "bundleCount": 0,
+            "riskCount": 0,
+            "topRisks": [],
+            "expandHint": {
+                "template": "selectArtefacts(...){ httpContext { bundles { ... } } }"
+            }
+        }),
     );
 
     assert_eq!(
@@ -183,6 +191,8 @@ fn selection_summary_includes_historical_context_stage() {
             "schema": null
         })
     );
+    assert_eq!(summary["http"]["bundleCount"], 0);
+    assert_eq!(summary["http"]["riskCount"], 0);
 }
 
 #[test]

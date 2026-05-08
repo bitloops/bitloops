@@ -21,4 +21,11 @@ pub(super) enum RegisteredStageKind<'a> {
     Coverage,
     TestsSummary,
     Knowledge(&'a super::RegisteredStageCall),
+    SelectionOverview,
+    HttpSearch(&'a super::RegisteredStageCall),
+    HttpContext(&'a super::RegisteredStageCall),
+    HttpHeaderProducers(&'a super::RegisteredStageCall),
+    HttpLifecycleBoundaries(&'a super::RegisteredStageCall),
+    HttpLossyTransforms(&'a super::RegisteredStageCall),
+    HttpPatchImpact(&'a super::RegisteredStageCall),
 }
