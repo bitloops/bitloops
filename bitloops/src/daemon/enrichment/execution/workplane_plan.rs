@@ -8,7 +8,7 @@ use super::super::{EnrichmentJobTarget, FollowUpJob};
 use super::SemanticFeatureInput;
 use super::follow_ups::symbol_embeddings_follow_up_from_artefact_ids;
 
-pub(crate) const WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE: usize = 16;
+pub(crate) const WORKPLANE_SUMMARY_REPO_BACKFILL_BATCH_SIZE: usize = 24;
 pub(crate) const WORKPLANE_EMBEDDING_REPO_BACKFILL_BATCH_SIZE: usize = 8;
 
 pub(crate) struct SummaryRefreshWorkplanePlan {
@@ -82,7 +82,7 @@ fn build_repo_backfill_summary_refresh_workplane_plan(
         }
     }
     if !remaining_artefact_ids.is_empty() {
-        follow_ups.push(FollowUpJob::SemanticSummaries {
+        follow_ups.push(FollowUpJob::RepoBackfillSummaries {
             target: EnrichmentJobTarget::new(job.config_root.clone(), job.repo_root.clone())
                 .with_repo_id(job.repo_id.clone())
                 .with_init_session_id(job.init_session_id.clone()),

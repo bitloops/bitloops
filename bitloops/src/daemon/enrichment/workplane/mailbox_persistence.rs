@@ -42,7 +42,22 @@ pub(crate) fn requeue_summary_mailbox_batch(
         SemanticMailboxItemStatus::Pending,
         Some(retry_in_secs),
         error,
-    )
+    )?;
+    log::warn!(
+        "summary mailbox batch requeued: repo_id={} leased_count={} attempts={} retry_in_secs={} failure_stage={} failure_kind={}",
+        batch.repo_id,
+        batch.items.len(),
+        batch
+            .items
+            .iter()
+            .map(|item| item.attempts)
+            .max()
+            .unwrap_or(0),
+        retry_in_secs,
+        classify_summary_retry_failure_stage(error),
+        classify_summary_retry_failure_kind(error),
+    );
+    Ok(())
 }
 
 pub(crate) fn persist_embedding_mailbox_batch_failure(
@@ -146,6 +161,37 @@ fn update_summary_mailbox_batch_failure(
         )?;
         Ok(())
     })
+}
+
+fn classify_summary_retry_failure_stage(error: &str) -> &'static str {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("executing semantic summary sql") {
+        "summary_sql"
+    } else if lower.contains("inserting runtime summary mailbox item") {
+        "runtime_summary_mailbox_insert"
+    } else if lower.contains("refreshing pending runtime embedding mailbox item")
+        || lower.contains("inserting runtime embedding mailbox item")
+    {
+        "runtime_embedding_mailbox_upsert"
+    } else if lower.contains("deleting acknowledged semantic summary mailbox items") {
+        "runtime_summary_mailbox_delete"
+    } else if lower.contains("committing semantic summary batch transaction") {
+        "transaction_commit"
+    } else {
+        "unknown"
+    }
+}
+
+fn classify_summary_retry_failure_kind(error: &str) -> &'static str {
+    let lower = error.to_ascii_lowercase();
+    if lower.contains("database is locked")
+        || lower.contains("busy timeout")
+        || lower.contains("error code 5")
+    {
+        "sqlite_lock_or_busy_timeout"
+    } else {
+        "other"
+    }
 }
 
 fn update_embedding_mailbox_batch_failure(
@@ -330,4 +376,138 @@ fn map_embedding_mailbox_item_row(
         updated_at_unix: parse_u64(row.get::<_, i64>(17)?),
         last_error: row.get(18)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::runtime_store::SemanticSummaryMailboxItemRecord;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    #[test]
+    fn summary_retry_classification_distinguishes_stage_and_lock_contention() {
+        let delete_locked = "committing semantic summary batch for repo `repo-1`: deleting acknowledged semantic summary mailbox items: database is locked";
+        assert_eq!(
+            classify_summary_retry_failure_stage(delete_locked),
+            "runtime_summary_mailbox_delete"
+        );
+        assert_eq!(
+            classify_summary_retry_failure_kind(delete_locked),
+            "sqlite_lock_or_busy_timeout"
+        );
+
+        let commit_failure = "committing semantic summary batch for repo `repo-1`: committing semantic summary batch transaction: constraint failed";
+        assert_eq!(
+            classify_summary_retry_failure_stage(commit_failure),
+            "transaction_commit"
+        );
+        assert_eq!(classify_summary_retry_failure_kind(commit_failure), "other");
+
+        let sql_failure = "committing semantic summary batch for repo `repo-1`: executing semantic summary SQL: syntax error";
+        assert_eq!(
+            classify_summary_retry_failure_stage(sql_failure),
+            "summary_sql"
+        );
+    }
+
+    #[test]
+    fn requeue_summary_mailbox_batch_restores_pending_state_and_clears_lease_fields() {
+        let temp = TempDir::new().expect("temp dir");
+        let store = DaemonSqliteRuntimeStore::open_at(temp.path().join("runtime.sqlite"))
+            .expect("open runtime store");
+        let lease_token = "semantic-summary-lease-test";
+        let item_id = "summary-item-1";
+        let repo_root = PathBuf::from("/tmp/repo");
+        let config_root = PathBuf::from("/tmp/config");
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO semantic_summary_mailbox_items (
+                         item_id, repo_id, repo_root, config_root, init_session_id, item_kind,
+                         artefact_id, payload_json, dedupe_key, status, attempts, available_at_unix,
+                         submitted_at_unix, leased_at_unix, lease_expires_at_unix, lease_token,
+                         updated_at_unix, last_error
+                     ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, NULL)",
+                    params![
+                        item_id,
+                        "repo-1",
+                        repo_root.to_string_lossy().to_string(),
+                        config_root.to_string_lossy().to_string(),
+                        SemanticMailboxItemKind::Artefact.as_str(),
+                        "artefact-1",
+                        "semantic_clones.summary_refresh:artefact-1",
+                        SemanticMailboxItemStatus::Leased.as_str(),
+                        3_u32,
+                        sql_i64(10)?,
+                        sql_i64(10)?,
+                        sql_i64(10)?,
+                        sql_i64(20)?,
+                        lease_token,
+                        sql_i64(10)?,
+                    ],
+                )?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .expect("insert leased summary mailbox row");
+
+        let batch = ClaimedSummaryMailboxBatch {
+            repo_id: "repo-1".to_string(),
+            repo_root: repo_root.clone(),
+            config_root: config_root.clone(),
+            lease_token: lease_token.to_string(),
+            items: vec![SemanticSummaryMailboxItemRecord {
+                item_id: item_id.to_string(),
+                repo_id: "repo-1".to_string(),
+                repo_root,
+                config_root,
+                init_session_id: None,
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some("artefact-1".to_string()),
+                payload_json: None,
+                dedupe_key: Some("semantic_clones.summary_refresh:artefact-1".to_string()),
+                status: SemanticMailboxItemStatus::Leased,
+                attempts: 3,
+                available_at_unix: 10,
+                submitted_at_unix: 10,
+                leased_at_unix: Some(10),
+                lease_expires_at_unix: Some(20),
+                lease_token: Some(lease_token.to_string()),
+                updated_at_unix: 10,
+                last_error: None,
+            }],
+        };
+
+        requeue_summary_mailbox_batch(
+            &store,
+            &batch,
+            5,
+            "committing semantic summary batch for repo `repo-1`: deleting acknowledged semantic summary mailbox items: database is locked",
+        )
+        .expect("requeue summary mailbox batch");
+
+        let pending = store
+            .with_connection(|conn| {
+                load_summary_mailbox_items_by_status(conn, SemanticMailboxItemStatus::Pending)
+            })
+            .expect("load pending summary mailbox items");
+        assert_eq!(pending.len(), 1);
+        let item = &pending[0];
+        assert_eq!(item.item_id, item_id);
+        assert_eq!(item.status, SemanticMailboxItemStatus::Pending);
+        assert_eq!(item.attempts, 3);
+        assert!(item.leased_at_unix.is_none());
+        assert!(item.lease_expires_at_unix.is_none());
+        assert!(item.lease_token.is_none());
+        assert_eq!(
+            item.last_error.as_deref(),
+            Some(
+                "committing semantic summary batch for repo `repo-1`: deleting acknowledged semantic summary mailbox items: database is locked"
+            )
+        );
+        assert_eq!(
+            item.available_at_unix.saturating_sub(item.updated_at_unix),
+            5
+        );
+    }
 }

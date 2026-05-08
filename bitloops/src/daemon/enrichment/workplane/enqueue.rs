@@ -69,6 +69,40 @@ pub(crate) fn enqueue_workplane_summary_jobs(
     Ok(())
 }
 
+pub(crate) fn enqueue_workplane_summary_repo_backfill_job(
+    target: &EnrichmentJobTarget,
+    artefact_ids: Vec<String>,
+) -> Result<()> {
+    if artefact_ids.is_empty() {
+        return Ok(());
+    }
+    let store = open_target_store(target)?;
+    let use_chunk_dedupe_keys = artefact_ids.len() > REPO_BACKFILL_MAILBOX_CHUNK_SIZE;
+    let items = artefact_ids
+        .chunks(REPO_BACKFILL_MAILBOX_CHUNK_SIZE)
+        .map(|chunk| {
+            let chunk_ids = chunk.to_vec();
+            let dedupe_key = if use_chunk_dedupe_keys {
+                repo_backfill_chunk_dedupe_key(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX, &chunk_ids)
+            } else {
+                repo_backfill_dedupe_key(SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
+            };
+            SemanticSummaryMailboxItemInsert::new(
+                target.init_session_id.clone(),
+                SemanticMailboxItemKind::RepoBackfill,
+                None,
+                Some(
+                    serde_json::to_value(chunk_ids)
+                        .expect("summary repo backfill payload should serialize"),
+                ),
+                Some(dedupe_key),
+            )
+        })
+        .collect::<Vec<_>>();
+    let _ = store.enqueue_semantic_summary_mailbox_items(items)?;
+    Ok(())
+}
+
 pub(crate) fn enqueue_workplane_embedding_jobs(
     target: &EnrichmentJobTarget,
     artefact_ids: Vec<String>,

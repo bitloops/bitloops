@@ -2,6 +2,7 @@ pub(super) const DEFAULT_OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
 pub(super) const DEFAULT_OLLAMA_CHAT_BASE_URL: &str = "http://127.0.0.1:11434/api/chat";
 pub(super) const DEFAULT_SUMMARY_TEMPERATURE: &str = "0.1";
 pub(super) const DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS: i64 = 200;
+pub(super) const DEFAULT_PLATFORM_SUMMARY_MAX_OUTPUT_TOKENS: i64 = 300;
 pub(super) const DEFAULT_SUMMARY_PROFILE_NAME: &str = "summary_local";
 pub(super) const DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME: &str = "summary_llm";
 pub(super) const DEFAULT_PLATFORM_SUMMARY_MODEL: &str = "ministral-3-3b-instruct";
