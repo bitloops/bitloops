@@ -55,7 +55,32 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
   async function callHook(hookName: string, payload: Record<string, unknown>) {
     try {
       const json = JSON.stringify(payload)
-      await $`echo ${json} | ${BITLOOPS_CMD} hooks opencode ${hookName}`.quiet().nothrow()
+      const proc = Bun.spawn(["sh", "-c", `${BITLOOPS_CMD} hooks opencode ${hookName}`], {
+        cwd: directory,
+        stdin: new TextEncoder().encode(json + "\n"),
+        stdout: "ignore",
+        stderr: "ignore",
+      })
+      await proc.exited
+    } catch {
+      // Silently ignore - plugin failures must not crash OpenCode
+    }
+  }
+
+  /**
+   * Synchronous variant for hooks that fire near process exit (turn-end, session-end).
+   * `session.status` idle can be followed immediately by process shutdown, so
+   * blocking here avoids dropping the hook command before it reaches Bitloops.
+   */
+  function callHookSync(hookName: string, payload: Record<string, unknown>) {
+    try {
+      const json = JSON.stringify(payload)
+      Bun.spawnSync(["sh", "-c", `${BITLOOPS_CMD} hooks opencode ${hookName}`], {
+        cwd: directory,
+        stdin: new TextEncoder().encode(json + "\n"),
+        stdout: "ignore",
+        stderr: "ignore",
+      })
     } catch {
       // Silently ignore - plugin failures must not crash OpenCode
     }
@@ -101,16 +126,31 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
         source.modelId,
         source.modelID,
         source.model_id,
+        source.model?.id,
+        source.model?.modelID,
+        source.model?.modelId,
+        source.model?.model_id,
+        source.model?.modelName,
+        source.model?.model_name,
+        source.model?.modelSlug,
+        source.model?.model_slug,
       )
       modelID = modelID ?? firstNonEmptyString(
         source.modelID,
         source.modelId,
         source.model_id,
+        source.model?.modelID,
+        source.model?.modelId,
+        source.model?.model_id,
+        source.model?.id,
       )
       providerID = providerID ?? firstNonEmptyString(
         source.providerID,
         source.providerId,
         source.provider_id,
+        source.model?.providerID,
+        source.model?.providerId,
+        source.model?.provider_id,
       )
     }
 
@@ -321,12 +361,14 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           break
         }
 
-        case "session.idle": {
-          const sessionID = (event as any).properties?.sessionID
+        case "session.status": {
+          const props = (event as any).properties
+          if (props?.status?.type !== "idle") break
+          const sessionID = props?.sessionID
           if (!sessionID) break
           const transcriptPath = await writeTranscriptWithFallback(sessionID)
           await writeExportJSON(sessionID)
-          await callHook("turn-end", {
+          callHookSync("turn-end", {
             session_id: sessionID,
             transcript_path: transcriptPath,
             ...latestSessionModelMetadata(sessionID),
@@ -359,7 +401,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           partStore.clear()
           currentSessionID = null
           currentSessionInfo = null
-          await callHook("session-end", {
+          callHookSync("session-end", {
             session_id: session.id,
             transcript_path: `${transcriptDir}/${session.id}.jsonl`,
             ...modelMetadata,

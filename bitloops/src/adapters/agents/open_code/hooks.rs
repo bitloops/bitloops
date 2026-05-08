@@ -192,6 +192,37 @@ enabled = true
             rendered.contains("providerID"),
             "plugin should preserve OpenCode's uppercase providerID field"
         );
+        assert!(
+            rendered.contains("source.model?.id"),
+            "plugin should flatten nested OpenCode session model identifiers"
+        );
+        assert!(
+            rendered.contains("source.model?.modelID"),
+            "plugin should flatten nested OpenCode message model identifiers"
+        );
+        assert!(
+            rendered.contains("source.model?.providerID"),
+            "plugin should flatten nested OpenCode provider identifiers"
+        );
+    }
+
+    #[test]
+    fn render_plugin_template_runs_hooks_from_repo_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        assert!(
+            rendered.contains("cwd: directory"),
+            "plugin should execute Bitloops hook commands from the OpenCode repo directory"
+        );
+        assert!(
+            rendered.contains("callHookSync"),
+            "plugin should provide a synchronous hook path for end-of-turn delivery"
+        );
+        assert!(
+            rendered.contains("case \"session.status\""),
+            "plugin should rely on session.status idle events for robust turn-end delivery"
+        );
     }
 
     #[test]
