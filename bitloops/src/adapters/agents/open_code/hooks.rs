@@ -176,6 +176,25 @@ enabled = true
     }
 
     #[test]
+    fn render_plugin_template_preserves_model_metadata_for_transcripts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        assert!(
+            rendered.contains("extractModelMetadata"),
+            "plugin should centralize model metadata preservation"
+        );
+        assert!(
+            rendered.contains("modelID"),
+            "plugin should preserve OpenCode's uppercase modelID field"
+        );
+        assert!(
+            rendered.contains("providerID"),
+            "plugin should preserve OpenCode's uppercase providerID field"
+        );
+    }
+
+    #[test]
     fn render_plugin_template_omits_turn_guidance_prompt_heuristic_machinery() {
         let dir = tempfile::tempdir().expect("tempdir");
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");

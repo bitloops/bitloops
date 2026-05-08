@@ -76,14 +76,72 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
     )
   }
 
+  function firstNonEmptyString(...values: any[]): string | undefined {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) {
+        return value.trim()
+      }
+    }
+  }
+
+  function extractModelMetadata(...sources: any[]): Record<string, string> {
+    let model: string | undefined
+    let modelID: string | undefined
+    let providerID: string | undefined
+
+    for (const source of sources) {
+      if (!source || typeof source !== "object") continue
+
+      model = model ?? firstNonEmptyString(
+        source.model,
+        source.modelName,
+        source.model_name,
+        source.modelSlug,
+        source.model_slug,
+        source.modelId,
+        source.modelID,
+        source.model_id,
+      )
+      modelID = modelID ?? firstNonEmptyString(
+        source.modelID,
+        source.modelId,
+        source.model_id,
+      )
+      providerID = providerID ?? firstNonEmptyString(
+        source.providerID,
+        source.providerId,
+        source.provider_id,
+      )
+    }
+
+    const resolvedModel = model ?? modelID
+    return {
+      ...(resolvedModel ? { model: resolvedModel } : {}),
+      ...(modelID ? { modelID } : {}),
+      ...(providerID ? { providerID } : {}),
+    }
+  }
+
+  function latestSessionModelMetadata(sessionID: string | null): Record<string, string> {
+    const messages = Array.from(messageStore.values())
+      .filter((msg: any) =>
+        !sessionID || msg.sessionID === sessionID || (!msg.sessionID && currentSessionID === sessionID)
+      )
+      .sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0))
+
+    return extractModelMetadata(messages[0], currentSessionInfo)
+  }
+
   /** Format a message object from its accumulated parts. */
   function formatMessageFromStore(msg: any) {
     const parts = partStore.get(msg.id) ?? []
+    const modelMetadata = extractModelMetadata(msg, currentSessionInfo)
     return {
       id: msg.id,
       role: msg.role,
       content: textFromParts(parts),
       time: msg.time,
+      ...modelMetadata,
       ...(msg.role === "assistant" ? {
         tokens: msg.tokens,
         cost: msg.cost,
@@ -98,11 +156,13 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
 
   /** Format a message from an API response (which includes parts inline). */
   function formatMessageFromAPI(info: any, parts: any[]) {
+    const modelMetadata = extractModelMetadata(info, currentSessionInfo)
     return {
       id: info.id,
       role: info.role,
       content: textFromParts(parts),
       time: info.time,
+      ...modelMetadata,
       ...(info.role === "assistant" ? {
         tokens: info.tokens,
         cost: info.cost,
@@ -215,6 +275,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("session-start", {
             session_id: session.id,
             transcript_path: `${transcriptDir}/${session.id}.jsonl`,
+            ...extractModelMetadata(session),
           })
           break
         }
@@ -253,6 +314,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
                 session_id: sessionID,
                 transcript_path: `${transcriptDir}/${sessionID}.jsonl`,
                 prompt: part.text ?? "",
+                ...extractModelMetadata(msg, currentSessionInfo),
               })
             }
           }
@@ -267,6 +329,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("turn-end", {
             session_id: sessionID,
             transcript_path: transcriptPath,
+            ...latestSessionModelMetadata(sessionID),
           })
           break
         }
@@ -277,6 +340,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("compaction", {
             session_id: sessionID,
             transcript_path: `${transcriptDir}/${sessionID}.jsonl`,
+            ...latestSessionModelMetadata(sessionID),
           })
           break
         }
@@ -284,6 +348,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
         case "session.deleted": {
           const session = (event as any).properties?.info
           if (!session?.id) break
+          const modelMetadata = latestSessionModelMetadata(session.id)
           // Write final transcript + export JSON before signaling session end
           if (messageStore.size > 0) {
             await writeTranscriptFromMemory(session.id)
@@ -297,6 +362,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("session-end", {
             session_id: session.id,
             transcript_path: `${transcriptDir}/${session.id}.jsonl`,
+            ...modelMetadata,
           })
           break
         }
