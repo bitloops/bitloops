@@ -19,7 +19,7 @@ use crate::cli::inference::{
 };
 use crate::cli::telemetry_consent;
 use crate::config::settings::{
-    DEFAULT_STRATEGY, load_settings, set_scope_exclusions,
+    DEFAULT_STRATEGY, load_settings, set_devql_producer_settings, set_scope_exclusions,
     write_project_bootstrap_settings_with_daemon_binding_and_devql_guidance,
 };
 use crate::config::{REPO_POLICY_LOCAL_FILE_NAME, default_daemon_config_exists};
@@ -578,6 +578,7 @@ pub(crate) async fn run_for_project_root(
     }
     let should_sync = final_setup_selection.sync;
     let should_ingest = final_setup_selection.ingest;
+    set_devql_producer_settings(&local_policy_path, should_sync, should_ingest)?;
     let run_code_embeddings = should_sync && code_embeddings_selected;
     let run_summaries = should_sync && summaries_selected;
     let run_summary_embeddings = run_summaries && code_embeddings_selected;

@@ -622,7 +622,12 @@ impl SlimQueryRoot {
             }
             ArtefactSelectorMode::Search { query, mode } => {
                 let bundle = select_search_artefacts(context, &scope, query, *mode).await?;
-                ArtefactSelection::new_search(bundle.unified, bundle.breakdown, scope)
+                ArtefactSelection::new_search(
+                    bundle.unified,
+                    bundle.breakdown,
+                    query.clone(),
+                    scope,
+                )
             }
             ArtefactSelectorMode::Path { path, lines } => {
                 let normalized = context

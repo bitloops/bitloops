@@ -31,4 +31,4 @@ pub(crate) use self::orchestrator::execute_sync_with_observer_and_stats_and_diff
 pub(crate) use self::orchestrator::execute_sync_with_stats;
 pub(crate) use self::orchestrator::run_sync_with_summary_and_stats_and_observer_and_diffs;
 #[cfg(test)]
-pub(crate) use self::validation::execute_sync_validation;
+pub(crate) use self::validation::{execute_sync_validation, execute_sync_validation_with_observer};

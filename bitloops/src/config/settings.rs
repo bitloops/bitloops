@@ -68,6 +68,21 @@ impl Default for BitloopsSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DevqlProducerSettings {
+    pub sync_enabled: bool,
+    pub ingest_enabled: bool,
+}
+
+impl Default for DevqlProducerSettings {
+    fn default() -> Self {
+        Self {
+            sync_enabled: true,
+            ingest_enabled: true,
+        }
+    }
+}
+
 pub fn settings_path(repo_root: &Path) -> PathBuf {
     repo_root.join(SETTINGS_FILE)
 }
@@ -96,6 +111,35 @@ pub fn devql_guidance_enabled(start: &Path) -> Result<bool> {
 
 pub fn devql_guidance_enabled_or_false(start: &Path) -> bool {
     devql_guidance_enabled(start).unwrap_or(false)
+}
+
+pub fn devql_producer_settings(start: &Path) -> Result<DevqlProducerSettings> {
+    devql_producer_settings_from_policy(&discover_repo_policy_optional(start)?)
+}
+
+pub fn devql_producer_settings_from_policy(
+    policy: &super::RepoPolicySnapshot,
+) -> Result<DevqlProducerSettings> {
+    let mut settings = DevqlProducerSettings::default();
+    if let Some(raw) = policy.devql.get("sync_enabled") {
+        settings.sync_enabled = raw
+            .as_bool()
+            .ok_or_else(|| anyhow!("`[devql].sync_enabled` must be a boolean"))?;
+    }
+    if let Some(raw) = policy.devql.get("ingest_enabled") {
+        settings.ingest_enabled = raw
+            .as_bool()
+            .ok_or_else(|| anyhow!("`[devql].ingest_enabled` must be a boolean"))?;
+    }
+    Ok(settings)
+}
+
+pub fn devql_sync_enabled(start: &Path) -> Result<bool> {
+    devql_producer_settings(start).map(|settings| settings.sync_enabled)
+}
+
+pub fn devql_ingest_enabled(start: &Path) -> Result<bool> {
+    devql_producer_settings(start).map(|settings| settings.ingest_enabled)
 }
 
 pub fn agent_hook_install_options_for_policy(
@@ -341,6 +385,19 @@ pub fn set_devql_guidance_enabled(path: &Path, enabled: bool) -> Result<()> {
     })
 }
 
+pub fn set_devql_producer_settings(
+    path: &Path,
+    sync_enabled: bool,
+    ingest_enabled: bool,
+) -> Result<()> {
+    write_repo_policy_file(path, |doc| {
+        ensure_devql_table(doc);
+        doc["devql"]["sync_enabled"] = Item::Value(TomlValue::from(sync_enabled));
+        doc["devql"]["ingest_enabled"] = Item::Value(TomlValue::from(ingest_enabled));
+        Ok(())
+    })
+}
+
 fn save_repo_policy_settings(settings: &BitloopsSettings, path: &Path) -> Result<()> {
     write_repo_policy_file(path, |doc| {
         ensure_capture_table(doc);
@@ -448,6 +505,12 @@ fn ensure_daemon_table(doc: &mut DocumentMut) {
     }
 }
 
+fn ensure_devql_table(doc: &mut DocumentMut) {
+    if doc.get("devql").is_none_or(|item| !item.is_table()) {
+        doc["devql"] = Item::Table(Table::new());
+    }
+}
+
 fn string_array_item(values: &[String]) -> Item {
     let mut array = Array::new();
     for value in values {
@@ -476,6 +539,74 @@ supported = ["codex"]
         .expect("write repo policy");
 
         assert!(devql_guidance_enabled(dir.path()).expect("load devql guidance flag"));
+    }
+
+    #[test]
+    fn devql_producer_settings_default_to_enabled_when_policy_omits_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(REPO_POLICY_FILE_NAME),
+            r#"
+[capture]
+enabled = true
+"#,
+        )
+        .expect("write repo policy");
+
+        let settings = devql_producer_settings(dir.path()).expect("load DevQL producer settings");
+
+        assert!(settings.sync_enabled);
+        assert!(settings.ingest_enabled);
+    }
+
+    #[test]
+    fn devql_producer_settings_read_local_policy_flags() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+            r#"
+[devql]
+sync_enabled = true
+ingest_enabled = false
+"#,
+        )
+        .expect("write local repo policy");
+
+        let settings = devql_producer_settings(dir.path()).expect("load DevQL producer settings");
+
+        assert!(settings.sync_enabled);
+        assert!(!settings.ingest_enabled);
+    }
+
+    #[test]
+    fn set_devql_producer_settings_persists_sync_and_ingest_flags() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(REPO_POLICY_LOCAL_FILE_NAME);
+
+        set_devql_producer_settings(&path, true, false).expect("write DevQL producer settings");
+
+        let content = fs::read_to_string(path).expect("read repo policy");
+        assert!(content.contains("[devql]"));
+        assert!(content.contains("sync_enabled = true"));
+        assert!(content.contains("ingest_enabled = false"));
+    }
+
+    #[test]
+    fn devql_producer_settings_reject_non_boolean_values() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+            r#"
+[devql]
+sync_enabled = "yes"
+ingest_enabled = false
+"#,
+        )
+        .expect("write local repo policy");
+
+        let err = devql_producer_settings(dir.path()).expect_err("non-bool flag should fail");
+
+        assert!(format!("{err:#}").contains("`[devql].sync_enabled` must be a boolean"));
     }
 
     #[test]

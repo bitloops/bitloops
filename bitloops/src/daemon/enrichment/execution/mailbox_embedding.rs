@@ -12,10 +12,11 @@ use crate::capability_packs::semantic_clones::embeddings::{
     resolve_embedding_setup, symbol_embeddings_require_reindex,
 };
 use crate::capability_packs::semantic_clones::features::{
-    NoopSemanticSummaryProvider, build_semantic_feature_rows,
+    SemanticFeatureHashKey, build_symbol_feature_rows,
 };
 use crate::capability_packs::semantic_clones::runtime_config::{
-    EmbeddingProviderMode, resolve_embedding_provider, resolve_semantic_clones_config,
+    EmbeddingProviderMode, SummaryProviderMode, resolve_embedding_provider,
+    resolve_semantic_clones_config, resolve_summary_provider,
 };
 use crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX;
 use crate::capability_packs::semantic_clones::{
@@ -72,11 +73,12 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let relational =
         RelationalStorage::connect(&cfg, &backends.relational, "semantic embedding batch").await?;
     let capability_host = build_capability_host(&batch.repo_root, cfg.repo.clone())?;
+    let inference = capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
     let config =
         resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
     let selection = resolve_embedding_provider(
         &config,
-        &capability_host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID),
+        &inference,
         batch.representation_kind,
         EmbeddingProviderMode::ConfiguredStrict,
     )?;
@@ -87,6 +89,17 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         );
     };
     let setup = resolve_embedding_setup(provider.as_ref())?;
+    let code_feature_hash_provider = if batch.representation_kind
+        == EmbeddingRepresentationKind::Code
+    {
+        Some(SemanticFeatureHashKey::from_summary_provider_cache_key(
+            resolve_summary_provider(&config, &inference, SummaryProviderMode::ConfiguredStrict)?
+                .provider
+                .cache_key(),
+        ))
+    } else {
+        None
+    };
     let config_ms = elapsed_ms(config_started);
 
     let input_started = Instant::now();
@@ -228,10 +241,15 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let mut embedding_statements = Vec::new();
     let mut repaired_feature_projection = false;
     if batch.representation_kind == EmbeddingRepresentationKind::Code {
+        let feature_hash_provider = code_feature_hash_provider
+            .as_ref()
+            .expect("code embedding batches resolve a feature hash key")
+            .clone();
         for input in &expanded_inputs {
             let input_for_rows = input.clone();
+            let hash_key_for_rows = feature_hash_provider.clone();
             let rows = tokio::task::spawn_blocking(move || {
-                build_semantic_feature_rows(&input_for_rows, &NoopSemanticSummaryProvider)
+                build_symbol_feature_rows(&input_for_rows, &hash_key_for_rows)
             })
             .await
             .context("building code embedding feature rows on blocking worker")?;

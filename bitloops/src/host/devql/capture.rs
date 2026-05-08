@@ -17,8 +17,10 @@ pub(crate) fn capture_temporary_checkpoint_batch(
         .enable_all()
         .build()
         .context("creating watcher capture runtime")?;
-    runtime.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))?;
-    persist_workspace_revision(cfg, &changes.tree_hash)
+    match runtime.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))? {
+        SyncChangedPathsOutcome::Completed => persist_workspace_revision(cfg, &changes.tree_hash),
+        SyncChangedPathsOutcome::SkippedByPolicy => Ok(()),
+    }
 }
 
 pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
@@ -29,14 +31,21 @@ pub(crate) fn capture_temporary_checkpoint_batch_with_handle(
     let Some(changes) = prepare_capture_temporary_checkpoint_batch(cfg, changed_paths)? else {
         return Ok(());
     };
-    handle.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))?;
-    persist_workspace_revision(cfg, &changes.tree_hash)
+    match handle.block_on(sync_changed_paths(cfg, &changes.modified, &changes.deleted))? {
+        SyncChangedPathsOutcome::Completed => persist_workspace_revision(cfg, &changes.tree_hash),
+        SyncChangedPathsOutcome::SkippedByPolicy => Ok(()),
+    }
 }
 
 struct PreparedCaptureBatch {
     modified: Vec<String>,
     deleted: Vec<String>,
     tree_hash: String,
+}
+
+enum SyncChangedPathsOutcome {
+    Completed,
+    SkippedByPolicy,
 }
 
 fn prepare_capture_temporary_checkpoint_batch(
@@ -138,7 +147,13 @@ async fn sync_changed_paths(
     cfg: &crate::host::devql::DevqlConfig,
     modified: &[String],
     deleted: &[String],
-) -> Result<()> {
+) -> Result<SyncChangedPathsOutcome> {
+    if !crate::config::settings::devql_sync_enabled(&cfg.repo_root)
+        .context("loading DevQL sync producer policy for watcher capture")?
+    {
+        return Ok(SyncChangedPathsOutcome::SkippedByPolicy);
+    }
+
     let mut paths = modified
         .iter()
         .chain(deleted.iter())
@@ -150,7 +165,7 @@ async fn sync_changed_paths(
     let paths =
         filter_paths_for_sync(cfg, &paths).context("classifying watcher capture paths for sync")?;
     if paths.is_empty() {
-        return Ok(());
+        return Ok(SyncChangedPathsOutcome::Completed);
     }
 
     #[cfg(test)]
@@ -158,14 +173,14 @@ async fn sync_changed_paths(
         crate::host::devql::run_sync_with_summary(cfg, crate::host::devql::SyncMode::Paths(paths))
             .await
             .context("running DevQL sync inline for watcher capture paths in tests")?;
-        Ok(())
+        Ok(SyncChangedPathsOutcome::Completed)
     }
 
     #[cfg(not(test))]
     {
         enqueue_spooled_sync_task_with_retry(cfg, paths)
             .context("queueing DevQL sync for watcher capture paths in repo-local spool")?;
-        Ok(())
+        Ok(SyncChangedPathsOutcome::Completed)
     }
 }
 

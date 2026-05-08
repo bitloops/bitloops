@@ -224,7 +224,10 @@ fn resolve_enqueue_task_input(
             };
             Ok((
                 crate::daemon::DevqlTaskSource::ManualCli,
-                crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec { backfill }),
+                crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+                    commits: Vec::new(),
+                    backfill,
+                }),
             ))
         }
         TaskKind::EmbeddingsBootstrap => Err(operation_error(

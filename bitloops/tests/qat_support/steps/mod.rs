@@ -68,6 +68,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I run bitloops init --agent (\S+) --sync=(true|false) --ingest=(true|false) in (\S+)$"),
+            step_fn(given_init_bitloops_with_agent_sync_ingest),
+        )
+        .given(
+            None,
             regex(r"^I run bitloops producer-contract init --agent (\S+) --sync=(true|false) in (\S+)$"),
             step_fn(given_init_bitloops_producer_contract),
         )
@@ -1168,6 +1173,11 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r#"^a completed DevQL sync task with source \"([^\"]+)\" shows (work|added|changed|removed|unchanged|cache hits|cache misses|parse errors) greater than (\d+) since snapshot in (\S+)$"#),
             step_fn(then_completed_sync_task_source_summary_field_greater_than_since_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^no DevQL ingest task with source \"([^\"]+)\" exists since snapshot in (\S+)$"#),
+            step_fn(then_no_devql_ingest_task_source_since_snapshot),
         )
         .then(
             None,

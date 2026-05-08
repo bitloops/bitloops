@@ -76,6 +76,9 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
     if watcher_autostart_disabled() {
         return Ok(());
     }
+    if !crate::config::settings::devql_sync_enabled(repo_root)? {
+        return Ok(());
+    }
 
     let restart_token = current_watcher_restart_token()?;
     let repo_root = repo_root
@@ -176,7 +179,9 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
 
 pub fn restart_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
     stop_watcher(repo_root, daemon_config_root)?;
-    if crate::config::settings::is_enabled_for_hooks(repo_root) {
+    if crate::config::settings::is_enabled_for_hooks(repo_root)
+        && crate::config::settings::devql_sync_enabled(repo_root)?
+    {
         ensure_watcher_running(repo_root, daemon_config_root)?;
     }
     Ok(())
@@ -732,6 +737,9 @@ fn evaluate_watcher_exit_reason(
         return Ok(Some(WatcherExitReason::RepoMissing));
     }
     if !crate::config::settings::is_enabled_for_hooks(&cfg.repo_root) {
+        return Ok(Some(WatcherExitReason::CaptureDisabled));
+    }
+    if !crate::config::settings::devql_sync_enabled(&cfg.repo_root)? {
         return Ok(Some(WatcherExitReason::CaptureDisabled));
     }
     if !watcher_registration_matches(runtime_store, pid, restart_token)? {

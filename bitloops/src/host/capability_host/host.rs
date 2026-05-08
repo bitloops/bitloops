@@ -70,6 +70,15 @@ impl LanguageServicesGateway for RuntimeLanguageServicesGateway {
     ) -> Vec<crate::host::language_adapter::LanguageEntryPointCandidate> {
         self.inner.entry_point_candidates_for_file(file, artefacts)
     }
+
+    fn http_facts_for_file(
+        &self,
+        file: &crate::host::language_adapter::LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[crate::host::language_adapter::LanguageHttpFactArtefact],
+    ) -> Option<(String, Vec<crate::host::language_adapter::LanguageHttpFact>)> {
+        self.inner.http_facts_for_file(file, content, artefacts)
+    }
 }
 
 pub struct DevqlCapabilityHost {
@@ -366,6 +375,22 @@ impl DevqlCapabilityHost {
             .collect();
         ingesters.sort();
 
+        let mut current_state_consumers: Vec<String> = self
+            .current_state_consumers
+            .iter()
+            .filter(|registration| registration.capability_id == d.id)
+            .map(|registration| registration.consumer_id.to_string())
+            .collect();
+        current_state_consumers.sort();
+
+        let mut mailboxes: Vec<String> = self
+            .mailboxes
+            .iter()
+            .filter(|registration| registration.capability_id == d.id)
+            .map(|registration| registration.mailbox_name.to_string())
+            .collect();
+        mailboxes.sort();
+
         let migrations: Vec<MigrationStepSummary> = self
             .migrations
             .iter()
@@ -416,6 +441,8 @@ impl DevqlCapabilityHost {
             dependencies,
             stages,
             ingesters,
+            current_state_consumers,
+            mailboxes,
             migrations,
             schema_modules,
             health_check_names,

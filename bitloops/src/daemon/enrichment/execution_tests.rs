@@ -1836,6 +1836,92 @@ async fn prepare_embedding_mailbox_batch_repairs_current_feature_projection_for_
 }
 
 #[tokio::test]
+async fn prepare_embedding_mailbox_batch_keeps_current_feature_hash_aligned_with_summary_hash() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "feature-repair-model",
+        "3",
+    )
+    .await;
+    let requested_inputs = inputs.iter().take(2).cloned().collect::<Vec<_>>();
+    let requested_ids = requested_inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(requested_ids.len(), 2, "fixture should include two inputs");
+
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "feature-hash-alignment-code-embedding-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "feature-hash-alignment-code-embedding-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::json!(requested_ids)),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("feature-hash-alignment-code-embedding-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare embedding batch");
+
+    let repair_sql = prepared.commit.embedding_statements.join("\n");
+    assert!(
+        repair_sql.contains("symbol_features_current"),
+        "expected the embedding batch to repair current feature rows"
+    );
+    for input in &requested_inputs {
+        let expected_hash = input_hashes
+            .get(&input.artefact_id)
+            .expect("expected summary-backed input hash");
+        let noop_hash =
+            crate::capability_packs::semantic_clones::features::build_semantic_feature_input_hash(
+                input,
+                &crate::capability_packs::semantic_clones::features::NoopSemanticSummaryProvider,
+            );
+
+        assert!(
+            repair_sql.contains(expected_hash),
+            "code embedding repairs should preserve the summary-backed feature hash for {}",
+            input.artefact_id
+        );
+        assert!(
+            !repair_sql.contains(&noop_hash),
+            "code embedding repairs should not stamp the noop summary hash for {}",
+            input.artefact_id
+        );
+    }
+}
+
+#[tokio::test]
 async fn prepare_summary_mailbox_batch_with_explicit_repo_backfill_ids_skips_unrelated_current_paths()
  {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();

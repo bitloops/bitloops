@@ -1629,6 +1629,20 @@ pub(super) fn then_completed_sync_task_source_summary_field_greater_than_since_s
     })
 }
 
+pub(super) fn then_no_devql_ingest_task_source_since_snapshot(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let source = ctx.matches[1].1.clone();
+        let repo_name = ctx.matches[2].1.clone();
+        run_step(
+            "no DevQL ingest task with source exists since snapshot",
+            helpers::assert_no_devql_ingest_task_source_since_snapshot(world, &repo_name, &source),
+        );
+    })
+}
+
 pub(super) fn then_latest_completed_sync_task_source_matches(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

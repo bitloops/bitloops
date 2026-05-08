@@ -82,6 +82,10 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         shared.as_ref().and_then(|value| value.watch.clone()),
         local.as_ref().and_then(|value| value.watch.clone()),
     );
+    let devql = merge_optional_values(
+        shared.as_ref().and_then(|value| value.devql.clone()),
+        local.as_ref().and_then(|value| value.devql.clone()),
+    );
     let scope = merge_scope_values(
         shared.as_ref().and_then(|value| value.scope.clone()),
         local.as_ref().and_then(|value| value.scope.clone()),
@@ -119,6 +123,7 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
     let fingerprint = fingerprint_repo_policy(RepoPolicyFingerprintInputs {
         capture: &capture,
         watch: &watch,
+        devql: &devql,
         scope: &scope,
         scope_exclusions: &scope_exclusions,
         contexts: &contexts,
@@ -134,6 +139,7 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         daemon_config_path,
         capture,
         watch,
+        devql,
         scope,
         contexts,
         agents,
@@ -146,6 +152,7 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
 fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
     let capture = Value::Object(Map::new());
     let watch = Value::Object(Map::new());
+    let devql = Value::Object(Map::new());
     let scope = Value::Object(Map::new());
     let contexts = Value::Array(Vec::new());
     let agents = Value::Object(Map::new());
@@ -159,6 +166,7 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
     let fingerprint = fingerprint_repo_policy(RepoPolicyFingerprintInputs {
         capture: &capture,
         watch: &watch,
+        devql: &devql,
         scope: &scope,
         scope_exclusions: &exclusions,
         contexts: &contexts,
@@ -175,6 +183,7 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
         daemon_config_path: None,
         capture,
         watch,
+        devql,
         scope,
         contexts,
         agents,

@@ -14,6 +14,7 @@ pub struct RepoPolicySnapshot {
     pub daemon_config_path: Option<PathBuf>,
     pub capture: Value,
     pub watch: Value,
+    pub devql: Value,
     pub scope: Value,
     pub contexts: Value,
     pub agents: Value,
@@ -46,6 +47,7 @@ pub struct ImportedKnowledgeConfig {
 pub(super) struct RepoPolicyFingerprintInputs<'a> {
     pub(super) capture: &'a Value,
     pub(super) watch: &'a Value,
+    pub(super) devql: &'a Value,
     pub(super) scope: &'a Value,
     pub(super) scope_exclusions: &'a RepoPolicyScopeExclusions,
     pub(super) contexts: &'a Value,
@@ -67,6 +69,8 @@ pub(super) struct RepoPolicyTomlFile {
     pub(super) capture: Option<Value>,
     #[serde(default)]
     pub(super) watch: Option<Value>,
+    #[serde(default)]
+    pub(super) devql: Option<Value>,
     #[serde(default)]
     pub(super) scope: Option<Value>,
     #[serde(default)]

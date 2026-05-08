@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 
 use async_graphql::futures_util::{Stream, stream};
-use async_graphql::{Context, ID, Object, Result, Subscription};
+use async_graphql::{Context, ID, Object, Result, SimpleObject, Subscription};
 
 use super::config::{map_runtime_api_error, resolve_runtime_devql_config};
 use super::config_management::{
@@ -10,12 +10,13 @@ use super::config_management::{
     UpdateRuntimeConfigResult, list_config_targets, load_config_snapshot,
     update_config as update_runtime_config,
 };
+use super::debug::{RuntimeDebugSnapshotObject, load_runtime_debug_snapshot};
 use super::events::RuntimeEventObject;
 use super::snapshot::RuntimeSnapshotObject;
 use super::start_init::{StartInitInput, StartInitResult};
 use super::util::{current_unix_timestamp, to_graphql_i64};
 use crate::api::DashboardState;
-use crate::graphql::{bad_user_input_error, graphql_error};
+use crate::graphql::{TaskObject, bad_user_input_error, graphql_error};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RuntimeRequestContext {
@@ -65,10 +66,30 @@ impl RuntimeQueryRoot {
                 )
             })
     }
+
+    #[graphql(name = "runtimeDebugSnapshot")]
+    async fn runtime_debug_snapshot(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: String,
+    ) -> Result<RuntimeDebugSnapshotObject> {
+        let state = ctx.data_unchecked::<DashboardState>();
+        let request_context = ctx
+            .data_opt::<RuntimeRequestContext>()
+            .cloned()
+            .unwrap_or_default();
+        load_runtime_debug_snapshot(state, request_context, repo_id.as_str()).await
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct RuntimeMutationRoot;
+
+#[derive(Debug, Clone, SimpleObject)]
+pub(crate) struct RuntimeTaskEnqueueResultObject {
+    pub task: TaskObject,
+    pub merged: bool,
+}
 
 #[Object]
 impl RuntimeMutationRoot {
@@ -105,6 +126,41 @@ impl RuntimeMutationRoot {
             .map_err(|err| {
                 graphql_error("internal", format!("failed to start init session: {err:#}"))
             })
+    }
+
+    #[graphql(name = "validateSync")]
+    async fn validate_sync(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: String,
+    ) -> Result<RuntimeTaskEnqueueResultObject> {
+        let state = ctx.data_unchecked::<DashboardState>();
+        let request_context = ctx
+            .data_opt::<RuntimeRequestContext>()
+            .cloned()
+            .unwrap_or_default();
+        let cfg = resolve_runtime_devql_config(state, &request_context, repo_id.as_str())
+            .await
+            .map_err(map_runtime_api_error)?;
+
+        crate::daemon::shared_devql_task_coordinator()
+            .register_subscription_hub(state.subscription_hub());
+
+        crate::daemon::enqueue_sync_for_config(
+            &cfg,
+            crate::daemon::DevqlTaskSource::ManualCli,
+            crate::host::devql::SyncMode::Validate,
+        )
+        .map(|queued| RuntimeTaskEnqueueResultObject {
+            task: queued.task.into(),
+            merged: queued.merged,
+        })
+        .map_err(|err| {
+            graphql_error(
+                "internal",
+                format!("failed to enqueue validate sync task: {err:#}"),
+            )
+        })
     }
 }
 

@@ -5,6 +5,12 @@ pub(crate) fn run_devql_pre_push_sync(
     remote: &str,
     stdin_lines: &[String],
 ) -> Result<()> {
+    if !crate::config::settings::devql_sync_enabled(repo_root)
+        .context("loading DevQL sync producer policy for pre-push sync")?
+    {
+        return Ok(());
+    }
+
     #[cfg(not(test))]
     {
         crate::host::devql::enqueue_spooled_pre_push_sync(repo_root, remote, stdin_lines)
@@ -37,6 +43,12 @@ pub(crate) async fn execute_devql_pre_push_sync(
     remote: &str,
     stdin_lines: &[String],
 ) -> Result<()> {
+    if !crate::config::settings::devql_sync_enabled(repo_root)
+        .context("loading DevQL sync producer policy for pre-push sync")?
+    {
+        return Ok(());
+    }
+
     let repo = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repository identity for pre-push DevQL sync")?;
     let backends = crate::config::resolve_store_backend_config_for_repo(repo_root)
