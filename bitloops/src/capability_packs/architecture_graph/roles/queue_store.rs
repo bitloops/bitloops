@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use super::contracts::{
     RoleAdjudicationFailure, RoleAdjudicationProvenance, RoleAdjudicationRequest,
     RoleAdjudicationResult, RoleAssignmentWriteEvent, RoleAssignmentWriteOutcome,
-    RoleAssignmentWriter, RoleFactsBundle, RoleFactsReader, RoleQueueEnqueueResult,
+    RoleAssignmentWriter, RoleBoxFuture, RoleFactsBundle, RoleFactsReader, RoleQueueEnqueueResult,
     RoleQueueJobStatus, RoleTaxonomyReader,
 };
 use anyhow::Result;
@@ -147,34 +147,38 @@ impl InMemoryRoleAssignmentWriter {
 }
 
 impl RoleAssignmentWriter for InMemoryRoleAssignmentWriter {
-    fn apply_llm_assignment(
-        &self,
+    fn apply_llm_assignment<'a>(
+        &'a self,
         event: RoleAssignmentWriteEvent,
-    ) -> Result<RoleAssignmentWriteOutcome> {
-        self.applied
-            .lock()
-            .expect("writer mutex poisoned")
-            .push(event);
-        Ok(RoleAssignmentWriteOutcome {
-            source: "in_memory",
-            persisted: true,
+    ) -> RoleBoxFuture<'a, RoleAssignmentWriteOutcome> {
+        Box::pin(async move {
+            self.applied
+                .lock()
+                .expect("writer mutex poisoned")
+                .push(event);
+            Ok(RoleAssignmentWriteOutcome {
+                source: "in_memory",
+                persisted: true,
+            })
         })
     }
 
-    fn mark_needs_review(
-        &self,
-        request: &RoleAdjudicationRequest,
-        failure: &RoleAdjudicationFailure,
-        provenance: &RoleAdjudicationProvenance,
-    ) -> Result<RoleAssignmentWriteOutcome> {
-        self.review.lock().expect("writer mutex poisoned").push((
-            request.clone(),
-            failure.clone(),
-            provenance.clone(),
-        ));
-        Ok(RoleAssignmentWriteOutcome {
-            source: "in_memory",
-            persisted: true,
+    fn mark_needs_review<'a>(
+        &'a self,
+        request: &'a RoleAdjudicationRequest,
+        failure: &'a RoleAdjudicationFailure,
+        provenance: &'a RoleAdjudicationProvenance,
+    ) -> RoleBoxFuture<'a, RoleAssignmentWriteOutcome> {
+        Box::pin(async move {
+            self.review.lock().expect("writer mutex poisoned").push((
+                request.clone(),
+                failure.clone(),
+                provenance.clone(),
+            ));
+            Ok(RoleAssignmentWriteOutcome {
+                source: "in_memory",
+                persisted: true,
+            })
         })
     }
 }
@@ -197,12 +201,18 @@ impl InMemoryRoleTaxonomyReader {
 }
 
 impl RoleTaxonomyReader for InMemoryRoleTaxonomyReader {
-    fn load_active_role_ids(&self, _repo_id: &str, _generation: u64) -> Result<BTreeSet<String>> {
-        Ok(self
-            .active_roles
-            .lock()
-            .expect("taxonomy mutex poisoned")
-            .clone())
+    fn load_active_role_ids<'a>(
+        &'a self,
+        _repo_id: &'a str,
+        _generation: u64,
+    ) -> RoleBoxFuture<'a, BTreeSet<String>> {
+        Box::pin(async move {
+            Ok(self
+                .active_roles
+                .lock()
+                .expect("taxonomy mutex poisoned")
+                .clone())
+        })
     }
 }
 
@@ -234,8 +244,11 @@ impl Default for InMemoryRoleFactsReader {
 }
 
 impl RoleFactsReader for InMemoryRoleFactsReader {
-    fn load_facts(&self, _request: &RoleAdjudicationRequest) -> Result<RoleFactsBundle> {
-        Ok(self.bundle.lock().expect("facts mutex poisoned").clone())
+    fn load_facts<'a>(
+        &'a self,
+        _request: &'a RoleAdjudicationRequest,
+    ) -> RoleBoxFuture<'a, RoleFactsBundle> {
+        Box::pin(async move { Ok(self.bundle.lock().expect("facts mutex poisoned").clone()) })
     }
 }
 

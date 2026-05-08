@@ -886,7 +886,8 @@ mod deterministic_tests {
                 &inference,
                 std::path::Path::new("."),
                 &services,
-            )?;
+            )
+            .await?;
         assert!(write_outcome.persisted);
 
         let target = taxonomy::RoleTarget {

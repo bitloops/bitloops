@@ -133,7 +133,7 @@ fn infer_deterministic_outcome(
     }
 }
 
-pub fn run_adjudication_request(
+pub async fn run_adjudication_request(
     request: &RoleAdjudicationRequest,
     inference: &dyn InferenceGateway,
     repo_root: &std::path::Path,
@@ -152,7 +152,7 @@ pub fn run_adjudication_request(
         limits: EvidencePacketLimits::default(),
     };
 
-    let packet = packet_builder.build(request)?;
+    let packet = packet_builder.build(request).await?;
     let active_role_ids = packet
         .candidate_roles
         .iter()
@@ -172,7 +172,8 @@ pub fn run_adjudication_request(
             "unavailable",
             ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
             &json!(packet),
-        );
+        )
+        .await;
     }
 
     let (raw_result, model_descriptor) =
@@ -191,7 +192,8 @@ pub fn run_adjudication_request(
                     "unknown",
                     ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
                     &json!(packet),
-                );
+                )
+                .await;
             }
         };
 
@@ -210,7 +212,8 @@ pub fn run_adjudication_request(
                 &model_descriptor,
                 ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
                 &json!(packet),
-            );
+            )
+            .await;
         }
     };
 
@@ -221,7 +224,8 @@ pub fn run_adjudication_request(
         &model_descriptor,
         ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
         &json!(packet),
-    )?;
+    )
+    .await?;
     services.queue.complete(
         &dedupe_key,
         &validated,
@@ -331,8 +335,8 @@ mod tests {
         assert_eq!(requests[0].reason, AdjudicationReason::Unknown);
     }
 
-    #[test]
-    fn invalid_response_marks_needs_review_without_assignment_apply() {
+    #[tokio::test]
+    async fn invalid_response_marks_needs_review_without_assignment_apply() {
         let queue = InMemoryRoleAdjudicationQueueStore::new();
         let writer = InMemoryRoleAssignmentWriter::default();
         let taxonomy = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleTaxonomyReader::with_roles(&["entrypoint"]);
@@ -380,14 +384,15 @@ mod tests {
         };
 
         run_adjudication_request(&request, &inference, std::path::Path::new("."), &services)
+            .await
             .expect("adjudication write path should succeed");
 
         assert!(writer.applied_events().is_empty());
         assert_eq!(writer.needs_review_events().len(), 1);
     }
 
-    #[test]
-    fn valid_response_is_persisted_with_llm_source() {
+    #[tokio::test]
+    async fn valid_response_is_persisted_with_llm_source() {
         let queue = InMemoryRoleAdjudicationQueueStore::new();
         let writer = InMemoryRoleAssignmentWriter::default();
         let taxonomy = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleTaxonomyReader::with_roles(&["entrypoint"]);
@@ -435,14 +440,15 @@ mod tests {
         };
 
         run_adjudication_request(&request, &inference, std::path::Path::new("."), &services)
+            .await
             .expect("adjudication should succeed");
 
         assert_eq!(writer.applied_events().len(), 1);
         assert_eq!(writer.applied_events()[0].provenance.source, "llm");
     }
 
-    #[test]
-    fn fallback_inference_marks_retryable_failure() {
+    #[tokio::test]
+    async fn fallback_inference_marks_retryable_failure() {
         let queue = InMemoryRoleAdjudicationQueueStore::new();
         let writer = InMemoryRoleAssignmentWriter::default();
         let taxonomy = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleTaxonomyReader::with_roles(&["entrypoint"]);
@@ -479,6 +485,7 @@ mod tests {
             std::path::Path::new("."),
             &services,
         )
+        .await
         .expect("failure should still be persisted as needs-review");
 
         assert_eq!(writer.applied_events().len(), 0);

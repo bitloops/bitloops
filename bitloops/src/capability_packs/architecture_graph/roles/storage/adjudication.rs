@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::future::Future;
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
@@ -7,7 +6,8 @@ use serde_json::{Value, json};
 use crate::capability_packs::architecture_graph::roles::contracts::{
     AdjudicationOutcome, RoleAdjudicationFailure, RoleAdjudicationProvenance,
     RoleAdjudicationRequest, RoleAssignmentWriteEvent, RoleAssignmentWriteOutcome,
-    RoleAssignmentWriter, RoleFactsBundle, RoleFactsReader, RoleTaxonomyReader, RuleSignalFact,
+    RoleAssignmentWriter, RoleBoxFuture, RoleFactsBundle, RoleFactsReader, RoleTaxonomyReader,
+    RuleSignalFact,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureRoleAssignment, AssignmentPriority, AssignmentSource, AssignmentStatus, RoleTarget,
@@ -31,8 +31,12 @@ impl<'a> DbRoleTaxonomyReader<'a> {
 }
 
 impl RoleTaxonomyReader for DbRoleTaxonomyReader<'_> {
-    fn load_active_role_ids(&self, repo_id: &str, _generation: u64) -> Result<BTreeSet<String>> {
-        block_on_relational(async move {
+    fn load_active_role_ids<'a>(
+        &'a self,
+        repo_id: &'a str,
+        _generation: u64,
+    ) -> RoleBoxFuture<'a, BTreeSet<String>> {
+        Box::pin(async move {
             let rows = self
                 .relational
                 .query_rows(&format!(
@@ -67,8 +71,11 @@ impl<'a> DbRoleFactsReader<'a> {
 }
 
 impl RoleFactsReader for DbRoleFactsReader<'_> {
-    fn load_facts(&self, request: &RoleAdjudicationRequest) -> Result<RoleFactsBundle> {
-        block_on_relational(async move {
+    fn load_facts<'a>(
+        &'a self,
+        request: &'a RoleAdjudicationRequest,
+    ) -> RoleBoxFuture<'a, RoleFactsBundle> {
+        Box::pin(async move {
             let target_predicate = target_predicate_sql(request);
             let facts = self
                 .relational
@@ -125,24 +132,26 @@ impl<'a> DbRoleAssignmentWriter<'a> {
 }
 
 impl RoleAssignmentWriter for DbRoleAssignmentWriter<'_> {
-    fn apply_llm_assignment(
-        &self,
+    fn apply_llm_assignment<'a>(
+        &'a self,
         event: RoleAssignmentWriteEvent,
-    ) -> Result<RoleAssignmentWriteOutcome> {
-        if event.result.outcome != AdjudicationOutcome::Assigned
-            || event.result.assignments.is_empty()
-        {
-            return self.mark_needs_review(
-                &event.request,
-                &RoleAdjudicationFailure {
-                    message: "LLM adjudication did not return an assignment".to_string(),
-                    retryable: false,
-                },
-                &event.provenance,
-            );
-        }
+    ) -> RoleBoxFuture<'a, RoleAssignmentWriteOutcome> {
+        Box::pin(async move {
+            if event.result.outcome != AdjudicationOutcome::Assigned
+                || event.result.assignments.is_empty()
+            {
+                return self
+                    .mark_needs_review(
+                        &event.request,
+                        &RoleAdjudicationFailure {
+                            message: "LLM adjudication did not return an assignment".to_string(),
+                            retryable: false,
+                        },
+                        &event.provenance,
+                    )
+                    .await;
+            }
 
-        block_on_relational(async move {
             let target = target_from_request(&event.request)?;
             let mut persisted = 0usize;
             for (index, decision) in event.result.assignments.iter().enumerate() {
@@ -185,25 +194,25 @@ impl RoleAssignmentWriter for DbRoleAssignmentWriter<'_> {
         })
     }
 
-    fn mark_needs_review(
-        &self,
-        request: &RoleAdjudicationRequest,
-        failure: &RoleAdjudicationFailure,
-        provenance: &RoleAdjudicationProvenance,
-    ) -> Result<RoleAssignmentWriteOutcome> {
-        let Some(role_id) = request
-            .current_assignment
-            .as_ref()
-            .map(|assignment| assignment.role_id.clone())
-            .or_else(|| request.candidate_role_ids.first().cloned())
-        else {
-            return Ok(RoleAssignmentWriteOutcome {
-                source: "db",
-                persisted: false,
-            });
-        };
+    fn mark_needs_review<'a>(
+        &'a self,
+        request: &'a RoleAdjudicationRequest,
+        failure: &'a RoleAdjudicationFailure,
+        provenance: &'a RoleAdjudicationProvenance,
+    ) -> RoleBoxFuture<'a, RoleAssignmentWriteOutcome> {
+        Box::pin(async move {
+            let Some(role_id) = request
+                .current_assignment
+                .as_ref()
+                .map(|assignment| assignment.role_id.clone())
+                .or_else(|| request.candidate_role_ids.first().cloned())
+            else {
+                return Ok(RoleAssignmentWriteOutcome {
+                    source: "db",
+                    persisted: false,
+                });
+            };
 
-        block_on_relational(async move {
             let target = target_from_request(request)?;
             let assignment = ArchitectureRoleAssignment {
                 repo_id: request.repo_id.clone(),
@@ -402,33 +411,6 @@ fn json_field(row: &Value, key: &str) -> Result<Value> {
     }
 }
 
-fn block_on_relational<T>(future: impl Future<Output = Result<T>> + Send) -> Result<T>
-where
-    T: Send,
-{
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-            return tokio::task::block_in_place(|| handle.block_on(future));
-        }
-        return std::thread::scope(|scope| {
-            let join = scope.spawn(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .context("building runtime for role adjudication storage")?
-                    .block_on(future)
-            });
-            join.join()
-                .unwrap_or_else(|_| Err(anyhow!("role adjudication storage thread panicked")))
-        });
-    }
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("building runtime for role adjudication storage")?
-        .block_on(future)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,53 +446,74 @@ mod tests {
         }
     }
 
-    #[test]
-    fn db_taxonomy_reader_loads_active_roles() -> Result<()> {
+    #[tokio::test]
+    async fn db_taxonomy_reader_loads_active_roles() -> Result<()> {
         let (_temp, relational) = test_relational()?;
-        block_on_relational(upsert_classification_role(&relational, &role()))?;
+        upsert_classification_role(&relational, &role()).await?;
 
-        let roles = DbRoleTaxonomyReader::new(&relational).load_active_role_ids("repo-1", 1)?;
+        let roles = DbRoleTaxonomyReader::new(&relational)
+            .load_active_role_ids("repo-1", 1)
+            .await?;
 
         assert_eq!(roles, BTreeSet::from([role().role_id]));
         Ok(())
     }
 
-    #[test]
-    fn db_assignment_writer_persists_llm_assignment() -> Result<()> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn db_role_taxonomy_reader_loads_active_roles_without_blocking_bridge() -> Result<()> {
+        let (_temp, relational) = test_relational()?;
+        let role = ArchitectureRole {
+            repo_id: "repo-async-reader".to_string(),
+            role_id: stable_role_id("repo-async-reader", "application", "entrypoint"),
+            family: "application".to_string(),
+            slug: "entrypoint".to_string(),
+            display_name: "Entrypoint".to_string(),
+            description: "Entrypoint role".to_string(),
+            lifecycle: RoleLifecycle::Active,
+            provenance: json!({"source": "test"}),
+        };
+        upsert_classification_role(&relational, &role).await?;
+
+        let reader = DbRoleTaxonomyReader::new(&relational);
+        let roles = reader.load_active_role_ids("repo-async-reader", 1).await?;
+
+        assert!(roles.contains(&role.role_id));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn db_assignment_writer_persists_llm_assignment() -> Result<()> {
         let (_temp, relational) = test_relational()?;
         let role = role();
-        block_on_relational(upsert_classification_role(&relational, &role))?;
+        upsert_classification_role(&relational, &role).await?;
         let request = request(vec![role.role_id.clone()]);
         let provenance = provenance();
 
-        let outcome = DbRoleAssignmentWriter::new(&relational).apply_llm_assignment(
-            RoleAssignmentWriteEvent {
+        let outcome = DbRoleAssignmentWriter::new(&relational)
+            .apply_llm_assignment(RoleAssignmentWriteEvent {
                 request: request.clone(),
                 result: crate::capability_packs::architecture_graph::roles::contracts::RoleAdjudicationResult {
-                    outcome: AdjudicationOutcome::Assigned,
-                    assignments: vec![crate::capability_packs::architecture_graph::roles::contracts::RoleAssignmentDecision {
-                        role_id: role.role_id.clone(),
-                        primary: true,
+                        outcome: AdjudicationOutcome::Assigned,
+                        assignments: vec![crate::capability_packs::architecture_graph::roles::contracts::RoleAssignmentDecision {
+                            role_id: role.role_id.clone(),
+                            primary: true,
+                            confidence: 0.91,
+                            evidence: json!(["main.rs"]),
+                        }],
                         confidence: 0.91,
-                        evidence: json!(["main.rs"]),
-                    }],
-                    confidence: 0.91,
-                    evidence: json!(["signal"]),
-                    reasoning_summary: "clear role".to_string(),
-                    rule_suggestions: vec![],
-                },
+                        evidence: json!(["signal"]),
+                        reasoning_summary: "clear role".to_string(),
+                        rule_suggestions: vec![],
+                    },
                 provenance,
-            },
-        )?;
+            })
+            .await?;
 
         let target = target_from_request(&request)?;
         let assignment_id = assignment_id("repo-1", &role.role_id, &target);
-        let assignment = block_on_relational(load_current_assignment_by_id(
-            &relational,
-            "repo-1",
-            &assignment_id,
-        ))?
-        .expect("assignment");
+        let assignment = load_current_assignment_by_id(&relational, "repo-1", &assignment_id)
+            .await?
+            .expect("assignment");
         assert!(outcome.persisted);
         assert_eq!(assignment.source, AssignmentSource::Llm);
         assert_eq!(assignment.status, AssignmentStatus::Active);
@@ -518,41 +521,40 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn db_assignment_writer_marks_needs_review() -> Result<()> {
+    #[tokio::test]
+    async fn db_assignment_writer_marks_needs_review() -> Result<()> {
         let (_temp, relational) = test_relational()?;
         let role = role();
-        block_on_relational(upsert_classification_role(&relational, &role))?;
+        upsert_classification_role(&relational, &role).await?;
         let request = request(vec![role.role_id.clone()]);
 
-        let outcome = DbRoleAssignmentWriter::new(&relational).mark_needs_review(
-            &request,
-            &RoleAdjudicationFailure {
-                message: "invalid response".to_string(),
-                retryable: false,
-            },
-            &provenance(),
-        )?;
+        let outcome = DbRoleAssignmentWriter::new(&relational)
+            .mark_needs_review(
+                &request,
+                &RoleAdjudicationFailure {
+                    message: "invalid response".to_string(),
+                    retryable: false,
+                },
+                &provenance(),
+            )
+            .await?;
 
         let target = target_from_request(&request)?;
         let assignment_id = assignment_id("repo-1", &role.role_id, &target);
-        let assignment = block_on_relational(load_current_assignment_by_id(
-            &relational,
-            "repo-1",
-            &assignment_id,
-        ))?
-        .expect("assignment");
+        let assignment = load_current_assignment_by_id(&relational, "repo-1", &assignment_id)
+            .await?
+            .expect("assignment");
         assert!(outcome.persisted);
         assert_eq!(assignment.status, AssignmentStatus::NeedsReview);
         assert_eq!(assignment.source, AssignmentSource::Llm);
         Ok(())
     }
 
-    #[test]
-    fn db_facts_reader_loads_facts_and_rule_signals() -> Result<()> {
+    #[tokio::test]
+    async fn db_facts_reader_loads_facts_and_rule_signals() -> Result<()> {
         let (_temp, relational) = test_relational()?;
         let role = role();
-        block_on_relational(upsert_classification_role(&relational, &role))?;
+        upsert_classification_role(&relational, &role).await?;
         let rule = ArchitectureRoleDetectionRule {
             repo_id: "repo-1".to_string(),
             rule_id: "rule-1".to_string(),
@@ -566,7 +568,7 @@ mod tests {
             negative_conditions: json!([]),
             provenance: json!({"source": "test"}),
         };
-        block_on_relational(upsert_detection_rule(&relational, &rule))?;
+        upsert_detection_rule(&relational, &rule).await?;
         let target = RoleTarget::file("src/main.rs");
         let fact = crate::capability_packs::architecture_graph::roles::taxonomy::ArchitectureArtefactFact {
             repo_id: "repo-1".to_string(),
@@ -593,20 +595,24 @@ mod tests {
             evidence: json!([]),
             generation_seq: 1,
         };
-        block_on_relational(super::super::facts::replace_facts_for_paths(
+        super::super::facts::replace_facts_for_paths(
             &relational,
             "repo-1",
             &[String::from("src/main.rs")],
             &[fact],
-        ))?;
-        block_on_relational(super::super::signals::replace_signals_for_paths(
+        )
+        .await?;
+        super::super::signals::replace_signals_for_paths(
             &relational,
             "repo-1",
             &[String::from("src/main.rs")],
             &[signal],
-        ))?;
+        )
+        .await?;
 
-        let bundle = DbRoleFactsReader::new(&relational).load_facts(&request(Vec::new()))?;
+        let bundle = DbRoleFactsReader::new(&relational)
+            .load_facts(&request(Vec::new()))
+            .await?;
 
         assert_eq!(bundle.facts.len(), 1);
         assert_eq!(bundle.rule_signals.len(), 1);

@@ -156,6 +156,7 @@ impl IngesterHandler for ArchitectureRoleAdjudicationIngester {
                 ctx.repo_root(),
                 relational,
             )
+            .await
             .with_context(|| {
                 format!(
                     "run role adjudication for scope `{}` using slot `{}`",
@@ -189,7 +190,7 @@ impl IngesterHandler for ArchitectureRoleAdjudicationIngester {
     }
 }
 
-fn run_role_adjudication_payload(
+async fn run_role_adjudication_payload(
     payload: &RoleAdjudicationMailboxPayload,
     inference: &dyn InferenceGateway,
     repo_root: &std::path::Path,
@@ -206,7 +207,7 @@ fn run_role_adjudication_payload(
         facts: &facts,
         writer: &writer,
     };
-    run_adjudication_request(&payload.request, inference, repo_root, &services)
+    run_adjudication_request(&payload.request, inference, repo_root, &services).await
 }
 
 pub fn build_assert_ingester() -> IngesterRegistration {
@@ -620,12 +621,15 @@ mod tests {
             }),
         };
 
-        let outcome = run_role_adjudication_payload(
-            &payload,
-            &inference,
-            std::path::Path::new("."),
-            &relational,
-        )?;
+        let outcome = test_runtime().block_on(async {
+            run_role_adjudication_payload(
+                &payload,
+                &inference,
+                std::path::Path::new("."),
+                &relational,
+            )
+            .await
+        })?;
 
         let target = RoleTarget {
             target_kind: TargetKind::Artefact,

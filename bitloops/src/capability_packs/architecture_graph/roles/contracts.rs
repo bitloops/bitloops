@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+use std::future::Future;
+use std::pin::Pin;
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -251,24 +253,33 @@ pub struct RoleFactsBundle {
     pub reachability: Option<Value>,
 }
 
+pub type RoleBoxFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+
 pub trait RoleTaxonomyReader: Send + Sync {
-    fn load_active_role_ids(&self, repo_id: &str, generation: u64) -> Result<BTreeSet<String>>;
+    fn load_active_role_ids<'a>(
+        &'a self,
+        repo_id: &'a str,
+        generation: u64,
+    ) -> RoleBoxFuture<'a, BTreeSet<String>>;
 }
 
 pub trait RoleFactsReader: Send + Sync {
-    fn load_facts(&self, request: &RoleAdjudicationRequest) -> Result<RoleFactsBundle>;
+    fn load_facts<'a>(
+        &'a self,
+        request: &'a RoleAdjudicationRequest,
+    ) -> RoleBoxFuture<'a, RoleFactsBundle>;
 }
 
 pub trait RoleAssignmentWriter: Send + Sync {
-    fn apply_llm_assignment(
-        &self,
+    fn apply_llm_assignment<'a>(
+        &'a self,
         event: RoleAssignmentWriteEvent,
-    ) -> Result<RoleAssignmentWriteOutcome>;
+    ) -> RoleBoxFuture<'a, RoleAssignmentWriteOutcome>;
 
-    fn mark_needs_review(
-        &self,
-        request: &RoleAdjudicationRequest,
-        failure: &RoleAdjudicationFailure,
-        provenance: &RoleAdjudicationProvenance,
-    ) -> Result<RoleAssignmentWriteOutcome>;
+    fn mark_needs_review<'a>(
+        &'a self,
+        request: &'a RoleAdjudicationRequest,
+        failure: &'a RoleAdjudicationFailure,
+        provenance: &'a RoleAdjudicationProvenance,
+    ) -> RoleBoxFuture<'a, RoleAssignmentWriteOutcome>;
 }

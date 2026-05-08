@@ -57,15 +57,16 @@ pub struct RoleEvidencePacketBuilder<'a> {
 }
 
 impl<'a> RoleEvidencePacketBuilder<'a> {
-    pub fn build(&self, request: &RoleAdjudicationRequest) -> Result<RoleEvidencePacket> {
+    pub async fn build(&self, request: &RoleAdjudicationRequest) -> Result<RoleEvidencePacket> {
         let active_roles = self
             .taxonomy
-            .load_active_role_ids(&request.repo_id, request.generation)?;
+            .load_active_role_ids(&request.repo_id, request.generation)
+            .await?;
 
         let role_candidates =
             candidate_roles_for_request(request, &active_roles, self.limits.max_candidate_roles);
 
-        let mut facts_bundle = self.facts.load_facts(request)?;
+        let mut facts_bundle = self.facts.load_facts(request).await?;
         facts_bundle.facts.truncate(self.limits.max_facts);
         facts_bundle
             .rule_signals
@@ -152,8 +153,6 @@ fn trim_snippets(snippets: Vec<String>, max_chars: usize) -> Vec<String> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use anyhow::Result;
-
     use super::*;
     use crate::capability_packs::architecture_graph::roles::contracts::{
         RoleFactsBundle, RuleSignalFact,
@@ -161,37 +160,50 @@ mod tests {
 
     struct FakeTaxonomy;
     impl RoleTaxonomyReader for FakeTaxonomy {
-        fn load_active_role_ids(
-            &self,
-            _repo_id: &str,
+        fn load_active_role_ids<'a>(
+            &'a self,
+            _repo_id: &'a str,
             _generation: u64,
-        ) -> Result<BTreeSet<String>> {
-            Ok(BTreeSet::from([
-                "entrypoint".to_string(),
-                "storage_adapter".to_string(),
-                "command_dispatcher".to_string(),
-            ]))
+        ) -> crate::capability_packs::architecture_graph::roles::contracts::RoleBoxFuture<
+            'a,
+            BTreeSet<String>,
+        > {
+            Box::pin(async move {
+                Ok(BTreeSet::from([
+                    "entrypoint".to_string(),
+                    "storage_adapter".to_string(),
+                    "command_dispatcher".to_string(),
+                ]))
+            })
         }
     }
 
     struct FakeFacts;
     impl RoleFactsReader for FakeFacts {
-        fn load_facts(&self, _request: &RoleAdjudicationRequest) -> Result<RoleFactsBundle> {
-            Ok(RoleFactsBundle {
-                facts: vec![
-                    Value::String("f1".to_string()),
-                    Value::String("f2".to_string()),
-                ],
-                rule_signals: vec![RuleSignalFact {
-                    rule_id: "r1".to_string(),
-                    polarity: "positive".to_string(),
-                    weight: 0.8,
-                    evidence: Value::Null,
-                }],
-                dependency_context: vec![Value::String("dep".to_string())],
-                related_artefacts: vec![Value::String("a1".to_string())],
-                source_snippets: vec!["0123456789".to_string(), "abcdefghij".to_string()],
-                reachability: Some(Value::String("reachable".to_string())),
+        fn load_facts<'a>(
+            &'a self,
+            _request: &'a RoleAdjudicationRequest,
+        ) -> crate::capability_packs::architecture_graph::roles::contracts::RoleBoxFuture<
+            'a,
+            RoleFactsBundle,
+        > {
+            Box::pin(async move {
+                Ok(RoleFactsBundle {
+                    facts: vec![
+                        Value::String("f1".to_string()),
+                        Value::String("f2".to_string()),
+                    ],
+                    rule_signals: vec![RuleSignalFact {
+                        rule_id: "r1".to_string(),
+                        polarity: "positive".to_string(),
+                        weight: 0.8,
+                        evidence: Value::Null,
+                    }],
+                    dependency_context: vec![Value::String("dep".to_string())],
+                    related_artefacts: vec![Value::String("a1".to_string())],
+                    source_snippets: vec!["0123456789".to_string(), "abcdefghij".to_string()],
+                    reachability: Some(Value::String("reachable".to_string())),
+                })
             })
         }
     }
@@ -213,8 +225,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn evidence_packet_is_bounded_and_uses_active_roles() {
+    #[tokio::test]
+    async fn evidence_packet_is_bounded_and_uses_active_roles() {
         let builder = RoleEvidencePacketBuilder {
             taxonomy: &FakeTaxonomy,
             facts: &FakeFacts,
@@ -226,7 +238,10 @@ mod tests {
             },
         };
 
-        let packet = builder.build(&request()).expect("packet should build");
+        let packet = builder
+            .build(&request())
+            .await
+            .expect("packet should build");
 
         assert_eq!(
             packet.candidate_roles,

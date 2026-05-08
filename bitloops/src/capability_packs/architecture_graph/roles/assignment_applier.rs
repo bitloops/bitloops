@@ -10,7 +10,7 @@ use super::contracts::{
     RoleAssignmentWriteOutcome, RoleAssignmentWriter,
 };
 
-pub fn apply_adjudication_result(
+pub async fn apply_adjudication_result(
     writer: &dyn RoleAssignmentWriter,
     request: &RoleAdjudicationRequest,
     result: Result<RoleAdjudicationResult, RoleAdjudicationFailure>,
@@ -21,12 +21,20 @@ pub fn apply_adjudication_result(
     let provenance = build_provenance(request.reason, model_descriptor, slot_name, packet_json);
 
     match result {
-        Ok(validated) => writer.apply_llm_assignment(RoleAssignmentWriteEvent {
-            request: request.clone(),
-            result: validated,
-            provenance,
-        }),
-        Err(failure) => writer.mark_needs_review(request, &failure, &provenance),
+        Ok(validated) => {
+            writer
+                .apply_llm_assignment(RoleAssignmentWriteEvent {
+                    request: request.clone(),
+                    result: validated,
+                    provenance,
+                })
+                .await
+        }
+        Err(failure) => {
+            writer
+                .mark_needs_review(request, &failure, &provenance)
+                .await
+        }
     }
 }
 
@@ -79,8 +87,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn valid_result_is_applied_with_llm_provenance() {
+    #[tokio::test]
+    async fn valid_result_is_applied_with_llm_provenance() {
         let writer = InMemoryRoleAssignmentWriter::default();
         let outcome = apply_adjudication_result(
             &writer,
@@ -102,6 +110,7 @@ mod tests {
             "role_adjudication",
             &json!({"packet": true}),
         )
+        .await
         .expect("apply should succeed");
 
         assert!(outcome.persisted);
@@ -111,8 +120,8 @@ mod tests {
         assert_eq!(events[0].provenance.model_descriptor, "openai:gpt-test");
     }
 
-    #[test]
-    fn invalid_result_marks_needs_review_and_does_not_apply_assignment() {
+    #[tokio::test]
+    async fn invalid_result_marks_needs_review_and_does_not_apply_assignment() {
         let writer = InMemoryRoleAssignmentWriter::default();
 
         apply_adjudication_result(
@@ -126,6 +135,7 @@ mod tests {
             "role_adjudication",
             &json!({"packet": true}),
         )
+        .await
         .expect("needs-review write should succeed");
 
         assert!(writer.applied_events().is_empty());

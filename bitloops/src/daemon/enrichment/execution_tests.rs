@@ -1283,6 +1283,64 @@ async fn workplane_embedding_mailbox_job_stays_incremental_without_active_state_
     assert_eq!(load_active_setup_row(&sqlite_path, &cfg.repo.repo_id), None);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn architecture_role_adjudication_workplane_job_loads_db_state_without_cancelled_sqlite_task()
+{
+    use crate::capability_packs::architecture_graph::types::{
+        ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+    };
+
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let cfg = daemon_test_cfg_for_repo(repo.path());
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    fs::create_dir_all(sqlite_path.parent().expect("sqlite parent")).expect("create sqlite parent");
+    let conn = rusqlite::Connection::open(&sqlite_path).expect("create relational sqlite");
+    conn.execute_batch(
+        crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql(),
+    )
+    .expect("initialise architecture graph schema");
+    drop(conn);
+
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-job-architecture-role-adjudication".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: ARCHITECTURE_GRAPH_CAPABILITY_ID.to_string(),
+        mailbox_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string(),
+        init_session_id: None,
+        dedupe_key: Some(format!("{}:1:file:src/main.rs:unknown", cfg.repo.repo_id)),
+        payload: serde_json::json!({
+            "request": {
+                "repo_id": cfg.repo.repo_id,
+                "generation": 1,
+                "target_kind": "file",
+                "path": "src/main.rs",
+                "reason": "unknown",
+                "candidate_role_ids": []
+            }
+        }),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+
+    assert!(
+        outcome.error.is_none(),
+        "adjudication should complete without cancelled SQLite task, got {:?}",
+        outcome.error
+    );
+}
+
 #[tokio::test]
 async fn repo_backfill_workplane_inputs_exclude_historical_only_artefacts() {
     use std::collections::BTreeSet;
