@@ -189,7 +189,7 @@ flowchart TD
     Packs --> Enrichment["Architecture, tests, knowledge, guidance, clones"]
     Enrichment --> Model
 
-    Model --> DevQL["DevQL / GraphQL"]
+    Model --> DevQL["DevQL"]
     Stores --> DevQL
 
     DevQL --> Dashboard["Local dashboard"]
