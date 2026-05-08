@@ -167,49 +167,7 @@ Notes:
 
 ### Structured-Generation Profiles
 
-Architecture inference uses `task = "structured_generation"` profiles. For local CLI agents, Bitloops launches the managed `bitloops_inference` runtime, and `bitloops-inference` launches the selected agent runtime from the profile.
-
-To install the managed inference runtime and configure architecture inference for Codex:
-
-```bash
-bitloops inference install --architecture-runtime codex --architecture-model gpt-5.4-mini
-```
-
-Codex example:
-
-```toml
-[architecture.inference]
-fact_synthesis = "architecture_fact_synthesis_codex"
-role_adjudication = "architecture_role_adjudication_codex"
-
-[inference.runtimes.bitloops_inference]
-command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
-args = []
-startup_timeout_secs = 60
-request_timeout_secs = 900
-
-[inference.runtimes.codex]
-command = "codex"
-args = ["--ask-for-approval", "never"]
-startup_timeout_secs = 5
-request_timeout_secs = 600
-
-[inference.profiles.architecture_fact_synthesis_codex]
-task = "structured_generation"
-driver = "codex_exec"
-runtime = "codex"
-model = "gpt-5.4-mini"
-temperature = "0.1"
-max_output_tokens = 4096
-
-[inference.profiles.architecture_role_adjudication_codex]
-task = "structured_generation"
-driver = "codex_exec"
-runtime = "codex"
-model = "gpt-5.4-mini"
-temperature = "0.1"
-max_output_tokens = 1024
-```
+Architecture inference uses `task = "structured_generation"` profiles. For local CLI agents, Bitloops launches the managed `bitloops_inference` runtime, and `bitloops-inference` launches the selected agent runtime from the profile. Configure these profiles manually when you need architecture inference backed by a local CLI agent.
 
 ### Telemetry Consent
 

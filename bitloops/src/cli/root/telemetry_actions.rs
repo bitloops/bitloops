@@ -925,7 +925,7 @@ fn inference_action(
     args: &crate::cli::inference::InferenceArgs,
 ) -> Option<crate::telemetry::analytics::ActionDescriptor> {
     match args.command.as_ref()? {
-        crate::cli::inference::InferenceCommand::Install(_) => {
+        crate::cli::inference::InferenceCommand::Install => {
             Some(new_action("bitloops inference install", HashMap::new()))
         }
     }

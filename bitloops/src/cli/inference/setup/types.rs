@@ -1,16 +1,8 @@
-use clap::ValueEnum;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum TextGenerationRuntime {
     #[default]
     Local,
     Platform,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
-pub enum ArchitectureInferenceRuntime {
-    #[default]
-    Codex,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

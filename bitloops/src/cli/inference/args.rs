@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 use crate::cli::enable::find_repo_root;
 
 use super::managed::install_or_bootstrap_inference;
-use super::setup::{ArchitectureInferenceRuntime, write_codex_architecture_inference_profiles};
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct InferenceArgs {
@@ -17,18 +16,7 @@ pub struct InferenceArgs {
 #[derive(Subcommand, Debug, Clone)]
 pub enum InferenceCommand {
     /// Install or update the managed standalone inference runtime.
-    Install(InferenceInstallArgs),
-}
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct InferenceInstallArgs {
-    /// Configure architecture structured-generation inference through a local CLI agent.
-    #[arg(long, value_enum)]
-    pub architecture_runtime: Option<ArchitectureInferenceRuntime>,
-
-    /// Model used by the selected architecture runtime.
-    #[arg(long, default_value = "gpt-5.4-mini")]
-    pub architecture_model: String,
+    Install,
 }
 
 pub fn run(args: InferenceArgs) -> Result<()> {
@@ -37,22 +25,10 @@ pub fn run(args: InferenceArgs) -> Result<()> {
     };
 
     match command {
-        InferenceCommand::Install(args) => {
+        InferenceCommand::Install => {
             let repo_root = current_repo_root()?;
             for line in install_or_bootstrap_inference(&repo_root)? {
                 println!("{line}");
-            }
-            if matches!(
-                args.architecture_runtime,
-                Some(ArchitectureInferenceRuntime::Codex)
-            ) {
-                println!(
-                    "{}",
-                    write_codex_architecture_inference_profiles(
-                        &repo_root,
-                        &args.architecture_model,
-                    )?
-                );
             }
             Ok(())
         }

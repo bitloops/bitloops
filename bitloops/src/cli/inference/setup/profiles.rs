@@ -7,30 +7,25 @@ use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, InferenceTask, SemanticSummaryMode,
     resolve_inference_capability_config_for_repo, resolve_preferred_daemon_config_path_for_repo,
 };
-use crate::host::inference::{
-    BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER, CODEX_EXEC_DRIVER,
-};
+use crate::host::inference::{BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER};
 
+#[cfg(test)]
 use super::constants::{
-    CODEX_RUNTIME_ID, DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS,
+    DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS,
     DEFAULT_ARCHITECTURE_ROLE_ADJUDICATION_MAX_OUTPUT_TOKENS,
-    DEFAULT_CODEX_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
-    DEFAULT_CODEX_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
+    DEFAULT_LOCAL_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
+    DEFAULT_LOCAL_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
+    DEFAULT_PLATFORM_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
+    DEFAULT_PLATFORM_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME, STRUCTURED_GENERATION_TASK,
+};
+use super::constants::{
     DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS, DEFAULT_CONTEXT_GUIDANCE_PROFILE_NAME,
     DEFAULT_OLLAMA_CHAT_BASE_URL, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
     DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_PROFILE_NAME,
     DEFAULT_PLATFORM_SUMMARY_API_KEY, DEFAULT_PLATFORM_SUMMARY_MODEL,
     DEFAULT_PLATFORM_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_MAX_OUTPUT_TOKENS,
     DEFAULT_SUMMARY_PROFILE_NAME, DEFAULT_SUMMARY_TEMPERATURE, OLLAMA_CHAT_DRIVER,
-    PLATFORM_CHAT_COMPLETIONS_URL_ENV, PLATFORM_GATEWAY_URL_ENV, STRUCTURED_GENERATION_TASK,
-    TEXT_GENERATION_TASK,
-};
-#[cfg(test)]
-use super::constants::{
-    DEFAULT_LOCAL_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
-    DEFAULT_LOCAL_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
-    DEFAULT_PLATFORM_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
-    DEFAULT_PLATFORM_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
+    PLATFORM_CHAT_COMPLETIONS_URL_ENV, PLATFORM_GATEWAY_URL_ENV, TEXT_GENERATION_TASK,
 };
 
 #[cfg(test)]
@@ -395,96 +390,6 @@ pub(super) fn write_platform_context_guidance_profile(
     write_daemon_config_document(&config_path, &doc)
 }
 
-pub(super) fn write_codex_architecture_profiles(repo_root: &Path, model_name: &str) -> Result<()> {
-    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
-    let mut doc = read_daemon_config_document(&config_path)?;
-
-    ensure_bitloops_inference_launcher_runtime(&mut doc);
-    ensure_codex_provider_runtime(&mut doc);
-
-    let fact_profile_name = write_codex_architecture_profile(
-        &mut doc,
-        DEFAULT_CODEX_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
-        model_name,
-        DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS,
-    );
-    let adjudication_profile_name = write_codex_architecture_profile(
-        &mut doc,
-        DEFAULT_CODEX_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
-        model_name,
-        DEFAULT_ARCHITECTURE_ROLE_ADJUDICATION_MAX_OUTPUT_TOKENS,
-    );
-
-    update_architecture_generation_binding(&mut doc, "fact_synthesis", &fact_profile_name);
-    update_architecture_generation_binding(
-        &mut doc,
-        "role_adjudication",
-        &adjudication_profile_name,
-    );
-    write_daemon_config_document(&config_path, &doc)
-}
-
-fn ensure_bitloops_inference_launcher_runtime(doc: &mut DocumentMut) {
-    let inference = ensure_table(doc, "inference");
-    let runtimes = ensure_child_table(inference, "runtimes");
-    let runtime = ensure_child_table(runtimes, BITLOOPS_INFERENCE_RUNTIME_ID);
-    if runtime
-        .get("command")
-        .and_then(Item::as_value)
-        .and_then(|value| value.as_str())
-        .is_none()
-    {
-        runtime["command"] = Item::Value("bitloops-inference".into());
-    }
-    runtime["args"] = Item::Value(toml_edit::Value::Array(toml_edit::Array::new()));
-    runtime["startup_timeout_secs"] = Item::Value(60.into());
-    runtime["request_timeout_secs"] = Item::Value(900.into());
-}
-
-fn ensure_codex_provider_runtime(doc: &mut DocumentMut) {
-    let inference = ensure_table(doc, "inference");
-    let runtimes = ensure_child_table(inference, "runtimes");
-    let runtime = ensure_child_table(runtimes, CODEX_RUNTIME_ID);
-    runtime["command"] = Item::Value("codex".into());
-    let mut args = toml_edit::Array::new();
-    args.push("--ask-for-approval");
-    args.push("never");
-    runtime["args"] = Item::Value(toml_edit::Value::Array(args));
-    runtime["startup_timeout_secs"] = Item::Value(5.into());
-    runtime["request_timeout_secs"] = Item::Value(600.into());
-}
-
-fn write_codex_architecture_profile(
-    doc: &mut DocumentMut,
-    default_profile_name: &str,
-    model_name: &str,
-    max_output_tokens: i64,
-) -> String {
-    let profile_name = {
-        let inference = ensure_table(doc, "inference");
-        let profiles = ensure_child_table(inference, "profiles");
-        select_profile_name(
-            profiles,
-            default_profile_name,
-            is_managed_codex_architecture_profile,
-        )
-    };
-
-    let inference = ensure_table(doc, "inference");
-    let profiles = ensure_child_table(inference, "profiles");
-    let profile = ensure_child_table(profiles, &profile_name);
-    profile["task"] = Item::Value(STRUCTURED_GENERATION_TASK.into());
-    profile["runtime"] = Item::Value(CODEX_RUNTIME_ID.into());
-    profile["driver"] = Item::Value(CODEX_EXEC_DRIVER.into());
-    profile["model"] = Item::Value(model_name.into());
-    profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
-    profile["max_output_tokens"] = Item::Value(max_output_tokens.into());
-    profile.remove("base_url");
-    profile.remove("api_key");
-    profile.remove("cache_dir");
-    profile_name
-}
-
 #[cfg(test)]
 pub(super) fn write_local_bitloops_inference_profiles(
     repo_root: &Path,
@@ -693,6 +598,7 @@ fn update_context_guidance_generation_binding(doc: &mut DocumentMut, profile_nam
     update_text_generation_binding(doc, "context_guidance", "guidance_generation", profile_name);
 }
 
+#[cfg(test)]
 fn update_architecture_generation_binding(
     doc: &mut DocumentMut,
     inference_key: &str,
@@ -822,27 +728,6 @@ fn is_managed_platform_context_guidance_profile(profile: &Table) -> bool {
             .is_none_or(|api_key| {
                 api_key == env_placeholder(DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV).as_str()
             })
-}
-
-fn is_managed_codex_architecture_profile(profile: &Table) -> bool {
-    profile
-        .get("task")
-        .and_then(Item::as_value)
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        == Some(STRUCTURED_GENERATION_TASK)
-        && profile
-            .get("runtime")
-            .and_then(Item::as_value)
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            == Some(CODEX_RUNTIME_ID)
-        && profile
-            .get("driver")
-            .and_then(Item::as_value)
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            == Some(CODEX_EXEC_DRIVER)
 }
 
 #[cfg(test)]

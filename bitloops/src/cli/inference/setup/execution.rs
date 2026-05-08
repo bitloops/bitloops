@@ -17,8 +17,8 @@ use super::ollama::{
     probe_ollama_availability, select_ollama_model, select_ollama_model_for_label,
 };
 use super::profiles::{
-    write_codex_architecture_profiles, write_context_guidance_profile,
-    write_platform_context_guidance_profile, write_platform_summary_profile, write_summary_profile,
+    write_context_guidance_profile, write_platform_context_guidance_profile,
+    write_platform_summary_profile, write_summary_profile,
 };
 #[cfg(test)]
 use super::profiles::{
@@ -112,25 +112,6 @@ pub(crate) fn configure_cloud_context_guidance_generation(
     };
     let execution = apply_prepared_context_guidance_setup(repo_root, plan)?;
     Ok(execution.1)
-}
-
-#[allow(dead_code)]
-pub(crate) fn configure_codex_architecture_inference(
-    repo_root: &Path,
-    model_name: &str,
-) -> Result<String> {
-    let _ = install_or_bootstrap_inference(repo_root)?;
-    write_codex_architecture_inference_profiles(repo_root, model_name)
-}
-
-pub(crate) fn write_codex_architecture_inference_profiles(
-    repo_root: &Path,
-    model_name: &str,
-) -> Result<String> {
-    write_codex_architecture_profiles(repo_root, model_name)?;
-    Ok(format!(
-        "Configured architecture inference to use Codex model `{model_name}`."
-    ))
 }
 
 #[cfg(test)]
