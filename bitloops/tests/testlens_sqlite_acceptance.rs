@@ -125,6 +125,9 @@ SELECT ch.production_symbol_id
 FROM coverage_hits ch
 JOIN coverage_captures cc ON cc.capture_id = ch.capture_id
 WHERE cc.commit_sha = ?1
+  AND ch.branch_id = -1
+  AND ch.covered = 1
+ORDER BY ch.production_symbol_id, ch.line
 LIMIT 1
 "#,
             params!["C1"],
