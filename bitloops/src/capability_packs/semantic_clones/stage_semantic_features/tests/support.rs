@@ -35,7 +35,7 @@ impl semantic::SemanticSummaryProvider for TestSummaryProvider {
     ) -> Option<SemanticSummaryCandidate> {
         Some(SemanticSummaryCandidate {
             summary: "Summarises the symbol.".to_string(),
-            confidence: 0.91,
+            confidence: None,
             source_model: Some("ollama:ministral-3:3b".to_string()),
         })
     }

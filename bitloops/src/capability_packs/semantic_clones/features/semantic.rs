@@ -1,6 +1,4 @@
-use std::collections::BTreeSet;
-
-use crate::host::inference::TextGenerationService;
+use crate::host::inference::{TextGenerationOptions, TextGenerationService};
 
 use super::common::{normalize_repo_path, render_dependency_context, split_identifier_tokens};
 use super::{MAX_SUMMARY_BODY_CHARS, SemanticFeatureInput};
@@ -10,7 +8,7 @@ const MINIMUM_SUMMARY_LENGTH: usize = 12;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticSummaryCandidate {
     pub summary: String,
-    pub confidence: f32,
+    pub confidence: Option<f32>,
     pub source_model: Option<String>,
 }
 
@@ -82,13 +80,6 @@ impl SemanticSummaryProvider for DeterministicFallbackSummaryProvider {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct HostedSemanticSummaryJson {
-    summary: String,
-    #[serde(default)]
-    confidence: Option<f32>,
-}
-
 fn build_semantic_summary_prompt(input: &SemanticFeatureInput) -> String {
     let body = input.body.trim();
     let body = if body.chars().count() > MAX_SUMMARY_BODY_CHARS {
@@ -102,14 +93,12 @@ fn build_semantic_summary_prompt(input: &SemanticFeatureInput) -> String {
     let dependency_context = render_dependency_context(&input.dependency_signals);
 
     format!(
-        "Summarize this code symbol and return only JSON.\n\n\
-JSON schema:\n\
-{{\"summary\":\"One sentence about what the symbol does.\",\"confidence\":0.0}}\n\n\
+        "Summarise this code symbol in one plain sentence.\n\n\
 Rules:\n\
-- summary must be a single sentence\n\
-- summary must be specific to the symbol\n\
-- confidence must be a float between 0 and 1\n\
-- no markdown\n\n\
+- Return only the sentence text\n\
+- Be specific to the symbol\n\
+- Do not return JSON\n\
+- Do not use markdown\n\n\
 Context:\n\
 language: {language}\n\
 kind: {kind}\n\
@@ -138,28 +127,17 @@ body:\n{body}",
     )
 }
 
-fn parse_semantic_summary_candidate_json(content: &str) -> Option<HostedSemanticSummaryJson> {
-    let payload = extract_json_object_from_text(content)?;
-    serde_json::from_str::<HostedSemanticSummaryJson>(&payload).ok()
-}
-
-fn extract_json_object_from_text(content: &str) -> Option<String> {
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
+fn parse_semantic_summary_candidate_text(content: &str) -> Option<String> {
+    let normalized = normalize_summary_text(content);
+    let trimmed = normalized.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') || trimmed.contains("```") {
         return None;
     }
-
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        return Some(trimmed.to_string());
+    if is_valid_summary(trimmed) {
+        Some(trimmed.to_string())
+    } else {
+        None
     }
-
-    let start = trimmed.find('{')?;
-    let end = trimmed.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-
-    Some(trimmed[start..=end].to_string())
 }
 
 struct TextGenerationServiceAdapter {
@@ -173,10 +151,10 @@ impl SemanticSummaryProvider for TextGenerationServiceAdapter {
     }
 
     fn generate(&self, input: &SemanticFeatureInput) -> Option<SemanticSummaryCandidate> {
-        let content = match self.service.complete(
-            "You summarize code symbols. Return only JSON with keys summary and confidence.",
-            &build_semantic_summary_prompt(input),
-        ) {
+        let system_prompt =
+            "You summarise code symbols. Return one plain sentence with no JSON and no markdown.";
+        let user_prompt = build_semantic_summary_prompt(input);
+        let content = match self.service.complete(system_prompt, &user_prompt) {
             Ok(content) => content,
             Err(err) => {
                 log::warn!(
@@ -187,17 +165,48 @@ impl SemanticSummaryProvider for TextGenerationServiceAdapter {
                 return None;
             }
         };
-        let Some(parsed) = parse_semantic_summary_candidate_json(&content) else {
+        if let Some(summary) = parse_semantic_summary_candidate_text(&content) {
+            return Some(SemanticSummaryCandidate {
+                summary,
+                confidence: None,
+                source_model: Some(self.service.descriptor()),
+            });
+        }
+
+        log::warn!(
+            "semantic summary provider returned an invalid plain-text response for `{}` (artefact `{}`)",
+            input.path,
+            input.artefact_id
+        );
+
+        let refreshed = match self.service.complete_with_options(
+            system_prompt,
+            &user_prompt,
+            TextGenerationOptions {
+                refresh_cache: true,
+            },
+        ) {
+            Ok(content) => content,
+            Err(err) => {
+                log::warn!(
+                    "semantic summary refresh failed for `{}` (artefact `{}`): {err:#}",
+                    input.path,
+                    input.artefact_id
+                );
+                return None;
+            }
+        };
+        let Some(summary) = parse_semantic_summary_candidate_text(&refreshed) else {
             log::warn!(
-                "semantic summary provider returned an unparsable response for `{}` (artefact `{}`)",
+                "semantic summary refresh returned an invalid plain-text response for `{}` (artefact `{}`)",
                 input.path,
                 input.artefact_id
             );
             return None;
         };
         Some(SemanticSummaryCandidate {
-            summary: parsed.summary,
-            confidence: parsed.confidence.unwrap_or(0.75),
+            summary,
+            confidence: None,
             source_model: Some(self.service.descriptor()),
         })
     }
@@ -217,7 +226,7 @@ pub struct SymbolSemanticsRow {
     pub llm_summary: Option<String>,
     pub template_summary: String,
     pub summary: String,
-    pub confidence: f32,
+    pub confidence: Option<f32>,
     pub source_model: Option<String>,
 }
 
@@ -255,9 +264,11 @@ pub(super) fn build_semantics_row(
         .as_ref()
         .map(|candidate| ensure_terminal_period(candidate.summary.as_str()));
     let template_summary = build_template_summary(input);
-    let llm_confidence = llm_candidate
-        .as_ref()
-        .map(|candidate| candidate.confidence.clamp(0.0, 1.0));
+    let llm_confidence = llm_candidate.as_ref().and_then(|candidate| {
+        candidate
+            .confidence
+            .map(|confidence| confidence.clamp(0.0, 1.0))
+    });
     let source_model = llm_candidate
         .as_ref()
         .and_then(|candidate| candidate.source_model.clone());
@@ -341,20 +352,12 @@ fn synthesize_summary(
 fn synthesize_summary_confidence(
     docstring_summary: Option<&str>,
     llm_summary: Option<&str>,
-    llm_confidence: Option<f32>,
-) -> f32 {
+    _llm_confidence: Option<f32>,
+) -> Option<f32> {
     match llm_summary {
-        Some(llm_summary) => {
-            let mut confidence = llm_confidence.unwrap_or(0.75_f32).clamp(0.0, 1.0);
-            if let Some(docstring_summary) = docstring_summary
-                && summaries_have_meaningful_overlap(docstring_summary, llm_summary)
-            {
-                confidence = (confidence + 0.08_f32).min(0.95_f32);
-            }
-            confidence
-        }
-        None if docstring_summary.is_some() => 0.68_f32,
-        None => 0.35_f32,
+        Some(_) => None,
+        None if docstring_summary.is_some() => Some(0.68_f32),
+        None => Some(0.35_f32),
     }
 }
 
@@ -410,27 +413,6 @@ fn summary_identity(summary: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn summaries_have_meaningful_overlap(left: &str, right: &str) -> bool {
-    let left_tokens = summary_token_set(left);
-    let right_tokens = summary_token_set(right);
-    if left_tokens.is_empty() || right_tokens.is_empty() {
-        return false;
-    }
-
-    let overlap = left_tokens.intersection(&right_tokens).count();
-    overlap * 2 >= left_tokens.len().min(right_tokens.len())
-}
-
-fn summary_token_set(summary: &str) -> BTreeSet<String> {
-    summary
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter_map(|token| {
-            let token = token.trim().to_ascii_lowercase();
-            if token.len() < 3 { None } else { Some(token) }
-        })
-        .collect()
-}
-
 fn summary_subject(input: &SemanticFeatureInput) -> String {
     if input.canonical_kind == "file" {
         return normalize_repo_path(&input.path).replace(['/', '.'], " ");
@@ -447,10 +429,11 @@ fn summary_subject(input: &SemanticFeatureInput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
     struct StaticSummaryProvider {
         summary: Option<String>,
-        confidence: f32,
+        confidence: Option<f32>,
         source_model: Option<String>,
     }
 
@@ -465,6 +448,54 @@ mod tests {
                 confidence: self.confidence,
                 source_model: self.source_model.clone(),
             })
+        }
+    }
+
+    struct RecordingTextGenerationService {
+        responses: Mutex<Vec<String>>,
+        refresh_flags: Mutex<Vec<bool>>,
+    }
+
+    impl RecordingTextGenerationService {
+        fn new(responses: Vec<&str>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().map(str::to_string).rev().collect()),
+                refresh_flags: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn refresh_flags(&self) -> Vec<bool> {
+            self.refresh_flags
+                .lock()
+                .expect("refresh flags lock")
+                .clone()
+        }
+    }
+
+    impl TextGenerationService for RecordingTextGenerationService {
+        fn descriptor(&self) -> String {
+            "bitloops:test-summary".to_string()
+        }
+
+        fn complete(&self, system_prompt: &str, user_prompt: &str) -> anyhow::Result<String> {
+            self.complete_with_options(system_prompt, user_prompt, TextGenerationOptions::default())
+        }
+
+        fn complete_with_options(
+            &self,
+            _system_prompt: &str,
+            _user_prompt: &str,
+            options: TextGenerationOptions,
+        ) -> anyhow::Result<String> {
+            self.refresh_flags
+                .lock()
+                .expect("refresh flags lock")
+                .push(options.refresh_cache);
+            self.responses
+                .lock()
+                .expect("responses lock")
+                .pop()
+                .ok_or_else(|| anyhow::anyhow!("missing fake response"))
         }
     }
 
@@ -500,6 +531,9 @@ mod tests {
         assert!(prompt.contains("docstring: // Normalizes email."));
         assert!(prompt.contains("modifiers: export"));
         assert!(prompt.contains("dependencies: calls:user repo::load by id"));
+        assert!(prompt.contains("one plain sentence"));
+        assert!(!prompt.contains("JSON schema"));
+        assert!(!prompt.contains("confidence"));
         let body_section = prompt
             .split("body:\n")
             .nth(1)
@@ -588,7 +622,7 @@ mod tests {
             &input,
             &StaticSummaryProvider {
                 summary: Some("short".to_string()),
-                confidence: 0.91,
+                confidence: Some(0.91),
                 source_model: Some("ollama:ministral-3:3b".to_string()),
             },
         );
@@ -600,14 +634,23 @@ mod tests {
     }
 
     #[test]
-    fn semantic_features_synthesize_summary_confidence_boosts_when_doc_and_llm_align() {
+    fn semantic_features_synthesize_summary_confidence_is_null_for_llm_summary() {
         let confidence = synthesize_summary_confidence(
             Some("Loads a user record by id from storage."),
             Some("Loads a user entity by id from storage."),
             Some(0.80),
         );
 
-        assert_eq!(confidence, 0.88);
+        assert_eq!(confidence, None);
+    }
+
+    #[test]
+    fn semantic_features_synthesize_summary_confidence_keeps_deterministic_values_without_llm() {
+        assert_eq!(
+            synthesize_summary_confidence(Some("Loads a user by id."), None, None),
+            Some(0.68)
+        );
+        assert_eq!(synthesize_summary_confidence(None, None, None), Some(0.35));
     }
 
     #[test]
@@ -623,7 +666,7 @@ mod tests {
             &input,
             &StaticSummaryProvider {
                 summary: Some(llm_summary.to_string()),
-                confidence: 0.91,
+                confidence: Some(0.91),
                 source_model: Some("ollama:ministral-3:3b".to_string()),
             },
         );
@@ -633,25 +676,62 @@ mod tests {
             row.summary,
             format!("Defines the typescript source file. {llm_summary}")
         );
-        assert_eq!(row.confidence, 0.91);
+        assert_eq!(row.confidence, None);
         assert_eq!(row.source_model.as_deref(), Some("ollama:ministral-3:3b"));
     }
 
     #[test]
-    fn semantic_features_parse_semantic_summary_candidate_json_from_wrapped_text() {
-        let parsed = parse_semantic_summary_candidate_json(
-            r#"Here is the result: {"summary":"Loads a user by id.","confidence":0.82}"#,
-        )
-        .expect("wrapped JSON should parse");
+    fn semantic_features_parse_semantic_summary_candidate_text_accepts_plain_sentence() {
+        let parsed = parse_semantic_summary_candidate_text("Loads a user by id from storage.")
+            .expect("plain summary should parse");
 
-        assert_eq!(parsed.summary, "Loads a user by id.");
-        assert_eq!(parsed.confidence, Some(0.82));
+        assert_eq!(parsed, "Loads a user by id from storage.");
     }
 
     #[test]
-    fn semantic_features_extract_json_object_returns_none_for_invalid_wrappers() {
-        assert_eq!(extract_json_object_from_text(""), None);
-        assert_eq!(extract_json_object_from_text("no json here"), None);
-        assert_eq!(extract_json_object_from_text("{missing"), None);
+    fn semantic_features_parse_semantic_summary_candidate_text_rejects_json_and_markdown() {
+        assert_eq!(
+            parse_semantic_summary_candidate_text(r#"{"summary":"Loads a user by id."}"#),
+            None
+        );
+        assert_eq!(
+            parse_semantic_summary_candidate_text("```json\n{\"summary\":\"Loads\"}\n```"),
+            None
+        );
+    }
+
+    #[test]
+    fn semantic_features_text_generation_adapter_accepts_plain_summary_without_confidence() {
+        let service = Arc::new(RecordingTextGenerationService::new(vec![
+            "Loads a user entity by id from storage.",
+        ]));
+        let service_for_provider: Arc<dyn TextGenerationService> = service.clone();
+        let provider = summary_provider_from_service(service_for_provider, false);
+
+        let candidate = provider
+            .generate(&sample_input("method", "getById"))
+            .expect("plain summary");
+
+        assert_eq!(candidate.summary, "Loads a user entity by id from storage.");
+        assert_eq!(candidate.confidence, None);
+        assert_eq!(service.refresh_flags(), vec![false]);
+    }
+
+    #[test]
+    fn semantic_features_text_generation_adapter_refreshes_once_after_invalid_plain_summary() {
+        let service = Arc::new(RecordingTextGenerationService::new(vec![
+            r#"{"summary":"Cached JSON should be rejected."}"#,
+            "Loads a user entity by id from storage.",
+        ]));
+        let service_for_provider: Arc<dyn TextGenerationService> = service.clone();
+        let provider = summary_provider_from_service(service_for_provider, false);
+
+        let candidate = provider
+            .generate(&sample_input("method", "getById"))
+            .expect("refreshed plain summary");
+
+        assert_eq!(candidate.summary, "Loads a user entity by id from storage.");
+        assert_eq!(candidate.confidence, None);
+        assert_eq!(service.refresh_flags(), vec![false, true]);
     }
 }

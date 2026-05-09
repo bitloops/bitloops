@@ -119,8 +119,7 @@ pub(crate) fn is_ignored_path(path: &Path, repo_dir: &Path) -> bool {
 }
 
 fn is_ignored_component(component: &OsStr) -> bool {
-    component == OsStr::new(".bitloops")
-        || component == OsStr::new(".git")
+    component == OsStr::new(".git")
         || component == OsStr::new(".mypy_cache")
         || component == OsStr::new(".pytest_cache")
         || component == OsStr::new(".tox")

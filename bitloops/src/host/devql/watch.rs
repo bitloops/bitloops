@@ -597,7 +597,7 @@ fn should_ignore_path(repo_root: &Path, path: &Path) -> bool {
     let rel = path.strip_prefix(repo_root).unwrap_or(path);
     let rel_str = rel.to_string_lossy();
 
-    if rel_str.starts_with(".git/") || rel_str.starts_with(".bitloops/") {
+    if rel_str.starts_with(".git/") {
         return true;
     }
     if rel_str.contains("/node_modules/") || rel_str.contains("/target/") {

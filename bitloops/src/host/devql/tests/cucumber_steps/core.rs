@@ -233,7 +233,7 @@ impl EmbeddingService for FixtureEmbeddingProvider {
 fn fixture_summary_candidate(summary: &str) -> semantic::SemanticSummaryCandidate {
     semantic::SemanticSummaryCandidate {
         summary: summary.to_string(),
-        confidence: 0.88,
+        confidence: None,
         source_model: Some("fixture-summary-model".to_string()),
     }
 }
@@ -2556,7 +2556,7 @@ fn given_stage1_summary_provider_returns_candidate(
     Box::pin(async move {
         world.stage1_provider_candidate = Some(semantic::SemanticSummaryCandidate {
             summary: doc_string(&ctx),
-            confidence: 0.82,
+            confidence: None,
             source_model: Some("fixture-summary-model".to_string()),
         });
     })
@@ -2569,7 +2569,7 @@ fn given_stage1_summary_provider_returns_invalid_candidate(
     Box::pin(async move {
         world.stage1_provider_candidate = Some(semantic::SemanticSummaryCandidate {
             summary: doc_string(&ctx),
-            confidence: 0.82,
+            confidence: None,
             source_model: Some("fixture-invalid-summary-model".to_string()),
         });
     })

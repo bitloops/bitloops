@@ -746,11 +746,11 @@ mod tests {
         let repo = init_git_repo();
         let _head = commit_file(repo.path(), "tracked.txt", "tracked", "initial commit");
         std::fs::write(repo.path().join("notes.txt"), "notes").expect("write untracked file");
-        std::fs::create_dir_all(repo.path().join(".bitloops").join("metadata"))
+        std::fs::create_dir_all(repo.path().join(".bitloops-test-state").join("metadata"))
             .expect("create metadata dir");
         std::fs::write(
             repo.path()
-                .join(".bitloops")
+                .join(".bitloops-test-state")
                 .join("metadata")
                 .join("ignored.txt"),
             "ignored",
@@ -770,7 +770,7 @@ mod tests {
         std::fs::write(repo.path().join("src.rs"), "fn main() {}\n").expect("write source");
         std::fs::create_dir_all(
             repo.path()
-                .join(".bitloops")
+                .join(".bitloops-test-state")
                 .join("internal")
                 .join("sessions")
                 .join("session-1"),
@@ -778,7 +778,7 @@ mod tests {
         .expect("create metadata dir");
         std::fs::write(
             repo.path()
-                .join(".bitloops")
+                .join(".bitloops-test-state")
                 .join("internal")
                 .join("sessions")
                 .join("session-1")
@@ -791,7 +791,7 @@ mod tests {
             &[
                 "add",
                 "src.rs",
-                ".bitloops/internal/sessions/session-1/ignored.txt",
+                ".bitloops-test-state/internal/sessions/session-1/ignored.txt",
             ],
         );
         git_ok(repo.path(), &["commit", "-m", "seed tree"]);

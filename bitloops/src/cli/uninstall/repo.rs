@@ -13,7 +13,6 @@ pub(super) struct ResolvedScope {
     pub(super) hook_repo_roots: Vec<PathBuf>,
     pub(super) agent_project_roots: Vec<PathBuf>,
     pub(super) repo_config_project_roots: Vec<PathBuf>,
-    pub(super) repo_data_roots: Vec<PathBuf>,
 }
 
 pub(super) fn resolve_scope(
@@ -53,17 +52,10 @@ pub(super) fn resolve_scope(
         Vec::new()
     };
 
-    let repo_data_roots = if targets.contains(&UninstallTarget::Data) {
-        discover_known_repo_roots()?
-    } else {
-        Vec::new()
-    };
-
     Ok(ResolvedScope {
         hook_repo_roots,
         agent_project_roots,
         repo_config_project_roots,
-        repo_data_roots,
     })
 }
 

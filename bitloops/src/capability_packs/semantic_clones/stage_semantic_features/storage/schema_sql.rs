@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
-    confidence REAL NOT NULL,
+    confidence REAL,
     source_model TEXT,
     generated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS symbol_semantics_current (
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
-    confidence REAL NOT NULL,
+    confidence REAL,
     source_model TEXT,
     generated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS symbol_semantics (
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
-    confidence REAL NOT NULL,
+    confidence REAL,
     source_model TEXT,
     generated_at TEXT DEFAULT (datetime('now'))
 );
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS symbol_semantics_current (
     llm_summary TEXT,
     template_summary TEXT NOT NULL,
     summary TEXT NOT NULL,
-    confidence REAL NOT NULL,
+    confidence REAL,
     source_model TEXT,
     generated_at TEXT DEFAULT (datetime('now'))
 );
@@ -177,6 +177,8 @@ pub(crate) fn semantic_features_postgres_upgrade_sql() -> &'static str {
     r#"
 ALTER TABLE symbol_semantics ADD COLUMN IF NOT EXISTS docstring_summary TEXT;
 ALTER TABLE symbol_features ADD COLUMN IF NOT EXISTS modifiers JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE IF EXISTS symbol_semantics ALTER COLUMN confidence DROP NOT NULL;
+ALTER TABLE IF EXISTS symbol_semantics_current ALTER COLUMN confidence DROP NOT NULL;
 
 DO $$
 BEGIN
@@ -262,6 +264,9 @@ WHERE docstring_summary IS NULL AND doc_comment_summary IS NOT NULL",
             .context("adding symbol_features.modifiers column")?;
         }
 
+        relax_sqlite_semantics_confidence_not_null(&conn, "symbol_semantics")?;
+        relax_sqlite_semantics_confidence_not_null(&conn, "symbol_semantics_current")?;
+
         if sqlite_table_exists(&conn, "artefacts_current")?
             && sqlite_table_exists(&conn, "current_file_state")?
             && sqlite_table_has_column(&conn, "current_file_state", "effective_content_id")?
@@ -278,6 +283,86 @@ WHERE docstring_summary IS NULL AND doc_comment_summary IS NOT NULL",
     })
     .await
     .context("joining SQLite semantic feature upgrade task")?
+}
+
+fn relax_sqlite_semantics_confidence_not_null(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+) -> Result<()> {
+    if !sqlite_table_exists(conn, table_name)?
+        || !sqlite_column_is_not_null(conn, table_name, "confidence")?
+    {
+        return Ok(());
+    }
+
+    let sql = match table_name {
+        "symbol_semantics" => {
+            r#"
+ALTER TABLE symbol_semantics RENAME TO symbol_semantics_old_confidence_not_null;
+CREATE TABLE symbol_semantics (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+INSERT INTO symbol_semantics (
+    artefact_id, repo_id, blob_sha, semantic_features_input_hash, docstring_summary,
+    llm_summary, template_summary, summary, confidence, source_model, generated_at
+)
+SELECT
+    artefact_id, repo_id, blob_sha, semantic_features_input_hash, docstring_summary,
+    llm_summary, template_summary, summary, confidence, source_model, generated_at
+FROM symbol_semantics_old_confidence_not_null;
+DROP TABLE symbol_semantics_old_confidence_not_null;
+CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
+ON symbol_semantics (repo_id, blob_sha);
+"#
+        }
+        "symbol_semantics_current" => {
+            r#"
+ALTER TABLE symbol_semantics_current RENAME TO symbol_semantics_current_old_confidence_not_null;
+CREATE TABLE symbol_semantics_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+INSERT INTO symbol_semantics_current (
+    artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+    docstring_summary, llm_summary, template_summary, summary, confidence, source_model, generated_at
+)
+SELECT
+    artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+    docstring_summary, llm_summary, template_summary, summary, confidence, source_model, generated_at
+FROM symbol_semantics_current_old_confidence_not_null;
+DROP TABLE symbol_semantics_current_old_confidence_not_null;
+CREATE INDEX IF NOT EXISTS symbol_semantics_current_repo_path_idx
+ON symbol_semantics_current (repo_id, path);
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_semantics_current_repo_artefact_idx
+ON symbol_semantics_current (repo_id, artefact_id);
+"#
+        }
+        _ => return Ok(()),
+    };
+
+    conn.execute_batch(sql)
+        .with_context(|| format!("relaxing {table_name}.confidence NOT NULL constraint"))
 }
 
 fn sqlite_table_exists(conn: &rusqlite::Connection, table_name: &str) -> Result<bool> {
@@ -315,6 +400,34 @@ fn sqlite_table_has_column(
             .with_context(|| format!("reading column name from PRAGMA table_info({table_name})"))?;
         if name == column_name {
             return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn sqlite_column_is_not_null(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    column_name: &str,
+) -> Result<bool> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table_name})"))
+        .with_context(|| format!("preparing PRAGMA table_info({table_name})"))?;
+    let mut rows = stmt
+        .query([])
+        .with_context(|| format!("querying PRAGMA table_info({table_name})"))?;
+    while let Some(row) = rows
+        .next()
+        .with_context(|| format!("iterating PRAGMA table_info({table_name})"))?
+    {
+        let name: String = row
+            .get(1)
+            .with_context(|| format!("reading column name from PRAGMA table_info({table_name})"))?;
+        if name == column_name {
+            let not_null: i64 = row.get(3).with_context(|| {
+                format!("reading NOT NULL flag from PRAGMA table_info({table_name})")
+            })?;
+            return Ok(not_null != 0);
         }
     }
     Ok(false)

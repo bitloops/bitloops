@@ -10,27 +10,18 @@ use super::{BinaryCandidatesFn, ServiceUninstaller};
 use crate::cli::embeddings::{
     managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
 };
-use crate::config::settings::SETTINGS_DIR;
 use crate::utils::platform_dirs::{
     bitloops_cache_dir, bitloops_config_dir, bitloops_data_dir, bitloops_home_dir,
     bitloops_state_dir,
 };
 
-pub(super) fn uninstall_data(repo_roots: &[PathBuf], out: &mut dyn Write) -> Result<()> {
+pub(super) fn uninstall_data(out: &mut dyn Write) -> Result<()> {
     let mut removed_any = false;
 
     let data_dir = bitloops_data_dir()?;
     if remove_dir_if_exists(&data_dir)? {
         writeln!(out, "  Removed data directory {}", data_dir.display())?;
         removed_any = true;
-    }
-
-    for repo_root in repo_roots {
-        let bitloops_dir = repo_root.join(SETTINGS_DIR);
-        if remove_dir_if_exists(&bitloops_dir)? {
-            writeln!(out, "  Removed repo data {}", bitloops_dir.display())?;
-            removed_any = true;
-        }
     }
 
     if !removed_any {

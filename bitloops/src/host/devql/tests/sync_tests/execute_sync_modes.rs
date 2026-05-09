@@ -120,7 +120,7 @@ while IFS= read -r line; do
       printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"sync-summary-model","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}\n' "$request_id"
       ;;
     *'"type":"infer"'*)
-      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"sync-summary-model"}\n' "$request_id"
+      printf '{"type":"infer","request_id":"%s","text":"Summarises the symbol.","provider_name":"ollama","model_name":"sync-summary-model"}\n' "$request_id"
       ;;
     *'"type":"shutdown"'*)
       printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
@@ -171,11 +171,7 @@ while (($line = $stdin.ReadLine()) -ne $null) {
       $response = @{
         type = "infer"
         request_id = $request.request_id
-        text = ""
-        parsed_json = @{
-          summary = "Summarises the symbol."
-          confidence = 0.91
-        }
+        text = "Summarises the symbol."
         provider_name = "ollama"
         model_name = "sync-summary-model"
       }
