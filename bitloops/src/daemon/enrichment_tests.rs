@@ -1079,7 +1079,7 @@ while IFS= read -r line; do
       exit 0
       ;;
     *'"type":"infer"'*)
-      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
+      printf '{"type":"infer","request_id":"%s","text":"Summarises the symbol.","provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
       ;;
   esac
 done
@@ -1116,7 +1116,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     Write-Output '{"type":"shutdown","request_id":"'"$requestId"'"}'
     exit 0
   } elseif ($line -like '*"type":"infer"*') {
-    Write-Output '{"type":"infer","request_id":"'"$requestId"'","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"ministral-3:3b"}'
+    Write-Output '{"type":"infer","request_id":"'"$requestId"'","text":"Summarises the symbol.","provider_name":"ollama","model_name":"ministral-3:3b"}'
   }
 }
 "#,

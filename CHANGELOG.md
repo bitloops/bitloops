@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- **Semantic summary generation now uses plain-text inference responses**: semantic-clones summary prompts now ask configured text-generation runtimes for a single plain sentence instead of JSON with `summary` and `confidence` fields. Runtime-backed text completions now send `ResponseMode::Text`, structured generation keeps `ResponseMode::JsonObject`, and refresh requests can pass `bitloops_refresh_cache` metadata so stale cached JSON responses can be bypassed.
+- **Repo-local `.bitloops/` compatibility handling has been removed**: enable/status logic no longer creates or requires a `.bitloops/` directory, uninstall data cleanup no longer discovers or removes repo-local `.bitloops/` data, and path classification, DevQL watch/sync filtering, rewind/debug helpers, and test-harness discovery no longer treat `.bitloops/` as a protected Bitloops infrastructure directory. Current repo policy files such as `.bitloops.toml` and `.bitloops.local.toml` remain unchanged.
+
+### Fixed
+
+- **Malformed JSON-shaped semantic-summary responses no longer break summary refreshes**: provider responses that look like JSON or markdown are rejected as invalid plain summaries, Bitloops retries once with a cache-refresh hint, and model-backed semantic rows can now persist `NULL` confidence values. Existing SQLite and Postgres semantic tables are upgraded so `symbol_semantics*.confidence` is nullable.
+
 ## [0.0.21] - 2026-05-08
 
 ### Added

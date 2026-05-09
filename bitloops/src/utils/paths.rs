@@ -8,10 +8,10 @@ mod worktree;
 pub use classification::{is_infrastructure_path, is_protected_path, to_relative_path};
 pub use claude::{get_claude_project_dir, sanitize_path_for_claude};
 pub use constants::{
-    BITLOOPS_DIR, BITLOOPS_TEST_STATE_DIR, CHECKPOINT_FILE_NAME, CONTENT_HASH_FILE_NAME,
-    CONTEXT_FILE_NAME, EVENTS_DB_FILE_NAME, EXPORT_DATA_FILE_NAME, METADATA_BRANCH_NAME,
-    METADATA_FILE_NAME, PROMPT_FILE_NAME, RELATIONAL_DB_FILE_NAME, RUNTIME_DB_FILE_NAME,
-    SETTINGS_FILE_NAME, SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, TRANSCRIPT_FILE_NAME_LEGACY,
+    BITLOOPS_TEST_STATE_DIR, CHECKPOINT_FILE_NAME, CONTENT_HASH_FILE_NAME, CONTEXT_FILE_NAME,
+    EVENTS_DB_FILE_NAME, EXPORT_DATA_FILE_NAME, METADATA_BRANCH_NAME, METADATA_FILE_NAME,
+    PROMPT_FILE_NAME, RELATIONAL_DB_FILE_NAME, RUNTIME_DB_FILE_NAME, SETTINGS_FILE_NAME,
+    SUMMARY_FILE_NAME, TRANSCRIPT_FILE_NAME, TRANSCRIPT_FILE_NAME_LEGACY,
 };
 pub use repo::{
     abs_path, bitloops_project_root, clear_repo_root_cache, open_repository, repo_root,
@@ -84,14 +84,11 @@ mod tests {
     #[test]
     fn test_is_infrastructure_path() {
         let tests = [
-            (".bitloops/metadata/test", true),
-            (".bitloops", true),
-            (".bitloops\\metadata\\test", true),
             (
                 ".bitloops-test-state/daemon/repos/hash/tmp/pre-prompt.json",
                 true,
             ),
-            (".bitloopsfile", false),
+            ("src/main.rs", false),
         ];
 
         for (path, want) in tests {
@@ -434,8 +431,8 @@ mod tests {
         let cases = [
             (".git", true),
             (".git/objects", true),
-            (".bitloops", true),
-            (".bitloops/metadata/session.json", true),
+            (".bitloops-test-state", true),
+            (".bitloops-test-state/daemon/runtime.sqlite", true),
             (".claude", true),
             (".claude/settings.json", true),
             (".github/hooks", true),
@@ -475,10 +472,10 @@ mod tests {
                 "repo_root() should return git top-level"
             );
 
-            let joined = abs_path(".bitloops/settings.json").expect("resolve relative path");
+            let joined = abs_path("src/main.rs").expect("resolve relative path");
             assert_eq!(
                 joined,
-                root.join(".bitloops/settings.json"),
+                root.join("src/main.rs"),
                 "abs_path should join with repo root"
             );
 

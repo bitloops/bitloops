@@ -1,4 +1,3 @@
-pub const BITLOOPS_DIR: &str = ".bitloops";
 pub const BITLOOPS_TEST_STATE_DIR: &str = ".bitloops-test-state";
 pub const RELATIONAL_DB_FILE_NAME: &str = "relational.db";
 pub const RUNTIME_DB_FILE_NAME: &str = "runtime.sqlite";

@@ -232,7 +232,7 @@ mod tests {
         }
 
         fn complete(&self, _system_prompt: &str, _user_prompt: &str) -> Result<String> {
-            Ok("{\"summary\":\"Summarises the symbol.\",\"confidence\":0.9}".to_string())
+            Ok("Summarises the symbol.".to_string())
         }
     }
 

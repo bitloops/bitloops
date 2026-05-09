@@ -1371,7 +1371,6 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         assert!(exclude.contains(".bitloops.local.toml"));
         assert!(exclude.contains(".claude/skills/bitloops/devql-explore-first/SKILL.md"));
         assert!(!exclude.contains("config.local.json"));
-        assert!(!exclude.contains(".bitloops/config.local.json"));
     });
 }
 
