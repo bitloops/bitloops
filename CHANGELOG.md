@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.22] - 2026-05-09
+
 ### Changed
 
 - **Semantic summary generation now uses plain-text inference responses**: semantic-clones summary prompts now ask configured text-generation runtimes for a single plain sentence instead of JSON with `summary` and `confidence` fields. Runtime-backed text completions now send `ResponseMode::Text`, structured generation keeps `ResponseMode::JsonObject`, and refresh requests can pass `bitloops_refresh_cache` metadata so stale cached JSON responses can be bypassed.
