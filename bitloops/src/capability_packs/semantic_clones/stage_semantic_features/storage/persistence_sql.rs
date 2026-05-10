@@ -475,12 +475,13 @@ pub(crate) fn build_semantic_persist_summary_sql(
 ) -> Result<String> {
     let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
     let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
+    let confidence_expr = sql_optional_f32(semantics.confidence);
     let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
     let generated_at_sql = semantic_generated_at_now_sql(dialect);
 
     Ok(format!(
         "INSERT INTO symbol_semantics (artefact_id, repo_id, blob_sha, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
-VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
+VALUES ('{artefact_id}', '{repo_id}', '{blob_sha}', '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence}, {source_model}) \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = EXCLUDED.blob_sha, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}",
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
@@ -490,7 +491,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, blob_sha = E
         llm_summary = llm_summary_expr,
         template_summary = esc_pg(&semantics.template_summary),
         summary = esc_pg(&semantics.summary),
-        confidence = semantics.confidence,
+        confidence = confidence_expr,
         source_model = source_model_expr,
         generated_at = generated_at_sql,
     ))
@@ -530,12 +531,13 @@ fn build_current_semantic_persist_summary_sql(
     let symbol_id_expr = sql_optional_string(symbol_id);
     let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
     let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
+    let confidence_expr = sql_optional_f32(semantics.confidence);
     let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
     let generated_at_sql = semantic_generated_at_now_sql(dialect);
 
     Ok(format!(
         "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
-VALUES ('{artefact_id}', '{repo_id}', '{path}', '{content_id}', {symbol_id}, '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model}) \
+VALUES ('{artefact_id}', '{repo_id}', '{path}', '{content_id}', {symbol_id}, '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence}, {source_model}) \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}",
         artefact_id = esc_pg(&semantics.artefact_id),
         repo_id = esc_pg(&semantics.repo_id),
@@ -547,7 +549,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
         llm_summary = llm_summary_expr,
         template_summary = esc_pg(&semantics.template_summary),
         summary = esc_pg(&semantics.summary),
-        confidence = semantics.confidence,
+        confidence = confidence_expr,
         source_model = source_model_expr,
         generated_at = generated_at_sql,
     ))
@@ -561,13 +563,14 @@ fn build_conditional_current_semantic_persist_summary_sql(
 ) -> Result<String> {
     let docstring_summary_expr = sql_optional_string(semantics.docstring_summary.as_deref());
     let llm_summary_expr = sql_optional_string(semantics.llm_summary.as_deref());
+    let confidence_expr = sql_optional_f32(semantics.confidence);
     let source_model_expr = sql_optional_string(semantics.source_model.as_deref());
     let generated_at_sql = semantic_generated_at_now_sql(dialect);
     let target_select = build_current_semantic_target_select_sql(input);
 
     Ok(format!(
         "INSERT INTO symbol_semantics_current (artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash, docstring_summary, llm_summary, template_summary, summary, confidence, source_model) \
-SELECT target.artefact_id, target.repo_id, target.path, target.content_id, target.symbol_id, '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence:.4}, {source_model} \
+SELECT target.artefact_id, target.repo_id, target.path, target.content_id, target.symbol_id, '{input_hash}', {docstring_summary}, {llm_summary}, '{template_summary}', '{summary}', {confidence}, {source_model} \
 FROM ({target_select}) target \
 WHERE 1 = 1 \
 ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, semantic_features_input_hash = EXCLUDED.semantic_features_input_hash, docstring_summary = EXCLUDED.docstring_summary, llm_summary = EXCLUDED.llm_summary, template_summary = EXCLUDED.template_summary, summary = EXCLUDED.summary, confidence = EXCLUDED.confidence, source_model = EXCLUDED.source_model, generated_at = {generated_at}",
@@ -576,7 +579,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLU
         llm_summary = llm_summary_expr,
         template_summary = esc_pg(&semantics.template_summary),
         summary = esc_pg(&semantics.summary),
-        confidence = semantics.confidence,
+        confidence = confidence_expr,
         source_model = source_model_expr,
         target_select = target_select,
         generated_at = generated_at_sql,
@@ -589,6 +592,12 @@ fn sql_string(value: &str) -> String {
 
 fn sql_optional_string(value: Option<&str>) -> String {
     value.map(sql_string).unwrap_or_else(|| "NULL".to_string())
+}
+
+fn sql_optional_f32(value: Option<f32>) -> String {
+    value
+        .map(|value| format!("{value:.4}"))
+        .unwrap_or_else(|| "NULL".to_string())
 }
 
 fn sql_json_string_for_dialect<T: serde::Serialize>(

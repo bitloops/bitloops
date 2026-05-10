@@ -72,6 +72,19 @@ pub trait TextGenerationService: Send + Sync {
         self.descriptor()
     }
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Result<String>;
+    fn complete_with_options(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        _options: TextGenerationOptions,
+    ) -> Result<String> {
+        self.complete(system_prompt, user_prompt)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextGenerationOptions {
+    pub refresh_cache: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

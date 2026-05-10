@@ -21,7 +21,6 @@ use crate::cli::embeddings::{
     managed_embeddings_binary_dir, managed_embeddings_binary_path, managed_embeddings_metadata_path,
 };
 use crate::cli::enable::SHELL_COMPLETION_COMMENT;
-use crate::config::settings::SETTINGS_DIR;
 use crate::config::{REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME};
 use crate::devql_transport::{RepoPathRegistry, RepoPathRegistryEntry, persist_repo_path_registry};
 use crate::test_support::process_state::{git_command, with_cwd, with_process_state};
@@ -861,7 +860,6 @@ fn full_uninstall_removes_supported_temp_artefacts() {
         &home,
         Some(repo.path()),
         || {
-            fs::create_dir_all(repo.path().join(SETTINGS_DIR)).unwrap();
             fs::write(
                 repo.path().join(REPO_POLICY_FILE_NAME),
                 "[capture]\nenabled = true\n",
@@ -928,7 +926,6 @@ fn full_uninstall_removes_supported_temp_artefacts() {
             assert!(!repo.path().join(REPO_POLICY_FILE_NAME).exists());
             assert!(!repo.path().join(REPO_POLICY_LOCAL_FILE_NAME).exists());
             assert!(!git_hooks::is_git_hook_installed(repo.path()));
-            assert!(!repo.path().join(SETTINGS_DIR).exists());
             assert!(!bitloops_config_dir().unwrap().exists());
             assert!(!bitloops_data_dir().unwrap().exists());
             assert!(!bitloops_cache_dir().unwrap().exists());

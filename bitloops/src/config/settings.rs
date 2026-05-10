@@ -13,7 +13,6 @@ use super::{
     discover_repo_policy_optional, load_daemon_settings,
 };
 
-pub const SETTINGS_DIR: &str = ".bitloops";
 pub const SETTINGS_FILE: &str = REPO_POLICY_FILE_NAME;
 pub const SETTINGS_LOCAL_FILE: &str = REPO_POLICY_LOCAL_FILE_NAME;
 pub const DEFAULT_STRATEGY: &str = "manual-commit";

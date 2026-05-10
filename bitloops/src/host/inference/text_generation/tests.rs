@@ -4,7 +4,6 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use serde_json::Value;
 use tempfile::TempDir;
 
 use crate::config::{
@@ -13,6 +12,7 @@ use crate::config::{
 };
 use crate::host::inference::{
     BITLOOPS_PLATFORM_CHAT_DRIVER, EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway,
+    TextGenerationOptions,
 };
 use crate::test_support::process_state::enter_process_state;
 
@@ -61,7 +61,7 @@ while IFS= read -r line; do
       exit 0
       ;;
     *'"type":"infer"'*)
-{timeout_branch}      printf '{{"type":"infer","request_id":"%s","text":"","parsed_json":{{"summary":"Summarises the symbol.","confidence":0.91}},"provider_name":"ollama","model_name":"ministral-3:3b"}}\n' "$request_id"
+{timeout_branch}      printf '{{"type":"infer","request_id":"%s","text":"Summarises the symbol.","provider_name":"ollama","model_name":"ministral-3:3b"}}\n' "$request_id"
       ;;
   esac
 done
@@ -143,16 +143,147 @@ fn runtime_service_restarts_after_request_timeout() {
         .complete("system", "user")
         .expect("text-generation request should recover after timeout");
 
-    assert_eq!(
-        serde_json::from_str::<Value>(&text).expect("parse response json"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
-    );
+    assert_eq!(text, "Summarises the symbol.");
     assert!(
         timeout_marker.exists(),
         "first request should have timed out"
+    );
+}
+
+#[test]
+fn canonical_text_prefers_runtime_text() {
+    let response = InferResponse {
+        request_id: "infer-1".to_string(),
+        text: "Plain summary text.".to_string(),
+        parsed_json: Some(serde_json::json!({
+            "summary": "Canonical parsed JSON"
+        })),
+        usage: None,
+        finish_reason: None,
+        provider_name: "ollama".to_string(),
+        model_name: "ministral-3:3b".to_string(),
+    };
+
+    let text = canonical_text_from_response(&response).expect("canonical text");
+
+    assert_eq!(text, "Plain summary text.");
+}
+
+#[test]
+fn runtime_service_sends_text_response_mode_for_completion() {
+    let _guard = test_lock();
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("text_mode_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    let config_path = temp.path().join("bitloops.toml");
+    fs::write(&config_path, "[inference]\n").expect("write fake config");
+    fs::write(
+        &script_path,
+        r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":{"response_modes":["text","json_object"],"usage_reporting":true,"structured_output":[]}}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
+      exit 0
+      ;;
+    *'"type":"infer"'*)
+      case "$line" in
+        *'"response_mode":"text"'*)
+          printf '{"type":"infer","request_id":"%s","text":"Plain text summary.","provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
+          ;;
+        *)
+          printf '{"type":"infer","request_id":"%s","text":"wrong mode","provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
+          ;;
+      esac
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write text mode runtime script");
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let service = BitloopsInferenceTextGenerationService::new(
+        "summary_local",
+        "ollama_chat",
+        &runtime,
+        &config_path,
+    )
+    .expect("build runtime service");
+
+    assert_eq!(
+        service.complete("system", "user").expect("completion"),
+        "Plain text summary."
+    );
+}
+
+#[test]
+fn runtime_service_sends_refresh_cache_metadata_when_requested() {
+    let _guard = test_lock();
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("refresh_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    let config_path = temp.path().join("bitloops.toml");
+    fs::write(&config_path, "[inference]\n").expect("write fake config");
+    fs::write(
+        &script_path,
+        r#"launch_log="$1"
+shift
+printf '%s\n' "$$" >> "$launch_log"
+
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":{"response_modes":["text","json_object"],"usage_reporting":true,"structured_output":[]}}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
+      exit 0
+      ;;
+    *'"type":"infer"'*)
+      case "$line" in
+        *'"bitloops_refresh_cache":true'*)
+          printf '{"type":"infer","request_id":"%s","text":"Refreshed summary.","provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
+          ;;
+        *)
+          printf '{"type":"infer","request_id":"%s","text":"Cached summary.","provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
+          ;;
+      esac
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("write refresh runtime script");
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let service = BitloopsInferenceTextGenerationService::new(
+        "summary_local",
+        "ollama_chat",
+        &runtime,
+        &config_path,
+    )
+    .expect("build runtime service");
+
+    assert_eq!(
+        service
+            .complete_with_options(
+                "system",
+                "user",
+                TextGenerationOptions {
+                    refresh_cache: true
+                },
+            )
+            .expect("refresh completion"),
+        "Refreshed summary."
     );
 }
 
@@ -209,12 +340,8 @@ fn runtime_service_reuses_hot_runtime_across_service_instances() {
     )
     .expect("build first runtime service");
     assert_eq!(
-        serde_json::from_str::<Value>(&first.complete("system", "user").expect("first completion"))
-            .expect("parse first completion"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
+        first.complete("system", "user").expect("first completion"),
+        "Summarises the symbol."
     );
     drop(first);
 
@@ -226,16 +353,10 @@ fn runtime_service_reuses_hot_runtime_across_service_instances() {
     )
     .expect("build second runtime service");
     assert_eq!(
-        serde_json::from_str::<Value>(
-            &second
-                .complete("system", "user")
-                .expect("second completion")
-        )
-        .expect("parse second completion"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
+        second
+            .complete("system", "user")
+            .expect("second completion"),
+        "Summarises the symbol."
     );
 
     let launches = fs::read_to_string(&launch_log).expect("read launch log");
@@ -272,7 +393,7 @@ while IFS= read -r line; do
       ;;
     *'"type":"infer"'*)
       sleep 1
-      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"bitloops-platform","model_name":"ministral-3-3b-instruct"}\n' "$request_id"
+      printf '{"type":"infer","request_id":"%s","text":"Summarises the symbol.","provider_name":"bitloops-platform","model_name":"ministral-3-3b-instruct"}\n' "$request_id"
       ;;
   esac
 done
@@ -320,13 +441,7 @@ done
             let text = completion
                 .expect("parallel completion thread should join")
                 .expect("parallel completion should succeed");
-            assert_eq!(
-                serde_json::from_str::<Value>(&text).expect("parse response json"),
-                serde_json::json!({
-                    "summary": "Summarises the symbol.",
-                    "confidence": 0.91
-                })
-            );
+            assert_eq!(text, "Summarises the symbol.");
         }
     });
     let elapsed = started.elapsed();
@@ -361,12 +476,8 @@ fn runtime_service_shuts_down_after_idle_eviction() {
     )
     .expect("build first runtime service");
     assert_eq!(
-        serde_json::from_str::<Value>(&first.complete("system", "user").expect("first completion"))
-            .expect("parse first completion"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
+        first.complete("system", "user").expect("first completion"),
+        "Summarises the symbol."
     );
 
     evict_idle_text_generation_sessions_for_tests(Duration::ZERO);
@@ -379,16 +490,10 @@ fn runtime_service_shuts_down_after_idle_eviction() {
     )
     .expect("build second runtime service");
     assert_eq!(
-        serde_json::from_str::<Value>(
-            &second
-                .complete("system", "user")
-                .expect("second completion")
-        )
-        .expect("parse second completion"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
+        second
+            .complete("system", "user")
+            .expect("second completion"),
+        "Summarises the symbol."
     );
 
     let launches = fs::read_to_string(&launch_log).expect("read launch log");
@@ -422,12 +527,8 @@ fn runtime_service_accepts_structured_provider_capabilities_from_describe() {
     )
     .expect("build first runtime service");
     assert_eq!(
-        serde_json::from_str::<Value>(&first.complete("system", "user").expect("first completion"))
-            .expect("parse first completion"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
+        first.complete("system", "user").expect("first completion"),
+        "Summarises the symbol."
     );
 
     evict_idle_text_generation_sessions_for_tests(Duration::ZERO);
@@ -440,16 +541,10 @@ fn runtime_service_accepts_structured_provider_capabilities_from_describe() {
     )
     .expect("build second runtime service");
     assert_eq!(
-        serde_json::from_str::<Value>(
-            &second
-                .complete("system", "user")
-                .expect("second completion")
-        )
-        .expect("parse second completion"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
+        second
+            .complete("system", "user")
+            .expect("second completion"),
+        "Summarises the symbol."
     );
 
     let launches = fs::read_to_string(&launch_log).expect("read launch log");
@@ -605,14 +700,14 @@ while IFS= read -r line; do
   request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
   case "$line" in
     *'"type":"describe"'*)
-      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":["text","json_object"]}}\n' "$request_id"
+      printf '{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":{"response_modes":["text","json_object"],"usage_reporting":true,"structured_output":[]}}}\n' "$request_id"
       ;;
     *'"type":"shutdown"'*)
       printf '{"type":"shutdown","request_id":"%s"}\n' "$request_id"
       exit 0
       ;;
     *'"type":"infer"'*)
-      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"Summarises the symbol.","confidence":0.91},"provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
+      printf '{"type":"infer","request_id":"%s","text":"Summarises the symbol.","provider_name":"ollama","model_name":"ministral-3:3b"}\n' "$request_id"
       ;;
   esac
 done
@@ -696,13 +791,7 @@ config_path = "{}"
         .text_generation("summary_generation")
         .and_then(|service| service.complete("system", "user"))
         .expect("runtime-backed text generation");
-    assert_eq!(
-        serde_json::from_str::<Value>(&text).expect("parse response json"),
-        serde_json::json!({
-            "summary": "Summarises the symbol.",
-            "confidence": 0.91
-        })
-    );
+    assert_eq!(text, "Summarises the symbol.");
 
     let launched_with = std::fs::read_to_string(&launch_log).expect("read launch log");
     assert_eq!(

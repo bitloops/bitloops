@@ -457,10 +457,9 @@ mod tests {
         setup_git_repo(&dir);
 
         with_hook_test_process_state(dir.path(), &[], || {
-            fs::create_dir_all(dir.path().join(".bitloops")).unwrap();
             fs::write(
-                dir.path().join(".bitloops/settings.json"),
-                r#"{"strategy":"manual-commit","enabled":false}"#,
+                dir.path().join(".bitloops.toml"),
+                "[capture]\nenabled = false\nstrategy = \"manual-commit\"\n",
             )
             .unwrap();
 

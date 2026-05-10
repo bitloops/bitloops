@@ -18,7 +18,7 @@ use crate::cli::telemetry_consent::{
 use crate::cli::terminal_picker::with_multi_select_hook;
 use crate::cli::{Cli, Commands};
 use crate::config::default_daemon_config_path;
-use crate::config::settings::{SETTINGS_DIR, save_settings, settings_local_path, settings_path};
+use crate::config::settings::{save_settings, settings_local_path, settings_path};
 use crate::test_support::process_state::{
     git_command, with_cwd, with_env_var, with_env_vars, with_process_state,
 };
@@ -27,14 +27,10 @@ use std::io::Cursor;
 use tempfile::TempDir;
 
 fn setup_settings(dir: &TempDir, content: &str) {
-    let settings_dir = dir.path().join(SETTINGS_DIR);
-    fs::create_dir_all(&settings_dir).unwrap();
     fs::write(settings_path(dir.path()), content).unwrap();
 }
 
 fn setup_local_settings(dir: &TempDir, content: &str) {
-    let settings_dir = dir.path().join(SETTINGS_DIR);
-    fs::create_dir_all(&settings_dir).unwrap();
     fs::write(settings_local_path(dir.path()), content).unwrap();
 }
 
@@ -868,7 +864,6 @@ enabled = true
 #[test]
 fn determine_settings_target_explicit_local_flag() {
     let dir = tempfile::tempdir().unwrap();
-    fs::create_dir_all(dir.path().join(SETTINGS_DIR)).unwrap();
     fs::write(settings_path(dir.path()), "{}").unwrap();
     let (path, notify) = determine_settings_target(dir.path(), true, false);
     assert_eq!(path, settings_local_path(dir.path()));
@@ -878,7 +873,6 @@ fn determine_settings_target_explicit_local_flag() {
 #[test]
 fn determine_settings_target_explicit_project_flag() {
     let dir = tempfile::tempdir().unwrap();
-    fs::create_dir_all(dir.path().join(SETTINGS_DIR)).unwrap();
     fs::write(settings_path(dir.path()), "{}").unwrap();
     let (path, notify) = determine_settings_target(dir.path(), false, true);
     assert_eq!(path, settings_path(dir.path()));
@@ -888,7 +882,6 @@ fn determine_settings_target_explicit_project_flag() {
 #[test]
 fn determine_settings_target_settings_exists_no_flags() {
     let dir = tempfile::tempdir().unwrap();
-    fs::create_dir_all(dir.path().join(SETTINGS_DIR)).unwrap();
     fs::write(settings_path(dir.path()), "{}").unwrap();
     let (path, notify) = determine_settings_target(dir.path(), false, false);
     assert_eq!(path, settings_local_path(dir.path()));
@@ -941,30 +934,6 @@ some_other_option = "value"
 }
 
 #[test]
-fn setup_bitloops_dir_creates_directory() {
-    let dir = tempfile::tempdir().unwrap();
-
-    setup_bitloops_dir(dir.path()).unwrap();
-
-    assert!(dir.path().join(SETTINGS_DIR).is_dir());
-}
-
-#[test]
-fn setup_bitloops_dir_preserves_existing_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let bitloops_dir = dir.path().join(SETTINGS_DIR);
-    fs::create_dir_all(&bitloops_dir).unwrap();
-    fs::write(bitloops_dir.join("marker.txt"), "marker").unwrap();
-
-    setup_bitloops_dir(dir.path()).unwrap();
-
-    assert_eq!(
-        fs::read_to_string(bitloops_dir.join("marker.txt")).unwrap(),
-        "marker"
-    );
-}
-
-#[test]
 fn run_enable_with_strategy_preserves_local_settings() {
     with_isolated_daemon_config(|| {
         let dir = tempfile::tempdir().unwrap();
@@ -996,14 +965,6 @@ push = true
             "local strategy options should be preserved"
         );
     });
-}
-
-#[test]
-fn test_check_bitloops_dir_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    assert!(!check_bitloops_dir_exists(dir.path()));
-    fs::create_dir_all(dir.path().join(SETTINGS_DIR)).unwrap();
-    assert!(check_bitloops_dir_exists(dir.path()));
 }
 
 #[test]
@@ -1060,18 +1021,6 @@ fn count_shadow_branches_test() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     assert_eq!(count_shadow_branches(dir.path()), 0);
-}
-
-#[test]
-fn test_remove_bitloops_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::create_dir_all(dir.path().join(SETTINGS_DIR).join("subdir")).unwrap();
-    fs::write(dir.path().join(SETTINGS_DIR).join("test.txt"), "test").unwrap();
-    remove_bitloops_directory(dir.path()).unwrap();
-    assert!(
-        !dir.path().join(SETTINGS_DIR).exists(),
-        ".bitloops should be removed"
-    );
 }
 
 #[test]
@@ -1314,12 +1263,6 @@ fn run_post_install_shell_completion_with_io_unsupported_shell_is_non_fatal() {
             );
         },
     );
-}
-
-#[test]
-fn remove_bitloops_directory_not_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    remove_bitloops_directory(dir.path()).unwrap();
 }
 
 #[test]
@@ -2362,20 +2305,6 @@ fn repo_local_policy_exclude_is_added_to_git_info_exclude() {
 
     let exclude = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
     assert!(exclude.contains(".bitloops.local.toml"));
-    assert!(!exclude.contains(".bitloops/"));
-}
-
-#[test]
-fn repo_local_policy_exclude_does_not_add_legacy_names() {
-    let dir = tempfile::tempdir().unwrap();
-    setup_git_repo(&dir);
-    ensure_repo_local_policy_excluded(dir.path(), dir.path()).unwrap();
-
-    let gitignore = fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
-    assert!(
-        !gitignore.contains("settings.local.json"),
-        "git exclude must not include legacy settings.local.json:\n{gitignore}"
-    );
 }
 
 #[test]

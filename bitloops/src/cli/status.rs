@@ -397,7 +397,6 @@ fn format_runtime_lane_summary(
 mod tests {
     use super::{ActiveSession, run_status_at, time_ago, write_active_sessions};
     use crate::config::settings::{self, BitloopsSettings};
-    use serde_json::json;
     use std::fs;
     use std::io::Cursor;
     use std::path::Path;
@@ -908,28 +907,6 @@ mod tests {
         assert!(
             output.contains("Disabled (auto-commit)"),
             "status should read .bitloops.local.toml override and show Disabled, got: {output}"
-        );
-    }
-
-    #[test]
-    fn unified_config_status_ignores_legacy_settings_json() {
-        let repo = setup_status_test_repo();
-        let settings_dir = repo.path().join(".bitloops");
-        fs::create_dir_all(&settings_dir).expect("dir");
-        fs::write(
-            settings_dir.join("settings.json"),
-            json!({"strategy": "auto-commit", "enabled": false}).to_string(),
-        )
-        .expect("legacy file");
-
-        let mut stdout = Cursor::new(Vec::new());
-        let err = run_status_at(&mut stdout, false, repo.path());
-        assert!(err.is_ok(), "run_status returned error: {err:?}");
-
-        let output = String::from_utf8(stdout.into_inner()).expect("utf8");
-        assert!(
-            output.contains("Enabled (manual-commit)"),
-            "status must ignore legacy settings.json and use built-in defaults, got: {output}"
         );
     }
 }

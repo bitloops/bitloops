@@ -773,9 +773,6 @@ fn sync_internal_ignored_paths(
 }
 
 fn is_sync_internal_ignored_path(path: &str, ignored: &HashSet<String>) -> bool {
-    if path.starts_with(".bitloops/stores/") {
-        return true;
-    }
     ignored
         .iter()
         .any(|base| path == base || path.starts_with(&format!("{base}-")))

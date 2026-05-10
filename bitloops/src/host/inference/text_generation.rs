@@ -13,7 +13,7 @@ use bitloops_inference_protocol::{
     DescribeRequest, DescribeResponse, ErrorResponse, InferRequest, InferResponse,
     PROTOCOL_VERSION, ResponseMode, RuntimeRequest, RuntimeResponse, ShutdownRequest,
 };
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::config::InferenceRuntimeConfig;
@@ -21,7 +21,7 @@ use crate::config::InferenceRuntimeConfig;
 use super::{
     BITLOOPS_PLATFORM_CHAT_DRIVER, DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY,
     OPENAI_CHAT_COMPLETIONS_DRIVER, StructuredGenerationRequest, StructuredGenerationService,
-    TextGenerationService,
+    TextGenerationOptions, TextGenerationService,
 };
 
 const SHARED_TEXT_GENERATION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -87,9 +87,21 @@ impl TextGenerationService for BitloopsInferenceTextGenerationService {
     }
 
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Result<String> {
+        self.complete_with_options(system_prompt, user_prompt, TextGenerationOptions::default())
+    }
+
+    fn complete_with_options(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        options: TextGenerationOptions,
+    ) -> Result<String> {
+        let metadata = options
+            .refresh_cache
+            .then(|| json!({ "bitloops_refresh_cache": true }));
         let response = self
             .shared_session_pool
-            .infer(system_prompt, user_prompt)
+            .infer_with_metadata(system_prompt, user_prompt, metadata, ResponseMode::Text)
             .with_context(|| {
                 format!(
                     "requesting standalone `bitloops-inference` runtime for profile `{}`",
@@ -129,6 +141,7 @@ impl StructuredGenerationService for BitloopsInferenceTextGenerationService {
                 &request.system_prompt,
                 &request.user_prompt,
                 Some(Value::Object(metadata)),
+                ResponseMode::JsonObject,
             )
             .with_context(|| {
                 format!(
@@ -256,18 +269,15 @@ impl SharedBitloopsInferenceSessionPool {
         self.next_session().describe()
     }
 
-    fn infer(&self, system_prompt: &str, user_prompt: &str) -> Result<InferResponse> {
-        self.infer_with_metadata(system_prompt, user_prompt, None)
-    }
-
     fn infer_with_metadata(
         &self,
         system_prompt: &str,
         user_prompt: &str,
         metadata: Option<Value>,
+        response_mode: ResponseMode,
     ) -> Result<InferResponse> {
         self.next_session()
-            .infer_with_metadata(system_prompt, user_prompt, metadata)
+            .infer_with_metadata(system_prompt, user_prompt, metadata, response_mode)
     }
 
     fn shutdown_idle_sessions(&self, idle_timeout: Duration) {
@@ -346,6 +356,7 @@ impl SharedBitloopsInferenceSession {
         system_prompt: &str,
         user_prompt: &str,
         metadata: Option<Value>,
+        response_mode: ResponseMode,
     ) -> Result<InferResponse> {
         let mut state = self
             .state
@@ -357,8 +368,12 @@ impl SharedBitloopsInferenceSession {
 
         match self
             .ensure_session_started(&mut state)?
-            .infer_with_metadata(system_prompt, user_prompt, metadata.clone())
-        {
+            .infer_with_metadata(
+                system_prompt,
+                user_prompt,
+                metadata.clone(),
+                response_mode.clone(),
+            ) {
             Ok(response) => {
                 state.last_used_at = Instant::now();
                 Ok(response)
@@ -381,7 +396,7 @@ impl SharedBitloopsInferenceSession {
                     .session
                     .as_mut()
                     .expect("session replaced above")
-                    .infer_with_metadata(system_prompt, user_prompt, metadata)
+                    .infer_with_metadata(system_prompt, user_prompt, metadata, response_mode)
                     .with_context(|| {
                         format!(
                             "retrying standalone `bitloops-inference` request after failure: {first_err:#}"
@@ -688,12 +703,13 @@ impl BitloopsInferenceSession {
         system_prompt: &str,
         user_prompt: &str,
         metadata: Option<Value>,
+        response_mode: ResponseMode,
     ) -> Result<InferResponse> {
         let request = RuntimeRequest::Infer(InferRequest {
             request_id: next_request_id(),
             system_prompt: system_prompt.to_string(),
             user_prompt: user_prompt.to_string(),
-            response_mode: ResponseMode::JsonObject,
+            response_mode,
             temperature: None,
             max_output_tokens: None,
             metadata,
