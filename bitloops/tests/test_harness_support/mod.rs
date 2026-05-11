@@ -1012,7 +1012,6 @@ impl Drop for RepoAppEnvGuard {
 }
 
 fn app_paths_for_repo(repo: &Path) -> AppPaths {
-    ignore_repo_test_state_dir(repo);
     let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
@@ -1027,7 +1026,11 @@ fn app_paths_for_repo(repo: &Path) -> AppPaths {
         xdg_data: home.join("xdg-data"),
         xdg_cache: home.join("xdg-cache"),
         xdg_state: home.join("xdg-state"),
-        test_state: repo.join(".bitloops-test-state"),
+        test_state: std::env::temp_dir()
+            .join("bitloops-test-state")
+            .join(format!("process-{}", std::process::id()))
+            .join("repos")
+            .join(format!("{hash:016x}")),
         home,
     };
     for dir in [
@@ -1041,26 +1044,6 @@ fn app_paths_for_repo(repo: &Path) -> AppPaths {
         fs::create_dir_all(dir).expect("create isolated Bitloops app dir");
     }
     app_paths
-}
-
-fn ignore_repo_test_state_dir(repo: &Path) {
-    let exclude_path = repo.join(".git").join("info").join("exclude");
-    if !exclude_path.exists() {
-        return;
-    }
-
-    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
-    if content
-        .lines()
-        .any(|line| line.trim() == ".bitloops-test-state/")
-    {
-        return;
-    }
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(".bitloops-test-state/\n");
-    fs::write(&exclude_path, content).expect("write git exclude for test state dir");
 }
 
 fn env_lock() -> &'static Mutex<()> {

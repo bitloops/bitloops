@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::ffi::OsString;
 use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -34,7 +32,6 @@ pub fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
 #[allow(dead_code)]
 pub fn write_test_daemon_config(repo: &Path) {
     let config_path = repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
-    ignore_repo_test_state_dir(repo);
     let daemon_state_root = repo_test_state_root(repo);
     let sqlite_path = daemon_state_root
         .join("stores")
@@ -158,6 +155,7 @@ pub fn isolated_repo_aux_dir(repo: &Path, name: &str) -> PathBuf {
     dir
 }
 
+#[allow(dead_code)]
 pub fn with_repo_app_env<T>(repo: &Path, f: impl FnOnce() -> T) -> T {
     let _guard = enter_repo_app_env(repo);
     f()
@@ -213,7 +211,6 @@ pub struct RepoAppPaths {
 
 fn isolated_app_paths(repo: &Path) -> RepoAppPaths {
     let home = isolated_repo_aux_dir(repo, "home");
-    ignore_repo_test_state_dir(repo);
     let paths = RepoAppPaths {
         xdg_config: home.join("xdg-config"),
         xdg_data: home.join("xdg-data"),
@@ -236,27 +233,16 @@ fn isolated_app_paths(repo: &Path) -> RepoAppPaths {
 }
 
 fn repo_test_state_root(repo: &Path) -> PathBuf {
-    repo.join(".bitloops-test-state")
-}
+    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let hash = hasher.finish();
 
-fn ignore_repo_test_state_dir(repo: &Path) {
-    let exclude_path = repo.join(".git").join("info").join("exclude");
-    if !exclude_path.exists() {
-        return;
-    }
-
-    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
-    if content
-        .lines()
-        .any(|line| line.trim() == ".bitloops-test-state/")
-    {
-        return;
-    }
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(".bitloops-test-state/\n");
-    fs::write(&exclude_path, content).expect("write git exclude for test state dir");
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("repos")
+        .join(format!("{hash:016x}"))
 }
 
 fn env_lock() -> &'static Mutex<()> {

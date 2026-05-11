@@ -1,4 +1,5 @@
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::config::resolve_repo_runtime_db_path_for_repo;
@@ -39,7 +40,6 @@ pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
 
 pub(crate) fn write_test_daemon_config(config_root: &Path) -> PathBuf {
     let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    ignore_repo_test_state_dir(config_root);
     let daemon_state_root = test_state_root_for_config_root(config_root);
     let sqlite_path = daemon_state_root
         .join("stores")
@@ -120,27 +120,18 @@ pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
 }
 
 pub(crate) fn test_state_root_for_config_root(config_root: &Path) -> PathBuf {
-    config_root.join(".bitloops-test-state")
-}
+    let canonical = config_root
+        .canonicalize()
+        .unwrap_or_else(|_| config_root.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let hash = hasher.finish();
 
-fn ignore_repo_test_state_dir(config_root: &Path) {
-    let exclude_path = config_root.join(".git").join("info").join("exclude");
-    if !exclude_path.exists() {
-        return;
-    }
-
-    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
-    if content
-        .lines()
-        .any(|line| line.trim() == ".bitloops-test-state/")
-    {
-        return;
-    }
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(".bitloops-test-state/\n");
-    fs::write(&exclude_path, content).expect("write git exclude for test state dir");
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("repos")
+        .join(format!("{hash:016x}"))
 }
 
 #[cfg(test)]
@@ -148,7 +139,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn write_test_daemon_config_keeps_state_under_config_root() {
+    fn write_test_daemon_config_keeps_state_outside_config_root() {
         let temp = tempfile::tempdir().expect("temp dir");
 
         write_test_daemon_config(temp.path());
@@ -159,12 +150,9 @@ mod tests {
             .relational
             .resolve_sqlite_db_path_for_repo(temp.path())
             .expect("resolve relational sqlite path");
-        let expected_root = temp.path().join(".bitloops-test-state");
-        let old_sibling_root = temp
-            .path()
-            .parent()
-            .expect("temp dir should have parent")
-            .join(".bitloops-test-state");
+        let expected_root = std::env::temp_dir()
+            .join("bitloops-test-state")
+            .join(format!("process-{}", std::process::id()));
 
         assert!(
             sqlite_path.starts_with(&expected_root),
@@ -173,10 +161,26 @@ mod tests {
             expected_root.display()
         );
         assert!(
-            !sqlite_path.starts_with(&old_sibling_root),
-            "sqlite path {} should not use sibling state root {}",
+            !sqlite_path.starts_with(temp.path()),
+            "sqlite path {} should not be under config root {}",
             sqlite_path.display(),
-            old_sibling_root.display()
+            temp.path().display()
+        );
+    }
+
+    #[test]
+    fn write_test_daemon_config_does_not_mutate_git_exclude() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let exclude_path = temp.path().join(".git").join("info").join("exclude");
+        fs::create_dir_all(exclude_path.parent().expect("exclude parent"))
+            .expect("create .git/info");
+        fs::write(&exclude_path, "existing-rule\n").expect("write exclude");
+
+        write_test_daemon_config(temp.path());
+
+        assert_eq!(
+            fs::read_to_string(&exclude_path).expect("read exclude"),
+            "existing-rule\n"
         );
     }
 }
