@@ -33,6 +33,7 @@ struct AppPaths {
     xdg_data: PathBuf,
     xdg_cache: PathBuf,
     xdg_state: PathBuf,
+    test_state: PathBuf,
 }
 
 fn write_test_daemon_config(config_root: &Path) -> PathBuf {
@@ -961,6 +962,7 @@ pub(crate) fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
         .env("XDG_DATA_HOME", &app_paths.xdg_data)
         .env("XDG_CACHE_HOME", &app_paths.xdg_cache)
         .env("XDG_STATE_HOME", &app_paths.xdg_state)
+        .env("BITLOOPS_TEST_STATE_DIR_OVERRIDE", &app_paths.test_state)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(DISABLE_VERSION_CHECK_ENV, "1")
         .env_remove("BITLOOPS_DEVQL_PG_DSN")
@@ -987,6 +989,10 @@ fn enter_repo_app_env(repo: &Path) -> RepoAppEnvGuard {
         ("XDG_DATA_HOME", Some(app_paths.xdg_data.as_os_str())),
         ("XDG_CACHE_HOME", Some(app_paths.xdg_cache.as_os_str())),
         ("XDG_STATE_HOME", Some(app_paths.xdg_state.as_os_str())),
+        (
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(app_paths.test_state.as_os_str()),
+        ),
     ]);
     RepoAppEnvGuard {
         _lock_guard: lock_guard,
@@ -1020,6 +1026,11 @@ fn app_paths_for_repo(repo: &Path) -> AppPaths {
         xdg_data: home.join("xdg-data"),
         xdg_cache: home.join("xdg-cache"),
         xdg_state: home.join("xdg-state"),
+        test_state: std::env::temp_dir()
+            .join("bitloops-test-state")
+            .join(format!("process-{}", std::process::id()))
+            .join("repos")
+            .join(format!("{hash:016x}")),
         home,
     };
     for dir in [
@@ -1028,6 +1039,7 @@ fn app_paths_for_repo(repo: &Path) -> AppPaths {
         &app_paths.xdg_data,
         &app_paths.xdg_cache,
         &app_paths.xdg_state,
+        &app_paths.test_state,
     ] {
         fs::create_dir_all(dir).expect("create isolated Bitloops app dir");
     }

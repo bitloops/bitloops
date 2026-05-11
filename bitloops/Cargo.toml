@@ -33,6 +33,10 @@ name = "production_seed"
 path = "tests/production_seed.rs"
 
 [[test]]
+name = "test_command_support_tests"
+path = "tests/test_command_support_tests.rs"
+
+[[test]]
 name = "testlens_gherkin"
 path = "tests/testlens_gherkin.rs"
 required-features = ["slow-tests"]

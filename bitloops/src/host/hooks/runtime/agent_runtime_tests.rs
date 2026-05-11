@@ -354,7 +354,7 @@ devql_guidance_enabled = false
     let strategy = NoOpStrategy;
     let skill_path = dir
         .path()
-        .join(".claude/skills/bitloops/devql-explore-first/SKILL.md");
+        .join(".claude/skills/devql-explore-first/SKILL.md");
     let settings_path = dir.path().join(".claude/settings.json");
 
     with_process_state(Some(dir.path()), &[], || {

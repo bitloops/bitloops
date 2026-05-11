@@ -8,6 +8,8 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use bitloops::cli::versioncheck::DISABLE_VERSION_CHECK_ENV;
 use bitloops::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV;
 
+const TEST_STATE_DIR_OVERRIDE_ENV: &str = "BITLOOPS_TEST_STATE_DIR_OVERRIDE";
+
 pub fn new_isolated_bitloops_command(bin_path: &Path, repo: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new(bin_path);
     cmd.args(args)
@@ -30,16 +32,7 @@ pub fn apply_repo_app_env(cmd: &mut Command, repo: &Path) {
 #[allow(dead_code)]
 pub fn write_test_daemon_config(repo: &Path) {
     let config_path = repo.join(bitloops::config::BITLOOPS_CONFIG_RELATIVE_PATH);
-    let daemon_state_root = repo
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| repo.to_path_buf())
-        .join(".bitloops-test-state")
-        .join(
-            repo.file_name()
-                .map(|name| name.to_os_string())
-                .unwrap_or_default(),
-        );
+    let daemon_state_root = repo_test_state_root(repo);
     let sqlite_path = daemon_state_root
         .join("stores")
         .join("relational")
@@ -137,6 +130,7 @@ pub fn apply_repo_app_paths(cmd: &mut Command, paths: &RepoAppPaths) {
         .env("XDG_DATA_HOME", &paths.xdg_data)
         .env("XDG_CACHE_HOME", &paths.xdg_cache)
         .env("XDG_STATE_HOME", &paths.xdg_state)
+        .env(TEST_STATE_DIR_OVERRIDE_ENV, &paths.test_state)
         .env(DISABLE_WATCHER_AUTOSTART_ENV, "1")
         .env(DISABLE_VERSION_CHECK_ENV, "1");
 }
@@ -161,6 +155,7 @@ pub fn isolated_repo_aux_dir(repo: &Path, name: &str) -> PathBuf {
     dir
 }
 
+#[allow(dead_code)]
 pub fn with_repo_app_env<T>(repo: &Path, f: impl FnOnce() -> T) -> T {
     let _guard = enter_repo_app_env(repo);
     f()
@@ -182,6 +177,10 @@ pub fn enter_repo_app_paths(paths: &RepoAppPaths) -> RepoAppEnvGuard {
         ("XDG_DATA_HOME", Some(paths.xdg_data.as_os_str())),
         ("XDG_CACHE_HOME", Some(paths.xdg_cache.as_os_str())),
         ("XDG_STATE_HOME", Some(paths.xdg_state.as_os_str())),
+        (
+            TEST_STATE_DIR_OVERRIDE_ENV,
+            Some(paths.test_state.as_os_str()),
+        ),
     ]);
     RepoAppEnvGuard {
         _lock_guard: lock_guard,
@@ -207,6 +206,7 @@ pub struct RepoAppPaths {
     pub xdg_data: PathBuf,
     pub xdg_cache: PathBuf,
     pub xdg_state: PathBuf,
+    pub test_state: PathBuf,
 }
 
 fn isolated_app_paths(repo: &Path) -> RepoAppPaths {
@@ -216,6 +216,7 @@ fn isolated_app_paths(repo: &Path) -> RepoAppPaths {
         xdg_data: home.join("xdg-data"),
         xdg_cache: home.join("xdg-cache"),
         xdg_state: home.join("xdg-state"),
+        test_state: repo_test_state_root(repo),
         home,
     };
     for dir in [
@@ -224,10 +225,24 @@ fn isolated_app_paths(repo: &Path) -> RepoAppPaths {
         &paths.xdg_data,
         &paths.xdg_cache,
         &paths.xdg_state,
+        &paths.test_state,
     ] {
         fs::create_dir_all(dir).expect("create isolated Bitloops app dir");
     }
     paths
+}
+
+fn repo_test_state_root(repo: &Path) -> PathBuf {
+    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("repos")
+        .join(format!("{hash:016x}"))
 }
 
 fn env_lock() -> &'static Mutex<()> {

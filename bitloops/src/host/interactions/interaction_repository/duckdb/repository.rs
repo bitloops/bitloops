@@ -5,7 +5,7 @@ use duckdb::OptionalExt;
 
 use super::row_mapping::{append_event_filter_sql, map_event_row, map_session_row, map_turn_row};
 use super::schema::ensure_current_schema;
-use crate::host::devql::esc_pg;
+use crate::host::devql::{esc_pg, open_duckdb_connection_with_retry};
 use crate::host::interactions::types::{
     InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
 };
@@ -33,8 +33,7 @@ impl DuckDbInteractionRepository {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating DuckDB directory {}", parent.display()))?;
         }
-        duckdb::Connection::open(&self.path)
-            .with_context(|| format!("opening DuckDB at {}", self.path.display()))
+        open_duckdb_connection_with_retry(&self.path)
     }
 
     pub(crate) fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
