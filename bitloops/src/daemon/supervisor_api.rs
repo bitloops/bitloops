@@ -63,8 +63,8 @@ fn spawn_supervisor_child_reaper() -> Option<tokio::task::JoinHandle<()>> {
         };
         while sigchld.recv().await.is_some() {
             match reap_terminated_child_processes() {
-                Ok(count) if count > 0 => {
-                    log::debug!("daemon supervisor reaped {count} child process(es)");
+                Ok(reaped) if !reaped.is_empty() => {
+                    log_reaped_child_processes(&reaped);
                 }
                 Ok(_) => {}
                 Err(err) => {
@@ -149,6 +149,28 @@ fn supervisor_api_error(err: anyhow::Error) -> (axum::http::StatusCode, String) 
 }
 
 async fn wait_for_shutdown_signal() {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ShutdownTrigger {
+        CtrlC,
+        Sigterm,
+    }
+
+    impl ShutdownTrigger {
+        fn label(self) -> &'static str {
+            match self {
+                ShutdownTrigger::CtrlC => "ctrl-c",
+                ShutdownTrigger::Sigterm => "sigterm",
+            }
+        }
+    }
+
+    fn log_shutdown_signal(trigger: ShutdownTrigger) {
+        log::info!(
+            "daemon supervisor shutdown signal received: {}",
+            trigger.label()
+        );
+    }
+
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
@@ -160,11 +182,13 @@ async fn wait_for_shutdown_signal() {
                 None
             }
         };
-        tokio::select! {
+        let trigger = tokio::select! {
             result = tokio::signal::ctrl_c() => {
                 if let Err(err) = result {
                     log::warn!("failed to install Ctrl-C handler for daemon supervisor: {err:#}");
+                    std::future::pending::<()>().await;
                 }
+                ShutdownTrigger::CtrlC
             }
             _ = async {
                 if let Some(signal) = terminate.as_mut() {
@@ -172,14 +196,35 @@ async fn wait_for_shutdown_signal() {
                 } else {
                     std::future::pending::<()>().await;
                 }
-            } => {}
-        }
+            } => ShutdownTrigger::Sigterm,
+        };
+        log_shutdown_signal(trigger);
     }
 
     #[cfg(not(unix))]
     {
         if let Err(err) = tokio::signal::ctrl_c().await {
             log::warn!("failed to install Ctrl-C handler for daemon supervisor: {err:#}");
+            std::future::pending::<()>().await;
+        }
+        log_shutdown_signal(ShutdownTrigger::CtrlC);
+    }
+}
+
+fn log_reaped_child_processes(reaped: &[ChildTerminationRecord]) {
+    for child in reaped {
+        if child.is_expected_shutdown() {
+            log::info!(
+                "daemon supervisor reaped child process: pid={} outcome={}",
+                child.pid,
+                child.summary()
+            );
+        } else {
+            log::warn!(
+                "daemon supervisor reaped child process: pid={} outcome={}",
+                child.pid,
+                child.summary()
+            );
         }
     }
 }
@@ -188,7 +233,7 @@ async fn wait_for_shutdown_signal() {
 mod tests {
     use super::*;
     use crate::api::DashboardServerConfig;
-    use crate::test_support::log_capture::capture_logs_async;
+    use crate::test_support::log_capture::{capture_logs, capture_logs_async};
 
     #[tokio::test]
     async fn supervisor_api_logs_terminal_handoff_failure() {
@@ -219,6 +264,27 @@ mod tests {
             logs.iter().any(|entry| entry.level == log::Level::Error
                 && entry.message.contains("daemon supervisor request failed")),
             "expected supervisor API to log terminal handoff failure, got logs: {logs:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn supervisor_logs_reaped_sigterm_child_details() {
+        let (_, logs) = capture_logs(|| {
+            log_reaped_child_processes(&[ChildTerminationRecord {
+                pid: 42,
+                outcome: ChildTerminationOutcome::Signaled {
+                    signal: libc::SIGTERM,
+                    core_dumped: false,
+                },
+            }]);
+        });
+
+        assert!(
+            logs.iter().any(|entry| entry.level == log::Level::Info
+                && entry.message.contains("pid=42")
+                && entry.message.contains("signal 15 (SIGTERM)")),
+            "expected child reap diagnostic log entry, got logs: {logs:?}"
         );
     }
 }

@@ -144,6 +144,12 @@ fn supervisor_service_name_is_global_and_stable() {
 }
 
 #[test]
+fn daemon_restart_timeouts_allow_extended_shutdown_and_startup_work() {
+    assert_eq!(READY_TIMEOUT, Duration::from_secs(45));
+    assert_eq!(STOP_TIMEOUT, Duration::from_secs(45));
+}
+
+#[test]
 fn daemon_shutdown_tears_down_watchers_bound_to_the_same_daemon_config() {
     let temp = TempDir::new().expect("temp dir");
     let daemon_root = temp.path().join("daemon-root");

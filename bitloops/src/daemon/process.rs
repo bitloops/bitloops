@@ -1,5 +1,113 @@
 use super::*;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ChildTerminationRecord {
+    pub(super) pid: u32,
+    pub(super) outcome: ChildTerminationOutcome,
+}
+
+impl ChildTerminationRecord {
+    pub(super) fn summary(&self) -> String {
+        self.outcome.summary()
+    }
+
+    pub(super) fn is_expected_shutdown(&self) -> bool {
+        match self.outcome {
+            ChildTerminationOutcome::Exited { code } => code == 0,
+            ChildTerminationOutcome::Signaled { signal, .. } => {
+                signal == expected_shutdown_signal_term()
+                    || signal == expected_shutdown_signal_int()
+            }
+            ChildTerminationOutcome::Stopped { .. }
+            | ChildTerminationOutcome::Continued
+            | ChildTerminationOutcome::Unknown { .. } => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ChildTerminationOutcome {
+    Exited { code: i32 },
+    Signaled { signal: i32, core_dumped: bool },
+    Stopped { signal: i32 },
+    Continued,
+    Unknown { raw_status: i32 },
+}
+
+impl ChildTerminationOutcome {
+    fn summary(&self) -> String {
+        match self {
+            ChildTerminationOutcome::Exited { code } => format!("exited with code {code}"),
+            ChildTerminationOutcome::Signaled {
+                signal,
+                core_dumped,
+            } => {
+                let signal_name = signal_name(*signal)
+                    .map(|name| format!(" ({name})"))
+                    .unwrap_or_default();
+                if *core_dumped {
+                    format!("signal {signal}{signal_name}, core dumped")
+                } else {
+                    format!("signal {signal}{signal_name}")
+                }
+            }
+            ChildTerminationOutcome::Stopped { signal } => {
+                let signal_name = signal_name(*signal)
+                    .map(|name| format!(" ({name})"))
+                    .unwrap_or_default();
+                format!("stopped by signal {signal}{signal_name}")
+            }
+            ChildTerminationOutcome::Continued => "continued".to_string(),
+            ChildTerminationOutcome::Unknown { raw_status } => {
+                format!("unknown wait status {raw_status}")
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn signal_name(signal: i32) -> Option<&'static str> {
+    match signal {
+        libc::SIGTERM => Some("SIGTERM"),
+        libc::SIGINT => Some("SIGINT"),
+        libc::SIGKILL => Some("SIGKILL"),
+        libc::SIGABRT => Some("SIGABRT"),
+        libc::SIGSEGV => Some("SIGSEGV"),
+        libc::SIGBUS => Some("SIGBUS"),
+        libc::SIGILL => Some("SIGILL"),
+        libc::SIGQUIT => Some("SIGQUIT"),
+        libc::SIGTRAP => Some("SIGTRAP"),
+        _ => None,
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_name(_signal: i32) -> Option<&'static str> {
+    None
+}
+
+fn expected_shutdown_signal_term() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::SIGTERM
+    }
+    #[cfg(not(unix))]
+    {
+        15
+    }
+}
+
+fn expected_shutdown_signal_int() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::SIGINT
+    }
+    #[cfg(not(unix))]
+    {
+        2
+    }
+}
+
 pub(super) fn current_binary_fingerprint() -> Result<String> {
     let current_exe = env::current_exe().context("resolving Bitloops executable path")?;
     let bytes = fs::read(&current_exe)
@@ -155,13 +263,16 @@ pub(super) fn reap_terminated_child_process(_pid: u32, _timeout: Duration) -> Re
 }
 
 #[cfg(unix)]
-pub(super) fn reap_terminated_child_processes() -> Result<usize> {
-    let mut reaped = 0_usize;
+pub(super) fn reap_terminated_child_processes() -> Result<Vec<ChildTerminationRecord>> {
+    let mut reaped = Vec::new();
     loop {
         let mut status = 0;
         let result = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
         if result > 0 {
-            reaped += 1;
+            reaped.push(ChildTerminationRecord {
+                pid: result as u32,
+                outcome: decode_child_termination_status(status),
+            });
             continue;
         }
         if result == 0 {
@@ -178,9 +289,33 @@ pub(super) fn reap_terminated_child_processes() -> Result<usize> {
     }
 }
 
+#[cfg(unix)]
+fn decode_child_termination_status(status: i32) -> ChildTerminationOutcome {
+    if libc::WIFEXITED(status) {
+        return ChildTerminationOutcome::Exited {
+            code: libc::WEXITSTATUS(status),
+        };
+    }
+    if libc::WIFSIGNALED(status) {
+        return ChildTerminationOutcome::Signaled {
+            signal: libc::WTERMSIG(status),
+            core_dumped: libc::WCOREDUMP(status),
+        };
+    }
+    if libc::WIFSTOPPED(status) {
+        return ChildTerminationOutcome::Stopped {
+            signal: libc::WSTOPSIG(status),
+        };
+    }
+    if libc::WIFCONTINUED(status) {
+        return ChildTerminationOutcome::Continued;
+    }
+    ChildTerminationOutcome::Unknown { raw_status: status }
+}
+
 #[cfg(not(unix))]
-pub(super) fn reap_terminated_child_processes() -> Result<usize> {
-    Ok(0)
+pub(super) fn reap_terminated_child_processes() -> Result<Vec<ChildTerminationRecord>> {
+    Ok(Vec::new())
 }
 
 pub(super) fn wait_for_shutdown_cleanup(

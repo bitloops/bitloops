@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 fn slim_schema_for_repo(repo_root: &Path) -> crate::graphql::SlimDevqlSchema {
     slim_schema_for_scope(repo_root, None)
@@ -1047,6 +1048,7 @@ async fn daemon_bootstrap_creates_devql_schema_tables() {
             open_browser: false,
             bootstrap_devql_schema: true,
             shutdown_message: None,
+            shutdown_delay: Duration::ZERO,
             on_ready: None,
             on_shutdown: None,
             config_path: Some(
