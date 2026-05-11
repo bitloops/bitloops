@@ -11,9 +11,6 @@ use crate::adapters::agents::copilot::agent::CopilotCliAgent;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
 use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 use crate::adapters::agents::{TokenCalculator, TranscriptAnalyzer};
-use crate::host::hooks::augmentation::builder::{
-    build_devql_hook_augmentation, build_devql_session_start_augmentation,
-};
 
 use super::{
     LifecycleAgentAdapter, LifecycleEvent, LifecycleEventType, dispatch_lifecycle_event,
@@ -510,27 +507,8 @@ impl LifecycleAgentAdapter for CodexLifecycleAdapter {
     }
 }
 
-fn build_prompt_augmentation_stdout(
-    repo_root: &Path,
-    hook_name: &str,
-    event: &LifecycleEvent,
-    registration: &crate::adapters::agents::AgentAdapterRegistration,
-) -> Option<String> {
-    let augmentation = match event.event_type {
-        Some(LifecycleEventType::SessionStart) => {
-            build_devql_session_start_augmentation(repo_root, registration.descriptor().id)?
-        }
-        Some(LifecycleEventType::TurnStart) if !event.prompt.trim().is_empty() => {
-            build_devql_hook_augmentation(repo_root, registration.descriptor().id, &event.prompt)?
-        }
-        _ => return None,
-    };
-
-    registration.render_prompt_augmentation(hook_name, &augmentation)
-}
-
 pub fn route_hook_command_to_lifecycle(
-    repo_root: &Path,
+    _repo_root: &Path,
     agent_name: &str,
     hook_name: &str,
     stdin: &str,
@@ -567,15 +545,13 @@ pub fn route_hook_command_to_lifecycle(
             "failed to parse lifecycle hook '{hook_name}' for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
         )
     })?;
-    let mut outcome = HookCommandOutcome::default();
+    let outcome = HookCommandOutcome::default();
     if let Some(event) = event {
         dispatch_lifecycle_event(Some(adapter.as_ref()), Some(&event)).map_err(|err| {
             anyhow!(
                 "failed to dispatch lifecycle event for family '{family}' profile '{profile}' (correlation_id={correlation_id}): {err}"
             )
         })?;
-        outcome.stdout =
-            build_prompt_augmentation_stdout(repo_root, hook_name, &event, resolved.registration);
     }
     Ok(outcome)
 }

@@ -27,10 +27,6 @@ fn skill_file(path: &Path) -> PathBuf {
     path.join(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
 }
 
-fn legacy_skill_file(path: &Path) -> PathBuf {
-    path.join(crate::adapters::agents::codex::skills::LEGACY_CODEX_SKILL_RELATIVE_PATH)
-}
-
 fn read_hooks(path: &Path) -> String {
     fs::read_to_string(hooks_file(path)).expect("read hooks.json")
 }
@@ -199,7 +195,6 @@ fn install_hooks_writes_the_minimal_repo_skill() {
             skill,
             crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL
         );
-        assert!(!legacy_skill_file(repo.path()).exists());
         assert!(
             !skill_file(home.path()).exists(),
             "must not write Codex skill into HOME"
