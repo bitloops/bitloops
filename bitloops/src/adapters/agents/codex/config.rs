@@ -5,6 +5,9 @@ use anyhow::{Context, Result, anyhow};
 use toml_edit::{DocumentMut, Item, Table, Value as TomlValue};
 
 const CONFIG_FILE_NAME: &str = "config.toml";
+const FEATURES_TABLE_NAME: &str = "features";
+const CANONICAL_HOOKS_FEATURE_KEY: &str = "hooks";
+const LEGACY_HOOKS_FEATURE_KEY: &str = "codex_hooks";
 
 pub fn codex_config_path(repo_root: &Path) -> PathBuf {
     repo_root.join(".codex").join(CONFIG_FILE_NAME)
@@ -27,12 +30,24 @@ pub fn ensure_codex_hooks_feature_enabled_at(repo_root: &Path) -> Result<PathBuf
         }
     };
 
-    if codex_hooks_feature_enabled(&doc) {
+    let features = ensure_features_table(&mut doc)?;
+    let canonical_enabled = feature_flag(features, CANONICAL_HOOKS_FEATURE_KEY).unwrap_or(false);
+    let legacy_present = features.contains_key(LEGACY_HOOKS_FEATURE_KEY);
+    let mut changed = false;
+
+    if !canonical_enabled {
+        features[CANONICAL_HOOKS_FEATURE_KEY] = Item::Value(TomlValue::from(true));
+        changed = true;
+    }
+    if legacy_present {
+        features.remove(LEGACY_HOOKS_FEATURE_KEY);
+        changed = true;
+    }
+
+    if !changed {
         return Ok(path);
     }
 
-    let features = ensure_features_table(&mut doc)?;
-    features["codex_hooks"] = Item::Value(TomlValue::from(true));
     write_config(&path, doc)?;
     Ok(path)
 }
@@ -49,26 +64,32 @@ pub fn codex_hooks_feature_enabled_at(repo_root: &Path) -> bool {
 }
 
 fn codex_hooks_feature_enabled(doc: &DocumentMut) -> bool {
-    doc.get("features")
-        .and_then(Item::as_table)
-        .and_then(|features| features.get("codex_hooks"))
-        .and_then(Item::as_bool)
+    let Some(features) = doc.get(FEATURES_TABLE_NAME).and_then(Item::as_table) else {
+        return false;
+    };
+
+    feature_flag(features, CANONICAL_HOOKS_FEATURE_KEY)
+        .or_else(|| feature_flag(features, LEGACY_HOOKS_FEATURE_KEY))
         .unwrap_or(false)
+}
+
+fn feature_flag(features: &Table, key: &str) -> Option<bool> {
+    features.get(key).and_then(Item::as_bool)
 }
 
 fn ensure_features_table(doc: &mut DocumentMut) -> Result<&mut Table> {
     let root = doc.as_table_mut();
-    if let Some(existing) = root.get("features")
+    if let Some(existing) = root.get(FEATURES_TABLE_NAME)
         && !existing.is_table()
     {
         return Err(anyhow!(
             "refusing to overwrite non-table `features` in Codex config"
         ));
     }
-    if !root.contains_key("features") || !root["features"].is_table() {
-        root.insert("features", Item::Table(Table::new()));
+    if !root.contains_key(FEATURES_TABLE_NAME) || !root[FEATURES_TABLE_NAME].is_table() {
+        root.insert(FEATURES_TABLE_NAME, Item::Table(Table::new()));
     }
-    Ok(root["features"]
+    Ok(root[FEATURES_TABLE_NAME]
         .as_table_mut()
         .expect("features should be a TOML table"))
 }

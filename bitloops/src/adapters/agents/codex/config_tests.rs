@@ -30,7 +30,8 @@ fn ensure_codex_hooks_feature_enabled_creates_repo_local_config() {
     assert!(path.exists(), "config.toml should be created");
     let raw = read_config(dir.path());
     assert!(raw.contains("[features]"));
-    assert!(raw.contains("codex_hooks = true"));
+    assert!(raw.contains("hooks = true"));
+    assert!(!raw.contains("codex_hooks = true"));
 }
 
 #[test]
@@ -53,7 +54,8 @@ name = "strict"
     ensure_codex_hooks_feature_enabled_at(dir.path()).expect("ensure config");
     let raw = read_config(dir.path());
     assert!(raw.contains("strict"));
-    assert!(raw.contains("codex_hooks = true"));
+    assert!(raw.contains("hooks = true"));
+    assert!(!raw.contains("codex_hooks = true"));
 }
 
 #[test]
@@ -68,6 +70,49 @@ fn ensure_codex_hooks_feature_enabled_is_idempotent() {
     let second = read_config(dir.path());
 
     assert_eq!(first, second);
+}
+
+#[test]
+fn ensure_codex_hooks_feature_enabled_migrates_legacy_codex_hooks_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    let codex_dir = dir.path().join(".codex");
+    fs::create_dir_all(&codex_dir).expect("create .codex");
+    fs::write(config_file(dir.path()), "[features]\ncodex_hooks = true\n").expect("seed config");
+
+    ensure_codex_hooks_feature_enabled_at(dir.path()).expect("ensure config");
+    let raw = read_config(dir.path());
+    assert!(raw.contains("hooks = true"));
+    assert!(!raw.contains("codex_hooks = true"));
+}
+
+#[test]
+fn codex_hooks_feature_enabled_accepts_legacy_codex_hooks_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    let codex_dir = dir.path().join(".codex");
+    fs::create_dir_all(&codex_dir).expect("create .codex");
+    fs::write(config_file(dir.path()), "[features]\ncodex_hooks = true\n").expect("seed config");
+
+    assert!(codex_hooks_feature_enabled_at(dir.path()));
+}
+
+#[test]
+fn codex_hooks_feature_enabled_prefers_canonical_hooks_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    init_repo(dir.path());
+
+    let codex_dir = dir.path().join(".codex");
+    fs::create_dir_all(&codex_dir).expect("create .codex");
+    fs::write(
+        config_file(dir.path()),
+        "[features]\nhooks = false\ncodex_hooks = true\n",
+    )
+    .expect("seed config");
+
+    assert!(!codex_hooks_feature_enabled_at(dir.path()));
 }
 
 #[test]
