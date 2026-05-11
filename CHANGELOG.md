@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **Existing repo-local OpenCode plugins could silently stop dashboard capture after model-metadata updates**: the generated `.opencode/plugins/bitloops.ts` plugin now keeps rich OpenCode transcript metadata such as nested `model.id`, `model.modelID`, and provider ids in the exported transcript while emitting only the single canonical `model` field on lifecycle hook payloads. This prevents Bitloops from rejecting OpenCode hook payloads with duplicate-model parse errors, restores live session and turn capture for fresh OpenCode runs, and ensures newly generated plugins come out with the corrected payload shape after rebuild/regeneration.
+
 ## [0.0.22] - 2026-05-09
 
 ### Changed
