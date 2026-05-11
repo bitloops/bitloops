@@ -36,6 +36,12 @@ const WATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const WATCHER_GIT_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const WATCHER_CHECKOUT_PROMOTION_WINDOW: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatcherStartPolicy {
+    RespectAutostartDisable,
+    ExplicitRequest,
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
     #[arg(long)]
@@ -73,7 +79,31 @@ fn watcher_autostart_disabled() -> bool {
 }
 
 pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
-    if watcher_autostart_disabled() {
+    ensure_watcher_running_with_policy(
+        repo_root,
+        daemon_config_root,
+        WatcherStartPolicy::RespectAutostartDisable,
+    )
+}
+
+pub fn ensure_watcher_running_explicit(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
+    ensure_watcher_running_with_policy(
+        repo_root,
+        daemon_config_root,
+        WatcherStartPolicy::ExplicitRequest,
+    )
+}
+
+fn should_skip_watcher_start(policy: WatcherStartPolicy) -> bool {
+    policy == WatcherStartPolicy::RespectAutostartDisable && watcher_autostart_disabled()
+}
+
+fn ensure_watcher_running_with_policy(
+    repo_root: &Path,
+    daemon_config_root: &Path,
+    policy: WatcherStartPolicy,
+) -> Result<()> {
+    if should_skip_watcher_start(policy) {
         return Ok(());
     }
     if !crate::config::settings::devql_sync_enabled(repo_root)? {
@@ -183,6 +213,16 @@ pub fn restart_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()
         && crate::config::settings::devql_sync_enabled(repo_root)?
     {
         ensure_watcher_running(repo_root, daemon_config_root)?;
+    }
+    Ok(())
+}
+
+pub fn restart_watcher_explicit(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
+    stop_watcher(repo_root, daemon_config_root)?;
+    if crate::config::settings::is_enabled_for_hooks(repo_root)
+        && crate::config::settings::devql_sync_enabled(repo_root)?
+    {
+        ensure_watcher_running_explicit(repo_root, daemon_config_root)?;
     }
     Ok(())
 }

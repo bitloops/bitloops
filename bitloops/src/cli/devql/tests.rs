@@ -1,4 +1,7 @@
-use super::graphql::{with_graphql_executor_hook, with_schema_sdl_fetch_hook};
+use super::graphql::{
+    RuntimeWatcherReconcileGraphqlRecord, reconcile_repo_watcher_via_runtime_graphql,
+    with_graphql_executor_hook, with_schema_sdl_fetch_hook,
+};
 use super::*;
 use crate::cli::{Cli, Commands};
 use crate::test_support::git_fixtures::{git_ok, init_test_repo};
@@ -1798,6 +1801,57 @@ fn devql_run_ingest_enqueue_requires_current_daemon_before_graphql_mutation() {
         .expect("graphql mutation should be captured");
     assert!(query.contains("enqueueTask"));
     assert_eq!(variables["input"]["kind"], json!("INGEST"));
+}
+
+#[test]
+fn devql_reconcile_repo_watcher_via_runtime_graphql_calls_runtime_mutation() {
+    let repo = seed_devql_cli_repo();
+    with_isolated_daemon_state(repo.path(), || {
+        let scope = crate::devql_transport::discover_slim_cli_repo_scope(Some(repo.path()))
+            .expect("discover scope");
+        let repo_id = scope.repo.repo_id.clone();
+        let calls = Rc::new(RefCell::new(0usize));
+
+        with_graphql_executor_hook(
+            {
+                let calls = Rc::clone(&calls);
+                let repo_root = scope.repo_root.clone();
+                let repo_id = repo_id.clone();
+                move |actual_repo_root, query, variables| {
+                    assert_eq!(actual_repo_root, repo_root.as_path());
+                    assert!(
+                        query.contains("reconcileWatcher("),
+                        "unexpected GraphQL document: {query}"
+                    );
+                    assert_eq!(variables["repoId"], repo_id);
+                    *calls.borrow_mut() += 1;
+                    Ok(json!({
+                        "reconcileWatcher": {
+                            "repoId": repo_id,
+                            "repoRoot": repo_root.display().to_string(),
+                            "watcherEnabled": true,
+                            "action": "restarted"
+                        }
+                    }))
+                }
+            },
+            || {
+                let record: RuntimeWatcherReconcileGraphqlRecord = test_runtime()
+                    .block_on(reconcile_repo_watcher_via_runtime_graphql(&scope))
+                    .expect("reconcile watcher");
+                assert_eq!(record.repo_id, repo_id);
+                assert_eq!(record.repo_root, scope.repo_root.display().to_string());
+                assert!(record.watcher_enabled);
+                assert_eq!(record.action, "restarted");
+            },
+        );
+
+        assert_eq!(
+            *calls.borrow(),
+            1,
+            "client should call runtime reconcileWatcher exactly once"
+        );
+    });
 }
 
 #[test]

@@ -188,6 +188,17 @@ pub(in crate::cli::devql::graphql) const RESUME_TASK_QUEUE_MUTATION: &str = r#"
     }
 "#;
 
+pub(in crate::cli::devql::graphql) const RECONCILE_WATCHER_MUTATION: &str = r#"
+    mutation ReconcileWatcher($repoId: String!) {
+      reconcileWatcher(repoId: $repoId) {
+        repoId
+        repoRoot
+        watcherEnabled
+        action
+      }
+    }
+"#;
+
 pub(in crate::cli::devql::graphql) const CANCEL_TASK_MUTATION: &str = r#"
     mutation CancelTask($id: String!) {
       cancelTask(id: $id) {

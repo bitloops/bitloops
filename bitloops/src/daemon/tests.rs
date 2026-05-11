@@ -331,6 +331,15 @@ fn daemon_startup_rehydrates_enabled_bound_repo_watchers_and_continues_after_fai
     let expected_third_enabled_repo = third_enabled_repo
         .canonicalize()
         .unwrap_or_else(|_| third_enabled_repo.clone());
+    let expected_sync_disabled_repo = sync_disabled_repo
+        .canonicalize()
+        .unwrap_or_else(|_| sync_disabled_repo.clone());
+    let expected_disabled_repo = disabled_repo
+        .canonicalize()
+        .unwrap_or_else(|_| disabled_repo.clone());
+    let expected_unbound_repo = unbound_repo
+        .canonicalize()
+        .unwrap_or_else(|_| unbound_repo.clone());
     let mut attempted = Vec::new();
     let daemon_config_path_string = daemon_config_path.to_string_lossy().to_string();
     with_env_var(
@@ -339,24 +348,95 @@ fn daemon_startup_rehydrates_enabled_bound_repo_watchers_and_continues_after_fai
         || {
             ensure_bound_repo_watchers_for_daemon_startup_with(
                 &daemon_config,
-                |repo_root, _config_root| {
-                    attempted.push(repo_root.to_path_buf());
+                |repo_root, _daemon_config| {
+                    let watcher_enabled = crate::config::settings::is_enabled_for_hooks(repo_root)
+                        && crate::config::settings::devql_sync_enabled(repo_root)?;
+                    attempted.push((repo_root.to_path_buf(), watcher_enabled));
                     if repo_root == expected_second_enabled_repo {
                         anyhow::bail!("synthetic watcher startup failure");
                     }
-                    Ok(())
+                    Ok(RepoWatcherReconcileResult {
+                        repo_root: repo_root.to_path_buf(),
+                        watcher_enabled,
+                        action: if watcher_enabled {
+                            RepoWatcherReconcileAction::Restarted
+                        } else {
+                            RepoWatcherReconcileAction::Stopped
+                        },
+                    })
                 },
             );
         },
     );
 
-    assert_eq!(
-        attempted,
-        vec![
-            expected_enabled_repo,
-            expected_second_enabled_repo,
-            expected_third_enabled_repo
-        ]
+    assert_eq!(attempted.len(), 5);
+    assert!(attempted.contains(&(expected_enabled_repo, true)));
+    assert!(attempted.contains(&(expected_second_enabled_repo, true)));
+    assert!(attempted.contains(&(expected_third_enabled_repo, true)));
+    assert!(attempted.contains(&(expected_sync_disabled_repo, false)));
+    assert!(attempted.contains(&(expected_disabled_repo, false)));
+    assert!(
+        !attempted
+            .iter()
+            .any(|(repo_root, _)| repo_root == &expected_unbound_repo)
+    );
+}
+
+#[test]
+fn daemon_reconcile_stops_registered_orphan_before_starting_enabled_watcher() {
+    let temp = TempDir::new().expect("temp dir");
+    let daemon_root = temp.path().join("daemon-root");
+    let repo_root = temp.path().join("repo");
+    fs::create_dir_all(&daemon_root).expect("create daemon root");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    fs::write(
+        repo_root.join(".bitloops.local.toml"),
+        "[capture]\nenabled = true\nstrategy = \"manual-commit\"\n[devql]\nsync_enabled = true\ningest_enabled = true\n",
+    )
+    .expect("write repo policy");
+
+    let daemon_config_path = write_daemon_test_config(&daemon_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(".bitloops.local.toml"),
+        &daemon_config_path,
+    )
+    .expect("write repo daemon binding");
+    let daemon_config =
+        resolve_daemon_config(Some(daemon_config_path.as_path())).expect("resolve daemon config");
+
+    let orphan_pid = spawn_detached_long_lived_process();
+    let runtime_store =
+        RepoSqliteRuntimeStore::open_for_roots(&daemon_config.config_root, &repo_root)
+            .expect("open repo runtime store");
+    runtime_store
+        .save_watcher_registration(
+            orphan_pid,
+            "registered-orphan-token",
+            &repo_root,
+            crate::host::runtime_store::RepoWatcherRegistrationState::Ready,
+        )
+        .expect("seed watcher registration");
+
+    with_env_var(
+        crate::host::devql::watch::DISABLE_WATCHER_AUTOSTART_ENV,
+        Some("1"),
+        || {
+            let result = reconcile_bound_repo_watcher(&repo_root, &daemon_config)
+                .expect("reconcile watcher");
+            assert!(result.watcher_enabled);
+            assert_eq!(result.action, RepoWatcherReconcileAction::Restarted);
+            assert_eq!(result.action.as_str(), "restarted");
+        },
+    );
+
+    wait_for_pid_exit(orphan_pid);
+    assert!(
+        runtime_store
+            .load_watcher_registration()
+            .expect("load watcher registration after reconcile")
+            .is_none(),
+        "registered orphan should be cleared when autostart is disabled for the test"
     );
 }
 

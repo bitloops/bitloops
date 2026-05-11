@@ -62,6 +62,21 @@ pub(super) struct CancelTaskMutationData {
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct ReconcileWatcherMutationData {
+    pub(super) reconcile_watcher: RuntimeWatcherReconcileGraphqlRecord,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RuntimeWatcherReconcileGraphqlRecord {
+    pub repo_id: String,
+    pub repo_root: String,
+    pub watcher_enabled: bool,
+    pub action: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct TaskProgressSubscriptionData {
     pub(super) task_progress: TaskProgressEventGraphqlRecord,
 }
