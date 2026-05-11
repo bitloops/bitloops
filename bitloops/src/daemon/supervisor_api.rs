@@ -140,6 +140,21 @@ async fn handle_supervisor_restart_repo(
         .map_err(supervisor_api_error)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownTrigger {
+    CtrlC,
+    Sigterm,
+}
+
+impl ShutdownTrigger {
+    fn label(self) -> &'static str {
+        match self {
+            ShutdownTrigger::CtrlC => "ctrl-c",
+            ShutdownTrigger::Sigterm => "sigterm",
+        }
+    }
+}
+
 fn supervisor_api_error(err: anyhow::Error) -> (axum::http::StatusCode, String) {
     log::error!("daemon supervisor request failed: {err:#}");
     (
@@ -149,21 +164,6 @@ fn supervisor_api_error(err: anyhow::Error) -> (axum::http::StatusCode, String) 
 }
 
 async fn wait_for_shutdown_signal() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum ShutdownTrigger {
-        CtrlC,
-        Sigterm,
-    }
-
-    impl ShutdownTrigger {
-        fn label(self) -> &'static str {
-            match self {
-                ShutdownTrigger::CtrlC => "ctrl-c",
-                ShutdownTrigger::Sigterm => "sigterm",
-            }
-        }
-    }
-
     fn log_shutdown_signal(trigger: ShutdownTrigger) {
         log::info!(
             "daemon supervisor shutdown signal received: {}",
@@ -182,22 +182,14 @@ async fn wait_for_shutdown_signal() {
                 None
             }
         };
-        let trigger = tokio::select! {
-            result = tokio::signal::ctrl_c() => {
-                if let Err(err) = result {
-                    log::warn!("failed to install Ctrl-C handler for daemon supervisor: {err:#}");
-                    std::future::pending::<()>().await;
-                }
-                ShutdownTrigger::CtrlC
+        let trigger = select_unix_shutdown_trigger(tokio::signal::ctrl_c(), async {
+            if let Some(signal) = terminate.as_mut() {
+                signal.recv().await;
+            } else {
+                std::future::pending::<()>().await;
             }
-            _ = async {
-                if let Some(signal) = terminate.as_mut() {
-                    signal.recv().await;
-                } else {
-                    std::future::pending::<()>().await;
-                }
-            } => ShutdownTrigger::Sigterm,
-        };
+        })
+        .await;
         log_shutdown_signal(trigger);
     }
 
@@ -208,6 +200,29 @@ async fn wait_for_shutdown_signal() {
             std::future::pending::<()>().await;
         }
         log_shutdown_signal(ShutdownTrigger::CtrlC);
+    }
+}
+
+#[cfg(unix)]
+async fn select_unix_shutdown_trigger<CtrlC, Sigterm>(
+    ctrl_c: CtrlC,
+    sigterm: Sigterm,
+) -> ShutdownTrigger
+where
+    CtrlC: std::future::Future<Output = std::io::Result<()>>,
+    Sigterm: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        trigger = async {
+            match ctrl_c.await {
+                Ok(()) => ShutdownTrigger::CtrlC,
+                Err(err) => {
+                    log::warn!("failed to install Ctrl-C handler for daemon supervisor: {err:#}");
+                    std::future::pending::<ShutdownTrigger>().await
+                }
+            }
+        } => trigger,
+        _ = sigterm => ShutdownTrigger::Sigterm,
     }
 }
 
@@ -234,6 +249,8 @@ mod tests {
     use super::*;
     use crate::api::DashboardServerConfig;
     use crate::test_support::log_capture::{capture_logs, capture_logs_async};
+    #[cfg(unix)]
+    use std::io;
 
     #[tokio::test]
     async fn supervisor_api_logs_terminal_handoff_failure() {
@@ -286,5 +303,21 @@ mod tests {
                 && entry.message.contains("signal 15 (SIGTERM)")),
             "expected child reap diagnostic log entry, got logs: {logs:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn supervisor_shutdown_prefers_sigterm_when_ctrl_c_handler_fails() {
+        let trigger = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            select_unix_shutdown_trigger(
+                async { Err(io::Error::other("ctrl-c unavailable")) },
+                async {},
+            ),
+        )
+        .await
+        .expect("shutdown trigger selection should not hang");
+
+        assert_eq!(trigger, ShutdownTrigger::Sigterm);
     }
 }

@@ -222,7 +222,6 @@ pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {
         {
             terminate_process_and_wait_for_shutdown_cleanup(
                 state.pid,
-                &runtime_state_path(Path::new(".")),
                 STOP_TIMEOUT,
                 STOP_RUNTIME_CLEAN_EXIT_GRACE,
                 FORCE_KILL_TIMEOUT,

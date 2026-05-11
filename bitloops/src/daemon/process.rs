@@ -226,7 +226,6 @@ pub(super) fn terminate_process(pid: u32) -> Result<()> {
 
 pub(super) fn terminate_process_and_wait_for_shutdown_cleanup(
     pid: u32,
-    runtime_path: &Path,
     timeout: Duration,
     runtime_clean_exit_grace: Duration,
     force_kill_timeout: Duration,
@@ -234,7 +233,6 @@ pub(super) fn terminate_process_and_wait_for_shutdown_cleanup(
     terminate_process(pid)?;
     wait_for_shutdown_cleanup_with_force_kill(
         pid,
-        runtime_path,
         timeout,
         runtime_clean_exit_grace,
         force_kill_timeout,
@@ -384,14 +382,9 @@ pub(super) fn reap_terminated_child_processes() -> Result<Vec<ChildTerminationRe
     Ok(Vec::new())
 }
 
-pub(super) fn wait_for_shutdown_cleanup(
-    pid: u32,
-    runtime_path: &Path,
-    timeout: Duration,
-) -> Result<()> {
+pub(super) fn wait_for_shutdown_cleanup(pid: u32, timeout: Duration) -> Result<()> {
     wait_for_shutdown_cleanup_with_force_kill(
         pid,
-        runtime_path,
         timeout,
         STOP_RUNTIME_CLEAN_EXIT_GRACE,
         FORCE_KILL_TIMEOUT,
@@ -409,12 +402,10 @@ fn process_has_exited_or_was_reaped(pid: u32) -> Result<bool> {
 
 fn wait_for_shutdown_cleanup_with_force_kill(
     pid: u32,
-    runtime_path: &Path,
     timeout: Duration,
     runtime_clean_exit_grace: Duration,
     force_kill_timeout: Duration,
 ) -> Result<()> {
-    let _ = runtime_path;
     let graceful_started = Instant::now();
     let mut runtime_cleaned_since = None::<Instant>;
     let mut force_kill_started = None::<Instant>;
@@ -592,8 +583,6 @@ mod tests {
     #[cfg(unix)]
     use crate::test_support::process_state::enter_process_state;
     #[cfg(unix)]
-    use std::path::Path;
-    #[cfg(unix)]
     use std::process::Command;
     #[cfg(unix)]
     use std::time::{Duration, Instant};
@@ -671,7 +660,7 @@ mod tests {
         let pid = child.id();
         drop(child);
 
-        wait_for_shutdown_cleanup(pid, Path::new("unused"), Duration::from_secs(1))
+        wait_for_shutdown_cleanup(pid, Duration::from_secs(1))
             .expect("wait for child shutdown cleanup");
         assert!(
             !process_is_running(pid).expect("inspect child process state after shutdown wait"),
@@ -702,7 +691,6 @@ mod tests {
         let started = Instant::now();
         terminate_process_and_wait_for_shutdown_cleanup(
             pid,
-            Path::new("unused"),
             Duration::from_secs(2),
             Duration::from_millis(100),
             Duration::from_secs(1),

@@ -146,7 +146,7 @@ fn supervisor_service_name_is_global_and_stable() {
 #[test]
 fn daemon_restart_timeouts_allow_extended_shutdown_and_startup_work() {
     assert_eq!(READY_TIMEOUT, Duration::from_secs(45));
-    assert_eq!(STOP_TIMEOUT, Duration::from_secs(45));
+    assert_eq!(STOP_TIMEOUT, Duration::from_secs(20));
     assert_eq!(STOP_RUNTIME_CLEAN_EXIT_GRACE, Duration::from_secs(5));
     assert_eq!(FORCE_KILL_TIMEOUT, Duration::from_secs(5));
 }
