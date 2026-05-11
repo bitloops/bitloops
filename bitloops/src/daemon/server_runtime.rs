@@ -119,22 +119,14 @@ pub(super) async fn run_server(
         stop_bound_repo_watchers_for_daemon_shutdown(&on_shutdown_config);
     });
 
-    let result = api::run_with_options(
-        config,
-        DashboardRuntimeOptions {
-            ready_subject: options.ready_subject.to_string(),
-            print_ready_banner: options.print_banner,
-            open_browser: options.open_browser,
-            bootstrap_devql_schema: false,
-            shutdown_message: Some("Bitloops daemon stopped.".to_string()),
-            on_ready: Some(ready_hook),
-            on_shutdown: Some(on_shutdown),
-            config_path: Some(daemon_config.config_path.clone()),
-            config_root: Some(config_root),
-            repo_registry_path: Some(daemon_config.repo_registry_path.clone()),
-        },
-    )
-    .await;
+    let runtime_options = daemon_dashboard_runtime_options(
+        &options,
+        daemon_config,
+        config_root,
+        Some(ready_hook),
+        Some(on_shutdown),
+    );
+    let result = api::run_with_options(config, runtime_options).await;
 
     if runtime_state_written.load(std::sync::atomic::Ordering::SeqCst)
         && let Err(err) = delete_runtime_state()
@@ -143,6 +135,28 @@ pub(super) async fn run_server(
     }
 
     result
+}
+
+fn daemon_dashboard_runtime_options(
+    options: &RunServerOptions<'_>,
+    daemon_config: &ResolvedDaemonConfig,
+    config_root: PathBuf,
+    on_ready: Option<DashboardReadyHook>,
+    on_shutdown: Option<api::DashboardShutdownHook>,
+) -> DashboardRuntimeOptions {
+    DashboardRuntimeOptions {
+        ready_subject: options.ready_subject.to_string(),
+        print_ready_banner: options.print_banner,
+        open_browser: options.open_browser,
+        bootstrap_devql_schema: false,
+        shutdown_message: Some("Bitloops daemon stopped.".to_string()),
+        shutdown_delay: Duration::ZERO,
+        on_ready,
+        on_shutdown,
+        config_path: Some(daemon_config.config_path.clone()),
+        config_root: Some(config_root),
+        repo_registry_path: Some(daemon_config.repo_registry_path.clone()),
+    }
 }
 
 pub(super) async fn ensure_service_managed_repo_runtime(
@@ -206,11 +220,11 @@ pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {
             if state.mode == DaemonMode::Service
                 && state.service_name.as_deref() == Some(GLOBAL_SUPERVISOR_SERVICE_NAME) =>
         {
-            terminate_process(state.pid)?;
-            wait_for_shutdown_cleanup(
+            terminate_process_and_wait_for_shutdown_cleanup(
                 state.pid,
-                &runtime_state_path(Path::new(".")),
                 STOP_TIMEOUT,
+                STOP_RUNTIME_CLEAN_EXIT_GRACE,
+                FORCE_KILL_TIMEOUT,
             )?;
             Ok(())
         }
@@ -522,4 +536,51 @@ fn repo_root_for_current_working_tree(cwd: &Path) -> Result<Option<PathBuf>> {
 
     let repo_root = PathBuf::from(repo_root);
     Ok(Some(repo_root.canonicalize().unwrap_or(repo_root)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DashboardRuntimeOptions, RunServerOptions, daemon_dashboard_runtime_options};
+    use crate::daemon::{DaemonMode, ResolvedDaemonConfig};
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[test]
+    fn daemon_runtime_options_skip_shutdown_delay() {
+        let options = daemon_dashboard_runtime_options(
+            &RunServerOptions {
+                mode: DaemonMode::Detached,
+                service_name: None,
+                open_browser: false,
+                ready_subject: "Bitloops daemon",
+                print_banner: false,
+                telemetry: None,
+            },
+            &ResolvedDaemonConfig {
+                config_path: PathBuf::from("/tmp/.bitloops.toml"),
+                config_root: PathBuf::from("/tmp"),
+                relational_db_path: PathBuf::from("/tmp/stores/daemon.sqlite"),
+                events_db_path: PathBuf::from("/tmp/stores/daemon.duckdb"),
+                blob_store_path: PathBuf::from("/tmp/blob-store"),
+                repo_registry_path: PathBuf::from("/tmp/repo-registry.json"),
+            },
+            PathBuf::from("/tmp"),
+            None,
+            None,
+        );
+
+        assert_eq!(options.shutdown_delay, Duration::ZERO);
+        assert_eq!(
+            options.shutdown_message.as_deref(),
+            Some("Bitloops daemon stopped.")
+        );
+    }
+
+    #[test]
+    fn dashboard_runtime_options_default_shutdown_delay_remains_five_seconds() {
+        assert_eq!(
+            DashboardRuntimeOptions::default().shutdown_delay,
+            Duration::from_secs(5)
+        );
+    }
 }
