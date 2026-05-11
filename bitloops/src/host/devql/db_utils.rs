@@ -227,6 +227,40 @@ pub(super) async fn duckdb_exec_path_allow_create(path: &Path, sql: &str) -> Res
     duckdb_exec_path_inner(path, sql, true).await
 }
 
+const DUCKDB_LOCK_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
+const DUCKDB_LOCK_RETRY_INITIAL_DELAY: Duration = Duration::from_millis(50);
+const DUCKDB_LOCK_RETRY_MAX_DELAY: Duration = Duration::from_millis(250);
+
+pub(crate) fn open_duckdb_connection_with_retry(path: &Path) -> Result<duckdb::Connection> {
+    let deadline = std::time::Instant::now() + DUCKDB_LOCK_RETRY_TIMEOUT;
+    let mut delay = DUCKDB_LOCK_RETRY_INITIAL_DELAY;
+
+    loop {
+        match duckdb::Connection::open(path) {
+            Ok(conn) => return Ok(conn),
+            Err(err) if is_transient_duckdb_lock_error(&err) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(anyhow!(err))
+                        .with_context(|| format!("opening DuckDB database at {}", path.display()));
+                }
+                std::thread::sleep(delay);
+                delay = std::cmp::min(delay.saturating_mul(2), DUCKDB_LOCK_RETRY_MAX_DELAY);
+            }
+            Err(err) => {
+                return Err(anyhow!(err))
+                    .with_context(|| format!("opening DuckDB database at {}", path.display()));
+            }
+        }
+    }
+}
+
+fn is_transient_duckdb_lock_error(err: &duckdb::Error) -> bool {
+    let message = err.to_string();
+    message.contains("Could not set lock")
+        || message.contains("Conflicting lock")
+        || message.contains("database is locked")
+}
+
 pub(super) async fn duckdb_exec_path_inner(
     path: &Path,
     sql: &str,
@@ -248,8 +282,7 @@ pub(super) async fn duckdb_exec_path_inner(
                 db_path.display()
             );
         }
-        let conn = duckdb::Connection::open(&db_path)
-            .with_context(|| format!("opening DuckDB database at {}", db_path.display()))?;
+        let conn = open_duckdb_connection_with_retry(&db_path)?;
         conn.execute_batch(&statement)
             .context("executing DuckDB statements")?;
         Ok(())
@@ -624,6 +657,7 @@ pub(crate) fn glob_to_sql_like(glob: &str) -> String {
 mod tests {
     use super::*;
     use anyhow::Context;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn sqlite_exec_batch_transactional_path_rolls_back_on_failure() -> Result<()> {
@@ -757,6 +791,113 @@ mod tests {
         );
 
         drop(writer);
+        Ok(())
+    }
+
+    #[test]
+    fn duckdb_exec_path_allow_create_waits_for_transient_writer_lock() -> Result<()> {
+        let tmp = tempfile::TempDir::new().context("creating temp dir")?;
+        let duckdb_path = tmp.path().join("events.duckdb");
+        let ready_path = tmp.path().join("lock-ready");
+        let release_path = tmp.path().join("lock-release");
+        let lock_holder = std::process::Command::new(std::env::current_exe()?)
+            .arg("duckdb_writer_lock_holder_child")
+            .arg("--ignored")
+            .env("BITLOOPS_DUCKDB_LOCK_HOLDER_PATH", &duckdb_path)
+            .env("BITLOOPS_DUCKDB_LOCK_HOLDER_READY", &ready_path)
+            .env("BITLOOPS_DUCKDB_LOCK_HOLDER_RELEASE", &release_path)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("spawning DuckDB lock holder child test")?;
+
+        wait_for_file(&ready_path, std::time::Duration::from_secs(5))
+            .context("waiting for DuckDB lock holder to become ready")?;
+
+        let release_after_delay = {
+            let release_path = release_path.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let _ = std::fs::write(release_path, b"release");
+            })
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating tokio runtime")?;
+        let result = runtime.block_on(duckdb_exec_path_allow_create(
+            &duckdb_path,
+            "CREATE TABLE retry_probe(value INTEGER); INSERT INTO retry_probe VALUES (1);",
+        ));
+
+        let _ = std::fs::write(&release_path, b"release");
+        release_after_delay
+            .join()
+            .expect("release delay thread should not panic");
+        let output = lock_holder
+            .wait_with_output()
+            .context("waiting for DuckDB lock holder child test")?;
+        assert!(
+            output.status.success(),
+            "DuckDB lock holder child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        result.context("executing DuckDB statements after transient writer lock")?;
+        let conn = duckdb::Connection::open(&duckdb_path).context("opening retried DuckDB")?;
+        let value: i64 = conn
+            .query_row("SELECT value FROM retry_probe", [], |row| row.get(0))
+            .context("reading retry probe value")?;
+        assert_eq!(value, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore]
+    fn duckdb_writer_lock_holder_child() -> Result<()> {
+        let Some(db_path) = std::env::var_os("BITLOOPS_DUCKDB_LOCK_HOLDER_PATH") else {
+            return Ok(());
+        };
+        let Some(ready_path) = std::env::var_os("BITLOOPS_DUCKDB_LOCK_HOLDER_READY") else {
+            return Ok(());
+        };
+        let Some(release_path) = std::env::var_os("BITLOOPS_DUCKDB_LOCK_HOLDER_RELEASE") else {
+            return Ok(());
+        };
+
+        let db_path = PathBuf::from(db_path);
+        let ready_path = PathBuf::from(ready_path);
+        let release_path = PathBuf::from(release_path);
+        let conn = duckdb::Connection::open(&db_path).context("opening lock holder DuckDB")?;
+        conn.execute_batch(
+            "CREATE TABLE lock_holder(value INTEGER); INSERT INTO lock_holder VALUES (1);",
+        )
+        .context("seeding lock holder DuckDB")?;
+        std::fs::write(&ready_path, b"ready").context("writing lock holder ready file")?;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !release_path.is_file() {
+            if std::time::Instant::now() >= deadline {
+                bail!("timed out waiting for lock holder release file");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        drop(conn);
+        Ok(())
+    }
+
+    fn wait_for_file(path: &Path, timeout: std::time::Duration) -> Result<()> {
+        let deadline = std::time::Instant::now() + timeout;
+        while !path.is_file() {
+            if std::time::Instant::now() >= deadline {
+                bail!("timed out waiting for {}", path.display());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         Ok(())
     }
 }

@@ -129,17 +129,7 @@ fn queued_ingest_task_payload(task_id: &str, backfill: Option<usize>) -> serde_j
 }
 
 fn test_daemon_state_root(repo_root: &Path) -> PathBuf {
-    repo_root
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| repo_root.to_path_buf())
-        .join(".bitloops-test-state")
-        .join(
-            repo_root
-                .file_name()
-                .map(|name| name.to_os_string())
-                .unwrap_or_default(),
-        )
+    repo_root.join(".bitloops-test-state")
 }
 
 fn write_envelope_config(repo_root: &Path, settings: serde_json::Value) {

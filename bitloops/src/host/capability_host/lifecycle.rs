@@ -359,6 +359,7 @@ mod tests {
 
     fn prepare_repo_root(temp: &TempDir) -> PathBuf {
         let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("create repo root");
         for path in [
             paths::default_relational_db_path(&repo_root),
             paths::default_events_db_path(&repo_root),

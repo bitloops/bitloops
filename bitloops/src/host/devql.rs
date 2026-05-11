@@ -846,8 +846,9 @@ use self::core_contracts::*;
 use self::db_utils::*;
 pub(crate) use self::db_utils::{
     clickhouse_query_data, duckdb_query_rows_path, duckdb_value_to_json, esc_ch, esc_pg,
-    escape_like_pattern, glob_to_sql_like, postgres_exec, sql_like_with_escape,
-    sqlite_exec_path_allow_create, sqlite_query_rows_path, sqlite_value_to_json,
+    escape_like_pattern, glob_to_sql_like, open_duckdb_connection_with_retry, postgres_exec,
+    sql_like_with_escape, sqlite_exec_path_allow_create, sqlite_query_rows_path,
+    sqlite_value_to_json,
 };
 use self::deps_query::*;
 pub(crate) use self::exclusion_reconcile::{
