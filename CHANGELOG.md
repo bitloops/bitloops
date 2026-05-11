@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+
+## [0.0.23] - 2026-05-11
+
 ### Changed
 
 - **DevQL guidance no longer uses runtime prompt augmentation**: Bitloops no longer injects DevQL guidance through runtime hook augmentation or OpenCode bootstrap prompt text. Agents now rely on their native repo-local prompt surfaces instead of per-session or per-turn reminder payloads.
