@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::config::resolve_repo_runtime_db_path_for_repo;
@@ -38,17 +39,8 @@ pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
 
 pub(crate) fn write_test_daemon_config(config_root: &Path) -> PathBuf {
     let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    let daemon_state_root = config_root
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| config_root.to_path_buf())
-        .join(".bitloops-test-state")
-        .join(
-            config_root
-                .file_name()
-                .map(|name| name.to_os_string())
-                .unwrap_or_default(),
-        );
+    ignore_repo_test_state_dir(config_root);
+    let daemon_state_root = test_state_root_for_config_root(config_root);
     let sqlite_path = daemon_state_root
         .join("stores")
         .join("relational")
@@ -72,7 +64,7 @@ duckdb_path = {duckdb_path:?}
 local_path = {blob_path:?}
 "#,
     );
-    std::fs::write(&config_path, config_contents).expect("write test daemon config");
+    fs::write(&config_path, config_contents).expect("write test daemon config");
     crate::config::settings::write_repo_daemon_binding(
         &config_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
         &config_path,
@@ -101,11 +93,11 @@ pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
     if let Some(parent) = duckdb_path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent).expect("create duckdb parent");
+        fs::create_dir_all(parent).expect("create duckdb parent");
     }
     let _conn = duckdb::Connection::open(duckdb_path).expect("create events duckdb file");
 
-    std::fs::create_dir_all(
+    fs::create_dir_all(
         backends
             .blobs
             .resolve_local_path_for_repo(repo_root)
@@ -118,11 +110,73 @@ pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
     if let Some(parent) = runtime_path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent).expect("create runtime sqlite parent");
+        fs::create_dir_all(parent).expect("create runtime sqlite parent");
     }
     let runtime = crate::storage::SqliteConnectionPool::connect(runtime_path)
         .expect("create runtime sqlite file");
     runtime
         .initialise_runtime_checkpoint_schema()
         .expect("initialise runtime checkpoint schema");
+}
+
+pub(crate) fn test_state_root_for_config_root(config_root: &Path) -> PathBuf {
+    config_root.join(".bitloops-test-state")
+}
+
+fn ignore_repo_test_state_dir(config_root: &Path) {
+    let exclude_path = config_root.join(".git").join("info").join("exclude");
+    if !exclude_path.exists() {
+        return;
+    }
+
+    let mut content = fs::read_to_string(&exclude_path).unwrap_or_default();
+    if content
+        .lines()
+        .any(|line| line.trim() == ".bitloops-test-state/")
+    {
+        return;
+    }
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(".bitloops-test-state/\n");
+    fs::write(&exclude_path, content).expect("write git exclude for test state dir");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_test_daemon_config_keeps_state_under_config_root() {
+        let temp = tempfile::tempdir().expect("temp dir");
+
+        write_test_daemon_config(temp.path());
+
+        let backends =
+            resolve_store_backend_config_for_repo(temp.path()).expect("resolve test stores");
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(temp.path())
+            .expect("resolve relational sqlite path");
+        let expected_root = temp.path().join(".bitloops-test-state");
+        let old_sibling_root = temp
+            .path()
+            .parent()
+            .expect("temp dir should have parent")
+            .join(".bitloops-test-state");
+
+        assert!(
+            sqlite_path.starts_with(&expected_root),
+            "sqlite path {} should be under {}",
+            sqlite_path.display(),
+            expected_root.display()
+        );
+        assert!(
+            !sqlite_path.starts_with(&old_sibling_root),
+            "sqlite path {} should not use sibling state root {}",
+            sqlite_path.display(),
+            old_sibling_root.display()
+        );
+    }
 }
