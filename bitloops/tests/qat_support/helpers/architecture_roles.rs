@@ -1512,9 +1512,29 @@ fn fake_architecture_structured_runtime_command_and_args(
         .join("capability-runtime")
         .join(format!("fake-{script_name}-runtime.sh"));
     let payload_json = serde_json::to_string(payload)?;
+    let role_payload_json = serde_json::to_string(&serde_json::json!({
+        "roles": payload
+            .get("roles")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    }))?;
+    let rule_payload_json = serde_json::to_string(&serde_json::json!({
+        "rule_candidates": payload
+            .get("rule_candidates")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    }))?;
     let script = r#"#!/bin/sh
 payload=$(cat <<'JSON'
 __PAYLOAD_JSON__
+JSON
+)
+role_payload=$(cat <<'JSON'
+__ROLE_PAYLOAD_JSON__
+JSON
+)
+rule_payload=$(cat <<'JSON'
+__RULE_PAYLOAD_JSON__
 JSON
 )
 while IFS= read -r line; do
@@ -1528,12 +1548,19 @@ while IFS= read -r line; do
       exit 0
       ;;
     *'"type":"infer"'*)
-      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":%s,"provider_name":"qat","model_name":"__MODEL_NAME__"}\n' "$request_id" "$payload"
+      case "$line" in
+        *'"seed_phase":"roles"'*) selected_payload="$role_payload" ;;
+        *'"seed_phase":"rules"'*) selected_payload="$rule_payload" ;;
+        *) selected_payload="$payload" ;;
+      esac
+      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":%s,"provider_name":"qat","model_name":"__MODEL_NAME__"}\n' "$request_id" "$selected_payload"
       ;;
   esac
 done
 "#
     .replace("__PAYLOAD_JSON__", &payload_json)
+    .replace("__ROLE_PAYLOAD_JSON__", &role_payload_json)
+    .replace("__RULE_PAYLOAD_JSON__", &rule_payload_json)
     .replace("__PROFILE_NAME__", profile_name)
     .replace("__MODEL_NAME__", model_name);
 
@@ -1566,9 +1593,27 @@ fn fake_architecture_structured_runtime_command_and_args(
         .join("capability-runtime")
         .join(format!("fake-{script_name}-runtime.ps1"));
     let payload_json = serde_json::to_string(payload)?;
+    let role_payload_json = serde_json::to_string(&serde_json::json!({
+        "roles": payload
+            .get("roles")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    }))?;
+    let rule_payload_json = serde_json::to_string(&serde_json::json!({
+        "rule_candidates": payload
+            .get("rule_candidates")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    }))?;
     let script = r#"
 $payload = @'
 __PAYLOAD_JSON__
+'@
+$rolePayload = @'
+__ROLE_PAYLOAD_JSON__
+'@
+$rulePayload = @'
+__RULE_PAYLOAD_JSON__
 '@
 while (($line = [Console]::In.ReadLine()) -ne $null) {
   if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -1579,11 +1624,20 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     Write-Output '{"type":"shutdown","request_id":"'"$requestId"'"}'
     exit 0
   } elseif ($line -like '*"type":"infer"*') {
-    Write-Output '{"type":"infer","request_id":"'"$requestId"'","text":"","parsed_json":'$payload',"provider_name":"qat","model_name":"__MODEL_NAME__"}'
+    if ($line -like '*"seed_phase":"roles"*') {
+      $selectedPayload = $rolePayload
+    } elseif ($line -like '*"seed_phase":"rules"*') {
+      $selectedPayload = $rulePayload
+    } else {
+      $selectedPayload = $payload
+    }
+    Write-Output '{"type":"infer","request_id":"'"$requestId"'","text":"","parsed_json":'$selectedPayload',"provider_name":"qat","model_name":"__MODEL_NAME__"}'
   }
 }
 "#
     .replace("__PAYLOAD_JSON__", &payload_json)
+    .replace("__ROLE_PAYLOAD_JSON__", &role_payload_json)
+    .replace("__RULE_PAYLOAD_JSON__", &rule_payload_json)
     .replace("__PROFILE_NAME__", profile_name)
     .replace("__MODEL_NAME__", model_name);
 

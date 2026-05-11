@@ -221,16 +221,7 @@ impl LocalInferenceGateway {
         profile_name: &str,
         profile: &InferenceProfileConfig,
     ) -> Result<Arc<dyn StructuredGenerationService>> {
-        let runtime_name = profile
-            .runtime
-            .as_deref()
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
-        let runtime = if is_cli_agent_structured_driver(&profile.driver) {
-            self.validate_cli_agent_provider_runtime(profile_name, profile)?;
-            self.bitloops_inference_launcher_runtime(profile_name)?
-        } else {
-            self.configured_runtime(profile_name, runtime_name)?
-        };
+        let runtime = self.structured_generation_runtime_config(profile_name, profile)?;
         let model = profile
             .model
             .as_deref()
@@ -240,7 +231,7 @@ impl LocalInferenceGateway {
         let service = BitloopsInferenceTextGenerationService::new(
             profile_name,
             &profile.driver,
-            runtime,
+            &runtime,
             &config_path,
             request_defaults,
         )
@@ -286,9 +277,9 @@ impl LocalInferenceGateway {
         &self,
         profile_name: &str,
         profile: &InferenceProfileConfig,
-    ) -> Result<()> {
+    ) -> Result<&InferenceRuntimeConfig> {
         if !is_cli_agent_structured_driver(&profile.driver) {
-            return Ok(());
+            bail!("profile `{profile_name}` does not use a CLI-agent structured-generation driver");
         }
         let provider_runtime_name = profile
             .runtime
@@ -302,7 +293,30 @@ impl LocalInferenceGateway {
                 "provider runtime `{provider_runtime_name}` for profile `{profile_name}` has no command configured"
             );
         }
-        Ok(())
+        Ok(provider_runtime)
+    }
+
+    fn structured_generation_runtime_config(
+        &self,
+        profile_name: &str,
+        profile: &InferenceProfileConfig,
+    ) -> Result<InferenceRuntimeConfig> {
+        let runtime_name = profile
+            .runtime
+            .as_deref()
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
+        if !is_cli_agent_structured_driver(&profile.driver) {
+            return Ok(self.configured_runtime(profile_name, runtime_name)?.clone());
+        }
+
+        let provider_runtime = self.validate_cli_agent_provider_runtime(profile_name, profile)?;
+        let mut launcher_runtime = self
+            .bitloops_inference_launcher_runtime(profile_name)?
+            .clone();
+        launcher_runtime.request_timeout_secs = launcher_runtime
+            .request_timeout_secs
+            .max(provider_runtime.request_timeout_secs);
+        Ok(launcher_runtime)
     }
 
     fn resolve_runtime_config_path(&self) -> Result<PathBuf> {

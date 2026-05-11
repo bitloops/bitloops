@@ -333,8 +333,9 @@ fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
     });
 
     let request = crate::capability_packs::architecture_graph::roles::llm_adjudication
-        ::architecture_roles_seed_request(&test_scope(), &evidence);
+        ::architecture_roles_seed_roles_request(&test_scope(), &evidence);
     let diagnostics = architecture_seed_request_diagnostics(
+        "role_discovery",
         "architecture_fact_synthesis_codex",
         Some("codex_exec"),
         Some("codex"),
@@ -355,10 +356,12 @@ fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
     assert!(diagnostics.user_prompt_bytes > 0);
 
     let rendered = diagnostics.human_summary();
+    assert!(rendered.contains("phase=role_discovery"));
     assert!(rendered.contains("profile=architecture_fact_synthesis_codex"));
     assert!(rendered.contains("model=gpt-5.4-mini"));
     assert!(rendered.contains("files=2"));
     assert!(rendered.contains("artefacts=1"));
+    assert!(rendered.contains("prompt_bytes(system="));
 }
 
 #[test]
@@ -399,6 +402,10 @@ fn bootstrap_skip_seed_formats_json_with_skipped_seed_flag() -> Result<()> {
 
     let rendered = format_bootstrap_command_output(&summary, true)?;
     let value: serde_json::Value = serde_json::from_str(&rendered)?;
+    assert!(rendered.contains("\"skipped_seed\": true"));
+    assert!(rendered.contains("\"seed\": null"));
+    assert!(rendered.contains("\"rule_activation\""));
+    assert!(rendered.contains("\"classification\""));
     assert_eq!(value["skipped_seed"], true);
     assert!(value["seed"].is_null());
     assert_eq!(value["rule_activation"]["proposals_applied"], 1);

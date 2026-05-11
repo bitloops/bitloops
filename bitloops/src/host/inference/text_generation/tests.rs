@@ -1,6 +1,8 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -11,8 +13,8 @@ use crate::config::{
     REPO_POLICY_LOCAL_FILE_NAME, resolve_inference_capability_config_for_repo,
 };
 use crate::host::inference::{
-    BITLOOPS_PLATFORM_CHAT_DRIVER, EmptyInferenceGateway, InferenceGateway, LocalInferenceGateway,
-    TextGenerationOptions,
+    BITLOOPS_PLATFORM_CHAT_DRIVER, CODEX_EXEC_DRIVER, EmptyInferenceGateway, InferenceGateway,
+    LocalInferenceGateway, TextGenerationOptions,
 };
 use crate::test_support::process_state::enter_process_state;
 
@@ -98,10 +100,29 @@ fn fake_structured_runtime_command_and_args(
     model_name: &str,
     response: serde_json::Value,
 ) -> (String, Vec<String>) {
+    fake_structured_runtime_command_and_args_with_infer_sleep(
+        repo_root,
+        provider_name,
+        model_name,
+        response,
+        None,
+    )
+}
+
+fn fake_structured_runtime_command_and_args_with_infer_sleep(
+    repo_root: &Path,
+    provider_name: &str,
+    model_name: &str,
+    response: serde_json::Value,
+    infer_sleep_secs: Option<u64>,
+) -> (String, Vec<String>) {
     let script_path = repo_root.join(".bitloops/test-bin/fake-structured-runtime.sh");
     fs::create_dir_all(script_path.parent().expect("script parent"))
         .expect("create fake structured runtime dir");
     let response_json = serde_json::to_string(&response).expect("serialise response");
+    let infer_sleep = infer_sleep_secs
+        .map(|seconds| format!("      sleep {seconds}\n"))
+        .unwrap_or_default();
     fs::write(
         &script_path,
         format!(
@@ -125,7 +146,7 @@ while IFS= read -r line; do
         *'"workspace_path"'*) has_workspace=1 ;;
         *) has_workspace=0 ;;
       esac
-      if [ "$has_schema" = 1 ] && [ "$has_workspace" = 1 ]; then
+{infer_sleep}      if [ "$has_schema" = 1 ] && [ "$has_workspace" = 1 ]; then
         printf '{{"type":"infer","request_id":"%s","text":"","parsed_json":%s,"provider_name":"{provider_name}","model_name":"{model_name}"}}\n' "$request_id" "$payload"
       else
         printf '{{"type":"error","request_id":"%s","code":"missing_metadata","message":"expected json_schema and workspace_path metadata"}}\n' "$request_id"
@@ -138,6 +159,10 @@ while IFS= read -r line; do
   esac
 done
 "#,
+            infer_sleep = infer_sleep,
+            response_json = response_json,
+            provider_name = provider_name,
+            model_name = model_name,
         ),
     )
     .expect("write fake structured runtime script");
@@ -384,6 +409,50 @@ fn platform_runtime_service_requires_authenticated_session() {
     assert!(
         !launch_log.exists(),
         "platform runtime should not be spawned without an auth token"
+    );
+}
+
+#[test]
+fn codex_exec_runtime_does_not_request_platform_auth_environment() {
+    let _guard = test_lock();
+    let temp = TempDir::new().expect("temp dir");
+    let script_path = temp.path().join("fake_inference_runtime.sh");
+    let launch_log = temp.path().join("launches.log");
+    let config_path = temp.path().join("bitloops.toml");
+    fs::write(&config_path, "[inference]\n").expect("write fake config");
+    write_fake_runtime_script(&script_path, None, "[\"json_object\"]");
+
+    let runtime = fake_runtime_config(&script_path, &launch_log);
+    let auth_calls = Rc::new(Cell::new(0));
+    let auth_calls_for_hook = Rc::clone(&auth_calls);
+    let service = with_platform_runtime_auth_environment_hook(
+        move || {
+            auth_calls_for_hook.set(auth_calls_for_hook.get() + 1);
+            Ok(vec![(
+                crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV.to_string(),
+                "unused-token".to_string(),
+            )])
+        },
+        || {
+            BitloopsInferenceTextGenerationService::new(
+                "architecture_fact_synthesis_codex",
+                CODEX_EXEC_DRIVER,
+                &runtime,
+                &config_path,
+                default_request_defaults(),
+            )
+        },
+    )
+    .expect("codex_exec runtime should start without platform auth lookup");
+
+    assert_eq!(
+        crate::host::inference::TextGenerationService::descriptor(&service),
+        "ollama:ministral-3:3b"
+    );
+    assert_eq!(
+        auth_calls.get(),
+        0,
+        "codex_exec runtime launch must not inspect platform auth"
     );
 }
 
@@ -940,6 +1009,95 @@ max_output_tokens = 4096
         .structured_generation("fact_synthesis")
         .expect("service should use bitloops_inference launcher");
     assert_eq!(service.descriptor(), "codex:gpt-5.4-mini");
+}
+
+#[test]
+fn codex_structured_generation_uses_provider_timeout_when_launcher_timeout_is_shorter() {
+    let _guard = test_lock();
+    let repo = tempfile::TempDir::new().expect("tempdir");
+    let repo_root = repo.path();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    let (launcher_command, launcher_args) =
+        fake_structured_runtime_command_and_args_with_infer_sleep(
+            repo_root,
+            "codex",
+            "gpt-5.4-mini",
+            serde_json::json!({ "nodes": [], "edges": [] }),
+            Some(2),
+        );
+    let launcher_args = launcher_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[architecture.inference]
+fact_synthesis = "architecture_fact_synthesis_codex"
+
+[inference.runtimes.bitloops_inference]
+command = {launcher_command:?}
+args = [{launcher_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 1
+
+[inference.runtimes.codex]
+command = "codex"
+args = ["--ask-for-approval", "never"]
+startup_timeout_secs = 5
+request_timeout_secs = 3
+
+[inference.profiles.architecture_fact_synthesis_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 4096
+"#
+        ),
+    )
+    .expect("write config");
+
+    let capability = resolve_inference_capability_config_for_repo(repo_root);
+    let mut architecture_slots = BTreeMap::new();
+    architecture_slots.insert(
+        "fact_synthesis".to_string(),
+        "architecture_fact_synthesis_codex".to_string(),
+    );
+    let mut slot_bindings = HashMap::new();
+    slot_bindings.insert("architecture_graph".to_string(), architecture_slots);
+    let gateway = LocalInferenceGateway::new(repo_root, capability.inference, slot_bindings);
+
+    let response = gateway
+        .scoped(Some("architecture_graph"))
+        .structured_generation("fact_synthesis")
+        .and_then(|service| {
+            service.generate(crate::host::inference::StructuredGenerationRequest {
+                system_prompt: "system".to_string(),
+                user_prompt: "user".to_string(),
+                json_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "nodes": { "type": "array" },
+                        "edges": { "type": "array" }
+                    },
+                    "required": ["nodes", "edges"],
+                    "additionalProperties": false
+                }),
+                workspace_path: Some(repo_root.display().to_string()),
+                metadata: serde_json::Map::new(),
+            })
+        })
+        .expect("structured generation should use provider timeout");
+
+    assert_eq!(response["nodes"], serde_json::json!([]));
+    assert_eq!(response["edges"], serde_json::json!([]));
 }
 
 #[test]

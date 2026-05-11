@@ -4,7 +4,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
-    architecture_roles_seed_request, collect_seed_evidence, run_seed_generation_request,
+    SEED_RULE_ROLE_BATCH_SIZE, architecture_roles_seed_roles_request,
+    architecture_roles_seed_rule_candidates_request, collect_seed_evidence,
+    combine_seeded_taxonomy, decode_seeded_role_discovery_response,
+    decode_seeded_rule_candidates_response,
 };
 use crate::capability_packs::architecture_graph::roles::migrations::{
     apply_proposal, create_rule_activate_proposal,
@@ -21,7 +24,10 @@ use crate::capability_packs::architecture_graph::roles::taxonomy::{
 };
 use crate::config::InferenceTask;
 use crate::host::capability_host::{CurrentStateConsumerContext, DevqlCapabilityHost};
-use crate::host::inference::{InferenceGateway, StructuredGenerationRequest};
+use crate::host::inference::{
+    InferenceGateway, ResolvedInferenceSlot, StructuredGenerationRequest,
+    StructuredGenerationService,
+};
 
 use super::super::SlimCliRepoScope;
 use super::{RolesClassifyOutput, format_roles_classify_output};
@@ -63,6 +69,7 @@ pub(super) struct BootstrapCommandSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ArchitectureSeedRequestDiagnostics {
+    pub(super) phase_name: String,
     pub(super) profile_name: String,
     pub(super) driver: Option<String>,
     pub(super) runtime: Option<String>,
@@ -80,7 +87,8 @@ pub(super) struct ArchitectureSeedRequestDiagnostics {
 impl ArchitectureSeedRequestDiagnostics {
     pub(super) fn human_summary(&self) -> String {
         format!(
-            "profile={} driver={} runtime={} model={} evidence(files={} artefacts={} edges={} graph_facts={} summaries={}) prompt_bytes(system={} user={} schema={})",
+            "phase={} profile={} driver={} runtime={} model={} evidence(files={} artefacts={} edges={} graph_facts={} summaries={}) prompt_bytes(system={} user={} schema={})",
+            self.phase_name,
             self.profile_name,
             self.driver.as_deref().unwrap_or("unknown"),
             self.runtime.as_deref().unwrap_or("unknown"),
@@ -132,22 +140,13 @@ pub(super) async fn seed_architecture_roles(
             format!("resolving architecture fact_synthesis inference slot `{profile_name}`")
         })?;
     let evidence = collect_seed_evidence(scope, context).await?;
-    let request = architecture_roles_seed_request(scope, &evidence);
-    let diagnostics = architecture_seed_request_diagnostics(
-        &profile_name,
-        resolved.driver.as_deref(),
-        resolved.runtime.as_deref(),
-        resolved.model.as_deref(),
-        &request,
+    let taxonomy = generate_seed_taxonomy_with_diagnostics(
+        service.as_ref(),
+        scope,
         &evidence,
-    );
-    eprintln!("architecture roles seed: {}", diagnostics.human_summary());
-    let taxonomy = run_seed_generation_request(service.as_ref(), request).with_context(|| {
-        format!(
-            "generating architecture role seed taxonomy failed: {}",
-            diagnostics.human_summary()
-        )
-    })?;
+        &profile_name,
+        &resolved,
+    )?;
     persist_seeded_taxonomy(
         context.storage.as_ref(),
         &scope.repo.repo_id,
@@ -155,6 +154,76 @@ pub(super) async fn seed_architecture_roles(
         taxonomy,
     )
     .await
+}
+
+fn generate_seed_taxonomy_with_diagnostics(
+    service: &dyn StructuredGenerationService,
+    scope: &SlimCliRepoScope,
+    evidence: &Value,
+    profile_name: &str,
+    resolved: &ResolvedInferenceSlot,
+) -> Result<SeededArchitectureTaxonomy> {
+    let role_request = architecture_roles_seed_roles_request(scope, evidence);
+    let role_diagnostics = architecture_seed_request_diagnostics(
+        "role_discovery",
+        profile_name,
+        resolved.driver.as_deref(),
+        resolved.runtime.as_deref(),
+        resolved.model.as_deref(),
+        &role_request,
+        evidence,
+    );
+    eprintln!(
+        "architecture roles seed: {}",
+        role_diagnostics.human_summary()
+    );
+
+    let role_response = service.generate(role_request).with_context(|| {
+        format!(
+            "generating architecture role discovery failed: {}",
+            role_diagnostics.human_summary()
+        )
+    })?;
+    let role_discovery = decode_seeded_role_discovery_response(role_response)?;
+
+    let mut rule_candidates = Vec::new();
+    for (batch_index, role_batch) in role_discovery
+        .roles
+        .chunks(SEED_RULE_ROLE_BATCH_SIZE)
+        .enumerate()
+    {
+        let phase_name = format!("rule_generation_batch_{batch_index}");
+        let rule_request = architecture_roles_seed_rule_candidates_request(
+            scope,
+            evidence,
+            role_batch,
+            batch_index,
+        );
+        let rule_diagnostics = architecture_seed_request_diagnostics(
+            &phase_name,
+            profile_name,
+            resolved.driver.as_deref(),
+            resolved.runtime.as_deref(),
+            resolved.model.as_deref(),
+            &rule_request,
+            evidence,
+        );
+        eprintln!(
+            "architecture roles seed: {}",
+            rule_diagnostics.human_summary()
+        );
+
+        let rule_response = service.generate(rule_request).with_context(|| {
+            format!(
+                "generating architecture rule candidates failed: {}",
+                rule_diagnostics.human_summary()
+            )
+        })?;
+        let mut decoded = decode_seeded_rule_candidates_response(rule_response)?;
+        rule_candidates.append(&mut decoded.rule_candidates);
+    }
+
+    combine_seeded_taxonomy(role_discovery.roles, rule_candidates)
 }
 
 pub(super) async fn persist_seeded_taxonomy(
@@ -304,6 +373,7 @@ pub(super) async fn persist_seeded_taxonomy(
 }
 
 pub(super) fn architecture_seed_request_diagnostics(
+    phase_name: &str,
     profile_name: &str,
     driver: Option<&str>,
     runtime: Option<&str>,
@@ -312,6 +382,7 @@ pub(super) fn architecture_seed_request_diagnostics(
     evidence: &Value,
 ) -> ArchitectureSeedRequestDiagnostics {
     ArchitectureSeedRequestDiagnostics {
+        phase_name: phase_name.to_string(),
         profile_name: profile_name.to_string(),
         driver: driver.map(ToOwned::to_owned),
         runtime: runtime.map(ToOwned::to_owned),

@@ -16,6 +16,19 @@ pub struct SeededArchitectureTaxonomy {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SeededArchitectureRoleDiscovery {
+    pub roles: Vec<SeededArchitectureRole>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeededArchitectureRuleCandidates {
+    #[serde(rename = "rule_candidates")]
+    pub rule_candidates: Vec<SeededArchitectureRuleCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SeededArchitectureRole {
     pub canonical_key: String,
     pub display_name: String,
@@ -322,14 +335,17 @@ pub fn role_rule_candidate_examples() -> Value {
     ])
 }
 
-pub fn architecture_roles_seed_schema() -> Value {
-    let strict_object = json!({
+fn strict_empty_object_schema() -> Value {
+    json!({
         "type": "object",
         "properties": {},
         "required": [],
         "additionalProperties": false
-    });
-    let condition_schema = json!({
+    })
+}
+
+fn role_condition_schema() -> Value {
+    json!({
         "type": "object",
         "additionalProperties": false,
         "required": ["kind", "value"],
@@ -340,7 +356,125 @@ pub fn architecture_roles_seed_schema() -> Value {
             },
             "value": { "type": "string", "minLength": 1 }
         }
-    });
+    })
+}
+
+fn seeded_role_schema() -> Value {
+    let strict_object = strict_empty_object_schema();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "canonical_key",
+            "display_name",
+            "description",
+            "family",
+            "lifecycle_status",
+            "provenance",
+            "evidence"
+        ],
+        "properties": {
+            "canonical_key": { "type": "string", "minLength": 1 },
+            "display_name": { "type": "string", "minLength": 1 },
+            "description": { "type": "string" },
+            "family": { "type": ["string", "null"] },
+            "lifecycle_status": { "type": ["string", "null"] },
+            "provenance": strict_object.clone(),
+            "evidence": strict_object
+        }
+    })
+}
+
+fn seeded_rule_candidate_schema() -> Value {
+    let strict_object = strict_empty_object_schema();
+    let condition_schema = role_condition_schema();
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "target_role_key",
+            "candidate_selector",
+            "positive_conditions",
+            "negative_conditions",
+            "score",
+            "evidence",
+            "metadata"
+        ],
+        "properties": {
+            "target_role_key": { "type": "string", "minLength": 1 },
+            "candidate_selector": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "path_prefixes",
+                    "path_suffixes",
+                    "path_contains",
+                    "languages",
+                    "canonical_kinds",
+                    "symbol_fqn_contains"
+                ],
+                "properties": {
+                    "path_prefixes": { "type": "array", "items": { "type": "string" } },
+                    "path_suffixes": { "type": "array", "items": { "type": "string" } },
+                    "path_contains": { "type": "array", "items": { "type": "string" } },
+                    "languages": { "type": "array", "items": { "type": "string" } },
+                    "canonical_kinds": { "type": "array", "items": { "type": "string" } },
+                    "symbol_fqn_contains": { "type": "array", "items": { "type": "string" } }
+                }
+            },
+            "positive_conditions": {
+                "type": "array",
+                "items": condition_schema.clone()
+            },
+            "negative_conditions": {
+                "type": "array",
+                "items": condition_schema
+            },
+            "score": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["base_confidence", "weight"],
+                "properties": {
+                    "base_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+                    "weight": { "type": ["number", "null"] }
+                }
+            },
+            "evidence": strict_object.clone(),
+            "metadata": strict_object
+        }
+    })
+}
+
+pub fn architecture_roles_seed_roles_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["roles"],
+        "properties": {
+            "roles": {
+                "type": "array",
+                "minItems": 1,
+                "items": seeded_role_schema()
+            }
+        }
+    })
+}
+
+pub fn architecture_roles_seed_rule_candidates_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["rule_candidates"],
+        "properties": {
+            "rule_candidates": {
+                "type": "array",
+                "items": seeded_rule_candidate_schema()
+            }
+        }
+    })
+}
+
+pub fn architecture_roles_seed_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -349,86 +483,11 @@ pub fn architecture_roles_seed_schema() -> Value {
             "roles": {
                 "type": "array",
                 "minItems": 1,
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "canonical_key",
-                        "display_name",
-                        "description",
-                        "family",
-                        "lifecycle_status",
-                        "provenance",
-                        "evidence"
-                    ],
-                    "properties": {
-                        "canonical_key": { "type": "string", "minLength": 1 },
-                        "display_name": { "type": "string", "minLength": 1 },
-                        "description": { "type": "string" },
-                        "family": { "type": ["string", "null"] },
-                        "lifecycle_status": { "type": ["string", "null"] },
-                        "provenance": strict_object.clone(),
-                        "evidence": strict_object.clone()
-                    }
-                }
+                "items": seeded_role_schema()
             },
             "rule_candidates": {
                 "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": [
-                        "target_role_key",
-                        "candidate_selector",
-                        "positive_conditions",
-                        "negative_conditions",
-                        "score",
-                        "evidence",
-                        "metadata"
-                    ],
-                    "properties": {
-                        "target_role_key": { "type": "string", "minLength": 1 },
-                        "candidate_selector": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": [
-                                "path_prefixes",
-                                "path_suffixes",
-                                "path_contains",
-                                "languages",
-                                "canonical_kinds",
-                                "symbol_fqn_contains"
-                            ],
-                            "properties": {
-                                "path_prefixes": { "type": "array", "items": { "type": "string" } },
-                                "path_suffixes": { "type": "array", "items": { "type": "string" } },
-                                "path_contains": { "type": "array", "items": { "type": "string" } },
-                                "languages": { "type": "array", "items": { "type": "string" } },
-                                "canonical_kinds": { "type": "array", "items": { "type": "string" } },
-                                "symbol_fqn_contains": { "type": "array", "items": { "type": "string" } }
-                            }
-                        },
-                        "positive_conditions": {
-                            "type": "array",
-                            "items": condition_schema.clone()
-                        },
-                        "negative_conditions": {
-                            "type": "array",
-                            "items": condition_schema.clone()
-                        },
-                        "score": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["base_confidence", "weight"],
-                            "properties": {
-                                "base_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-                                "weight": { "type": ["number", "null"] }
-                            }
-                        },
-                        "evidence": strict_object.clone(),
-                        "metadata": strict_object.clone()
-                    }
-                }
+                "items": seeded_rule_candidate_schema()
             }
         }
     })

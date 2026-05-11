@@ -7,8 +7,10 @@ use super::contracts::RoleAdjudicationRequest;
 mod seed;
 pub use seed::{
     RoleRuleCandidateSelector, RoleRuleCondition, RoleRuleScore, RoleSplitSpecFile,
-    RoleSplitTargetRole, RuleSpecFile, SeededArchitectureRole, SeededArchitectureRuleCandidate,
-    SeededArchitectureTaxonomy, allowed_rule_condition_kinds, architecture_roles_seed_schema,
+    RoleSplitTargetRole, RuleSpecFile, SeededArchitectureRole, SeededArchitectureRoleDiscovery,
+    SeededArchitectureRuleCandidate, SeededArchitectureRuleCandidates, SeededArchitectureTaxonomy,
+    allowed_rule_condition_kinds, architecture_roles_seed_roles_schema,
+    architecture_roles_seed_rule_candidates_schema, architecture_roles_seed_schema,
     generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
     validate_role_split_spec, validate_rule_spec_file, validate_seeded_taxonomy,
 };

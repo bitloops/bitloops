@@ -707,6 +707,59 @@ fn devql_cli_parses_architecture_roles_classify_command() {
 }
 
 #[test]
+fn architecture_roles_manual_chain_commands_parse() {
+    assert!(matches!(
+        parse_architecture_roles_command(&["bitloops", "devql", "architecture", "roles", "seed"]),
+        DevqlArchitectureRolesCommand::Seed(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "rules",
+            "activate",
+            "rule-1",
+        ]),
+        DevqlArchitectureRolesCommand::Rules(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "proposal",
+            "apply",
+            "proposal-1",
+        ]),
+        DevqlArchitectureRolesCommand::Proposal(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "classify",
+            "--full",
+        ]),
+        DevqlArchitectureRolesCommand::Classify(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "bootstrap",
+        ]),
+        DevqlArchitectureRolesCommand::Bootstrap(_)
+    ));
+}
+
+#[test]
 fn devql_cli_rejects_conflicting_sync_enqueue_modes() {
     let cases = vec![
         vec![

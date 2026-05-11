@@ -148,6 +148,15 @@ mod seeded_tests {
     }
 
     #[test]
+    fn architecture_roles_seed_phase_schemas_require_all_declared_properties() {
+        let role_schema = architecture_roles_seed_roles_schema();
+        let rule_schema = architecture_roles_seed_rule_candidates_schema();
+
+        assert_schema_objects_require_every_property(&role_schema);
+        assert_schema_objects_require_every_property(&rule_schema);
+    }
+
+    #[test]
     fn rule_condition_catalog_documents_all_supported_condition_kinds() {
         let allowed: std::collections::BTreeSet<_> =
             allowed_rule_condition_kinds().iter().copied().collect();
@@ -257,23 +266,26 @@ mod seeded_tests {
 
     #[test]
     fn seed_schema_enumerates_supported_rule_condition_kinds() {
-        let expected: std::collections::BTreeSet<_> =
-            allowed_rule_condition_kinds().iter().copied().collect();
-        let schema = architecture_roles_seed_schema();
+        let schemas = [
+            architecture_roles_seed_schema(),
+            architecture_roles_seed_rule_candidates_schema(),
+        ];
 
-        for pointer in [
-            "/properties/rule_candidates/items/properties/positive_conditions/items/properties/kind/enum",
-            "/properties/rule_candidates/items/properties/negative_conditions/items/properties/kind/enum",
-        ] {
-            let enum_values = schema
-                .pointer(pointer)
-                .and_then(serde_json::Value::as_array)
-                .unwrap_or_else(|| panic!("missing schema enum at {pointer}"));
-            let actual: std::collections::BTreeSet<_> = enum_values
-                .iter()
-                .map(|value| value.as_str().expect("enum value is string"))
-                .collect();
-            assert_eq!(actual, expected);
+        for schema in schemas {
+            for pointer in [
+                "/properties/rule_candidates/items/properties/positive_conditions/items/properties/kind/enum",
+                "/properties/rule_candidates/items/properties/negative_conditions/items/properties/kind/enum",
+            ] {
+                let enum_values = schema
+                    .pointer(pointer)
+                    .and_then(serde_json::Value::as_array)
+                    .unwrap_or_else(|| panic!("missing schema enum at {pointer}"));
+                let actual = enum_values
+                    .iter()
+                    .map(|value| value.as_str().expect("enum value is a string"))
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, allowed_rule_condition_kinds());
+            }
         }
     }
 

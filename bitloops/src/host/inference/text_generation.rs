@@ -669,7 +669,9 @@ impl BitloopsInferenceSession {
         command.arg("run");
         command.arg("--config").arg(&config.config_path);
         command.arg("--profile").arg(&config.profile_name);
-        command.envs(platform_runtime_auth_environment());
+        if config.driver == BITLOOPS_PLATFORM_CHAT_DRIVER {
+            command.envs(platform_runtime_auth_environment());
+        }
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::inherit());
