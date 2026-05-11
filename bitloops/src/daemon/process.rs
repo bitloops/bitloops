@@ -224,6 +224,72 @@ pub(super) fn terminate_process(pid: u32) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn terminate_process_and_wait_for_shutdown_cleanup(
+    pid: u32,
+    runtime_path: &Path,
+    timeout: Duration,
+    runtime_clean_exit_grace: Duration,
+    force_kill_timeout: Duration,
+) -> Result<()> {
+    terminate_process(pid)?;
+    wait_for_shutdown_cleanup_with_force_kill(
+        pid,
+        runtime_path,
+        timeout,
+        runtime_clean_exit_grace,
+        force_kill_timeout,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShutdownCleanupStatus {
+    process_exited: bool,
+    runtime_cleaned: bool,
+}
+
+impl ShutdownCleanupStatus {
+    fn complete(self) -> bool {
+        self.process_exited && self.runtime_cleaned
+    }
+}
+
+fn force_kill_process(pid: u32) -> Result<()> {
+    if !process_is_running(pid)? {
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("running `taskkill /F` for Bitloops daemon")?;
+        if !status.success() {
+            bail!("failed to force-stop Bitloops daemon process {pid}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let status = Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("running `kill -KILL` for Bitloops daemon")?;
+        if !status.success() {
+            bail!("failed to force-stop Bitloops daemon process {pid}");
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(unix)]
 pub(super) fn reap_terminated_child_process(pid: u32, timeout: Duration) -> Result<bool> {
     if pid > i32::MAX as u32 {
@@ -323,24 +389,13 @@ pub(super) fn wait_for_shutdown_cleanup(
     runtime_path: &Path,
     timeout: Duration,
 ) -> Result<()> {
-    let _ = runtime_path;
-    let started = Instant::now();
-    loop {
-        let process_exited = process_has_exited_or_was_reaped(pid)?;
-        let runtime_cleaned = read_runtime_state(Path::new("."))?.is_none();
-        if process_exited && runtime_cleaned {
-            return Ok(());
-        }
-        if started.elapsed() > timeout {
-            bail!(
-                "Bitloops daemon did not shut down within {} seconds (process_exited={}, runtime_cleaned={})",
-                timeout.as_secs(),
-                process_exited,
-                runtime_cleaned
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    wait_for_shutdown_cleanup_with_force_kill(
+        pid,
+        runtime_path,
+        timeout,
+        STOP_RUNTIME_CLEAN_EXIT_GRACE,
+        FORCE_KILL_TIMEOUT,
+    )
 }
 
 fn process_has_exited_or_was_reaped(pid: u32) -> Result<bool> {
@@ -350,6 +405,90 @@ fn process_has_exited_or_was_reaped(pid: u32) -> Result<bool> {
     }
 
     process_is_running(pid).map(|running| !running)
+}
+
+fn wait_for_shutdown_cleanup_with_force_kill(
+    pid: u32,
+    runtime_path: &Path,
+    timeout: Duration,
+    runtime_clean_exit_grace: Duration,
+    force_kill_timeout: Duration,
+) -> Result<()> {
+    let _ = runtime_path;
+    let graceful_started = Instant::now();
+    let mut runtime_cleaned_since = None::<Instant>;
+    let mut force_kill_started = None::<Instant>;
+
+    loop {
+        let status = shutdown_cleanup_status(pid)?;
+        if status.complete() {
+            return Ok(());
+        }
+
+        if let Some(force_started) = force_kill_started {
+            if status.process_exited {
+                cleanup_stale_runtime_state_after_forced_shutdown(status);
+                return Ok(());
+            }
+            if force_started.elapsed() > force_kill_timeout {
+                bail!(
+                    "Bitloops daemon did not shut down after forced termination (process_exited={}, runtime_cleaned={})",
+                    status.process_exited,
+                    status.runtime_cleaned
+                );
+            }
+        } else {
+            if status.runtime_cleaned && !status.process_exited {
+                let cleaned_since = runtime_cleaned_since.get_or_insert_with(Instant::now);
+                if cleaned_since.elapsed() >= runtime_clean_exit_grace {
+                    log::warn!(
+                        "daemon process {} remained alive for {:?} after runtime cleanup; forcing termination",
+                        pid,
+                        runtime_clean_exit_grace
+                    );
+                    force_kill_process(pid)?;
+                    force_kill_started = Some(Instant::now());
+                    continue;
+                }
+            } else {
+                runtime_cleaned_since = None;
+            }
+
+            if graceful_started.elapsed() > timeout {
+                if !status.process_exited {
+                    log::warn!(
+                        "daemon process {} exceeded graceful shutdown timeout of {:?}; forcing termination (runtime_cleaned={})",
+                        pid,
+                        timeout,
+                        status.runtime_cleaned
+                    );
+                    force_kill_process(pid)?;
+                    force_kill_started = Some(Instant::now());
+                    continue;
+                }
+
+                cleanup_stale_runtime_state_after_forced_shutdown(status);
+                return Ok(());
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn shutdown_cleanup_status(pid: u32) -> Result<ShutdownCleanupStatus> {
+    Ok(ShutdownCleanupStatus {
+        process_exited: process_has_exited_or_was_reaped(pid)?,
+        runtime_cleaned: read_runtime_state(Path::new("."))?.is_none(),
+    })
+}
+
+fn cleanup_stale_runtime_state_after_forced_shutdown(status: ShutdownCleanupStatus) {
+    if !status.runtime_cleaned
+        && let Err(err) = delete_runtime_state()
+    {
+        log::warn!("failed to clear stale daemon runtime state after forced shutdown: {err:#}");
+    }
 }
 
 pub(super) async fn daemon_http_ready(state: &DaemonRuntimeState) -> bool {
@@ -446,7 +585,10 @@ mod tests {
     #[cfg(not(windows))]
     use super::unix_kill_zero_indicates_running;
     #[cfg(unix)]
-    use super::{process_is_running, reap_terminated_child_process, wait_for_shutdown_cleanup};
+    use super::{
+        process_is_running, reap_terminated_child_process,
+        terminate_process_and_wait_for_shutdown_cleanup, wait_for_shutdown_cleanup,
+    };
     #[cfg(unix)]
     use crate::test_support::process_state::enter_process_state;
     #[cfg(unix)]
@@ -534,6 +676,47 @@ mod tests {
         assert!(
             !process_is_running(pid).expect("inspect child process state after shutdown wait"),
             "expected shutdown cleanup to wait until the child is gone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_cleanup_force_kills_lingering_process_once_runtime_is_cleaned() {
+        let cwd = TempDir::new().expect("temp cwd");
+        let state_root = TempDir::new().expect("temp state root");
+        let state_root_str = state_root.path().to_string_lossy().to_string();
+        let _guard = enter_process_state(
+            Some(cwd.path()),
+            &[(
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_str.as_str()),
+            )],
+        );
+        let child = Command::new("sh")
+            .args(["-c", "trap '' TERM; exec sleep 60"])
+            .spawn()
+            .expect("spawn TERM-ignoring child");
+        let pid = child.id();
+        drop(child);
+
+        let started = Instant::now();
+        terminate_process_and_wait_for_shutdown_cleanup(
+            pid,
+            Path::new("unused"),
+            Duration::from_secs(2),
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        )
+        .expect("force-kill lingering child during shutdown cleanup");
+
+        assert!(
+            started.elapsed() < Duration::from_millis(1500),
+            "expected forced shutdown cleanup to finish early, elapsed={:?}",
+            started.elapsed()
+        );
+        assert!(
+            !process_is_running(pid).expect("inspect child process state after forced shutdown"),
+            "expected forced shutdown cleanup to terminate lingering child"
         );
     }
 }

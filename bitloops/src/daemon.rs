@@ -135,9 +135,10 @@ use self::types::RUNTIME_STATE_FILE_NAME;
 #[cfg(test)]
 use self::types::global_daemon_dir_fallback;
 use self::types::{
-    GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME, READY_TIMEOUT, STOP_TIMEOUT,
-    SupervisorAppState, SupervisorHealthResponse, SupervisorStartRequest, SupervisorStopRequest,
-    global_daemon_dir, supervisor_service_metadata_path, unix_timestamp_now,
+    FORCE_KILL_TIMEOUT, GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME,
+    READY_TIMEOUT, STOP_RUNTIME_CLEAN_EXIT_GRACE, STOP_TIMEOUT, SupervisorAppState,
+    SupervisorHealthResponse, SupervisorStartRequest, SupervisorStopRequest, global_daemon_dir,
+    supervisor_service_metadata_path, unix_timestamp_now,
 };
 
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {

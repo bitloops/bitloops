@@ -220,11 +220,12 @@ pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {
             if state.mode == DaemonMode::Service
                 && state.service_name.as_deref() == Some(GLOBAL_SUPERVISOR_SERVICE_NAME) =>
         {
-            terminate_process(state.pid)?;
-            wait_for_shutdown_cleanup(
+            terminate_process_and_wait_for_shutdown_cleanup(
                 state.pid,
                 &runtime_state_path(Path::new(".")),
                 STOP_TIMEOUT,
+                STOP_RUNTIME_CLEAN_EXIT_GRACE,
+                FORCE_KILL_TIMEOUT,
             )?;
             Ok(())
         }
