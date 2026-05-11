@@ -6,11 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.24] - 2026-05-12
+
 ### Fixed
 
 - **Default-daemon restart now handles slow shutdown and startup paths more reliably**: service-managed daemon shutdown no longer inherits the shared dashboard's extra 5-second shutdown grace period, daemon stop/restart keeps a 20-second graceful shutdown budget while daemon readiness still allows up to 45 seconds, and once shutdown hooks have already cleaned the runtime marker a lingering daemon process is force-stopped after a short grace instead of waiting for the full stop timeout behind stuck background work. Supervisor logs also now record shutdown triggers plus reaped child exit details. This reduces false `did not shut down within 20 seconds` / `did not become ready within 20 seconds` restart failures and helps avoid the stale `service_running: true` with missing runtime-marker state seen after timed-out restarts.
-- **Repo-local Codex hook config now uses the canonical feature flag**: Bitloops now writes `.codex/config.toml` with `[features].hooks = true`, still recognizes legacy `[features].codex_hooks` entries when reading older installs, and rewrites that legacy key during hook enable/install so Codex stops surfacing the deprecation warning in trusted repositories.
-
+- **Repo-local Codex hook config now uses the canonical feature flag**: Bitloops now writes `.codex/config.toml` with a `[features]` table containing `hooks = true`, still recognizes legacy `codex_hooks = true` entries in that table when reading older installs, and rewrites that legacy key during hook enable/install so Codex stops surfacing the deprecation warning in trusted repositories.
 
 ## [0.0.23] - 2026-05-11
 
