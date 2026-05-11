@@ -4,7 +4,7 @@ use bitloops::adapters::agents::{
     AGENT_NAME_CLAUDE_CODE, AGENT_NAME_CODEX, AGENT_NAME_COPILOT, AGENT_NAME_CURSOR,
     AGENT_NAME_GEMINI, AGENT_NAME_OPEN_CODE,
 };
-use bitloops::config::settings::load_settings;
+use bitloops::config::settings::{load_settings, set_devql_producer_settings, settings_local_path};
 use bitloops::config::{
     resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
     resolve_store_backend_config_for_repo,

@@ -15,7 +15,8 @@ use super::{
     LanguageAdapterMigrationDescriptor, LanguageAdapterMigrationExecution,
     LanguageAdapterMigrationFailure, LanguageAdapterMigrationRunReport,
     LanguageAdapterMigrationStatus, LanguageAdapterMigrationStep, LanguageAdapterPack,
-    LanguageArtefact, LanguageEntryPointSupport, LanguageTestSupport,
+    LanguageArtefact, LanguageEntryPointSupport, LanguageHttpFact, LanguageHttpFactArtefact,
+    LanguageHttpFactFile, LanguageTestSupport,
 };
 
 #[derive(Debug, Default)]
@@ -109,6 +110,20 @@ impl LanguageAdapterRegistry {
 
     pub(crate) fn extract_file_docstring(&self, pack_id: &str, content: &str) -> Option<String> {
         self.packs.get(pack_id)?.extract_file_docstring(content)
+    }
+
+    pub(crate) fn extract_http_facts(
+        &self,
+        pack_id: &str,
+        file: &LanguageHttpFactFile,
+        content: &str,
+        artefacts: &[LanguageHttpFactArtefact],
+    ) -> Result<Vec<LanguageHttpFact>> {
+        let pack = self
+            .packs
+            .get(pack_id)
+            .ok_or_else(|| anyhow::anyhow!("language adapter pack `{pack_id}` not found"))?;
+        pack.extract_http_facts(file, content, artefacts)
     }
 
     pub(crate) fn registered_pack_ids(&self) -> Vec<&str> {

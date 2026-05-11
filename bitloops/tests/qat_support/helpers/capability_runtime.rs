@@ -271,7 +271,7 @@ while IFS= read -r line; do
       exit 0
       ;;
     *'"type":"infer"'*)
-      printf '{"type":"infer","request_id":"%s","text":"","parsed_json":{"summary":"QAT deterministic semantic summary for clone ranking.","confidence":0.91},"provider_name":"qat","model_name":"qat-summary-model"}\n' "$request_id"
+      printf '{"type":"infer","request_id":"%s","text":"QAT deterministic semantic summary for clone ranking.","provider_name":"qat","model_name":"qat-summary-model"}\n' "$request_id"
       ;;
   esac
 done
@@ -311,7 +311,7 @@ while (($line = [Console]::In.ReadLine()) -ne $null) {
     Write-Output '{"type":"shutdown","request_id":"'"$requestId"'"}'
     exit 0
   } elseif ($line -like '*"type":"infer"*') {
-    Write-Output '{"type":"infer","request_id":"'"$requestId"'","text":"","parsed_json":{"summary":"QAT deterministic semantic summary for clone ranking.","confidence":0.91},"provider_name":"qat","model_name":"qat-summary-model"}'
+    Write-Output '{"type":"infer","request_id":"'"$requestId"'","text":"QAT deterministic semantic summary for clone ranking.","provider_name":"qat","model_name":"qat-summary-model"}'
   }
 }
 "#;

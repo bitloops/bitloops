@@ -3,6 +3,8 @@ use anyhow::{Result, bail};
 use super::args::{
     compile_artefact_args, compile_checkpoint_args, compile_clone_summary_args,
     compile_clones_args, compile_coverage_args, compile_deps_args, compile_deps_summary_args,
+    compile_http_header_producers_args, compile_http_lifecycle_boundaries_args,
+    compile_http_lossy_transforms_args, compile_http_patch_impact_args, compile_http_search_args,
     compile_knowledge_args, compile_select_artefacts_args, compile_selection_checkpoint_args,
     compile_selection_clones_args, compile_selection_context_guidance_args,
     compile_selection_deps_args, compile_selection_historical_context_args,
@@ -42,6 +44,20 @@ pub(super) fn compile_terminal_leaf(
         && !parsed.has_artefacts_stage
     {
         return compile_knowledge_leaf(parsed, stage);
+    }
+
+    if let Some(stage) = registered_stage
+        && matches!(
+            stage,
+            RegisteredStageKind::HttpSearch(_)
+                | RegisteredStageKind::HttpHeaderProducers(_)
+                | RegisteredStageKind::HttpLifecycleBoundaries(_)
+                | RegisteredStageKind::HttpLossyTransforms(_)
+                | RegisteredStageKind::HttpPatchImpact(_)
+        )
+        && !parsed.has_artefacts_stage
+    {
+        return compile_http_leaf(parsed, stage);
     }
 
     if matches!(registered_stage, Some(RegisteredStageKind::CloneSummary)) {
@@ -103,9 +119,20 @@ fn compile_select_artefacts_leaf(
             compile_selection_tests_args(stage),
             selection_stage_selections(&parsed.select_fields)?,
         )
+    } else if matches!(
+        registered_stage,
+        Some(RegisteredStageKind::SelectionOverview)
+    ) {
+        GraphqlField::new("overview", Vec::new(), Vec::new())
+    } else if let Some(RegisteredStageKind::HttpContext(_stage)) = registered_stage {
+        GraphqlField::new(
+            "httpContext",
+            first_arg(parsed.has_limit_stage.then_some(parsed.limit)),
+            http_context_result_selections(),
+        )
     } else {
         bail!(
-            "selectArtefacts(...) requires checkpoints(), historicalContext(), contextGuidance(), clones(), dependencies(), or tests()"
+            "selectArtefacts(...) requires overview(), checkpoints(), historicalContext(), contextGuidance(), clones(), dependencies(), tests(), or httpContext()"
         );
     };
 
@@ -152,6 +179,14 @@ pub(super) fn compile_project_stage_leaf(
         RegisteredStageKind::Knowledge(_) => {
             bail!("knowledge() is not a project-level registered stage in the GraphQL compiler")
         }
+        RegisteredStageKind::SelectionOverview | RegisteredStageKind::HttpContext(_) => {
+            bail!("that selection-only HTTP stage is not project-level in the GraphQL compiler")
+        }
+        RegisteredStageKind::HttpSearch(_)
+        | RegisteredStageKind::HttpHeaderProducers(_)
+        | RegisteredStageKind::HttpLifecycleBoundaries(_)
+        | RegisteredStageKind::HttpLossyTransforms(_)
+        | RegisteredStageKind::HttpPatchImpact(_) => compile_http_leaf(parsed, registered_stage),
     }
 }
 
@@ -196,6 +231,50 @@ fn compile_clone_summary_leaf(parsed: &ParsedDevqlQuery) -> Result<GraphqlField>
         compile_clone_summary_args(parsed)?,
         clone_summary_selections(),
     ))
+}
+
+fn compile_http_leaf(
+    parsed: &ParsedDevqlQuery,
+    registered_stage: RegisteredStageKind<'_>,
+) -> Result<GraphqlField> {
+    match registered_stage {
+        RegisteredStageKind::HttpSearch(stage) => Ok(GraphqlField::new(
+            "httpSearch",
+            compile_http_search_args(stage, parsed.has_limit_stage.then_some(parsed.limit))?,
+            http_search_result_selections(),
+        )),
+        RegisteredStageKind::HttpHeaderProducers(stage) => Ok(GraphqlField::new(
+            "httpHeaderProducers",
+            compile_http_header_producers_args(
+                stage,
+                parsed.has_limit_stage.then_some(parsed.limit),
+            )?,
+            http_header_producer_selections(),
+        )),
+        RegisteredStageKind::HttpLifecycleBoundaries(stage) => Ok(GraphqlField::new(
+            "httpLifecycleBoundaries",
+            compile_http_lifecycle_boundaries_args(
+                stage,
+                parsed.has_limit_stage.then_some(parsed.limit),
+            ),
+            http_primitive_selections(),
+        )),
+        RegisteredStageKind::HttpLossyTransforms(stage) => Ok(GraphqlField::new(
+            "httpLossyTransforms",
+            compile_http_lossy_transforms_args(
+                stage,
+                parsed.has_limit_stage.then_some(parsed.limit),
+                true,
+            ),
+            http_primitive_selections(),
+        )),
+        RegisteredStageKind::HttpPatchImpact(stage) => Ok(GraphqlField::new(
+            "httpPatchImpact",
+            compile_http_patch_impact_args(stage)?,
+            http_patch_impact_result_selections(),
+        )),
+        _ => bail!("unsupported HTTP stage in direct lookup compiler"),
+    }
 }
 
 fn compile_artefacts_leaf(
@@ -276,6 +355,30 @@ fn compile_artefacts_leaf(
                 bail!("test_harness_tests_summary() cannot be nested under artefacts()")
             }
             RegisteredStageKind::Knowledge(_) => {}
+            RegisteredStageKind::SelectionOverview => {
+                bail!("overview() cannot be nested under artefacts()")
+            }
+            RegisteredStageKind::HttpContext(_) => {
+                bail!("httpContext() is only supported after selectArtefacts(...)")
+            }
+            RegisteredStageKind::HttpLossyTransforms(stage) => node_selections.push(
+                GraphqlField::new(
+                    "httpLossyTransforms",
+                    compile_http_lossy_transforms_args(
+                        stage,
+                        parsed.has_limit_stage.then_some(parsed.limit),
+                        false,
+                    ),
+                    http_primitive_selections(),
+                )
+                .into(),
+            ),
+            RegisteredStageKind::HttpSearch(_)
+            | RegisteredStageKind::HttpHeaderProducers(_)
+            | RegisteredStageKind::HttpLifecycleBoundaries(_)
+            | RegisteredStageKind::HttpPatchImpact(_) => {
+                bail!("that HTTP direct lookup cannot be nested under artefacts()")
+            }
         }
     }
 
@@ -291,6 +394,148 @@ fn compile_artefacts_leaf(
         compile_artefact_args(parsed, outer_first)?,
         node_selections,
     ))
+}
+
+fn http_search_result_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("overview"),
+        GraphqlField::new("bundles", Vec::new(), http_bundle_selections()).into(),
+        GraphqlField::new("matchedFacts", Vec::new(), http_primitive_selections()).into(),
+    ]
+}
+
+fn http_context_result_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("overview"),
+        GraphqlField::new("bundles", Vec::new(), http_bundle_selections()).into(),
+        GraphqlField::new("primitives", Vec::new(), http_primitive_selections()).into(),
+        GraphqlField::new("obligations", Vec::new(), http_obligation_selections()).into(),
+    ]
+}
+
+fn http_bundle_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("bundleId"),
+        GraphqlSelection::scalar("kind"),
+        GraphqlSelection::scalar("riskKind"),
+        GraphqlSelection::scalar("severity"),
+        GraphqlSelection::scalar("matchedRoles"),
+        GraphqlSelection::scalar("status"),
+        GraphqlField::new("confidence", Vec::new(), http_confidence_selections()).into(),
+        GraphqlField::new("upstreamFacts", Vec::new(), http_upstream_fact_selections()).into(),
+        GraphqlField::new("causalChain", Vec::new(), http_causal_chain_selections()).into(),
+        GraphqlField::new(
+            "invalidatedAssumptions",
+            Vec::new(),
+            http_invalidated_assumption_selections(),
+        )
+        .into(),
+        GraphqlField::new("obligations", Vec::new(), http_obligation_selections()).into(),
+    ]
+}
+
+fn http_primitive_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("id"),
+        GraphqlSelection::scalar("owner"),
+        GraphqlSelection::scalar("primitiveType"),
+        GraphqlSelection::scalar("subject"),
+        GraphqlSelection::scalar("roles"),
+        GraphqlSelection::scalar("terms"),
+        GraphqlSelection::scalar("status"),
+        GraphqlField::new("confidence", Vec::new(), http_confidence_selections()).into(),
+        GraphqlField::new("evidence", Vec::new(), http_evidence_selections()).into(),
+        GraphqlSelection::scalar("properties"),
+    ]
+}
+
+fn http_header_producer_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("primitiveId"),
+        GraphqlSelection::scalar("producerKind"),
+        GraphqlSelection::scalar("sourceSignal"),
+        GraphqlSelection::scalar("phase"),
+        GraphqlSelection::scalar("preconditions"),
+        GraphqlField::new("confidence", Vec::new(), http_confidence_selections()).into(),
+    ]
+}
+
+fn http_patch_impact_result_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("patchFingerprint"),
+        GraphqlField::new(
+            "invalidatedAssumptions",
+            Vec::new(),
+            http_invalidated_assumption_selections(),
+        )
+        .into(),
+        GraphqlField::new(
+            "propagationObligations",
+            Vec::new(),
+            http_obligation_selections(),
+        )
+        .into(),
+    ]
+}
+
+fn http_confidence_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("level"),
+        GraphqlSelection::scalar("score"),
+    ]
+}
+
+fn http_evidence_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("kind"),
+        GraphqlSelection::scalar("path"),
+        GraphqlSelection::scalar("artefactId"),
+        GraphqlSelection::scalar("symbolId"),
+        GraphqlSelection::scalar("contentId"),
+        GraphqlSelection::scalar("startLine"),
+        GraphqlSelection::scalar("endLine"),
+        GraphqlSelection::scalar("dependencyPackage"),
+        GraphqlSelection::scalar("dependencyVersion"),
+        GraphqlSelection::scalar("sourceUrl"),
+    ]
+}
+
+fn http_upstream_fact_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("owner"),
+        GraphqlSelection::scalar("factId"),
+        GraphqlSelection::scalar("primitiveType"),
+        GraphqlSelection::scalar("subject"),
+        GraphqlSelection::scalar("roles"),
+    ]
+}
+
+fn http_causal_chain_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("owner"),
+        GraphqlSelection::scalar("factId"),
+        GraphqlSelection::scalar("role"),
+        GraphqlSelection::scalar("primitiveType"),
+        GraphqlSelection::scalar("subject"),
+    ]
+}
+
+fn http_invalidated_assumption_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("id"),
+        GraphqlSelection::scalar("assumption"),
+        GraphqlSelection::scalar("invalidatedByPrimitiveIds"),
+        GraphqlSelection::scalar("scope"),
+    ]
+}
+
+fn http_obligation_selections() -> Vec<GraphqlSelection> {
+    vec![
+        GraphqlSelection::scalar("id"),
+        GraphqlSelection::scalar("requiredFollowUp"),
+        GraphqlSelection::scalar("targetSymbols"),
+        GraphqlSelection::scalar("blocking"),
+    ]
 }
 
 fn selection_stage_selections(select_fields: &[String]) -> Result<Vec<GraphqlSelection>> {

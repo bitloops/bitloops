@@ -73,6 +73,11 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I set DevQL producer policy --sync=(true|false) --ingest=(true|false) in (\S+)$"),
+            step_fn(given_set_devql_producer_policy),
+        )
+        .given(
+            None,
             regex(r"^I run bitloops producer-contract init --agent (\S+) --sync=(true|false) in (\S+)$"),
             step_fn(given_init_bitloops_producer_contract),
         )

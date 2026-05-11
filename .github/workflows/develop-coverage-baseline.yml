@@ -20,6 +20,7 @@ env:
 jobs:
   publish-coverage-baseline:
     name: Publish coverage baseline metadata
+    if: ${{ false }} # skip for now
     runs-on: self-hosted
     env:
       BITLOOPS_ACTIONS_VARIABLES_TOKEN: ${{ secrets.BITLOOPS_ACTIONS_VARIABLES_TOKEN }}

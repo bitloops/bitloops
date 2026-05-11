@@ -597,6 +597,7 @@ struct SessionInfoRaw {
         alias = "modelSlug",
         alias = "model_slug",
         alias = "modelId",
+        alias = "modelID",
         alias = "model_id",
         alias = "newModel",
         alias = "new_model"
@@ -619,6 +620,7 @@ struct TurnStartRaw {
         alias = "modelSlug",
         alias = "model_slug",
         alias = "modelId",
+        alias = "modelID",
         alias = "model_id",
         alias = "newModel",
         alias = "new_model"
@@ -641,6 +643,7 @@ struct TaskHookInputRaw {
         alias = "modelSlug",
         alias = "model_slug",
         alias = "modelId",
+        alias = "modelID",
         alias = "model_id",
         alias = "newModel",
         alias = "new_model"
@@ -665,6 +668,7 @@ struct PostTaskHookInputRaw {
         alias = "modelSlug",
         alias = "model_slug",
         alias = "modelId",
+        alias = "modelID",
         alias = "model_id",
         alias = "newModel",
         alias = "new_model"
@@ -693,6 +697,7 @@ struct PostTodoHookInputRaw {
         alias = "modelSlug",
         alias = "model_slug",
         alias = "modelId",
+        alias = "modelID",
         alias = "model_id",
         alias = "newModel",
         alias = "new_model"
@@ -719,6 +724,7 @@ struct ToolHookInputRaw {
         alias = "modelSlug",
         alias = "model_slug",
         alias = "modelId",
+        alias = "modelID",
         alias = "model_id",
         alias = "newModel",
         alias = "new_model"

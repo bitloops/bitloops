@@ -15,9 +15,11 @@ use super::{
     CodeCityArchitectureResult, CodeCityFileDetailResult, CodeCitySnapshotStatusResult,
     CodeCityViolationConnectionResult, CodeCityViolationFilterInput, CodeCityWorldResult,
     ConnectionPagination, DateTimeScalar, DependencyConnectionEdge, DependencyEdgeConnection,
-    DepsFilterInput, FileContext, KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider,
-    NavigationContextFilterInput, NavigationContextSnapshot, TemporalScope,
-    TestHarnessCommitSummary, TestHarnessCoverageResult, TestHarnessTestsResult, paginate_items,
+    DepsFilterInput, FileContext, HttpHeaderProducer, HttpLossyTransformAroundInput,
+    HttpPatchImpactInput, HttpPatchImpactResult, HttpPrimitive, HttpSearchResult,
+    KnowledgeItemConnection, KnowledgeItemEdge, KnowledgeProvider, NavigationContextFilterInput,
+    NavigationContextSnapshot, TemporalScope, TestHarnessCommitSummary, TestHarnessCoverageResult,
+    TestHarnessTestsResult, paginate_items,
 };
 
 mod stages;
@@ -233,6 +235,84 @@ impl Project {
             page.page_info,
             page.total_count,
         ))
+    }
+
+    #[graphql(name = "httpSearch")]
+    async fn http_search(
+        &self,
+        ctx: &Context<'_>,
+        terms: Vec<String>,
+        first: Option<i32>,
+    ) -> Result<HttpSearchResult> {
+        let terms = normalise_http_terms("terms", terms)?;
+        let first = optional_positive_limit("first", first)?.unwrap_or(10);
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_search(&self.scope, &terms, first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query HTTP search index: {err:#}")))
+    }
+
+    #[graphql(name = "httpHeaderProducers")]
+    async fn http_header_producers(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "headerName")] header_name: String,
+        first: Option<i32>,
+    ) -> Result<Vec<HttpHeaderProducer>> {
+        let header_name = normalise_http_scalar("headerName", header_name)?;
+        let first = optional_positive_limit("first", first)?.unwrap_or(20);
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_header_producers(&self.scope, &header_name, first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query HTTP header producers: {err:#}")))
+    }
+
+    #[graphql(name = "httpLifecycleBoundaries")]
+    async fn http_lifecycle_boundaries(
+        &self,
+        ctx: &Context<'_>,
+        terms: Option<Vec<String>>,
+        first: Option<i32>,
+    ) -> Result<Vec<HttpPrimitive>> {
+        let terms = normalise_optional_http_terms(terms)?;
+        let first = optional_positive_limit("first", first)?.unwrap_or(20);
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_lifecycle_boundaries(&self.scope, &terms, first)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to query HTTP lifecycle boundaries: {err:#}"
+                ))
+            })
+    }
+
+    #[graphql(name = "httpLossyTransforms")]
+    async fn http_lossy_transforms(
+        &self,
+        ctx: &Context<'_>,
+        around: Option<HttpLossyTransformAroundInput>,
+        first: Option<i32>,
+    ) -> Result<Vec<HttpPrimitive>> {
+        let first = optional_positive_limit("first", first)?.unwrap_or(20);
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_lossy_transforms(&self.scope, around.as_ref(), first)
+            .await
+            .map_err(|err| backend_error(format!("failed to query HTTP lossy transforms: {err:#}")))
+    }
+
+    #[graphql(name = "httpPatchImpact")]
+    async fn http_patch_impact(
+        &self,
+        ctx: &Context<'_>,
+        input: HttpPatchImpactInput,
+    ) -> Result<HttpPatchImpactResult> {
+        if input.patch_fingerprint.trim().is_empty() {
+            return Err(bad_user_input_error("`patchFingerprint` must be non-empty"));
+        }
+        ctx.data_unchecked::<DevqlGraphqlContext>()
+            .http_patch_impact(&self.scope, &input)
+            .await
+            .map_err(|err| backend_error(format!("failed to query HTTP patch impact: {err:#}")))
     }
 
     #[graphql(name = "navigationContext")]
@@ -748,4 +828,31 @@ impl Project {
         .map_err(|err| map_stage_adapter_error("project codeCityArcs", err))?;
         decode_stage_single("codecity_arcs", rows)
     }
+}
+
+fn normalise_http_scalar(name: &str, value: String) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(bad_user_input_error(format!("`{name}` must be non-empty")));
+    }
+    Ok(value.to_string())
+}
+
+fn normalise_optional_http_terms(terms: Option<Vec<String>>) -> Result<Vec<String>> {
+    terms.map_or_else(
+        || Ok(Vec::new()),
+        |terms| normalise_http_terms("terms", terms),
+    )
+}
+
+fn normalise_http_terms(name: &str, terms: Vec<String>) -> Result<Vec<String>> {
+    let terms = terms
+        .into_iter()
+        .map(|term| term.trim().to_string())
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        return Err(bad_user_input_error(format!("`{name}` must be non-empty")));
+    }
+    Ok(terms)
 }

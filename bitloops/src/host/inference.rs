@@ -25,7 +25,7 @@ pub const BITLOOPS_INFERENCE_RUNTIME_ID: &str = "bitloops_inference";
 pub const CODEX_EXEC_DRIVER: &str = "codex_exec";
 pub const CLAUDE_CODE_PRINT_DRIVER: &str = "claude_code_print";
 pub const OPENAI_CHAT_COMPLETIONS_DRIVER: &str = "openai_chat_completions";
-pub const DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY: usize = 4;
+pub const DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingInputType {
@@ -74,6 +74,19 @@ pub trait TextGenerationService: Send + Sync {
         self.descriptor()
     }
     fn complete(&self, system_prompt: &str, user_prompt: &str) -> Result<String>;
+    fn complete_with_options(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        _options: TextGenerationOptions,
+    ) -> Result<String> {
+        self.complete(system_prompt, user_prompt)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextGenerationOptions {
+    pub refresh_cache: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

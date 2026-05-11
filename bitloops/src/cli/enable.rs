@@ -1,9 +1,11 @@
 //! `bitloops enable` / `bitloops disable` command implementation.
 
 use std::collections::BTreeSet;
+use std::env;
+#[cfg(test)]
+use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::{env, fs};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
@@ -38,7 +40,7 @@ use crate::config::discover_repo_policy;
 #[cfg(test)]
 use crate::config::settings::BitloopsSettings;
 use crate::config::settings::{
-    self, SETTINGS_DIR, devql_guidance_enabled_from_policy, load_settings, set_capture_enabled,
+    self, devql_guidance_enabled_from_policy, load_settings, set_capture_enabled,
     set_devql_guidance_enabled,
 };
 #[cfg(test)]
@@ -221,13 +223,6 @@ fn reconcile_repo_watcher(repo_root: &Path) {
     if let Err(err) = crate::cli::watcher_bootstrap::reconcile_repo_watcher(repo_root) {
         log::debug!("skipping watcher restart after policy change: {err:#}");
     }
-}
-
-#[cfg(test)]
-fn setup_bitloops_dir(repo_root: &Path) -> Result<()> {
-    fs::create_dir_all(repo_root.join(SETTINGS_DIR))
-        .with_context(|| format!("creating {SETTINGS_DIR}/ directory"))?;
-    Ok(())
 }
 
 #[cfg(test)]
@@ -881,17 +876,10 @@ pub fn count_shadow_branches(repo_root: &Path) -> usize {
     0
 }
 
-pub fn check_bitloops_dir_exists(repo_root: &Path) -> bool {
-    repo_root.join(SETTINGS_DIR).exists()
-}
-
 #[cfg(test)]
 pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
     let enabled = settings::is_enabled(repo_root).unwrap_or(false);
     if !enabled {
-        return (false, String::new(), String::new());
-    }
-    if !check_bitloops_dir_exists(repo_root) {
         return (false, String::new(), String::new());
     }
     if !git_hooks::is_git_hook_installed(repo_root) {
@@ -911,14 +899,6 @@ pub fn is_fully_enabled(repo_root: &Path) -> (bool, String, String) {
         .agent_display(&enabled_agents[0])
         .unwrap_or("Unknown");
     (true, agent.to_string(), config.to_string())
-}
-
-pub fn remove_bitloops_directory(repo_root: &Path) -> Result<()> {
-    let bitloops_dir = repo_root.join(SETTINGS_DIR);
-    if !bitloops_dir.exists() {
-        return Ok(());
-    }
-    fs::remove_dir_all(&bitloops_dir).context("removing .bitloops directory")
 }
 
 #[cfg(test)]

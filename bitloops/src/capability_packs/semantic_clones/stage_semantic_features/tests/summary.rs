@@ -5,7 +5,7 @@ use crate::capability_packs::semantic_clones::features as semantic;
 fn semantic_rows(
     llm_summary: Option<&str>,
     summary: &str,
-    confidence: f32,
+    confidence: Option<f32>,
     source_model: Option<&str>,
 ) -> semantic::SemanticFeatureRows {
     let input = semantic::SemanticFeatureInput {
@@ -78,7 +78,7 @@ fn semantic_summary_snapshot_marks_llm_enrichment_from_summary_or_model() {
 
 #[test]
 fn strict_summary_provider_rejects_template_only_rows() {
-    let rows = semantic_rows(None, "Defines the rust source file.", 0.35, None);
+    let rows = semantic_rows(None, "Defines the rust source file.", Some(0.35), None);
 
     let err = ensure_required_llm_summary_output(&rows, &StrictNoopSummaryProvider)
         .expect_err("strict provider should reject template-only summaries");
@@ -93,7 +93,7 @@ fn strict_summary_provider_accepts_model_backed_rows() {
     let rows = semantic_rows(
         Some("Summarises the symbol."),
         "Defines the rust source file. Summarises the symbol.",
-        0.91,
+        None,
         Some("ollama:ministral-3:3b"),
     );
 

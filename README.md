@@ -1,88 +1,55 @@
 <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1>Give your AI agents high-signal context in milliseconds.</h1>
-<p>
-  <strong>Bitloops continuously models your codebase and development history so agents can retrieve
-  architecture, decisions, and intent instantly — instead of crawling your repositories.</strong>
-</p>
+  <h1>Codebase truth maintenance for AI agents.</h1>
+  <p>
+    <strong>Bitloops builds and maintains a local, typed, queryable model of your codebase so AI agents, developers, and reviewers can work from shared system state instead of rediscovering the repository from raw text.</strong>
+  </p>
   <p>
     <a href="https://bitloops.com">Website</a>
     ·
-    <a href="#what-is-bitloops">What is Bitloops</a>
-    ·
-    <a href="#installation">Installation</a>
-    ·
-    <a href="#getting-started">Getting Started</a>
-    ·
-    <a href="https://github.com/bitloops/bitloops/blob/Repo_Documentation_Improvement/DevQL-Getting_Started.md">DevQL</a>
-    ·
-    <a href="#faqs">FAQs</a>
-     ·
     <a href="https://bitloops.com/docs/">Docs</a>
+    ·
+    <a href="https://bitloops.com/docs/getting-started/quickstart">Quickstart</a>
+    ·
+    <a href="https://bitloops.com/docs/concepts/devql">DevQL</a>
+    ·
+    <a href="https://github.com/bitloops/bitloops/discussions">Discussions</a>
   </p>
 
-[![Fork](https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork)](https://github.com/bitloops/bitloops/network/) [![Star](https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star)](https://github.com/bitloops/bitloops/stargazers/) [![Commits](https://badgen.net/github/commits/bitloops/bitloops?color=6b7280)](https://github.com/bitloops/bitloops/commits/) [![Version](https://img.shields.io/github/v/tag/bitloops/bitloops?style=flat-square&color=7404e4)](https://github.com/bitloops/bitloops/tags/) [![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/releases) [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827)](https://github.com/bitloops/bitloops/blob/main/LICENSE) [![Contributors](https://img.shields.io/github/contributors/bitloops/bitloops?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/graphs/contributors) [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square)](https://github.com/bitloops/bitloops) [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
+[![Fork](https://img.shields.io/github/forks/bitloops/bitloops?style=flat-square&label=Fork)](https://github.com/bitloops/bitloops/network/)
+[![Star](https://img.shields.io/github/stars/bitloops/bitloops?style=flat-square&label=Star)](https://github.com/bitloops/bitloops/stargazers/)
+[![Commits](https://badgen.net/github/commits/bitloops/bitloops?color=6b7280)](https://github.com/bitloops/bitloops/commits/)
+[![Version](https://img.shields.io/github/v/tag/bitloops/bitloops?style=flat-square&color=7404e4)](https://github.com/bitloops/bitloops/tags/)
+[![Downloads](https://img.shields.io/github/downloads/bitloops/bitloops/total?style=flat-square&color=6b7280)](https://github.com/bitloops/bitloops/releases)
+[![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827)](https://github.com/bitloops/bitloops/blob/main/LICENSE)
+[![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
+[![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
 
 </div>
-    
+
 > [!WARNING]
-> **Project status: Alpha / Work in Progress**
+> **Project status: alpha / work in progress**
 >
-> Bitloops is under active development in the open. It is **not production-ready** yet.
->
-> You should currently expect:
-> - breaking changes between releases
-> - incomplete or evolving documentation
-> - rough edges in onboarding and agent integrations
-> - limited support for some environments and workflows
->
-> We welcome early adopters, testers, and contributors who are comfortable trying experimental developer tooling and sharing feedback.
+> Bitloops is under active development in the open and is **not production-ready yet**.
+> Expect breaking changes, evolving documentation, rough onboarding edges, and uneven
+> support across environments while the system matures.
 
-## What is Bitloops?
+## What Bitloops Gives You
 
-AI agents don’t understand your codebase.  
-They brute-force it.
+AI coding agents are powerful, but most of them still start every task by crawling the repository again: read files, grep for symbols, infer architecture, guess which tests matter, inspect old docs, and compress all of that into a prompt.
 
-They:
+Bitloops gives them a maintained operating picture instead.
 
-- run `grep`, `ls`, `cat`
-- chain tool calls
-- pull too much context
-- burn tokens figuring out what matters
+| You need | Bitloops gives you |
+| --- | --- |
+| Better agent context | A local, queryable model of files, artefacts, symbols, dependencies, tests, checkpoints, and history. |
+| Less repeated repo crawling | Agents ask precise DevQL questions instead of rediscovering the same facts through `grep`, `cat`, and large context dumps. |
+| Reviewable AI-assisted work | Sessions and checkpoints preserve prompts, transcript fragments, tool events, changed files, model/token metadata, and commit linkage. |
+| Shared memory across agents | Claude Code, Codex, Cursor, Gemini, Copilot, and OpenCode can feed one repository-scoped model instead of creating isolated mental models. |
+| Fresher repository understanding | Current-state sync and historical ingest keep repository facts aligned with the worktree and Git history. |
+| A foundation for safer autonomy | Provenance, evidence, confidence, freshness, and lifecycle primitives are represented where available and are being expanded across the system. |
 
-Bitloops replaces that.
-
-It builds a **local, queryable model of your repository** so agents can fetch what they need directly—dependencies, files, tests, and prior context—in a single call.
-
-Powered by **DevQL**, a GraphQL-based query layer for your codebase.
-
-It also captures every agent interaction as **checkpoints**—giving you a trace of:
-
-- tool usage
-- decisions
-- reasoning
-- and how changes evolved
-
-So you don’t just get results—you can inspect how they were produced.
-
----
-
-### Without vs With Bitloops
-
-|                                                              |                                                               |
-| ------------------------------------------------------------ | ------------------------------------------------------------- |
-| **Without Bitloops**                                         | **With Bitloops**                                             |
-| Each session starts from zero                                | Sessions build on shared repository memory                    |
-| Agents send large amounts of repository context to the model | Only relevant code, architecture, and reasoning are retrieved |
-| High token usage with noisy context                          | Fewer tokens with higher-quality context                      |
-| Reviewers see diffs with no reasoning trail                  | Commits link to the developer–AI conversation                 |
-| AI reasoning disappears between sessions                     | Agent reasoning remains searchable                            |
-| Limited governance over AI-generated changes                 | Teams can review and audit AI reasoning through commits       |
-| Multiple iterations to reach a correct result                | Higher chance of getting it right the first time              |
-
-## Installation
-
-### Native Install (Recommended)
+## Install
 
 macOS, Linux, WSL:
 
@@ -102,49 +69,172 @@ Windows CMD:
 curl -fsSL https://bitloops.com/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
-## Getting Started
+## Get Started
 
-1. The fastest way to get started is to run this from inside the git repository or subproject you want to capture:
+From the repository or subproject you want Bitloops to capture:
 
-   ```bash
-   bitloops init --install-default-daemon
-   ```
+```bash
+bitloops init --install-default-daemon
+```
 
-   This bootstraps the default daemon service if needed, creates or updates `.bitloops.local.toml`, and installs Bitloops hooks for the current project.
+Then work normally with your AI coding agent and commit as usual. Bitloops installs managed hooks, starts or binds the local daemon as needed, captures relevant session context, and keeps the local repository model fresh through daemon workers and Git safety producers.
 
-2. Toggle capture later if needed:
+Open the local dashboard:
 
-   ```bash
-   bitloops enable
-   bitloops disable
-   ```
+```bash
+bitloops dashboard
+```
 
-   `bitloops disable` removes Bitloops-managed agent prompt surfaces for the agents recorded in the repo policy.
-   `bitloops enable` reinstalls those same managed surfaces and resumes capture.
+Or visit:
 
-3. Work as usual and commit normally. Bitloops will capture the relevant
-   developer-agent context around those changes.
+```text
+http://127.0.0.1:5667
+```
 
-## Dashboard
-
-To view your checkpoints, with the daemon running visit:
-[localhost:5667](http://127.0.0.1:5667)
-
-## Uninstall
-
-Remove Bitloops-managed agent prompt surfaces from the current Bitloops project:
+Pause or resume capture for the current project:
 
 ```bash
 bitloops disable
+bitloops enable
 ```
 
-Remove Bitloops-managed artefacts from your machine as well:
+Remove Bitloops-managed local artefacts from your machine:
 
 ```bash
 bitloops uninstall --full
 ```
 
-## Supported Agents
+For detailed setup, configuration, troubleshooting, storage, and upgrade notes, use the [documentation site](https://bitloops.com/docs/).
+
+## What You Can Do Today
+
+Bitloops is alpha, but the current product already focuses on practical local workflows:
+
+- initialize a repository and install managed agent/Git hooks;
+- capture AI-agent sessions and checkpoint history;
+- inspect captured work and repository intelligence in a local dashboard;
+- query repository state through DevQL and GraphQL;
+- model current and historical files, artefacts, dependencies, commits, tests, checkpoints, and capability-pack data;
+- use supported agent integrations across Claude Code, Codex, Cursor, Gemini, Copilot, and OpenCode;
+- keep data local by default, with optional remote stores, connectors, telemetry, and inference providers controlled by configuration and consent.
+
+Some of the deeper truth-maintenance vision is still evolving. Bitloops already contains many primitives for provenance, confidence, freshness, stale-state handling, lifecycle state, and reviewability, but broader invalidation, governance, and human-approval flows are being built incrementally.
+
+## Capabilities
+
+Bitloops turns agent activity, repository structure, development history, tests,
+and external knowledge into a local queryable model.
+
+| Capability | What you get |
+| --- | --- |
+| **Agent context** | Agents can retrieve relevant files, artefacts, dependencies, tests, and prior reasoning without crawling the repo from scratch. |
+| **Checkpoint history** | AI-assisted work is captured as sessions and checkpoints linked to commits, prompts, tool use, files read, and files changed. |
+| **Repository intelligence** | Bitloops models files, symbols, artefacts, dependencies, branches, commits, and current workspace state. |
+| **DevQL queries** | Developers, agents, dashboards, and editor tools can query the maintained codebase model through DevQL and GraphQL. |
+| **Test and coverage awareness** | Bitloops can map tests, coverage, verification signals, and confidence back to code artefacts. |
+| **Knowledge ingestion** | External knowledge from sources such as GitHub, Jira, and Confluence can become part of repository understanding. |
+| **Semantic understanding** | Summaries, embeddings, semantic clone detection, and context guidance help agents reason beyond exact text matches. |
+| **Architecture views** | Architecture graph and CodeCity-style views help expose structure, boundaries, dependencies, risks, and higher-level codebase shape where enabled. |
+| **Freshness and re-evaluation** | Bitloops tracks when repository facts were produced, what code state they came from, and what should be refreshed as the repo changes. |
+| **Local-first operation** | Bitloops runs locally by default, with optional remote stores, connectors, telemetry, and inference providers controlled by configuration and consent. |
+
+## Who Bitloops Is For
+
+- **Developers using AI agents** who want better context, fewer repeated repo scans, and a searchable trail of what the agent did.
+- **Engineering teams and reviewers** who need to inspect AI-assisted work by reasoning, prompts, files read, tools used, and commit linkage, not only by diff.
+- **Platform and AI-tool teams** who want a typed local substrate for repository intelligence, agent context, and review workflows.
+- **Strategic readers** evaluating AI-native software engineering infrastructure where codebase knowledge compounds instead of disappearing into chat history.
+
+## Why Bitloops Exists
+
+AI coding is bottlenecked by state, not only generation.
+
+A codebase is not fundamentally a pile of text. Text is the serialization format for a changing system of files, symbols, APIs, tests, dependencies, entry points, runtime assumptions, historical decisions, external knowledge, review state, and agent activity.
+
+Most AI coding tools repeatedly force that structured system through an unstructured medium: prompt text, retrieved chunks, embeddings, and chat memory. The agent then has to infer the system again and again.
+
+That loop looks like this:
+
+```text
+retrieve -> infer -> act -> forget
+```
+
+Bitloops changes the loop to:
+
+```text
+extract -> persist -> classify -> validate -> refresh -> act
+```
+
+The goal is not just better retrieval. The goal is durable codebase truth maintenance: maintain useful facts, relationships, evidence, history, freshness, and review state so future agents and humans can act from the same operating picture.
+
+> Agents cannot reliably change systems they cannot model. Bitloops builds and maintains the model.
+
+## How It Works
+
+```mermaid
+flowchart TD
+    Developer["Developer / AI coding agent"] --> CLI["Bitloops CLI"]
+    Developer --> Hooks["Agent and Git hooks"]
+
+    CLI --> Daemon["Local Bitloops daemon"]
+    Hooks --> Capture["Session and checkpoint capture"]
+    Capture --> Stores["Local stores"]
+
+    Daemon --> Sync["Current workspace sync"]
+    Daemon --> Ingest["Historical ingest"]
+    Sync --> Model["Queryable repository model"]
+    Ingest --> Model
+
+    Model --> Packs["Capability packs"]
+    Packs --> Enrichment["Architecture, tests, knowledge, guidance, clones"]
+    Enrichment --> Model
+
+    Model --> DevQL["DevQL"]
+    Stores --> DevQL
+
+    DevQL --> Dashboard["Local dashboard"]
+    DevQL --> Editor["Editor integrations"]
+    DevQL --> Agents["Agent context"]
+```
+
+The CLI is the user control surface. The daemon coordinates long-running work: repository watching, current-state sync, historical ingest, task queues, capability consumers, enrichment workers, dashboard serving, and GraphQL endpoints.
+
+DevQL is the typed product contract. GraphQL is the canonical API, with a terminal-friendly DSL layered on top for CLI use.
+
+Example DevQL pipeline:
+
+```text
+repo("my-repo") -> asOf(ref:"main") -> artefacts(name:"findById") -> tests()
+```
+
+## How You Use Bitloops
+
+| Surface | What you use it for |
+| --- | --- |
+| **CLI** | Initialize a repo, enable or disable capture, open the dashboard, inspect checkpoints, run diagnostics, and query DevQL. |
+| **Local dashboard** | Browse captured AI-assisted work, checkpoints, repository intelligence, and DevQL-backed views in your browser. |
+| **DevQL** | Ask precise questions about the maintained repository model instead of making agents crawl files manually. |
+| **Agent integrations** | Let supported AI coding agents feed one repository-scoped model through normalized hooks, transcripts, prompts, tool events, and checkpoint data. |
+| **Background daemon** | Keep the local model fresh, coordinate sync and ingest work, serve the dashboard, and expose logs when something needs attention. |
+
+## Local-First Trust Model
+
+Normal local use does not require cloud access to your codebase. By default, Bitloops keeps configuration, runtime state, relational data, event data, and blobs on your machine.
+
+Optional connectors, remote stores, telemetry, and inference providers are controlled by configuration and consent. Deterministic analysis is preferred where facts can be known mechanically; inference is reserved for ambiguity, synthesis, semantic summaries, and novel cases.
+
+| Data area | Default behavior | Optional direction |
+| --- | --- | --- |
+| Repository model | Local relational store | Postgres-backed remote/team setups |
+| Interaction/event analytics | Local event store | ClickHouse-backed analytics setups |
+| Runtime state | Local daemon-owned SQLite state | Local daemon lifecycle and recovery data |
+| Checkpoint/session blobs | Local filesystem | S3 or GCS-backed blob storage |
+| External knowledge | Connector-controlled imports | GitHub, Jira, and Confluence-backed knowledge sources |
+| Telemetry | Consent-gated | Aggregated product analytics |
+
+## Supported Agents And Languages
+
+Supported agent integrations:
 
 - [x] Claude Code
 - [x] Codex
@@ -153,67 +243,51 @@ bitloops uninstall --full
 - [x] Copilot
 - [x] OpenCode
 
-## What is DevQL?
+Built-in language adapters:
 
-DevQL is a typed GraphQL interface for querying artefacts, checkpoints, dependencies, and knowledge — available as a CLI DSL, raw GraphQL, or dashboard endpoint.
+- [x] Rust
+- [x] TypeScript / JavaScript
+- [x] Python
+- [x] Go
+- [x] Java
+- [x] C#
 
-[Read more here](https://bitloops.com/docs/concepts/devql)
+## Technical Documentation
 
-## FAQs
+Technical details live in the documentation:
 
-### Do you need access to my codebase?
+- [Quickstart](https://bitloops.com/docs/getting-started/quickstart) for setup and first use;
+- [DevQL](https://bitloops.com/docs/concepts/devql) for querying the maintained repository model;
+- [Docs home](https://bitloops.com/docs/) for guides, concepts, reference, and troubleshooting;
+- [Contributor documentation](https://bitloops.com/docs/contributors) for source builds, architecture, language/agent/capability extension guides, and testing workflows;
+- [CONTRIBUTING.md](./CONTRIBUTING.md) for repository contribution rules.
 
-No. None of your code is sent to our servers. By default Bitloops keeps its
-config, cache, state, and local data in platform app directories on your
-machine, with store backends controlled by the daemon config.
+## Roadmap Direction
 
-### Is this totally free for real?
+Bitloops is moving toward stronger codebase truth maintenance:
 
-You bet!
+- more accurate freshness, stale-state, and conflict signals;
+- better review workflows for AI-assisted work;
+- richer test, coverage, architecture, semantic, and knowledge context;
+- deeper connector-backed knowledge from tools like GitHub, Jira, and Confluence;
+- more agent and language support;
+- optional team and remote backends while preserving local-first defaults;
+- governed flows that can turn useful agent discoveries into reviewable, reusable system state.
 
-### What kind of databases do I need?
+## What Bitloops Is Not
 
-DevQL now uses a provider model:
+Bitloops is not just a prompt wrapper, hook installer, dashboard, code search tool, vector database, documentation layer, chat memory, or generic RAG system.
 
-- Relational backend: `sqlite` or `postgres`
-- Events backend: `duckdb` or `clickhouse`
+Those can be surfaces or ingredients. The durable product is the maintained model of the codebase and development process.
 
-Current runtime adapters are `sqlite`/`postgres` for relational and
-`duckdb`/`clickhouse` for events (default relational backend: `sqlite`,
-default events backend: `duckdb`). Legacy `postgres_dsn` / `clickhouse_*` and
-`BITLOOPS_DEVQL_*` settings remain supported for backward compatibility.
+## Community And Support
 
-### Why do you use telemetry and why should I opt-in?
-
-Telemetry data help us understand which features users are using the most and
-help us guide our development. The telemetry data are not connected to specific
-users and are analysed and considered in aggregate. Bitloops asks for consent
-when the default daemon config is first created, and later interactive `init`
-or `enable` runs only ask again if consent becomes unresolved for an existing
-daemon config.
-
-## Community & Support
-
-### Contributing
-
-We welcome contributions from the community! Your input helps make Bitloops better
-for everyone. See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
-
-We welcome:
-
-- bug reports
-- documentation improvements
-- performance improvements
-- new integrations with AI coding tools
-- architectural ideas and discussions
-
-If you are unsure where to start, open an issue and we will help guide you.
-
-### Code of Conduct
-
-We're committed to fostering an inclusive and respectful community. Read our
-[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) for guidelines.
+- Website: <https://bitloops.com>
+- Docs: <https://bitloops.com/docs/>
+- Issues: <https://github.com/bitloops/bitloops/issues>
+- Security: [SECURITY.md](./SECURITY.md)
+- Code of Conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 
 ## License
 
-Apache 2.0.
+Apache-2.0. See [LICENSE](./LICENSE).

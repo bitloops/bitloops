@@ -193,6 +193,21 @@ pub(super) fn given_init_bitloops_with_agent_sync_ingest(
     })
 }
 
+pub(super) fn given_set_devql_producer_policy(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let sync = ctx.matches[1].1.parse::<bool>().expect("parse sync bool");
+        let ingest = ctx.matches[2].1.parse::<bool>().expect("parse ingest bool");
+        let repo_name = ctx.matches[3].1.clone();
+        run_step(
+            "I set DevQL producer policy",
+            helpers::set_devql_producer_policy_for_repo(world, &repo_name, sync, ingest),
+        );
+    })
+}
+
 pub(super) fn given_init_bitloops_producer_contract(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

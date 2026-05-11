@@ -16,7 +16,7 @@ use super::sqlite_writer::{
 };
 use super::stats::SyncExecutionStats;
 use super::summary::SyncSummary;
-use super::validation::execute_sync_validation;
+use super::validation::execute_sync_validation_with_observer;
 use super::*;
 use crate::host::capability_host::events::{SyncArtefactDiff, SyncFileDiff};
 
@@ -67,7 +67,7 @@ pub(crate) async fn run_sync_with_summary_and_stats_and_observer_and_diffs(
         .context("resolving DevQL backend config for `devql sync`")?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, "devql sync").await?;
     if matches!(mode, sync::types::SyncMode::Validate) {
-        return match execute_sync_validation(cfg, &relational).await {
+        return match execute_sync_validation_with_observer(cfg, &relational, observer).await {
             Ok(summary) => Ok((
                 summary,
                 SyncExecutionStats::default(),
@@ -773,9 +773,6 @@ fn sync_internal_ignored_paths(
 }
 
 fn is_sync_internal_ignored_path(path: &str, ignored: &HashSet<String>) -> bool {
-    if path.starts_with(".bitloops/stores/") {
-        return true;
-    }
     ignored
         .iter()
         .any(|base| path == base || path.starts_with(&format!("{base}-")))

@@ -284,7 +284,7 @@ fn init_adds_all_required_claude_hooks() {
     assert!(hook_command_exists(
         &settings,
         "SessionStart",
-        "startup|clear|compact",
+        "startup|resume|clear|compact",
         "bitloops hooks claude-code session-start"
     ));
     assert!(hook_command_exists(

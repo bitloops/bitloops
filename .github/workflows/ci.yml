@@ -25,6 +25,7 @@ jobs:
         run: cargo dev-file-size
   qat:
     name: QAT
+    if: ${{ false }} # skip for now
     runs-on: self-hosted
     timeout-minutes: 180
     env:

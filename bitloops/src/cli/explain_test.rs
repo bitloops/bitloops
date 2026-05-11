@@ -2322,8 +2322,8 @@ fn TestHasCodeChanges_FirstCommitReturnsTrue() {
 #[test]
 fn TestHasCodeChanges_OnlyMetadataChanges() {
     let changed = vec![
-        ".bitloops/internal/sessions/session-123/full.jsonl".to_string(),
-        ".bitloops/internal/sessions/session-123/prompt.txt".to_string(),
+        ".bitloops-test-state/internal/sessions/session-123/full.jsonl".to_string(),
+        ".bitloops-test-state/internal/sessions/session-123/prompt.txt".to_string(),
     ];
     assert!(
         !has_code_changes(&changed, false),
@@ -2334,8 +2334,10 @@ fn TestHasCodeChanges_OnlyMetadataChanges() {
 #[test]
 fn TestHasCodeChanges_OnlyCheckpointArtefactTaskChanges() {
     let changed = vec![
-        ".bitloops/internal/sessions/session-123/tasks/toolu_abc/context.json".to_string(),
-        ".bitloops/internal/sessions/session-123/tasks/toolu_abc/output.json".to_string(),
+        ".bitloops-test-state/internal/sessions/session-123/tasks/toolu_abc/context.json"
+            .to_string(),
+        ".bitloops-test-state/internal/sessions/session-123/tasks/toolu_abc/output.json"
+            .to_string(),
     ];
     assert!(
         !has_code_changes(&changed, false),
@@ -2355,7 +2357,7 @@ fn TestHasCodeChanges_WithCodeChanges() {
 #[test]
 fn TestHasCodeChanges_MixedChanges() {
     let changed = vec![
-        ".bitloops/internal/sessions/session-123/full.jsonl".to_string(),
+        ".bitloops-test-state/internal/sessions/session-123/full.jsonl".to_string(),
         "src/main.rs".to_string(),
     ];
     assert!(

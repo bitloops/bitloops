@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader, Cursor};
 
 use serde_json::Value;
 
-const MODEL_KEYS: [&str; 8] = [
+const MODEL_KEYS: [&str; 9] = [
     "newModel",
     "model",
     "modelName",
@@ -10,6 +10,7 @@ const MODEL_KEYS: [&str; 8] = [
     "modelSlug",
     "model_slug",
     "modelId",
+    "modelID",
     "model_id",
 ];
 
@@ -156,6 +157,16 @@ mod tests {
             extract_model_from_transcript_bytes(transcript),
             "claude-opus-4-1"
         );
+    }
+
+    #[test]
+    fn extracts_model_from_uppercase_id_keys() {
+        let transcript = br#"{
+            "providerID": "openai",
+            "modelID": "gpt-5.4"
+        }"#;
+
+        assert_eq!(extract_model_from_transcript_bytes(transcript), "gpt-5.4");
     }
 
     #[test]

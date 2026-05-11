@@ -36,7 +36,7 @@ pub struct UninstallArgs {
     #[arg(long, default_value_t = false)]
     pub service: bool,
 
-    /// Remove Bitloops data directories and repo-local `.bitloops/` data.
+    /// Remove Bitloops data directories.
     #[arg(long, default_value_t = false)]
     pub data: bool,
 
@@ -109,7 +109,7 @@ impl UninstallTarget {
             }
             Self::GitHooks => "Git hooks in known repositories",
             Self::Shell => "Shell completion integration",
-            Self::Data => "Global data and repo-local `.bitloops/` data",
+            Self::Data => "Global data directory",
             Self::Caching => "Global cache directories",
             Self::Config => "Global config and TLS artefacts",
             Self::Service => "Daemon service and state metadata",
@@ -117,7 +117,7 @@ impl UninstallTarget {
         }
     }
 
-    pub(super) fn summary(self, hook_repo_count: usize, repo_data_count: usize) -> String {
+    pub(super) fn summary(self, hook_repo_count: usize) -> String {
         match self {
             Self::AgentHooks => format!("Agent hooks in {hook_repo_count} Bitloops project(s)"),
             Self::RepoConfig => {
@@ -125,9 +125,7 @@ impl UninstallTarget {
             }
             Self::GitHooks => format!("Git hooks in {hook_repo_count} repo(s)"),
             Self::Shell => "Shell completion integration".to_string(),
-            Self::Data => {
-                format!("Global data directory and .bitloops dirs in {repo_data_count} repo(s)")
-            }
+            Self::Data => "Global data directory".to_string(),
             Self::Caching => "Global cache directory".to_string(),
             Self::Config => "Global config directory and TLS artefacts".to_string(),
             Self::Service => "Global daemon service and state metadata".to_string(),

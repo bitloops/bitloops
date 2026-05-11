@@ -570,13 +570,7 @@ fn test_hard_reset_with_protection_preserves_protected_dirs() {
     run_git(dir.path(), &["add", "second.txt"]);
     run_git(dir.path(), &["commit", "-m", "Second commit"]);
 
-    fs::write(dir.path().join(".gitignore"), ".bitloops/\n.worktrees/\n").expect("write ignore");
-    fs::create_dir_all(dir.path().join(".bitloops/internal")).expect("create .bitloops");
-    fs::write(
-        dir.path().join(".bitloops/internal/session.json"),
-        "important session metadata",
-    )
-    .expect("write .bitloops content");
+    fs::write(dir.path().join(".gitignore"), ".worktrees/\n").expect("write ignore");
     fs::create_dir_all(dir.path().join(".worktrees/feature-branch")).expect("create .worktrees");
     fs::write(
         dir.path().join(".worktrees/feature-branch/config"),
@@ -593,15 +587,6 @@ fn test_hard_reset_with_protection_preserves_protected_dirs() {
             !dir.path().join("second.txt").exists(),
             "second commit file should be removed by reset"
         );
-
-        assert!(
-            dir.path().join(".bitloops").exists(),
-            ".bitloops should not be deleted by hard reset"
-        );
-        let bitloops_content =
-            fs::read_to_string(dir.path().join(".bitloops/internal/session.json"))
-                .expect("read .bitloops content");
-        assert_eq!(bitloops_content, "important session metadata");
 
         assert!(
             dir.path().join(".worktrees").exists(),

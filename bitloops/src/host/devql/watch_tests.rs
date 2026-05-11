@@ -206,7 +206,7 @@ fn dirty_worktree_paths_include_untracked_source_files() {
 }
 
 #[test]
-fn dirty_worktree_rescan_adds_paths_without_internal_store_paths() {
+fn dirty_worktree_rescan_adds_paths_without_tmp_paths() {
     let (_dir, repo_root, _store) = seed_runtime_store();
     let source_path = repo_root.join("src").join("math.rs");
     fs::create_dir_all(source_path.parent().expect("source parent")).expect("create src dir");
@@ -216,10 +216,7 @@ fn dirty_worktree_rescan_adds_paths_without_internal_store_paths() {
     )
     .expect("write source file");
 
-    let internal_path = repo_root
-        .join(".bitloops")
-        .join("stores")
-        .join("internal.rs");
+    let internal_path = repo_root.join("src").join("internal.tmp");
     fs::create_dir_all(internal_path.parent().expect("internal parent"))
         .expect("create internal store dir");
     fs::write(&internal_path, "pub fn ignored() {}\n").expect("write internal store file");
@@ -236,10 +233,8 @@ fn dirty_worktree_rescan_adds_paths_without_internal_store_paths() {
         "watcher fallback batch should contain source file, got {batch:?}"
     );
     assert!(
-        batch
-            .iter()
-            .all(|path| !path.ends_with(".bitloops/stores/internal.rs")),
-        "watcher fallback batch should omit Bitloops internal store files, got {batch:?}"
+        batch.iter().all(|path| !path.ends_with("src/internal.tmp")),
+        "watcher fallback batch should omit temporary files, got {batch:?}"
     );
 }
 

@@ -66,9 +66,19 @@ impl SubscriptionHub {
 
     pub(crate) fn publish_task(&self, task: DevqlTaskRecord) {
         let task_id = task.task_id.clone();
+        let runtime_event = RuntimeEventRecord {
+            domain: "task_queue".to_string(),
+            repo_id: task.repo_id.clone(),
+            init_session_id: task.init_session_id.clone(),
+            updated_at_unix: task.updated_at_unix,
+            task_id: Some(task_id.clone()),
+            run_id: None,
+            mailbox_name: None,
+        };
         let _ = self
             .task_progress
             .send(TaskProgressMessage { task_id, task });
+        let _ = self.runtime_events.send(runtime_event);
     }
 
     pub(crate) fn publish_runtime_event(&self, event: RuntimeEventRecord) {

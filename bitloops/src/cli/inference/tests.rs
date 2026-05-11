@@ -374,6 +374,7 @@ fn summary_setup_can_write_platform_profile() {
     assert!(rendered.contains("driver = \"bitloops_platform_chat\""));
     assert!(rendered.contains("model = \"ministral-3-3b-instruct\""));
     assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
+    assert!(rendered.contains("max_output_tokens = 200"));
     assert!(!rendered.contains("base_url = "));
 }
 
@@ -586,6 +587,7 @@ fn cloud_summary_setup_prepared_plan_reports_progress_and_writes_profile() {
     assert!(rendered.contains("driver = \"bitloops_platform_chat\""));
     assert!(rendered.contains("model = \"ministral-3-3b-instruct\""));
     assert!(rendered.contains("api_key = \"${BITLOOPS_PLATFORM_GATEWAY_TOKEN}\""));
+    assert!(rendered.contains("max_output_tokens = 200"));
     assert!(rendered.contains("base_url = \"https://platform.example.com/v1/chat/completions\""));
 }
 

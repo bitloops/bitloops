@@ -2042,47 +2042,48 @@ fn devql_run_ingest_enqueue_executes_graphql_mutation_with_expected_input() {
 #[test]
 fn devql_run_ingest_enqueue_requires_current_daemon_before_graphql_mutation() {
     let repo = seed_devql_cli_repo();
-    let _guard = enter_process_state(Some(repo.path()), &[]);
     let bootstrap_count = Rc::new(RefCell::new(0usize));
     let query_count = Rc::new(RefCell::new(0usize));
     let ingested = Rc::new(RefCell::new(None::<(String, serde_json::Value)>));
 
-    super::graphql::with_ingest_daemon_runtime_hook(
-        {
-            let bootstrap_count = Rc::clone(&bootstrap_count);
-            move |_repo_root: &std::path::Path| {
-                *bootstrap_count.borrow_mut() += 1;
-                Ok(())
-            }
-        },
-        || {
-            with_graphql_executor_hook(
-                {
-                    let query_count = Rc::clone(&query_count);
-                    let ingested = Rc::clone(&ingested);
-                    move |_repo_root: &std::path::Path,
-                          query: &str,
-                          variables: &serde_json::Value| {
-                        *query_count.borrow_mut() += 1;
-                        *ingested.borrow_mut() = Some((query.to_string(), variables.clone()));
-                        Ok(json!({
-                            "enqueueTask": {
-                                "merged": false,
-                                "task": queued_ingest_task_payload("ingest-task-2", None)
-                            }
-                        }))
-                    }
-                },
-                || {
-                    test_runtime()
-                        .block_on(run(DevqlArgs {
-                            command: Some(ingest_enqueue_command(false)),
-                        }))
-                        .expect("devql ingest enqueue should succeed");
-                },
-            );
-        },
-    );
+    with_isolated_daemon_state(repo.path(), || {
+        super::graphql::with_ingest_daemon_runtime_hook(
+            {
+                let bootstrap_count = Rc::clone(&bootstrap_count);
+                move |_repo_root: &std::path::Path| {
+                    *bootstrap_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                with_graphql_executor_hook(
+                    {
+                        let query_count = Rc::clone(&query_count);
+                        let ingested = Rc::clone(&ingested);
+                        move |_repo_root: &std::path::Path,
+                              query: &str,
+                              variables: &serde_json::Value| {
+                            *query_count.borrow_mut() += 1;
+                            *ingested.borrow_mut() = Some((query.to_string(), variables.clone()));
+                            Ok(json!({
+                                "enqueueTask": {
+                                    "merged": false,
+                                    "task": queued_ingest_task_payload("ingest-task-2", None)
+                                }
+                            }))
+                        }
+                    },
+                    || {
+                        test_runtime()
+                            .block_on(run(DevqlArgs {
+                                command: Some(ingest_enqueue_command(false)),
+                            }))
+                            .expect("devql ingest enqueue should succeed");
+                    },
+                );
+            },
+        );
+    });
 
     assert_eq!(*bootstrap_count.borrow(), 1);
     assert_eq!(*query_count.borrow(), 1);

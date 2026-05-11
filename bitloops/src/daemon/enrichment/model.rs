@@ -114,7 +114,7 @@ impl EnrichmentJobTarget {
 
 #[derive(Debug, Clone)]
 pub(crate) enum FollowUpJob {
-    SemanticSummaries {
+    RepoBackfillSummaries {
         target: EnrichmentJobTarget,
         artefact_ids: Vec<String>,
     },
