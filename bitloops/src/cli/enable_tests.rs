@@ -501,7 +501,7 @@ enabled = true
         assert!(codex_hooks::are_hooks_installed_at(dir.path()));
         assert!(
             dir.path()
-                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".agents/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(dir.path().join(".codex/config.toml").exists());
@@ -546,7 +546,7 @@ supported = ["codex"]
         assert!(crate::adapters::agents::codex::hooks::are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".agents/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(git_hooks::is_git_hook_installed(dir.path()));
@@ -596,13 +596,13 @@ supported = ["cursor", "gemini"]
         assert!(crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+                .join(".cursor/rules/devql-explore-first.mdc")
                 .exists()
         );
         assert!(GeminiCliAgent.are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".gemini/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(!dir.path().join("GEMINI.md").exists());
@@ -652,7 +652,7 @@ devql_guidance_enabled = true
         assert!(git_hooks::is_git_hook_installed(dir.path()));
         assert!(
             !dir.path()
-                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".agents/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
 
@@ -1762,16 +1762,16 @@ supported = ["cursor", "gemini"]
     assert!(dir.path().join(".cursor/hooks.json").exists());
     assert!(
         dir.path()
-            .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+            .join(".cursor/rules/devql-explore-first.mdc")
             .exists()
     );
     assert!(
         dir.path()
-            .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".gemini/skills/devql-explore-first/SKILL.md")
             .exists()
     );
     let gemini_md = std::fs::read_to_string(dir.path().join("GEMINI.md")).unwrap();
-    assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
+    assert!(gemini_md.contains("@./.gemini/skills/devql-explore-first/SKILL.md"));
     assert!(git_hooks::is_git_hook_installed(dir.path()));
 }
 
@@ -1803,12 +1803,12 @@ devql_guidance_enabled = false
     assert!(crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
     assert!(
         !dir.path()
-            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".agents/skills/devql-explore-first/SKILL.md")
             .exists()
     );
     assert!(
         !dir.path()
-            .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+            .join(".cursor/rules/devql-explore-first.mdc")
             .exists()
     );
 }
@@ -1842,7 +1842,7 @@ devql_guidance_enabled = false
     assert!(policy.contains("devql_guidance_enabled = true"));
     assert!(
         dir.path()
-            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".agents/skills/devql-explore-first/SKILL.md")
             .exists()
     );
     assert!(!codex_hooks::are_hooks_installed_at(dir.path()));
@@ -1880,7 +1880,7 @@ devql_guidance_enabled = false
     assert!(git_hooks::is_git_hook_installed(dir.path()));
     assert!(
         dir.path()
-            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".agents/skills/devql-explore-first/SKILL.md")
             .exists()
     );
 }
@@ -2069,7 +2069,7 @@ devql_guidance_enabled = false
 }
 
 #[test]
-fn disable_and_reenable_devql_guidance_toggles_augmentation_for_claude_and_codex() {
+fn disable_and_reenable_devql_guidance_preserves_no_runtime_augmentation_for_claude_and_codex() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     setup_settings(
@@ -2089,39 +2089,6 @@ devql_guidance_enabled = true
     crate::adapters::agents::claude_code::skills::install_repo_skill(dir.path()).unwrap();
     crate::adapters::agents::codex::skills::install_repo_skill(dir.path()).unwrap();
 
-    let repo_understanding_prompt = "Explain tracked.txt:1";
-
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
-        )
-        .is_some()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CODEX,
-        )
-        .is_none()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
-            repo_understanding_prompt,
-        )
-        .is_some()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CODEX,
-            repo_understanding_prompt,
-        )
-        .is_none()
-    );
-
     run_disable_with_args(
         dir.path(),
         &mut Vec::new(),
@@ -2135,36 +2102,6 @@ devql_guidance_enabled = true
 
     assert!(claude_hooks::are_hooks_installed(dir.path()));
     assert!(codex_hooks::are_hooks_installed_at(dir.path()));
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
-        )
-        .is_none()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CODEX,
-        )
-        .is_none()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
-            repo_understanding_prompt,
-        )
-        .is_none()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CODEX,
-            repo_understanding_prompt,
-        )
-        .is_none()
-    );
 
     with_repo_cwd(dir.path(), || {
         let mut args = default_enable_args();
@@ -2172,37 +2109,6 @@ devql_guidance_enabled = true
         args.devql_guidance = true;
         run_enable_command(args).expect("re-enable devql skill should succeed");
     });
-
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
-        )
-        .is_some()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_session_start_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CODEX,
-        )
-        .is_none()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CLAUDE_CODE,
-            repo_understanding_prompt,
-        )
-        .is_some()
-    );
-    assert!(
-        crate::host::hooks::augmentation::builder::build_devql_hook_augmentation(
-            dir.path(),
-            crate::adapters::agents::AGENT_NAME_CODEX,
-            repo_understanding_prompt,
-        )
-        .is_none()
-    );
 }
 
 #[test]

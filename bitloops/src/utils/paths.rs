@@ -141,22 +141,54 @@ mod tests {
     #[test]
     fn test_default_storage_paths_live_under_test_state_directory() {
         let repo_root = Path::new("/repo");
+        let relational_path = default_relational_db_path(repo_root);
+        let temp_state_root = std::env::temp_dir().join("bitloops-test-state");
 
-        assert_eq!(
-            default_relational_db_path(repo_root),
-            PathBuf::from("/repo/.bitloops-test-state/data/stores/relational/relational.db")
+        assert!(
+            relational_path.starts_with(&temp_state_root),
+            "test relational path {} should live under temp state root {}",
+            relational_path.display(),
+            temp_state_root.display()
+        );
+        assert!(
+            !relational_path.starts_with(repo_root),
+            "test relational path {} should not create state under repo root {}",
+            relational_path.display(),
+            repo_root.display()
         );
         assert_eq!(
             default_events_db_path(repo_root),
-            PathBuf::from("/repo/.bitloops-test-state/data/stores/event/events.duckdb")
+            relational_path
+                .parent()
+                .expect("relational file should have parent")
+                .parent()
+                .expect("relational store dir should have parent")
+                .join("event")
+                .join("events.duckdb")
         );
         assert_eq!(
             default_blob_store_path(repo_root),
-            PathBuf::from("/repo/.bitloops-test-state/data/stores/blob")
+            relational_path
+                .parent()
+                .expect("relational file should have parent")
+                .parent()
+                .expect("relational store dir should have parent")
+                .join("blob")
         );
         assert_eq!(
             default_embedding_model_cache_dir(repo_root),
-            PathBuf::from("/repo/.bitloops-test-state/cache/embeddings/models")
+            relational_path
+                .parent()
+                .expect("relational file should have parent")
+                .parent()
+                .expect("relational store dir should have parent")
+                .parent()
+                .expect("data dir should have parent")
+                .parent()
+                .expect("test state root should have parent")
+                .join("cache")
+                .join("embeddings")
+                .join("models")
         );
     }
 

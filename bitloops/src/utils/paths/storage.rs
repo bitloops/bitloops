@@ -1,14 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::utils::platform_dirs::bitloops_state_dir;
+#[cfg(test)]
+use crate::utils::platform_dirs::explicit_test_state_dir;
 #[cfg(not(test))]
 use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir};
-#[cfg(test)]
-use crate::utils::platform_dirs::{bitloops_cache_dir, bitloops_data_dir, explicit_test_state_dir};
 use sha2::{Digest, Sha256};
 
-#[cfg(test)]
-use super::constants::BITLOOPS_TEST_STATE_DIR;
 use super::constants::{EVENTS_DB_FILE_NAME, RELATIONAL_DB_FILE_NAME, RUNTIME_DB_FILE_NAME};
 
 fn platform_path_fallback(category: &str) -> PathBuf {
@@ -16,18 +14,30 @@ fn platform_path_fallback(category: &str) -> PathBuf {
 }
 
 #[cfg(test)]
-fn should_use_test_app_dirs(repo_root: &Path) -> bool {
-    repo_root.is_relative()
+fn test_repo_state_dir(repo_root: &Path) -> PathBuf {
+    if let Some(path) = explicit_test_state_dir() {
+        return path;
+    }
+
+    if repo_root.is_relative() {
+        return bitloops_state_dir().unwrap_or_else(|_| platform_path_fallback("state"));
+    }
+
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("repos")
+        .join(repo_state_key(repo_root))
 }
 
 #[cfg(test)]
 fn test_repo_data_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join(BITLOOPS_TEST_STATE_DIR).join("data")
+    test_repo_state_dir(repo_root).join("data")
 }
 
 #[cfg(test)]
 fn test_repo_cache_dir(repo_root: &Path) -> PathBuf {
-    repo_root.join(BITLOOPS_TEST_STATE_DIR).join("cache")
+    test_repo_state_dir(repo_root).join("cache")
 }
 
 #[cfg(test)]
@@ -57,13 +67,6 @@ fn test_global_runtime_state_dir() -> PathBuf {
 
 #[cfg(test)]
 pub fn default_relational_db_path(repo_root: &Path) -> PathBuf {
-    if should_use_test_app_dirs(repo_root) {
-        return bitloops_data_dir()
-            .unwrap_or_else(|_| platform_path_fallback("data"))
-            .join("stores")
-            .join("relational")
-            .join(RELATIONAL_DB_FILE_NAME);
-    }
     test_repo_data_dir(repo_root)
         .join("stores")
         .join("relational")
@@ -81,13 +84,6 @@ pub fn default_relational_db_path(_repo_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 pub fn default_events_db_path(repo_root: &Path) -> PathBuf {
-    if should_use_test_app_dirs(repo_root) {
-        return bitloops_data_dir()
-            .unwrap_or_else(|_| platform_path_fallback("data"))
-            .join("stores")
-            .join("event")
-            .join(EVENTS_DB_FILE_NAME);
-    }
     test_repo_data_dir(repo_root)
         .join("stores")
         .join("event")
@@ -105,12 +101,6 @@ pub fn default_events_db_path(_repo_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 pub fn default_blob_store_path(repo_root: &Path) -> PathBuf {
-    if should_use_test_app_dirs(repo_root) {
-        return bitloops_data_dir()
-            .unwrap_or_else(|_| platform_path_fallback("data"))
-            .join("stores")
-            .join("blob");
-    }
     test_repo_data_dir(repo_root).join("stores").join("blob")
 }
 
@@ -124,12 +114,6 @@ pub fn default_blob_store_path(_repo_root: &Path) -> PathBuf {
 
 #[cfg(test)]
 pub fn default_embedding_model_cache_dir(repo_root: &Path) -> PathBuf {
-    if should_use_test_app_dirs(repo_root) {
-        return bitloops_cache_dir()
-            .unwrap_or_else(|_| platform_path_fallback("cache"))
-            .join("embeddings")
-            .join("models");
-    }
     test_repo_cache_dir(repo_root)
         .join("embeddings")
         .join("models")

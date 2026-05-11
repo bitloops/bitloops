@@ -11,10 +11,10 @@ fn events_backend_duckdb_path_defaults_under_test_state_store_directory() {
     };
 
     let resolved = events.duckdb_path_or_default();
-    let rendered = resolved.to_string_lossy();
-    assert!(
-        rendered.ends_with(".bitloops-test-state/data/stores/event/events.duckdb")
-            || rendered.ends_with(".bitloops-test-state\\data\\stores\\event\\events.duckdb")
+    assert_default_test_store_path(
+        &resolved,
+        None,
+        &["data", "stores", "event", "events.duckdb"],
     );
 }
 

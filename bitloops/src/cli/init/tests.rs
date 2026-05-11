@@ -1360,7 +1360,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         );
         let repo_skill = repo
             .path()
-            .join(".claude/skills/bitloops/devql-explore-first/SKILL.md");
+            .join(".claude/skills/devql-explore-first/SKILL.md");
         assert!(
             repo_skill.exists(),
             "expected repo-local DevQL Guidance to be installed at {}",
@@ -1369,7 +1369,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
-        assert!(exclude.contains(".claude/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(exclude.contains(".claude/skills/devql-explore-first/SKILL.md"));
         assert!(!exclude.contains("config.local.json"));
     });
 }
@@ -1430,7 +1430,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
         assert!(repo.path().join(".cursor/hooks.json").exists());
         assert!(
             repo.path()
-                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".gemini/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
     });
@@ -2003,7 +2003,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
         assert!(repo.path().join(".cursor/hooks.json").exists());
         assert!(
             repo.path()
-                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+                .join(".cursor/rules/devql-explore-first.mdc")
                 .exists()
         );
         assert!(!repo.path().join(".claude/settings.json").exists());
@@ -2064,14 +2064,14 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 assert!(!config.contains("codex_hooks = true"));
                 let repo_skill = repo
                     .path()
-                    .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
+                    .join(".agents/skills/devql-explore-first/SKILL.md");
                 assert!(
                     repo_skill.exists(),
                     "expected Codex repo-local skill to be installed"
                 );
                 let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                     .expect("read git exclude");
-                assert!(exclude.contains(".agents/skills/bitloops/devql-explore-first/SKILL.md"));
+                assert!(exclude.contains(".agents/skills/devql-explore-first/SKILL.md"));
                 assert!(!repo.path().join(".claude/settings.json").exists());
             });
         },
@@ -2120,15 +2120,15 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
 
             let gemini_md =
                 std::fs::read_to_string(repo.path().join("GEMINI.md")).expect("read GEMINI.md");
-            assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
+            assert!(gemini_md.contains("@./.gemini/skills/devql-explore-first/SKILL.md"));
             assert!(
                 repo.path()
-                    .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
+                    .join(".gemini/skills/devql-explore-first/SKILL.md")
                     .exists()
             );
             let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
                 .expect("read exclude");
-            assert!(exclude.contains(".gemini/skills/bitloops/devql-explore-first/SKILL.md"));
+            assert!(exclude.contains(".gemini/skills/devql-explore-first/SKILL.md"));
         });
     });
 }
@@ -2175,12 +2175,12 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
         assert!(repo.path().join(".github/hooks/bitloops.json").exists());
         assert!(
             repo.path()
-                .join(".github/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".github/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         let exclude =
             std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".github/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(exclude.contains(".github/skills/devql-explore-first/SKILL.md"));
     });
 }
 
@@ -2226,12 +2226,12 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
         assert!(repo.path().join(".opencode/plugins/bitloops.ts").exists());
         assert!(
             repo.path()
-                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".opencode/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         let exclude =
             std::fs::read_to_string(repo.path().join(".git/info/exclude")).expect("read exclude");
-        assert!(exclude.contains(".opencode/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(exclude.contains(".opencode/skills/devql-explore-first/SKILL.md"));
     });
 }
 
@@ -2290,38 +2290,38 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         assert!(
             !repo
                 .path()
-                .join(".claude/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".claude/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".agents/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+                .join(".cursor/rules/devql-explore-first.mdc")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".gemini/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(!repo.path().join("GEMINI.md").exists());
         assert!(
             !repo
                 .path()
-                .join(".github/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".github/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(
             !repo
                 .path()
-                .join(".opencode/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".opencode/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         let local_policy =
@@ -2405,7 +2405,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
 
         let repo_skill = repo
             .path()
-            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
+            .join(".agents/skills/devql-explore-first/SKILL.md");
         assert!(repo.path().join(".codex/hooks.json").exists());
         assert!(
             repo_skill.exists(),

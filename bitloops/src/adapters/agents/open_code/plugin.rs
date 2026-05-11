@@ -1,20 +1,10 @@
 use std::path::Path;
 
-use crate::adapters::agents::AGENT_NAME_OPEN_CODE;
-use crate::host::hooks::augmentation::devql_guidance::build_session_bootstrap;
-use crate::host::hooks::augmentation::prompt_surface_presence::installed_prompt_surface_relative_path;
-
 pub const BITLOOPS_CMD_PLACEHOLDER: &str = "__BITLOOPS_CMD__";
 pub const BOOTSTRAP_CONTEXT_PLACEHOLDER: &str = "__BOOTSTRAP_CONTEXT__";
 
-pub(crate) fn session_bootstrap_text(repo_root: &Path) -> String {
-    let Some(surface_path) =
-        installed_prompt_surface_relative_path(repo_root, AGENT_NAME_OPEN_CODE)
-    else {
-        return String::new();
-    };
-
-    build_session_bootstrap(surface_path)
+pub(crate) fn session_bootstrap_text(_repo_root: &Path) -> String {
+    String::new()
 }
 
 pub const PLUGIN_TEMPLATE: &str = r##"// Bitloops CLI plugin for OpenCode

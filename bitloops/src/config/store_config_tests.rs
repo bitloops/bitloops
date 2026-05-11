@@ -14,6 +14,32 @@ mod providerless;
 mod sqlite_path;
 mod watch;
 
+fn assert_default_test_store_path(path: &Path, repo_root: Option<&Path>, suffix: &[&str]) {
+    let temp_state_root = std::env::temp_dir().join("bitloops-test-state");
+    assert!(
+        path.starts_with(&temp_state_root),
+        "default test store path {} should live under {}",
+        path.display(),
+        temp_state_root.display()
+    );
+    if let Some(repo_root) = repo_root {
+        assert!(
+            !path.starts_with(repo_root),
+            "default test store path {} should not live under repo root {}",
+            path.display(),
+            repo_root.display()
+        );
+    }
+
+    let expected_suffix = suffix.iter().collect::<PathBuf>();
+    assert!(
+        path.ends_with(&expected_suffix),
+        "default test store path {} should end with {}",
+        path.display(),
+        expected_suffix.display()
+    );
+}
+
 fn json_value_to_toml_item(value: &Value) -> Item {
     match value {
         Value::Null => Item::None,
