@@ -5,17 +5,7 @@ use crate::test_support::process_state::enter_process_state;
 use tempfile::TempDir;
 
 fn write_local_devql_config(repo_root: &Path) {
-    let daemon_state_root = repo_root
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| repo_root.to_path_buf())
-        .join(".bitloops-test-state")
-        .join(
-            repo_root
-                .file_name()
-                .map(|name| name.to_os_string())
-                .unwrap_or_default(),
-        );
+    let daemon_state_root = repo_root.join(".bitloops-test-state");
     let sqlite_path = daemon_state_root
         .join("stores")
         .join("relational")

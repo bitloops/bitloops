@@ -1,3 +1,5 @@
+use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use crate::config::resolve_repo_runtime_db_path_for_repo;
@@ -38,17 +40,7 @@ pub(crate) fn repo_local_blob_root(repo_root: &Path) -> PathBuf {
 
 pub(crate) fn write_test_daemon_config(config_root: &Path) -> PathBuf {
     let config_path = config_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
-    let daemon_state_root = config_root
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| config_root.to_path_buf())
-        .join(".bitloops-test-state")
-        .join(
-            config_root
-                .file_name()
-                .map(|name| name.to_os_string())
-                .unwrap_or_default(),
-        );
+    let daemon_state_root = test_state_root_for_config_root(config_root);
     let sqlite_path = daemon_state_root
         .join("stores")
         .join("relational")
@@ -72,7 +64,7 @@ duckdb_path = {duckdb_path:?}
 local_path = {blob_path:?}
 "#,
     );
-    std::fs::write(&config_path, config_contents).expect("write test daemon config");
+    fs::write(&config_path, config_contents).expect("write test daemon config");
     crate::config::settings::write_repo_daemon_binding(
         &config_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
         &config_path,
@@ -101,11 +93,11 @@ pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
     if let Some(parent) = duckdb_path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent).expect("create duckdb parent");
+        fs::create_dir_all(parent).expect("create duckdb parent");
     }
     let _conn = duckdb::Connection::open(duckdb_path).expect("create events duckdb file");
 
-    std::fs::create_dir_all(
+    fs::create_dir_all(
         backends
             .blobs
             .resolve_local_path_for_repo(repo_root)
@@ -118,11 +110,77 @@ pub(crate) fn ensure_test_store_backends(repo_root: &Path) {
     if let Some(parent) = runtime_path.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent).expect("create runtime sqlite parent");
+        fs::create_dir_all(parent).expect("create runtime sqlite parent");
     }
     let runtime = crate::storage::SqliteConnectionPool::connect(runtime_path)
         .expect("create runtime sqlite file");
     runtime
         .initialise_runtime_checkpoint_schema()
         .expect("initialise runtime checkpoint schema");
+}
+
+pub(crate) fn test_state_root_for_config_root(config_root: &Path) -> PathBuf {
+    let canonical = config_root
+        .canonicalize()
+        .unwrap_or_else(|_| config_root.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    canonical.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    std::env::temp_dir()
+        .join("bitloops-test-state")
+        .join(format!("process-{}", std::process::id()))
+        .join("repos")
+        .join(format!("{hash:016x}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_test_daemon_config_keeps_state_outside_config_root() {
+        let temp = tempfile::tempdir().expect("temp dir");
+
+        write_test_daemon_config(temp.path());
+
+        let backends =
+            resolve_store_backend_config_for_repo(temp.path()).expect("resolve test stores");
+        let sqlite_path = backends
+            .relational
+            .resolve_sqlite_db_path_for_repo(temp.path())
+            .expect("resolve relational sqlite path");
+        let expected_root = std::env::temp_dir()
+            .join("bitloops-test-state")
+            .join(format!("process-{}", std::process::id()));
+
+        assert!(
+            sqlite_path.starts_with(&expected_root),
+            "sqlite path {} should be under {}",
+            sqlite_path.display(),
+            expected_root.display()
+        );
+        assert!(
+            !sqlite_path.starts_with(temp.path()),
+            "sqlite path {} should not be under config root {}",
+            sqlite_path.display(),
+            temp.path().display()
+        );
+    }
+
+    #[test]
+    fn write_test_daemon_config_does_not_mutate_git_exclude() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let exclude_path = temp.path().join(".git").join("info").join("exclude");
+        fs::create_dir_all(exclude_path.parent().expect("exclude parent"))
+            .expect("create .git/info");
+        fs::write(&exclude_path, "existing-rule\n").expect("write exclude");
+
+        write_test_daemon_config(temp.path());
+
+        assert_eq!(
+            fs::read_to_string(&exclude_path).expect("read exclude"),
+            "existing-rule\n"
+        );
+    }
 }

@@ -20,10 +20,10 @@ fn TestInstallHooks_InstallsRepoSkillAndGeminiImport() {
     assert!(repo_skill_path(root).exists());
     let gemini_md = fs::read_to_string(root.join("GEMINI.md")).expect("failed to read GEMINI.md");
     assert!(gemini_md.contains("user context"));
-    assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
+    assert!(gemini_md.contains("@./.gemini/skills/devql-explore-first/SKILL.md"));
     assert_eq!(
         gemini_md
-            .matches("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md")
+            .matches("@./.gemini/skills/devql-explore-first/SKILL.md")
             .count(),
         1
     );
@@ -35,7 +35,7 @@ fn TestInstallHooks_InstallsRepoSkillAndGeminiImport() {
     assert!(!repo_skill_path(root).exists());
     let gemini_md = fs::read_to_string(root.join("GEMINI.md")).expect("failed to read GEMINI.md");
     assert!(gemini_md.contains("user context"));
-    assert!(!gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
+    assert!(!gemini_md.contains("@./.gemini/skills/devql-explore-first/SKILL.md"));
 }
 
 #[test]

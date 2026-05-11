@@ -220,7 +220,6 @@ pub(super) fn make_registration_with_package(
         install_prompt_surface_noop,
         uninstall_noop,
         callbacks.format_resume_command,
-        None,
     )
 }
 

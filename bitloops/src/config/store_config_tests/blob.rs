@@ -1,21 +1,17 @@
 use super::*;
 
 #[test]
-fn blob_local_path_resolution_defaults_under_current_repo_root() {
+fn blob_local_path_resolution_defaults_under_isolated_test_state_for_current_repo() {
     let temp = tempfile::tempdir().expect("temp dir");
     let _guard = enter_process_state(Some(temp.path()), &[]);
 
     let resolved = resolve_blob_local_path(None).expect("default blob path");
-    let rendered = resolved.to_string_lossy();
 
-    assert!(
-        rendered.ends_with(".bitloops-test-state/data/stores/blob")
-            || rendered.ends_with(".bitloops-test-state\\data\\stores\\blob")
-    );
+    assert_default_test_store_path(&resolved, Some(temp.path()), &["data", "stores", "blob"]);
 }
 
 #[test]
-fn blob_storage_local_path_or_default_uses_current_repo_root() {
+fn blob_storage_local_path_or_default_uses_isolated_test_state_for_current_repo() {
     let temp = tempfile::tempdir().expect("temp dir");
     let config = BlobStorageConfig {
         local_path: None,
@@ -32,11 +28,7 @@ fn blob_storage_local_path_or_default_uses_current_repo_root() {
         .local_path_or_default()
         .expect("default local blob path");
 
-    let rendered = resolved.to_string_lossy();
-    assert!(
-        rendered.ends_with(".bitloops-test-state/data/stores/blob")
-            || rendered.ends_with(".bitloops-test-state\\data\\stores\\blob")
-    );
+    assert_default_test_store_path(&resolved, Some(temp.path()), &["data", "stores", "blob"]);
 }
 
 #[test]
@@ -77,9 +69,5 @@ fn blob_local_path_resolution_defaults_under_test_state_store_directory() {
     let resolved = blobs
         .local_path_or_default()
         .expect("default local blob path");
-    let rendered = resolved.to_string_lossy();
-    assert!(
-        rendered.ends_with(".bitloops-test-state/data/stores/blob")
-            || rendered.ends_with(".bitloops-test-state\\data\\stores\\blob")
-    );
+    assert_default_test_store_path(&resolved, None, &["data", "stores", "blob"]);
 }
