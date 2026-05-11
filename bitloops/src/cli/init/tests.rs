@@ -2286,7 +2286,8 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                 assert!(repo.path().join(".codex/hooks.json").exists());
                 let config = std::fs::read_to_string(repo.path().join(".codex/config.toml"))
                     .expect("read codex config");
-                assert!(config.contains("codex_hooks = true"));
+                assert!(config.contains("hooks = true"));
+                assert!(!config.contains("codex_hooks = true"));
                 let repo_skill = repo
                     .path()
                     .join(".agents/skills/devql-explore-first/SKILL.md");

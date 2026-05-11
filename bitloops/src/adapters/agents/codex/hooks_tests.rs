@@ -212,7 +212,7 @@ fn installed_hooks_require_repo_local_codex_feature_config() {
 
         assert!(
             !are_hooks_installed_at(dir.path()),
-            "hooks should not be considered installed without .codex/config.toml enabling codex_hooks"
+            "hooks should not be considered installed without .codex/config.toml enabling hooks"
         );
     });
 }
@@ -223,12 +223,12 @@ fn installed_hooks_require_enabled_repo_local_codex_feature_config() {
     init_repo(dir.path());
     with_codex_test_env(dir.path(), || {
         install_hooks_at(dir.path(), false, false).expect("install");
-        fs::write(config_file(dir.path()), "[features]\ncodex_hooks = false\n")
+        fs::write(config_file(dir.path()), "[features]\nhooks = false\n")
             .expect("disable codex hooks");
 
         assert!(
             !are_hooks_installed_at(dir.path()),
-            "hooks should not be considered installed when codex_hooks is disabled"
+            "hooks should not be considered installed when hooks is disabled"
         );
     });
 }
