@@ -119,6 +119,26 @@ pub fn run_architecture_roles_bootstrap(world: &mut QatWorld, repo_name: &str) -
     .map(|_| ())
 }
 
+pub fn run_architecture_roles_bootstrap_skip_seed(
+    world: &mut QatWorld,
+    repo_name: &str,
+) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_architecture_role_command(
+        world,
+        &[
+            "devql",
+            "architecture",
+            "roles",
+            "bootstrap",
+            "--skip-seed",
+            "--json",
+        ],
+        "bitloops devql architecture roles bootstrap --skip-seed --json",
+    )
+    .map(|_| ())
+}
+
 pub fn activate_seeded_architecture_role_rules(
     world: &mut QatWorld,
     repo_name: &str,

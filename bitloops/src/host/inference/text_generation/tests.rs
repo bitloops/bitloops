@@ -85,6 +85,13 @@ fn fake_runtime_config(script_path: &Path, launch_log: &Path) -> InferenceRuntim
     }
 }
 
+fn default_request_defaults() -> TextGenerationRequestDefaults {
+    TextGenerationRequestDefaults {
+        temperature: 0.1,
+        max_output_tokens: 200,
+    }
+}
+
 fn fake_structured_runtime_command_and_args(
     repo_root: &Path,
     provider_name: &str,
@@ -191,6 +198,7 @@ fn runtime_service_restarts_after_request_timeout() {
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build runtime service");
 
@@ -270,6 +278,7 @@ done
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build runtime service");
 
@@ -325,6 +334,7 @@ done
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build runtime service");
 
@@ -360,6 +370,7 @@ fn platform_runtime_service_requires_authenticated_session() {
             BITLOOPS_PLATFORM_CHAT_DRIVER,
             &runtime,
             &config_path,
+            default_request_defaults(),
         ) {
             Ok(_) => panic!("platform service without auth must fail"),
             Err(err) => err,
@@ -392,6 +403,7 @@ fn runtime_service_reuses_hot_runtime_across_service_instances() {
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build first runtime service");
     assert_eq!(
@@ -405,6 +417,7 @@ fn runtime_service_reuses_hot_runtime_across_service_instances() {
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build second runtime service");
     assert_eq!(
@@ -479,6 +492,7 @@ done
             BITLOOPS_PLATFORM_CHAT_DRIVER,
             &runtime,
             &config_path,
+            default_request_defaults(),
         )
         .expect("build platform runtime service"),
     );
@@ -528,6 +542,7 @@ fn runtime_service_shuts_down_after_idle_eviction() {
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build first runtime service");
     assert_eq!(
@@ -542,6 +557,7 @@ fn runtime_service_shuts_down_after_idle_eviction() {
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build second runtime service");
     assert_eq!(
@@ -579,6 +595,7 @@ fn runtime_service_accepts_structured_provider_capabilities_from_describe() {
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build first runtime service");
     assert_eq!(
@@ -593,6 +610,7 @@ fn runtime_service_accepts_structured_provider_capabilities_from_describe() {
         "ollama_chat",
         &runtime,
         &config_path,
+        default_request_defaults(),
     )
     .expect("build second runtime service");
     assert_eq!(
@@ -1009,4 +1027,114 @@ max_output_tokens = 4096
 
     assert_eq!(response["nodes"], serde_json::json!([]));
     assert_eq!(response["edges"], serde_json::json!([]));
+}
+
+#[test]
+fn structured_generation_forwards_profile_request_defaults_to_runtime() {
+    let _guard = test_lock();
+    let repo = tempfile::TempDir::new().expect("tempdir");
+    let repo_root = repo.path();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let request_log = repo_root.join("structured-request.jsonl");
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+
+    let script_path = repo_root.join(".bitloops/test-bin/fake-defaults-runtime.sh");
+    std::fs::create_dir_all(script_path.parent().expect("script parent"))
+        .expect("create script parent");
+    std::fs::write(
+        &script_path,
+        format!(
+            r#"request_log={request_log:?}
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"architecture_fact_synthesis_codex","provider":{{"kind":"codex_exec","provider_name":"codex","model_name":"gpt-5.4-mini","endpoint":"codex","capabilities":{{"response_modes":["json_object"],"usage_reporting":false,"structured_output":["json_object","json_schema"]}}}}}}\n' "$request_id"
+      ;;
+    *'"type":"infer"'*)
+      printf '%s\n' "$line" >> "$request_log"
+      printf '{{"type":"infer","request_id":"%s","text":"","parsed_json":{{"nodes":[],"edges":[]}},"provider_name":"codex","model_name":"gpt-5.4-mini"}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{{"type":"shutdown","request_id":"%s"}}\n' "$request_id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+            request_log = request_log.display(),
+        ),
+    )
+    .expect("write fake runtime");
+
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[architecture.inference]
+fact_synthesis = "architecture_fact_synthesis_codex"
+
+[inference.runtimes.bitloops_inference]
+command = "/bin/sh"
+args = [{script_path:?}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+
+[inference.runtimes.codex]
+command = "codex"
+args = ["--ask-for-approval", "never"]
+startup_timeout_secs = 5
+request_timeout_secs = 600
+
+[inference.profiles.architecture_fact_synthesis_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 4096
+"#,
+            script_path = script_path.display(),
+        ),
+    )
+    .expect("write config");
+
+    let capability = resolve_inference_capability_config_for_repo(repo_root);
+    let mut architecture_slots = BTreeMap::new();
+    architecture_slots.insert(
+        "fact_synthesis".to_string(),
+        "architecture_fact_synthesis_codex".to_string(),
+    );
+    let mut slot_bindings = HashMap::new();
+    slot_bindings.insert("architecture_graph".to_string(), architecture_slots);
+    let gateway = LocalInferenceGateway::new(repo_root, capability.inference, slot_bindings);
+
+    let service = gateway
+        .scoped(Some("architecture_graph"))
+        .structured_generation("fact_synthesis")
+        .expect("structured service");
+    service
+        .generate(crate::host::inference::StructuredGenerationRequest {
+            system_prompt: "system".to_string(),
+            user_prompt: "user".to_string(),
+            json_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "nodes": { "type": "array" },
+                    "edges": { "type": "array" }
+                },
+                "required": ["nodes", "edges"],
+                "additionalProperties": false
+            }),
+            workspace_path: Some(repo_root.display().to_string()),
+            metadata: serde_json::Map::new(),
+        })
+        .expect("structured response");
+
+    let logged = std::fs::read_to_string(&request_log).expect("read request log");
+    let request: serde_json::Value =
+        serde_json::from_str(logged.lines().next().expect("logged request")).expect("request JSON");
+    assert_eq!(request["temperature"], serde_json::json!(0.1));
+    assert_eq!(request["max_output_tokens"], serde_json::json!(4096));
 }

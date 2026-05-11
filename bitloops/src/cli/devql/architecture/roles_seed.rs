@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
-    collect_seed_evidence, run_seed_generation,
+    architecture_roles_seed_request, collect_seed_evidence, run_seed_generation_request,
 };
 use crate::capability_packs::architecture_graph::roles::migrations::{
     apply_proposal, create_rule_activate_proposal,
@@ -21,7 +21,7 @@ use crate::capability_packs::architecture_graph::roles::taxonomy::{
 };
 use crate::config::InferenceTask;
 use crate::host::capability_host::{CurrentStateConsumerContext, DevqlCapabilityHost};
-use crate::host::inference::InferenceGateway;
+use crate::host::inference::{InferenceGateway, StructuredGenerationRequest};
 
 use super::super::SlimCliRepoScope;
 use super::{RolesClassifyOutput, format_roles_classify_output};
@@ -51,6 +51,50 @@ pub(super) struct SeedCommandSummary {
     pub(super) seed: SeedSummary,
     pub(super) rule_activation: Option<SeedRuleActivationSummary>,
     pub(super) classification: Option<RolesClassifyOutput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct BootstrapCommandSummary {
+    pub(super) seed: Option<SeedSummary>,
+    pub(super) rule_activation: SeedRuleActivationSummary,
+    pub(super) classification: RolesClassifyOutput,
+    pub(super) skipped_seed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ArchitectureSeedRequestDiagnostics {
+    pub(super) profile_name: String,
+    pub(super) driver: Option<String>,
+    pub(super) runtime: Option<String>,
+    pub(super) model: Option<String>,
+    pub(super) files: usize,
+    pub(super) artefacts: usize,
+    pub(super) edges: usize,
+    pub(super) graph_facts: usize,
+    pub(super) summaries: usize,
+    pub(super) system_prompt_bytes: usize,
+    pub(super) user_prompt_bytes: usize,
+    pub(super) schema_bytes: usize,
+}
+
+impl ArchitectureSeedRequestDiagnostics {
+    pub(super) fn human_summary(&self) -> String {
+        format!(
+            "profile={} driver={} runtime={} model={} evidence(files={} artefacts={} edges={} graph_facts={} summaries={}) prompt_bytes(system={} user={} schema={})",
+            self.profile_name,
+            self.driver.as_deref().unwrap_or("unknown"),
+            self.runtime.as_deref().unwrap_or("unknown"),
+            self.model.as_deref().unwrap_or("unknown"),
+            self.files,
+            self.artefacts,
+            self.edges,
+            self.graph_facts,
+            self.summaries,
+            self.system_prompt_bytes,
+            self.user_prompt_bytes,
+            self.schema_bytes,
+        )
+    }
 }
 
 pub(super) async fn seed_architecture_roles(
@@ -88,7 +132,22 @@ pub(super) async fn seed_architecture_roles(
             format!("resolving architecture fact_synthesis inference slot `{profile_name}`")
         })?;
     let evidence = collect_seed_evidence(scope, context).await?;
-    let taxonomy = run_seed_generation(service.as_ref(), scope, &evidence)?;
+    let request = architecture_roles_seed_request(scope, &evidence);
+    let diagnostics = architecture_seed_request_diagnostics(
+        &profile_name,
+        resolved.driver.as_deref(),
+        resolved.runtime.as_deref(),
+        resolved.model.as_deref(),
+        &request,
+        &evidence,
+    );
+    eprintln!("architecture roles seed: {}", diagnostics.human_summary());
+    let taxonomy = run_seed_generation_request(service.as_ref(), request).with_context(|| {
+        format!(
+            "generating architecture role seed taxonomy failed: {}",
+            diagnostics.human_summary()
+        )
+    })?;
     persist_seeded_taxonomy(
         context.storage.as_ref(),
         &scope.repo.repo_id,
@@ -244,6 +303,38 @@ pub(super) async fn persist_seeded_taxonomy(
     })
 }
 
+pub(super) fn architecture_seed_request_diagnostics(
+    profile_name: &str,
+    driver: Option<&str>,
+    runtime: Option<&str>,
+    model: Option<&str>,
+    request: &StructuredGenerationRequest,
+    evidence: &Value,
+) -> ArchitectureSeedRequestDiagnostics {
+    ArchitectureSeedRequestDiagnostics {
+        profile_name: profile_name.to_string(),
+        driver: driver.map(ToOwned::to_owned),
+        runtime: runtime.map(ToOwned::to_owned),
+        model: model.map(ToOwned::to_owned),
+        files: json_array_len(evidence, "canonical_files"),
+        artefacts: json_array_len(evidence, "canonical_artefacts"),
+        edges: json_array_len(evidence, "dependency_graph_hints"),
+        graph_facts: json_array_len(evidence, "existing_architecture_graph_facts"),
+        summaries: json_array_len(evidence, "artefact_summaries"),
+        system_prompt_bytes: request.system_prompt.len(),
+        user_prompt_bytes: request.user_prompt.len(),
+        schema_bytes: request.json_schema.to_string().len(),
+    }
+}
+
+fn json_array_len(value: &Value, key: &str) -> usize {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
 pub(super) async fn load_seed_owned_draft_rule_ids(
     relational: &crate::host::devql::RelationalStorage,
     repo_id: &str,
@@ -328,6 +419,20 @@ pub(super) async fn activate_seeded_draft_rules(
     })
 }
 
+pub(super) async fn ensure_seed_owned_draft_rules_exist(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    profile_name: &str,
+) -> Result<()> {
+    let rule_ids = load_seed_owned_draft_rule_ids(relational, repo_id, profile_name).await?;
+    if rule_ids.is_empty() {
+        bail!(
+            "No seed-owned draft architecture role rules exist for profile `{profile_name}`. Run `bitloops devql architecture roles seed` first or rerun bootstrap without `--skip-seed`."
+        );
+    }
+    Ok(())
+}
+
 pub(super) fn configured_seed_profile_name(scoped_config: Option<&Value>) -> Result<String> {
     scoped_config
         .and_then(|value| value.pointer("/inference/fact_synthesis"))
@@ -374,7 +479,37 @@ pub(super) fn format_seed_command_output(
     Ok(sections.join("\n"))
 }
 
-fn format_seed_summary(summary: &SeedSummary) -> String {
+pub(super) fn format_bootstrap_command_output(
+    summary: &BootstrapCommandSummary,
+    json_output: bool,
+) -> Result<String> {
+    if json_output {
+        return serde_json::to_string_pretty(summary)
+            .context("serialising architecture roles bootstrap output as JSON");
+    }
+
+    let mut sections = Vec::new();
+    if let Some(seed) = summary.seed.as_ref() {
+        sections.push(format_seed_summary(seed));
+    } else {
+        sections.push(
+            "architecture roles seed skipped; using existing seed-owned draft rules".to_string(),
+        );
+    }
+    sections.push(format!(
+        "seeded rule activation: seed_owned_draft_rules={} proposals_created={} proposals_applied={}",
+        summary.rule_activation.seed_owned_draft_rules,
+        summary.rule_activation.proposals_created,
+        summary.rule_activation.proposals_applied,
+    ));
+    sections.push(format_roles_classify_output(
+        &summary.classification,
+        false,
+    )?);
+    Ok(sections.join("\n"))
+}
+
+pub(super) fn format_seed_summary(summary: &SeedSummary) -> String {
     format!(
         "architecture roles seeded with profile `{}`\nroles: total={} created={} reused={}\nrules: total={} created={} reused={}",
         summary.profile_name,

@@ -32,6 +32,13 @@ pub(super) struct BitloopsInferenceTextGenerationService {
     descriptor: String,
     cache_key: String,
     shared_session_pool: Arc<SharedBitloopsInferenceSessionPool>,
+    request_defaults: TextGenerationRequestDefaults,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct TextGenerationRequestDefaults {
+    pub(super) temperature: f32,
+    pub(super) max_output_tokens: u32,
 }
 
 impl BitloopsInferenceTextGenerationService {
@@ -40,6 +47,7 @@ impl BitloopsInferenceTextGenerationService {
         driver: &str,
         runtime: &InferenceRuntimeConfig,
         config_path: &Path,
+        request_defaults: TextGenerationRequestDefaults,
     ) -> Result<Self> {
         let session_config = BitloopsInferenceSessionConfig {
             command: runtime.command.clone(),
@@ -66,13 +74,17 @@ impl BitloopsInferenceTextGenerationService {
             "{}:{}",
             describe.provider.provider_name, describe.provider.model_name
         );
-        let cache_key = format!("profile={profile_name}::driver={driver}::provider={descriptor}");
+        let cache_key = format!(
+            "profile={profile_name}::driver={driver}::provider={descriptor}::temperature={}::max_output_tokens={}",
+            request_defaults.temperature, request_defaults.max_output_tokens
+        );
 
         Ok(Self {
             profile_name: profile_name.to_string(),
             descriptor,
             cache_key,
             shared_session_pool,
+            request_defaults,
         })
     }
 }
@@ -101,7 +113,13 @@ impl TextGenerationService for BitloopsInferenceTextGenerationService {
             .then(|| json!({ "bitloops_refresh_cache": true }));
         let response = self
             .shared_session_pool
-            .infer_with_metadata(system_prompt, user_prompt, metadata, ResponseMode::Text)
+            .infer_with_metadata(
+                system_prompt,
+                user_prompt,
+                metadata,
+                ResponseMode::Text,
+                self.request_defaults,
+            )
             .with_context(|| {
                 format!(
                     "requesting standalone `bitloops-inference` runtime for profile `{}`",
@@ -142,6 +160,7 @@ impl StructuredGenerationService for BitloopsInferenceTextGenerationService {
                 &request.user_prompt,
                 Some(Value::Object(metadata)),
                 ResponseMode::JsonObject,
+                self.request_defaults,
             )
             .with_context(|| {
                 format!(
@@ -275,9 +294,15 @@ impl SharedBitloopsInferenceSessionPool {
         user_prompt: &str,
         metadata: Option<Value>,
         response_mode: ResponseMode,
+        request_defaults: TextGenerationRequestDefaults,
     ) -> Result<InferResponse> {
-        self.next_session()
-            .infer_with_metadata(system_prompt, user_prompt, metadata, response_mode)
+        self.next_session().infer_with_metadata(
+            system_prompt,
+            user_prompt,
+            metadata,
+            response_mode,
+            request_defaults,
+        )
     }
 
     fn shutdown_idle_sessions(&self, idle_timeout: Duration) {
@@ -357,6 +382,7 @@ impl SharedBitloopsInferenceSession {
         user_prompt: &str,
         metadata: Option<Value>,
         response_mode: ResponseMode,
+        request_defaults: TextGenerationRequestDefaults,
     ) -> Result<InferResponse> {
         let mut state = self
             .state
@@ -373,6 +399,7 @@ impl SharedBitloopsInferenceSession {
                 user_prompt,
                 metadata.clone(),
                 response_mode.clone(),
+                request_defaults,
             ) {
             Ok(response) => {
                 state.last_used_at = Instant::now();
@@ -396,7 +423,13 @@ impl SharedBitloopsInferenceSession {
                     .session
                     .as_mut()
                     .expect("session replaced above")
-                    .infer_with_metadata(system_prompt, user_prompt, metadata, response_mode)
+                    .infer_with_metadata(
+                        system_prompt,
+                        user_prompt,
+                        metadata,
+                        response_mode,
+                        request_defaults,
+                    )
                     .with_context(|| {
                         format!(
                             "retrying standalone `bitloops-inference` request after failure: {first_err:#}"
@@ -704,14 +737,15 @@ impl BitloopsInferenceSession {
         user_prompt: &str,
         metadata: Option<Value>,
         response_mode: ResponseMode,
+        request_defaults: TextGenerationRequestDefaults,
     ) -> Result<InferResponse> {
         let request = RuntimeRequest::Infer(InferRequest {
             request_id: next_request_id(),
             system_prompt: system_prompt.to_string(),
             user_prompt: user_prompt.to_string(),
             response_mode,
-            temperature: None,
-            max_output_tokens: None,
+            temperature: Some(request_defaults.temperature),
+            max_output_tokens: Some(request_defaults.max_output_tokens),
             metadata,
         });
         let request_id = request.request_id().to_string();

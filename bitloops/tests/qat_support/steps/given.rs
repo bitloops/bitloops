@@ -735,6 +735,19 @@ pub(super) fn given_bootstrap_architecture_roles(
     })
 }
 
+pub(super) fn given_bootstrap_architecture_roles_skip_seed(
+    world: &mut QatWorld,
+    ctx: cucumber::step::Context,
+) -> LocalBoxFuture<'_, ()> {
+    Box::pin(async move {
+        let repo_name = ctx.matches[1].1.clone();
+        run_step(
+            "I bootstrap architecture roles using existing seed rules",
+            helpers::run_architecture_roles_bootstrap_skip_seed(world, &repo_name),
+        );
+    })
+}
+
 pub(super) fn given_activate_seeded_architecture_role_rules(
     world: &mut QatWorld,
     ctx: cucumber::step::Context,

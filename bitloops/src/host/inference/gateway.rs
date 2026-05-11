@@ -10,7 +10,9 @@ use crate::config::{
 };
 
 use super::embeddings::BitloopsEmbeddingsIpcService;
-use super::text_generation::BitloopsInferenceTextGenerationService;
+use super::text_generation::{
+    BitloopsInferenceTextGenerationService, TextGenerationRequestDefaults,
+};
 use super::{
     BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER,
     BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, CLAUDE_CODE_PRINT_DRIVER, CODEX_EXEC_DRIVER,
@@ -190,16 +192,7 @@ impl LocalInferenceGateway {
             .model
             .as_deref()
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires a model"))?;
-        let temperature = profile
-            .temperature
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
-        let max_output_tokens = profile
-            .max_output_tokens
-            .filter(|value| *value > 0)
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+        let request_defaults = request_defaults_for_profile(profile_name, profile)?;
         if profile.driver != BITLOOPS_PLATFORM_CHAT_DRIVER
             && profile
                 .base_url
@@ -214,11 +207,12 @@ impl LocalInferenceGateway {
             &profile.driver,
             runtime,
             &config_path,
+            request_defaults,
         )
         .with_context(|| {
             format!("building text-generation service for profile `{profile_name}`")
         })?;
-        let _ = (model, temperature, max_output_tokens);
+        let _ = model;
         Ok(Arc::new(service))
     }
 
@@ -241,27 +235,19 @@ impl LocalInferenceGateway {
             .model
             .as_deref()
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires a model"))?;
-        let temperature = profile
-            .temperature
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
-        let max_output_tokens = profile
-            .max_output_tokens
-            .filter(|value| *value > 0)
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+        let request_defaults = request_defaults_for_profile(profile_name, profile)?;
         let config_path = self.resolve_runtime_config_path()?;
         let service = BitloopsInferenceTextGenerationService::new(
             profile_name,
             &profile.driver,
             runtime,
             &config_path,
+            request_defaults,
         )
         .with_context(|| {
             format!("building structured-generation service for profile `{profile_name}`")
         })?;
-        let _ = (model, temperature, max_output_tokens);
+        let _ = model;
         Ok(Arc::new(service))
     }
 
@@ -327,6 +313,32 @@ impl LocalInferenceGateway {
 
 fn is_cli_agent_structured_driver(driver: &str) -> bool {
     matches!(driver.trim(), CODEX_EXEC_DRIVER | CLAUDE_CODE_PRINT_DRIVER)
+}
+
+fn request_defaults_for_profile(
+    profile_name: &str,
+    profile: &InferenceProfileConfig,
+) -> Result<TextGenerationRequestDefaults> {
+    let temperature_text = profile
+        .temperature
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
+    let temperature = temperature_text.parse::<f32>().with_context(|| {
+        format!("profile `{profile_name}` has invalid temperature `{temperature_text}`")
+    })?;
+    if !temperature.is_finite() {
+        bail!("profile `{profile_name}` has non-finite temperature `{temperature_text}`");
+    }
+    let max_output_tokens = profile
+        .max_output_tokens
+        .filter(|value| *value > 0)
+        .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+    Ok(TextGenerationRequestDefaults {
+        temperature,
+        max_output_tokens,
+    })
 }
 
 impl InferenceGateway for LocalInferenceGateway {

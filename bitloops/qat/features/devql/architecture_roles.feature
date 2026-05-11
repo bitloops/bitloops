@@ -39,6 +39,14 @@ Feature: Architecture role intelligence
     And architecture role assignment for role "capability_registration" and path "crates/bitloops-inference/src/register.rs" is active with source "rule" in bitloops
     And architecture role classification output wrote at least 7 role assignments in bitloops
 
+  @devql @architecture_roles @architecture_roles_skip_seed
+  Scenario: Existing seeded draft rules can be activated and classified without reseeding
+    When I run architecture role seed in bitloops
+    And I bootstrap architecture roles using existing seed rules in bitloops
+    Then architecture roles include canonical keys "process_entrypoint,runtime_bootstrapper,cli_command_grammar,command_dispatcher,storage_adapter,current_state_consumer,capability_registration,provider_adapter" in bitloops
+    And architecture role assignment for role "process_entrypoint" and path "crates/bitloops-inference/src/main.rs" is active with source "rule" in bitloops
+    And architecture role classification output wrote at least 7 role assignments in bitloops
+
   @devql @architecture_roles @architecture_roles_management
   Scenario: Role management keeps stable role identity and invalidates affected assignments
     Given seeded active architecture role rules classified bitloops

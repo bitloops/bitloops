@@ -33,13 +33,14 @@ use super::*;
 mod roles_seed;
 
 use roles_seed::{
-    SeedCommandSummary, activate_seeded_draft_rules, format_seed_command_output,
-    seed_architecture_roles,
+    BootstrapCommandSummary, SeedCommandSummary, activate_seeded_draft_rules,
+    configured_seed_profile_name, ensure_seed_owned_draft_rules_exist,
+    format_bootstrap_command_output, format_seed_command_output, seed_architecture_roles,
 };
 #[cfg(test)]
 use roles_seed::{
-    SeedRuleActivationSummary, SeedSummary, configured_seed_profile_name, ensure_seed_alias,
-    persist_seeded_taxonomy,
+    SeedRuleActivationSummary, SeedSummary, architecture_seed_request_diagnostics,
+    ensure_seed_alias, persist_seeded_taxonomy,
 };
 
 const ROLE_REVIEW_STATUSES: &[&str] = &["needs_review", "stale", "rejected", "unknown"];
@@ -444,6 +445,50 @@ async fn run_architecture_roles_bootstrap_command(
     context: &crate::host::capability_host::CurrentStateConsumerContext,
     args: DevqlArchitectureRolesBootstrapArgs,
 ) -> Result<()> {
+    if args.skip_seed {
+        let profile_name =
+            configured_seed_profile_name(host.config_view("architecture_graph").scoped())?;
+        ensure_seed_owned_draft_rules_exist(
+            context.storage.as_ref(),
+            &scope.repo.repo_id,
+            &profile_name,
+        )
+        .await?;
+        let rule_activation = activate_seeded_draft_rules(
+            context.storage.as_ref(),
+            &scope.repo.repo_id,
+            &profile_name,
+            cli_provenance("bootstrap_skip_seed_activate_rules"),
+        )
+        .await?;
+        let classification = classify_architecture_roles_with_output(
+            scope,
+            context,
+            DevqlArchitectureRolesClassifyArgs {
+                full: true,
+                paths: None,
+                repair_stale: false,
+                enqueue_adjudication: args.enqueue_adjudication,
+                json: args.json,
+            },
+        )
+        .await?;
+
+        println!(
+            "{}",
+            format_bootstrap_command_output(
+                &BootstrapCommandSummary {
+                    seed: None,
+                    rule_activation,
+                    classification,
+                    skipped_seed: true,
+                },
+                args.json,
+            )?
+        );
+        return Ok(());
+    }
+
     run_architecture_roles_seed_command(
         scope,
         host,

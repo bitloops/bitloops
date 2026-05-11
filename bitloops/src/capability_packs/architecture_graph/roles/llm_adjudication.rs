@@ -15,6 +15,8 @@ const MAX_FILE_EVIDENCE: usize = 120;
 const MAX_ARTEFACT_EVIDENCE: usize = 200;
 const MAX_EDGE_EVIDENCE: usize = 200;
 const MAX_GRAPH_EVIDENCE: usize = 120;
+const MAX_SEED_TEXT_CHARS: usize = 800;
+const TRUNCATED_MARKER: &str = "…[truncated]";
 
 pub(crate) async fn collect_seed_evidence(
     scope: &SlimCliRepoScope,
@@ -71,9 +73,18 @@ pub(crate) async fn collect_seed_evidence(
                 "language": artefact.language,
                 "canonical_kind": artefact.canonical_kind,
                 "language_kind": artefact.language_kind,
-                "symbol_fqn": artefact.symbol_fqn,
-                "signature": artefact.signature,
-                "docstring": artefact.docstring,
+                "symbol_fqn": artefact
+                    .symbol_fqn
+                    .as_ref()
+                    .map(|value| truncate_seed_evidence_text(value, MAX_SEED_TEXT_CHARS)),
+                "signature": artefact
+                    .signature
+                    .as_ref()
+                    .map(|value| truncate_seed_evidence_text(value, MAX_SEED_TEXT_CHARS)),
+                "docstring": artefact
+                    .docstring
+                    .as_ref()
+                    .map(|value| truncate_seed_evidence_text(value, MAX_SEED_TEXT_CHARS)),
             }))
             .collect::<Vec<_>>(),
         "artefact_summaries": semantic_summaries,
@@ -172,14 +183,37 @@ pub(crate) fn decode_seeded_taxonomy_response(value: Value) -> Result<SeededArch
     Ok(taxonomy)
 }
 
+#[cfg(test)]
 pub(crate) fn run_seed_generation(
     service: &dyn StructuredGenerationService,
     scope: &SlimCliRepoScope,
     evidence: &Value,
 ) -> Result<SeededArchitectureTaxonomy> {
-    let request = architecture_roles_seed_request(scope, evidence);
+    run_seed_generation_request(service, architecture_roles_seed_request(scope, evidence))
+}
+
+pub(crate) fn run_seed_generation_request(
+    service: &dyn StructuredGenerationService,
+    request: StructuredGenerationRequest,
+) -> Result<SeededArchitectureTaxonomy> {
     let response = service.generate(request)?;
     decode_seeded_taxonomy_response(response)
+}
+
+fn truncate_seed_evidence_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    truncated.push_str(TRUNCATED_MARKER);
+    truncated
+}
+
+fn truncated_json_string(value: Option<&Value>, max_chars: usize) -> Value {
+    match value.and_then(Value::as_str) {
+        Some(text) if !text.is_empty() => json!(truncate_seed_evidence_text(text, max_chars)),
+        _ => Value::Null,
+    }
 }
 
 async fn load_repository_metadata(
@@ -258,7 +292,7 @@ async fn load_semantic_summary_evidence(
     context: &CurrentStateConsumerContext,
     repo_id: &str,
 ) -> Result<Vec<Value>> {
-    context
+    let rows = context
         .storage
         .query_rows(&format!(
             "SELECT a.artefact_id AS artefact_id, a.path AS path, \
@@ -280,7 +314,18 @@ async fn load_semantic_summary_evidence(
             MAX_ARTEFACT_EVIDENCE
         ))
         .await
-        .context("loading semantic summary evidence for architecture role seed")
+        .context("loading semantic summary evidence for architecture role seed")?;
+
+    Ok(rows
+        .into_iter()
+        .map(|mut row| {
+            if let Some(object) = row.as_object_mut() {
+                let summary = truncated_json_string(object.get("summary"), MAX_SEED_TEXT_CHARS);
+                object.insert("summary".to_string(), summary);
+            }
+            row
+        })
+        .collect())
 }
 
 fn parse_json_array_field(value: Option<&Value>) -> Result<Value> {
@@ -418,5 +463,23 @@ mod tests {
                 .expect("valid taxonomy");
         assert_eq!(taxonomy.roles.len(), 1);
         assert_eq!(taxonomy.rule_candidates.len(), 1);
+    }
+
+    #[test]
+    fn seed_evidence_text_is_truncated_with_omission_marker() {
+        let input = "a".repeat(MAX_SEED_TEXT_CHARS + 20);
+        let truncated = truncate_seed_evidence_text(&input, MAX_SEED_TEXT_CHARS);
+
+        assert!(truncated.len() <= MAX_SEED_TEXT_CHARS + "…[truncated]".len());
+        assert!(truncated.ends_with("…[truncated]"));
+    }
+
+    #[test]
+    fn seed_evidence_text_keeps_short_values_unchanged() {
+        let input = "short docstring";
+        assert_eq!(
+            truncate_seed_evidence_text(input, MAX_SEED_TEXT_CHARS),
+            "short docstring"
+        );
     }
 }

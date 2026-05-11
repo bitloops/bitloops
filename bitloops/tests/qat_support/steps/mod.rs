@@ -309,6 +309,16 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I bootstrap architecture roles using existing seed rules in (\S+)$"),
+            step_fn(given_bootstrap_architecture_roles_skip_seed),
+        )
+        .when(
+            None,
+            regex(r"^I bootstrap architecture roles using existing seed rules in (\S+)$"),
+            step_fn(given_bootstrap_architecture_roles_skip_seed),
+        )
+        .given(
+            None,
             regex(r"^I activate seeded architecture role rules in (\S+)$"),
             step_fn(given_activate_seeded_architecture_role_rules),
         )

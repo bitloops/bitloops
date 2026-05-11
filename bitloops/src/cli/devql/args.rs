@@ -324,6 +324,10 @@ pub struct DevqlArchitectureRolesSeedArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlArchitectureRolesBootstrapArgs {
+    /// Use existing seed-owned draft rules instead of generating a fresh taxonomy.
+    #[arg(long, default_value_t = false)]
+    pub skip_seed: bool,
+
     /// Enqueue ambiguous/high-impact classification results for asynchronous LLM adjudication.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub enqueue_adjudication: bool,

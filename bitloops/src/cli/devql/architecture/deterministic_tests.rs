@@ -36,6 +36,23 @@ async fn relational() -> Result<RelationalStorage> {
     Ok(relational)
 }
 
+fn test_scope() -> SlimCliRepoScope {
+    SlimCliRepoScope {
+        repo: crate::host::devql::RepoIdentity {
+            repo_id: "repo-1".to_string(),
+            provider: "git".to_string(),
+            organization: "bitloops".to_string(),
+            name: "demo".to_string(),
+            identity: "git/bitloops/demo".to_string(),
+        },
+        repo_root: std::path::PathBuf::from("/tmp/demo"),
+        branch_name: "main".to_string(),
+        project_path: None,
+        git_dir_relative_path: ".git".to_string(),
+        config_fingerprint: "fingerprint".to_string(),
+    }
+}
+
 fn seeded_taxonomy(role_key: &str) -> SeededArchitectureTaxonomy {
     SeededArchitectureTaxonomy {
         roles: vec![SeededArchitectureRole {
@@ -293,6 +310,99 @@ fn seed_command_output_keeps_seed_only_human_output_unchanged() -> Result<()> {
         rendered,
         "architecture roles seeded with profile `local_agent`\nroles: total=1 created=1 reused=0\nrules: total=1 created=1 reused=0"
     );
+    Ok(())
+}
+
+#[test]
+fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
+    let evidence = json!({
+        "canonical_files": [
+            { "path": "src/main.rs" },
+            { "path": "src/lib.rs" }
+        ],
+        "canonical_artefacts": [
+            { "artefact_id": "a1" }
+        ],
+        "dependency_graph_hints": [],
+        "existing_architecture_graph_facts": [
+            { "label": "CLI" }
+        ],
+        "artefact_summaries": [
+            { "artefact_id": "a1", "summary": "Routes commands." }
+        ]
+    });
+
+    let request = crate::capability_packs::architecture_graph::roles::llm_adjudication
+        ::architecture_roles_seed_request(&test_scope(), &evidence);
+    let diagnostics = architecture_seed_request_diagnostics(
+        "architecture_fact_synthesis_codex",
+        Some("codex_exec"),
+        Some("codex"),
+        Some("gpt-5.4-mini"),
+        &request,
+        &evidence,
+    );
+
+    assert_eq!(
+        diagnostics.profile_name,
+        "architecture_fact_synthesis_codex"
+    );
+    assert_eq!(diagnostics.files, 2);
+    assert_eq!(diagnostics.artefacts, 1);
+    assert_eq!(diagnostics.edges, 0);
+    assert_eq!(diagnostics.graph_facts, 1);
+    assert_eq!(diagnostics.summaries, 1);
+    assert!(diagnostics.user_prompt_bytes > 0);
+
+    let rendered = diagnostics.human_summary();
+    assert!(rendered.contains("profile=architecture_fact_synthesis_codex"));
+    assert!(rendered.contains("model=gpt-5.4-mini"));
+    assert!(rendered.contains("files=2"));
+    assert!(rendered.contains("artefacts=1"));
+}
+
+#[test]
+fn bootstrap_skip_seed_formats_json_with_skipped_seed_flag() -> Result<()> {
+    let summary = BootstrapCommandSummary {
+        seed: None,
+        rule_activation: SeedRuleActivationSummary {
+            seed_owned_draft_rules: 1,
+            proposals_created: 1,
+            proposals_applied: 1,
+            activated_rule_ids: vec!["rule-1".to_string()],
+            proposal_ids: vec!["proposal-1".to_string()],
+        },
+        classification: RolesClassifyOutput {
+            roles: ArchitectureRoleReconcileMetrics {
+                full_reconcile: true,
+                affected_paths: 0,
+                refreshed_paths: 1,
+                removed_paths: 0,
+                skipped_unchanged_paths: 0,
+                facts_written: 1,
+                facts_deleted: 0,
+                rules_loaded: 1,
+                signals_written: 1,
+                signals_deleted: 0,
+                assignments_written: 1,
+                assignments_marked_stale: 0,
+                assignment_history_rows: 1,
+                adjudication_candidates: 0,
+            },
+            role_adjudication_selected: 0,
+            role_adjudication_enqueued: 0,
+            role_adjudication_deduped: 0,
+            warnings: Vec::new(),
+        },
+        skipped_seed: true,
+    };
+
+    let rendered = format_bootstrap_command_output(&summary, true)?;
+    let value: serde_json::Value = serde_json::from_str(&rendered)?;
+    assert_eq!(value["skipped_seed"], true);
+    assert!(value["seed"].is_null());
+    assert_eq!(value["rule_activation"]["proposals_applied"], 1);
+    assert_eq!(value["classification"]["roles"]["rules_loaded"], 1);
     Ok(())
 }
 

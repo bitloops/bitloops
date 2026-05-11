@@ -1612,6 +1612,25 @@ fn devql_cli_parses_architecture_roles_bootstrap_command() {
 }
 
 #[test]
+fn parses_architecture_roles_bootstrap_skip_seed() {
+    let command = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "bootstrap",
+        "--skip-seed",
+        "--json",
+    ]);
+
+    let DevqlArchitectureRolesCommand::Bootstrap(args) = command else {
+        panic!("expected architecture roles bootstrap command");
+    };
+    assert!(args.skip_seed);
+    assert!(args.json);
+}
+
+#[test]
 fn devql_cli_parses_architecture_roles_alias_create_command() {
     let command = parse_architecture_roles_command(&[
         "bitloops",
