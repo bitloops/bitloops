@@ -24,24 +24,30 @@ pub(crate) async fn reconcile_runtime_watcher(
     let cfg = resolve_runtime_devql_config(state, &request_context, repo_id)
         .await
         .map_err(map_runtime_api_error)?;
-    let daemon_config = crate::daemon::resolve_daemon_config(Some(state.config_path.as_path()))
+    let repo_id = cfg.repo.repo_id;
+    let repo_root = cfg.repo_root;
+    let daemon_config_path = state.config_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let daemon_config = crate::daemon::resolve_daemon_config(Some(
+            daemon_config_path.as_path(),
+        ))
         .map_err(|err| {
-            graphql_error(
-                "internal",
-                format!("failed to resolve daemon config for watcher reconciliation: {err:#}"),
-            )
+            format!("failed to resolve daemon config for watcher reconciliation: {err:#}")
         })?;
-    let result =
-        crate::daemon::reconcile_bound_repo_watcher_explicit(&cfg.repo_root, &daemon_config)
-            .map_err(|err| {
-                graphql_error(
-                    "internal",
-                    format!("failed to reconcile DevQL watcher: {err:#}"),
-                )
-            })?;
+        crate::daemon::reconcile_bound_repo_watcher_explicit(&repo_root, &daemon_config)
+            .map_err(|err| format!("failed to reconcile DevQL watcher: {err:#}"))
+    })
+    .await
+    .map_err(|err| {
+        graphql_error(
+            "internal",
+            format!("watcher reconciliation task failed: {err:#}"),
+        )
+    })?
+    .map_err(|err| graphql_error("internal", err))?;
 
     Ok(RuntimeWatcherReconcileResultObject {
-        repo_id: cfg.repo.repo_id,
+        repo_id,
         repo_root: result.repo_root.display().to_string(),
         watcher_enabled: result.watcher_enabled,
         action: result.action.as_str().to_string(),

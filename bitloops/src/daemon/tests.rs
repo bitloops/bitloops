@@ -425,8 +425,8 @@ fn daemon_reconcile_stops_registered_orphan_before_starting_enabled_watcher() {
             let result = reconcile_bound_repo_watcher(&repo_root, &daemon_config)
                 .expect("reconcile watcher");
             assert!(result.watcher_enabled);
-            assert_eq!(result.action, RepoWatcherReconcileAction::Restarted);
-            assert_eq!(result.action.as_str(), "restarted");
+            assert_eq!(result.action, RepoWatcherReconcileAction::Skipped);
+            assert_eq!(result.action.as_str(), "skipped");
         },
     );
 

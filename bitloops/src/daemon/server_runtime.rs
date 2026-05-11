@@ -335,6 +335,7 @@ pub(super) fn stop_bound_repo_watchers_for_daemon_shutdown(daemon_config: &Resol
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RepoWatcherReconcileAction {
     Restarted,
+    Skipped,
     Stopped,
 }
 
@@ -344,6 +345,7 @@ impl RepoWatcherReconcileAction {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Restarted => "restarted",
+            Self::Skipped => "skipped",
             Self::Stopped => "stopped",
         }
     }
@@ -381,7 +383,7 @@ pub(crate) fn reconcile_bound_repo_watcher_explicit(
 fn reconcile_bound_repo_watcher_with(
     repo_root: &Path,
     daemon_config: &ResolvedDaemonConfig,
-    restart_watcher: fn(&Path, &Path) -> Result<()>,
+    restart_watcher: fn(&Path, &Path) -> Result<crate::host::devql::watch::WatcherRestartOutcome>,
 ) -> Result<RepoWatcherReconcileResult> {
     let repo_root = repo_root
         .canonicalize()
@@ -392,11 +394,18 @@ fn reconcile_bound_repo_watcher_with(
     if watcher_enabled {
         // Reconciliation intentionally restarts so any registered watcher
         // left by a previous daemon or short-lived CLI process is replaced here.
-        restart_watcher(&repo_root, &daemon_config.config_root)?;
+        let restart_outcome = restart_watcher(&repo_root, &daemon_config.config_root)?;
         Ok(RepoWatcherReconcileResult {
             repo_root,
             watcher_enabled,
-            action: RepoWatcherReconcileAction::Restarted,
+            action: match restart_outcome {
+                crate::host::devql::watch::WatcherRestartOutcome::Started => {
+                    RepoWatcherReconcileAction::Restarted
+                }
+                crate::host::devql::watch::WatcherRestartOutcome::Skipped => {
+                    RepoWatcherReconcileAction::Skipped
+                }
+            },
         })
     } else {
         crate::host::devql::watch::stop_watcher(&repo_root, &daemon_config.config_root)?;
