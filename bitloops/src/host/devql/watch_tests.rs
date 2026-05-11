@@ -187,6 +187,20 @@ fn ensure_watcher_running_returns_early_when_autostart_is_disabled() {
 }
 
 #[test]
+fn explicit_watcher_start_policy_ignores_autostart_disabled_env() {
+    with_env_var(DISABLE_WATCHER_AUTOSTART_ENV, Some("1"), || {
+        assert!(
+            should_skip_watcher_start(WatcherStartPolicy::RespectAutostartDisable),
+            "automatic watcher starts should respect disabled autostart"
+        );
+        assert!(
+            !should_skip_watcher_start(WatcherStartPolicy::ExplicitRequest),
+            "explicit watcher reconciliation should ignore disabled autostart"
+        );
+    });
+}
+
+#[test]
 fn dirty_worktree_paths_include_untracked_source_files() {
     let (_dir, repo_root, _store) = seed_runtime_store();
     let source_path = repo_root.join("src").join("math.rs");
