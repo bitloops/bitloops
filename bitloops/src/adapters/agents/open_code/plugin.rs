@@ -172,6 +172,11 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
     return extractModelMetadata(messages[0], currentSessionInfo)
   }
 
+  function hookModelPayload(...sources: any[]): Record<string, string> {
+    const modelMetadata = extractModelMetadata(...sources)
+    return modelMetadata.model ? { model: modelMetadata.model } : {}
+  }
+
   /** Format a message object from its accumulated parts. */
   function formatMessageFromStore(msg: any) {
     const parts = partStore.get(msg.id) ?? []
@@ -315,7 +320,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("session-start", {
             session_id: session.id,
             transcript_path: `${transcriptDir}/${session.id}.jsonl`,
-            ...extractModelMetadata(session),
+            ...hookModelPayload(session),
           })
           break
         }
@@ -354,7 +359,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
                 session_id: sessionID,
                 transcript_path: `${transcriptDir}/${sessionID}.jsonl`,
                 prompt: part.text ?? "",
-                ...extractModelMetadata(msg, currentSessionInfo),
+                ...hookModelPayload(msg, currentSessionInfo),
               })
             }
           }
@@ -371,7 +376,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           callHookSync("turn-end", {
             session_id: sessionID,
             transcript_path: transcriptPath,
-            ...latestSessionModelMetadata(sessionID),
+            ...hookModelPayload(latestSessionModelMetadata(sessionID)),
           })
           break
         }
@@ -382,7 +387,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           await callHook("compaction", {
             session_id: sessionID,
             transcript_path: `${transcriptDir}/${sessionID}.jsonl`,
-            ...latestSessionModelMetadata(sessionID),
+            ...hookModelPayload(latestSessionModelMetadata(sessionID)),
           })
           break
         }
@@ -404,7 +409,7 @@ export const BitloopsPlugin: Plugin = async ({ client, directory, $ }) => {
           callHookSync("session-end", {
             session_id: session.id,
             transcript_path: `${transcriptDir}/${session.id}.jsonl`,
-            ...modelMetadata,
+            ...hookModelPayload(modelMetadata),
           })
           break
         }

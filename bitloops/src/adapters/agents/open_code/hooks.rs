@@ -210,6 +210,37 @@ enabled = true
     }
 
     #[test]
+    fn render_plugin_template_limits_hook_payloads_to_single_model_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
+
+        assert!(
+            rendered.contains("function hookModelPayload"),
+            "plugin should derive a hook-safe model payload from the richer model metadata"
+        );
+        assert!(
+            rendered.contains("return modelMetadata.model ? { model: modelMetadata.model } : {}"),
+            "hook-safe model payload should only emit a single canonical model field"
+        );
+        assert!(
+            rendered.contains("...hookModelPayload(session)"),
+            "session-start hooks should use the hook-safe model payload"
+        );
+        assert!(
+            rendered.contains("...hookModelPayload(msg, currentSessionInfo)"),
+            "turn-start hooks should use the hook-safe model payload"
+        );
+        assert!(
+            rendered.contains("...hookModelPayload(latestSessionModelMetadata(sessionID))"),
+            "turn-end and compaction hooks should use the hook-safe model payload"
+        );
+        assert!(
+            rendered.contains("...hookModelPayload(modelMetadata)"),
+            "session-end hooks should use the hook-safe model payload"
+        );
+    }
+
+    #[test]
     fn render_plugin_template_runs_hooks_from_repo_directory() {
         let dir = tempfile::tempdir().expect("tempdir");
         let rendered = render_plugin_template(dir.path(), false).expect("render should succeed");
