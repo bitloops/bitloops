@@ -32,9 +32,15 @@ use super::*;
 
 mod roles_seed;
 
-use roles_seed::run_architecture_roles_seed;
+use roles_seed::{
+    SeedCommandSummary, activate_seeded_draft_rules, format_seed_command_output,
+    seed_architecture_roles,
+};
 #[cfg(test)]
-use roles_seed::{configured_seed_profile_name, ensure_seed_alias, persist_seeded_taxonomy};
+use roles_seed::{
+    SeedRuleActivationSummary, SeedSummary, configured_seed_profile_name, ensure_seed_alias,
+    persist_seeded_taxonomy,
+};
 
 const ROLE_REVIEW_STATUSES: &[&str] = &["needs_review", "stale", "rejected", "unknown"];
 
@@ -60,8 +66,11 @@ async fn run_architecture_roles_command(
     args: DevqlArchitectureRolesArgs,
 ) -> Result<()> {
     match args.command {
-        DevqlArchitectureRolesCommand::Seed(_) => {
-            run_architecture_roles_seed(scope, host, context).await
+        DevqlArchitectureRolesCommand::Seed(args) => {
+            run_architecture_roles_seed_command(scope, host, context, args).await
+        }
+        DevqlArchitectureRolesCommand::Bootstrap(args) => {
+            run_architecture_roles_bootstrap_command(scope, host, context, args).await
         }
         DevqlArchitectureRolesCommand::Classify(args) => {
             run_architecture_roles_classify(scope, context, args).await
@@ -228,7 +237,7 @@ struct RolesStatusOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct RolesClassifyOutput {
+pub(super) struct RolesClassifyOutput {
     roles: ArchitectureRoleReconcileMetrics,
     role_adjudication_selected: usize,
     role_adjudication_enqueued: usize,
@@ -275,11 +284,11 @@ struct RoleReviewItem {
     updated_at: Option<String>,
 }
 
-async fn run_architecture_roles_classify(
+async fn classify_architecture_roles_with_output(
     scope: &SlimCliRepoScope,
     context: &crate::host::capability_host::CurrentStateConsumerContext,
     args: DevqlArchitectureRolesClassifyArgs,
-) -> Result<()> {
+) -> Result<RolesClassifyOutput> {
     let files = context
         .relational
         .load_current_canonical_files(&scope.repo.repo_id)
@@ -352,16 +361,101 @@ async fn run_architecture_roles_classify(
             deduped: 0,
         }
     };
-    let output = RolesClassifyOutput {
+    Ok(RolesClassifyOutput {
         roles: outcome.metrics,
         role_adjudication_selected: adjudication_metrics.selected,
         role_adjudication_enqueued: adjudication_metrics.enqueued,
         role_adjudication_deduped: adjudication_metrics.deduped,
         warnings,
+    })
+}
+
+async fn run_architecture_roles_classify(
+    scope: &SlimCliRepoScope,
+    context: &crate::host::capability_host::CurrentStateConsumerContext,
+    args: DevqlArchitectureRolesClassifyArgs,
+) -> Result<()> {
+    let json_output = args.json;
+    let output = classify_architecture_roles_with_output(scope, context, args).await?;
+    println!("{}", format_roles_classify_output(&output, json_output)?);
+    Ok(())
+}
+
+fn validate_seed_automation_args(args: &DevqlArchitectureRolesSeedArgs) -> Result<()> {
+    if args.classify && !args.activate_rules {
+        bail!("`roles seed --classify` requires `--activate-rules`");
+    }
+    Ok(())
+}
+
+async fn run_architecture_roles_seed_command(
+    scope: &SlimCliRepoScope,
+    host: &DevqlCapabilityHost,
+    context: &crate::host::capability_host::CurrentStateConsumerContext,
+    args: DevqlArchitectureRolesSeedArgs,
+) -> Result<()> {
+    validate_seed_automation_args(&args)?;
+
+    let seed = seed_architecture_roles(scope, host, context).await?;
+    let rule_activation = if args.activate_rules {
+        Some(
+            activate_seeded_draft_rules(
+                context.storage.as_ref(),
+                &scope.repo.repo_id,
+                &seed.profile_name,
+                cli_provenance("seed_activate_rules"),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let classification = if args.classify {
+        Some(
+            classify_architecture_roles_with_output(
+                scope,
+                context,
+                DevqlArchitectureRolesClassifyArgs {
+                    full: true,
+                    paths: None,
+                    repair_stale: false,
+                    enqueue_adjudication: args.enqueue_adjudication,
+                    json: args.json,
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let summary = SeedCommandSummary {
+        seed,
+        rule_activation,
+        classification,
     };
 
-    println!("{}", format_roles_classify_output(&output, args.json)?);
+    println!("{}", format_seed_command_output(&summary, args.json)?);
     Ok(())
+}
+
+async fn run_architecture_roles_bootstrap_command(
+    scope: &SlimCliRepoScope,
+    host: &DevqlCapabilityHost,
+    context: &crate::host::capability_host::CurrentStateConsumerContext,
+    args: DevqlArchitectureRolesBootstrapArgs,
+) -> Result<()> {
+    run_architecture_roles_seed_command(
+        scope,
+        host,
+        context,
+        DevqlArchitectureRolesSeedArgs {
+            activate_rules: true,
+            classify: true,
+            enqueue_adjudication: args.enqueue_adjudication,
+            json: args.json,
+        },
+    )
+    .await
 }
 
 async fn run_architecture_roles_status(
@@ -629,7 +723,10 @@ fn print_roles_status_human(output: &RolesStatusOutput) {
     }
 }
 
-fn format_roles_classify_output(output: &RolesClassifyOutput, json_output: bool) -> Result<String> {
+pub(super) fn format_roles_classify_output(
+    output: &RolesClassifyOutput,
+    json_output: bool,
+) -> Result<String> {
     if json_output {
         return serde_json::to_string_pretty(output)
             .context("serialising architecture roles classify output as JSON");

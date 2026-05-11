@@ -1,9 +1,13 @@
 use anyhow::{Context, Result, anyhow, bail};
+use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::capability_packs::architecture_graph::roles::llm_adjudication::{
     collect_seed_evidence, run_seed_generation,
+};
+use crate::capability_packs::architecture_graph::roles::migrations::{
+    apply_proposal, create_rule_activate_proposal,
 };
 use crate::capability_packs::architecture_graph::roles::storage::{
     AliasConflict, ArchitectureRoleAliasRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,
@@ -20,8 +24,9 @@ use crate::host::capability_host::{CurrentStateConsumerContext, DevqlCapabilityH
 use crate::host::inference::InferenceGateway;
 
 use super::super::SlimCliRepoScope;
+use super::{RolesClassifyOutput, format_roles_classify_output};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct SeedSummary {
     pub(super) profile_name: String,
     pub(super) roles_total: usize,
@@ -32,11 +37,27 @@ pub(super) struct SeedSummary {
     pub(super) rules_reused: usize,
 }
 
-pub(super) async fn run_architecture_roles_seed(
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct SeedRuleActivationSummary {
+    pub(super) seed_owned_draft_rules: usize,
+    pub(super) proposals_created: usize,
+    pub(super) proposals_applied: usize,
+    pub(super) activated_rule_ids: Vec<String>,
+    pub(super) proposal_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SeedCommandSummary {
+    pub(super) seed: SeedSummary,
+    pub(super) rule_activation: Option<SeedRuleActivationSummary>,
+    pub(super) classification: Option<RolesClassifyOutput>,
+}
+
+pub(super) async fn seed_architecture_roles(
     scope: &SlimCliRepoScope,
     host: &DevqlCapabilityHost,
     context: &CurrentStateConsumerContext,
-) -> Result<()> {
+) -> Result<SeedSummary> {
     let profile_name =
         configured_seed_profile_name(host.config_view("architecture_graph").scoped())?;
 
@@ -68,15 +89,13 @@ pub(super) async fn run_architecture_roles_seed(
         })?;
     let evidence = collect_seed_evidence(scope, context).await?;
     let taxonomy = run_seed_generation(service.as_ref(), scope, &evidence)?;
-    let summary = persist_seeded_taxonomy(
+    persist_seeded_taxonomy(
         context.storage.as_ref(),
         &scope.repo.repo_id,
         &profile_name,
         taxonomy,
     )
-    .await?;
-    println!("{}", format_seed_summary(&summary));
-    Ok(())
+    .await
 }
 
 pub(super) async fn persist_seeded_taxonomy(
@@ -225,6 +244,90 @@ pub(super) async fn persist_seeded_taxonomy(
     })
 }
 
+pub(super) async fn load_seed_owned_draft_rule_ids(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    profile_name: &str,
+) -> Result<Vec<String>> {
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT rule.rule_id, rule.provenance_json \
+             FROM architecture_role_detection_rules rule \
+             JOIN architecture_roles role \
+               ON role.repo_id = rule.repo_id AND role.role_id = rule.role_id \
+             WHERE rule.repo_id = {repo_id} \
+               AND rule.lifecycle_status = 'draft' \
+             ORDER BY role.canonical_key ASC, rule.version ASC, rule.rule_id ASC;",
+            repo_id = sql_text(repo_id),
+        ))
+        .await
+        .context("loading seed-owned draft architecture role rules")?;
+
+    let mut rule_ids = Vec::new();
+    for row in rows {
+        let rule_id = row
+            .get("rule_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("seed-owned draft rule row missing `rule_id`"))?;
+        let provenance = match row.get("provenance_json") {
+            Some(Value::String(text)) if !text.trim().is_empty() => {
+                serde_json::from_str::<Value>(text)
+                    .context("parsing architecture role rule provenance")?
+            }
+            Some(value) => value.clone(),
+            None => json!({}),
+        };
+        let is_seed_owned = provenance.get("source").and_then(Value::as_str)
+            == Some("architecture_roles_seed")
+            && provenance.get("seed_profile").and_then(Value::as_str) == Some(profile_name);
+        if is_seed_owned {
+            rule_ids.push(rule_id.to_string());
+        }
+    }
+
+    Ok(rule_ids)
+}
+
+pub(super) async fn activate_seeded_draft_rules(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    profile_name: &str,
+    provenance: Value,
+) -> Result<SeedRuleActivationSummary> {
+    let rule_ids = load_seed_owned_draft_rule_ids(relational, repo_id, profile_name).await?;
+    let mut activated_rule_ids = Vec::new();
+    let mut proposal_ids = Vec::new();
+
+    for rule_id in &rule_ids {
+        let rule_ref = format!("rule:{rule_id}");
+        let proposal = create_rule_activate_proposal(
+            relational,
+            repo_id,
+            &rule_ref,
+            merge_provenance(
+                provenance.clone(),
+                json!({
+                    "source": "architecture_roles_seed_automation",
+                    "operation": "activate_seed_rule",
+                    "seed_profile": profile_name,
+                }),
+            ),
+        )
+        .await?;
+        apply_proposal(relational, repo_id, &proposal.proposal_id).await?;
+        activated_rule_ids.push(rule_id.clone());
+        proposal_ids.push(proposal.proposal_id);
+    }
+
+    Ok(SeedRuleActivationSummary {
+        seed_owned_draft_rules: rule_ids.len(),
+        proposals_created: proposal_ids.len(),
+        proposals_applied: proposal_ids.len(),
+        activated_rule_ids,
+        proposal_ids,
+    })
+}
+
 pub(super) fn configured_seed_profile_name(scoped_config: Option<&Value>) -> Result<String> {
     scoped_config
         .and_then(|value| value.pointer("/inference/fact_synthesis"))
@@ -239,6 +342,38 @@ pub(super) fn configured_seed_profile_name(scoped_config: Option<&Value>) -> Res
         })
 }
 
+pub(super) fn format_seed_command_output(
+    summary: &SeedCommandSummary,
+    json_output: bool,
+) -> Result<String> {
+    if json_output {
+        return serde_json::to_string_pretty(summary)
+            .context("serialising architecture roles seed output as JSON");
+    }
+
+    let mut sections = vec![format_seed_summary(&summary.seed)];
+    if let Some(activation) = summary.rule_activation.as_ref() {
+        sections.push(format!(
+            "seeded rule activation: seed_owned_draft_rules={} proposals_created={} proposals_applied={}",
+            activation.seed_owned_draft_rules,
+            activation.proposals_created,
+            activation.proposals_applied,
+        ));
+        for (rule_id, proposal_id) in activation
+            .activated_rule_ids
+            .iter()
+            .zip(activation.proposal_ids.iter())
+        {
+            sections.push(format!("activated_rule={rule_id} proposal={proposal_id}"));
+        }
+    }
+    if let Some(classification) = summary.classification.as_ref() {
+        sections.push(format_roles_classify_output(classification, false)?);
+    }
+
+    Ok(sections.join("\n"))
+}
+
 fn format_seed_summary(summary: &SeedSummary) -> String {
     format!(
         "architecture roles seeded with profile `{}`\nroles: total={} created={} reused={}\nrules: total={} created={} reused={}",
@@ -250,6 +385,10 @@ fn format_seed_summary(summary: &SeedSummary) -> String {
         summary.rules_created,
         summary.rules_reused,
     )
+}
+
+fn sql_text(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn merge_provenance(mut left: Value, right: Value) -> Value {

@@ -14,9 +14,7 @@ Feature: Architecture role intelligence
 
   @devql @architecture_roles
   Scenario: Seeded taxonomy and deterministic rules classify canonical artefacts
-    When I run architecture role seed in bitloops
-    And I activate seeded architecture role rules in bitloops
-    And I run architecture role classification with full refresh in bitloops
+    When I bootstrap architecture roles in bitloops
     Then architecture roles include canonical keys "process_entrypoint,runtime_bootstrapper,cli_command_grammar,command_dispatcher,storage_adapter,current_state_consumer,capability_registration,provider_adapter" in bitloops
     And architecture role facts include path "crates/bitloops-inference/src/main.rs" in bitloops
     And architecture role facts include path "crates/bitloops-inference/src/runtime.rs" in bitloops

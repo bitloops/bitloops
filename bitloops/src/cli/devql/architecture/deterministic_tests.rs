@@ -6,9 +6,10 @@ use crate::capability_packs::architecture_graph::roles::rules::{
     compile_detection_rules, evaluate_rules_over_facts,
 };
 use crate::capability_packs::architecture_graph::roles::storage::{
-    ArchitectureRoleAliasRecord, ArchitectureRoleRecord, deterministic_alias_id,
-    deterministic_role_id, list_roles, load_active_detection_rules, load_role_by_id,
-    load_role_rules, normalize_role_alias, update_role_rule_lifecycle, upsert_assignment,
+    ArchitectureRoleAliasRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,
+    deterministic_alias_id, deterministic_role_id, deterministic_rule_id, insert_role_rule,
+    list_roles, load_active_detection_rules, load_role_by_id, load_role_rules,
+    next_role_rule_version, normalize_role_alias, update_role_rule_lifecycle, upsert_assignment,
     upsert_role,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
@@ -182,6 +183,130 @@ fn roles_classify_formats_json_metrics() -> Result<()> {
     assert_eq!(parsed["roles"]["full_reconcile"], true);
     assert_eq!(parsed["roles"]["adjudication_candidates"], 0);
     Ok(())
+}
+
+#[test]
+fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
+    let output = RolesClassifyOutput {
+        roles: ArchitectureRoleReconcileMetrics {
+            full_reconcile: true,
+            affected_paths: 0,
+            refreshed_paths: 2,
+            removed_paths: 0,
+            skipped_unchanged_paths: 0,
+            facts_written: 4,
+            facts_deleted: 1,
+            rules_loaded: 3,
+            signals_written: 5,
+            signals_deleted: 2,
+            assignments_written: 6,
+            assignments_marked_stale: 0,
+            assignment_history_rows: 6,
+            adjudication_candidates: 1,
+        },
+        role_adjudication_selected: 1,
+        role_adjudication_enqueued: 0,
+        role_adjudication_deduped: 1,
+        warnings: vec!["classification warning".to_string()],
+    };
+
+    let rendered = format_roles_classify_output(&output, false)?;
+
+    assert!(rendered.contains("architecture roles classified"));
+    assert!(rendered.contains("roles: full_reconcile=true"));
+    assert!(rendered.contains("assignments: written=6"));
+    assert!(rendered.contains("warning: classification warning"));
+    Ok(())
+}
+
+#[test]
+fn seed_command_output_includes_activation_and_classification_in_json() -> Result<()> {
+    let summary = SeedCommandSummary {
+        seed: SeedSummary {
+            profile_name: "local_agent".to_string(),
+            roles_total: 1,
+            roles_created: 1,
+            roles_reused: 0,
+            rules_total: 1,
+            rules_created: 1,
+            rules_reused: 0,
+        },
+        rule_activation: Some(SeedRuleActivationSummary {
+            seed_owned_draft_rules: 1,
+            proposals_created: 1,
+            proposals_applied: 1,
+            activated_rule_ids: vec!["rule-1".to_string()],
+            proposal_ids: vec!["proposal-1".to_string()],
+        }),
+        classification: Some(RolesClassifyOutput {
+            roles: ArchitectureRoleReconcileMetrics {
+                full_reconcile: true,
+                affected_paths: 0,
+                refreshed_paths: 2,
+                removed_paths: 0,
+                skipped_unchanged_paths: 0,
+                facts_written: 4,
+                facts_deleted: 0,
+                rules_loaded: 1,
+                signals_written: 2,
+                signals_deleted: 0,
+                assignments_written: 2,
+                assignments_marked_stale: 0,
+                assignment_history_rows: 2,
+                adjudication_candidates: 0,
+            },
+            role_adjudication_selected: 0,
+            role_adjudication_enqueued: 0,
+            role_adjudication_deduped: 0,
+            warnings: Vec::new(),
+        }),
+    };
+
+    let rendered = format_seed_command_output(&summary, true)?;
+    let value: serde_json::Value = serde_json::from_str(&rendered)?;
+
+    assert_eq!(value["seed"]["profile_name"], "local_agent");
+    assert_eq!(value["rule_activation"]["proposals_applied"], 1);
+    assert_eq!(value["classification"]["roles"]["rules_loaded"], 1);
+    Ok(())
+}
+
+#[test]
+fn seed_command_output_keeps_seed_only_human_output_unchanged() -> Result<()> {
+    let summary = SeedCommandSummary {
+        seed: SeedSummary {
+            profile_name: "local_agent".to_string(),
+            roles_total: 1,
+            roles_created: 1,
+            roles_reused: 0,
+            rules_total: 1,
+            rules_created: 1,
+            rules_reused: 0,
+        },
+        rule_activation: None,
+        classification: None,
+    };
+
+    let rendered = format_seed_command_output(&summary, false)?;
+
+    assert_eq!(
+        rendered,
+        "architecture roles seeded with profile `local_agent`\nroles: total=1 created=1 reused=0\nrules: total=1 created=1 reused=0"
+    );
+    Ok(())
+}
+
+#[test]
+fn seed_classify_requires_activate_rules() {
+    let err = validate_seed_automation_args(&DevqlArchitectureRolesSeedArgs {
+        activate_rules: false,
+        classify: true,
+        enqueue_adjudication: true,
+        json: false,
+    })
+    .expect_err("classify without activate-rules should fail");
+
+    assert!(err.to_string().contains("requires `--activate-rules`"));
 }
 
 #[tokio::test]
@@ -373,5 +498,189 @@ async fn persist_seeded_taxonomy_reuses_alias_equivalent_roles() -> Result<()> {
     assert_eq!(loaded.canonical_key, "command_dispatcher");
     let rules = load_role_rules(&relational, "repo-1", &existing.role_id).await?;
     assert_eq!(rules.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn activate_seeded_draft_rules_only_applies_seed_owned_rules() -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let relational = relational().await?;
+    persist_seeded_taxonomy(
+        &relational,
+        "repo-1",
+        "local_agent",
+        seeded_taxonomy("command_dispatcher"),
+    )
+    .await?;
+    let role = list_roles(&relational, "repo-1")
+        .await?
+        .into_iter()
+        .next()
+        .expect("seeded role");
+    let manual_hash = hex::encode(Sha256::digest(b"manual-rule"));
+    let manual_version = next_role_rule_version(&relational, "repo-1", &role.role_id).await?;
+    let manual_rule = ArchitectureRoleRuleRecord {
+        rule_id: deterministic_rule_id("repo-1", &role.role_id, manual_version, &manual_hash),
+        repo_id: "repo-1".to_string(),
+        role_id: role.role_id.clone(),
+        version: manual_version,
+        lifecycle_status: "draft".to_string(),
+        canonical_hash: manual_hash,
+        candidate_selector: json!({
+            "targetKinds": [],
+            "pathPrefixes": ["src/manual"],
+            "pathSuffixes": [],
+            "requiredFacts": []
+        }),
+        positive_conditions: json!([]),
+        negative_conditions: json!([]),
+        score: json!({"base_confidence": 0.8, "weight": 1.0}),
+        provenance: json!({"source": "manual_test"}),
+        evidence: json!([]),
+        metadata: json!({}),
+        supersedes_rule_id: None,
+    };
+    insert_role_rule(&relational, &manual_rule).await?;
+
+    let activation = activate_seeded_draft_rules(
+        &relational,
+        "repo-1",
+        "local_agent",
+        cli_provenance("seed_activate_rules"),
+    )
+    .await?;
+
+    assert_eq!(activation.seed_owned_draft_rules, 1);
+    assert_eq!(activation.proposals_created, 1);
+    assert_eq!(activation.proposals_applied, 1);
+    assert_eq!(activation.activated_rule_ids.len(), 1);
+
+    let rules = load_role_rules(&relational, "repo-1", &role.role_id).await?;
+    let active_seed_rules = rules
+        .iter()
+        .filter(|rule| {
+            rule.lifecycle_status == "active"
+                && rule
+                    .provenance
+                    .get("source")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("architecture_roles_seed")
+        })
+        .count();
+    let draft_manual_rules = rules
+        .iter()
+        .filter(|rule| {
+            rule.lifecycle_status == "draft"
+                && rule
+                    .provenance
+                    .get("source")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("manual_test")
+        })
+        .count();
+    assert_eq!(active_seed_rules, 1);
+    assert_eq!(draft_manual_rules, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn activate_seeded_draft_rules_is_idempotent_after_first_activation() -> Result<()> {
+    let relational = relational().await?;
+    persist_seeded_taxonomy(
+        &relational,
+        "repo-1",
+        "local_agent",
+        seeded_taxonomy("command_dispatcher"),
+    )
+    .await?;
+
+    let first = activate_seeded_draft_rules(
+        &relational,
+        "repo-1",
+        "local_agent",
+        cli_provenance("seed_activate_rules"),
+    )
+    .await?;
+    let second = activate_seeded_draft_rules(
+        &relational,
+        "repo-1",
+        "local_agent",
+        cli_provenance("seed_activate_rules"),
+    )
+    .await?;
+
+    assert_eq!(first.seed_owned_draft_rules, 1);
+    assert_eq!(first.proposals_applied, 1);
+    assert_eq!(second.seed_owned_draft_rules, 0);
+    assert_eq!(second.proposals_applied, 0);
+    assert!(second.activated_rule_ids.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn seed_activation_enables_full_classification() -> Result<()> {
+    let relational = relational().await?;
+    let mut taxonomy = seeded_taxonomy("command_dispatcher");
+    taxonomy.rule_candidates[0].candidate_selector = RoleRuleCandidateSelector {
+        path_prefixes: vec!["src/cli".to_string()],
+        ..Default::default()
+    };
+    taxonomy.rule_candidates[0].score = RoleRuleScore {
+        base_confidence: Some(0.95),
+        weight: Some(1.0),
+    };
+    taxonomy.rule_candidates[0].positive_conditions = vec![RoleRuleCondition {
+        kind: "path_contains".to_string(),
+        value: json!("commands"),
+    }];
+
+    persist_seeded_taxonomy(&relational, "repo-1", "local_agent", taxonomy).await?;
+    activate_seeded_draft_rules(
+        &relational,
+        "repo-1",
+        "local_agent",
+        cli_provenance("seed_activate_rules"),
+    )
+    .await?;
+
+    let files = vec![CurrentCanonicalFileRecord {
+        repo_id: "repo-1".to_string(),
+        path: "src/cli/commands/run.rs".to_string(),
+        analysis_mode: "parsed".to_string(),
+        file_role: "source".to_string(),
+        language: "rust".to_string(),
+        resolved_language: "rust".to_string(),
+        effective_content_id: "content-1".to_string(),
+        parser_version: "test".to_string(),
+        extractor_version: "test".to_string(),
+        exists_in_head: true,
+        exists_in_index: true,
+        exists_in_worktree: true,
+    }];
+
+    let outcome =
+        crate::capability_packs::architecture_graph::roles::classifier::classify_architecture_roles_for_current_state(
+            &relational,
+            crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
+                repo_id: "repo-1",
+                generation_seq: 7,
+                scope: crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationScope {
+                    full_reconcile: true,
+                    affected_paths: BTreeSet::new(),
+                    removed_paths: BTreeSet::new(),
+                },
+                files: &files,
+                artefacts: &[],
+                dependency_edges: &[],
+            },
+        )
+        .await?;
+
+    assert!(outcome.metrics.full_reconcile);
+    assert_eq!(outcome.metrics.rules_loaded, 1);
+    assert!(outcome.metrics.signals_written >= 1);
+    assert!(outcome.metrics.assignments_written >= 1);
+    assert_eq!(outcome.metrics.adjudication_candidates, 0);
     Ok(())
 }

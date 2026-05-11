@@ -109,6 +109,16 @@ pub fn run_architecture_role_seed(world: &mut QatWorld, repo_name: &str) -> Resu
     .map(|_| ())
 }
 
+pub fn run_architecture_roles_bootstrap(world: &mut QatWorld, repo_name: &str) -> Result<()> {
+    ensure_bitloops_repo_name(repo_name)?;
+    run_architecture_role_command(
+        world,
+        &["devql", "architecture", "roles", "bootstrap", "--json"],
+        "bitloops devql architecture roles bootstrap --json",
+    )
+    .map(|_| ())
+}
+
 pub fn activate_seeded_architecture_role_rules(
     world: &mut QatWorld,
     repo_name: &str,
@@ -195,9 +205,7 @@ pub fn seeded_active_architecture_role_rules_classified(
     world: &mut QatWorld,
     repo_name: &str,
 ) -> Result<()> {
-    run_architecture_role_seed(world, repo_name)?;
-    activate_seeded_architecture_role_rules(world, repo_name)?;
-    run_architecture_role_classification_full_refresh(world, repo_name)
+    run_architecture_roles_bootstrap(world, repo_name)
 }
 
 pub fn snapshot_architecture_role_id(
@@ -753,9 +761,17 @@ pub fn assert_architecture_role_classification_output_wrote_at_least_assignments
     let assignments_written = output
         .get("roles")
         .and_then(|roles| roles.get("assignments_written"))
+        .or_else(|| {
+            output
+                .get("classification")
+                .and_then(|classification| classification.get("roles"))
+                .and_then(|roles| roles.get("assignments_written"))
+        })
         .and_then(serde_json::Value::as_u64)
         .ok_or_else(|| {
-            anyhow!("classification output missing roles.assignments_written: {output}")
+            anyhow!(
+                "classification output missing roles.assignments_written or classification.roles.assignments_written: {output}"
+            )
         })?;
     ensure!(
         assignments_written >= minimum,

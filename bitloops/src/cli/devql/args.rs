@@ -279,6 +279,8 @@ pub struct DevqlArchitectureRolesArgs {
 pub enum DevqlArchitectureRolesCommand {
     /// Seed a repository-specific architecture role taxonomy.
     Seed(DevqlArchitectureRolesSeedArgs),
+    /// Seed roles, activate seed-owned rules, and run full classification.
+    Bootstrap(DevqlArchitectureRolesBootstrapArgs),
     /// Re-run architecture role classification from current canonical state.
     Classify(DevqlArchitectureRolesClassifyArgs),
     /// Show ambiguous role adjudication queue and needs-review assignments.
@@ -302,7 +304,34 @@ pub enum DevqlArchitectureRolesCommand {
 }
 
 #[derive(Args, Debug, Clone, Default)]
-pub struct DevqlArchitectureRolesSeedArgs {}
+pub struct DevqlArchitectureRolesSeedArgs {
+    /// Activate seed-owned draft rules after seeding.
+    #[arg(long = "activate-rules", default_value_t = false)]
+    pub activate_rules: bool,
+
+    /// Run a full deterministic classification after activating seed-owned rules.
+    #[arg(long, default_value_t = false)]
+    pub classify: bool,
+
+    /// Enqueue ambiguous/high-impact classification results for asynchronous LLM adjudication.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub enqueue_adjudication: bool,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DevqlArchitectureRolesBootstrapArgs {
+    /// Enqueue ambiguous/high-impact classification results for asynchronous LLM adjudication.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub enqueue_adjudication: bool,
+
+    /// Emit JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
 
 #[derive(Args, Debug, Clone)]
 pub struct DevqlArchitectureRolesClassifyArgs {

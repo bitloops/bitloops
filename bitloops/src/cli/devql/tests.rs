@@ -1486,6 +1486,25 @@ fn devql_cli_parses_architecture_roles_role_mutation_commands() {
         parse_architecture_roles_command(&["bitloops", "devql", "architecture", "roles", "seed"]);
     assert!(matches!(seed, DevqlArchitectureRolesCommand::Seed(_)));
 
+    let seed_auto = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "seed",
+        "--activate-rules",
+        "--classify",
+        "--enqueue-adjudication=false",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Seed(seed_auto) = seed_auto else {
+        panic!("expected architecture roles seed command");
+    };
+    assert!(seed_auto.activate_rules);
+    assert!(seed_auto.classify);
+    assert!(!seed_auto.enqueue_adjudication);
+    assert!(seed_auto.json);
+
     let status = parse_architecture_roles_command(&[
         "bitloops",
         "devql",
@@ -1581,6 +1600,25 @@ fn devql_cli_parses_architecture_roles_role_mutation_commands() {
     };
     assert_eq!(split.role_ref, "role:frontend");
     assert_eq!(split.spec, PathBuf::from("roles/frontend-split.json"));
+}
+
+#[test]
+fn devql_cli_parses_architecture_roles_bootstrap_command() {
+    let bootstrap = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "bootstrap",
+        "--enqueue-adjudication=false",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Bootstrap(bootstrap) = bootstrap else {
+        panic!("expected architecture roles bootstrap command");
+    };
+
+    assert!(!bootstrap.enqueue_adjudication);
+    assert!(bootstrap.json);
 }
 
 #[test]
