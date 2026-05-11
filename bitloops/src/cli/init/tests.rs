@@ -1360,7 +1360,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         );
         let repo_skill = repo
             .path()
-            .join(".claude/skills/bitloops/devql-explore-first/SKILL.md");
+            .join(".claude/skills/devql-explore-first/SKILL.md");
         assert!(
             repo_skill.exists(),
             "expected repo-local DevQL Guidance to be installed at {}",
@@ -1369,7 +1369,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
         let exclude = std::fs::read_to_string(repo.path().join(".git/info/exclude"))
             .expect("read git exclude");
         assert!(exclude.contains(".bitloops.local.toml"));
-        assert!(exclude.contains(".claude/skills/bitloops/devql-explore-first/SKILL.md"));
+        assert!(exclude.contains(".claude/skills/devql-explore-first/SKILL.md"));
         assert!(!exclude.contains("config.local.json"));
     });
 }
@@ -2289,7 +2289,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
         assert!(
             !repo
                 .path()
-                .join(".claude/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".claude/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(

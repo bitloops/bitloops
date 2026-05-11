@@ -604,7 +604,7 @@ devql_guidance_enabled = false
     let transcript_path_str = transcript_path.to_string_lossy().to_string();
     let skill_path = repo
         .path()
-        .join(".claude/skills/bitloops/devql-explore-first/SKILL.md");
+        .join(".claude/skills/devql-explore-first/SKILL.md");
     let settings_path = repo.path().join(".claude/settings.json");
     std::fs::write(
         &transcript_path,
