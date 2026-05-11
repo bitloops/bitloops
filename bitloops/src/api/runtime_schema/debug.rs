@@ -1,5 +1,6 @@
+use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -101,6 +102,14 @@ pub(crate) struct RuntimeDebugLogTailObject {
     pub available: bool,
     pub path: String,
     pub lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "errorLines")]
+    pub error_lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "warnLines")]
+    pub warn_lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "infoLines")]
+    pub info_lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "debugLines")]
+    pub debug_lines: Vec<RuntimeDebugLogLineObject>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -414,6 +423,10 @@ fn load_supporting_logs() -> RuntimeDebugLogTailObject {
                 available: false,
                 path: path.to_string_lossy().to_string(),
                 lines: Vec::new(),
+                error_lines: Vec::new(),
+                warn_lines: Vec::new(),
+                info_lines: Vec::new(),
+                debug_lines: Vec::new(),
             };
         }
     };
@@ -421,11 +434,34 @@ fn load_supporting_logs() -> RuntimeDebugLogTailObject {
         .into_iter()
         .map(|line| parse_log_line(&line))
         .collect();
+    let error_lines = parse_log_lines(
+        tail_log_lines_by_level(&path, SUPPORTING_LOG_LINE_LIMIT, "error").unwrap_or_default(),
+    );
+    let warn_lines = parse_log_lines(
+        tail_log_lines_by_level(&path, SUPPORTING_LOG_LINE_LIMIT, "warn").unwrap_or_default(),
+    );
+    let info_lines = parse_log_lines(
+        tail_log_lines_by_level(&path, SUPPORTING_LOG_LINE_LIMIT, "info").unwrap_or_default(),
+    );
+    let debug_lines = parse_log_lines(
+        tail_log_lines_by_level(&path, SUPPORTING_LOG_LINE_LIMIT, "debug").unwrap_or_default(),
+    );
     RuntimeDebugLogTailObject {
         available: true,
         path: path.to_string_lossy().to_string(),
         lines,
+        error_lines,
+        warn_lines,
+        info_lines,
+        debug_lines,
     }
+}
+
+fn parse_log_lines(raw_lines: Vec<String>) -> Vec<RuntimeDebugLogLineObject> {
+    raw_lines
+        .into_iter()
+        .map(|line| parse_log_line(&line))
+        .collect()
 }
 
 fn tail_log_lines(path: &Path, lines: usize) -> anyhow::Result<Vec<String>> {
@@ -445,6 +481,64 @@ fn tail_log_lines(path: &Path, lines: usize) -> anyhow::Result<Vec<String>> {
         .with_context(|| format!("decoding daemon log {}", path.display()))?;
 
     Ok(content.lines().map(str::to_owned).collect())
+}
+
+fn tail_log_lines_by_level(
+    path: &Path,
+    lines: usize,
+    level_filter: &str,
+) -> anyhow::Result<Vec<String>> {
+    if lines == 0 {
+        return Ok(Vec::new());
+    }
+
+    let file =
+        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut filtered_tail = VecDeque::with_capacity(lines);
+    for raw_line in reader.lines() {
+        let raw_line =
+            raw_line.with_context(|| format!("reading daemon log {}", path.display()))?;
+        if !log_line_matches_level(&raw_line, level_filter) {
+            continue;
+        }
+        if filtered_tail.len() == lines {
+            filtered_tail.pop_front();
+        }
+        filtered_tail.push_back(raw_line);
+    }
+
+    Ok(filtered_tail.into_iter().collect())
+}
+
+fn log_line_matches_level(raw: &str, level_filter: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    let Some(level) = parsed
+        .get("level")
+        .or_else(|| parsed.get("lvl"))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    let Some(level) = normalize_log_level(level) else {
+        return false;
+    };
+    let Some(level_filter) = normalize_log_level(level_filter) else {
+        return false;
+    };
+    level == level_filter
+}
+
+fn normalize_log_level(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "DEBUG" => Some("debug"),
+        "INFO" => Some("info"),
+        "WARN" | "WARNING" => Some("warn"),
+        "ERROR" => Some("error"),
+        _ => None,
+    }
 }
 
 fn find_tail_start_offset(file: &mut File, lines: usize, path: &Path) -> anyhow::Result<u64> {
@@ -576,6 +670,30 @@ mod tests {
                 r#"{"level":"INFO","message":"line-117"}"#.to_string(),
                 r#"{"level":"INFO","message":"line-118"}"#.to_string(),
                 r#"{"level":"INFO","message":"line-119"}"#.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn tail_log_lines_by_level_filters_before_limiting() {
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("daemon.log");
+        let mut lines = vec![
+            r#"{"level":"ERROR","message":"first-error"}"#.to_string(),
+            r#"{"level":"ERROR","message":"second-error"}"#.to_string(),
+        ];
+        lines.extend((0..120).map(|idx| format!(r#"{{"level":"INFO","message":"line-{idx}"}}"#)));
+        lines.push(r#"{"level":"ERROR","message":"last-error"}"#.to_string());
+        fs::write(&log_path, format!("{}\n", lines.join("\n"))).expect("write log");
+
+        let error_lines =
+            tail_log_lines_by_level(&log_path, 2, "error").expect("tail error log lines");
+
+        assert_eq!(
+            error_lines,
+            vec![
+                r#"{"level":"ERROR","message":"second-error"}"#.to_string(),
+                r#"{"level":"ERROR","message":"last-error"}"#.to_string(),
             ]
         );
     }
