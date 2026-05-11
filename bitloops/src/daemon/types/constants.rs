@@ -10,6 +10,6 @@ pub(in crate::daemon) const GLOBAL_SUPERVISOR_SERVICE_NAME: &str = "com.bitloops
 pub(crate) const SUPERVISOR_RUNTIME_STATE_FILE_NAME: &str = "supervisor-runtime.json";
 pub(in crate::daemon) const SUPERVISOR_SERVICE_STATE_FILE_NAME: &str = "supervisor-service.json";
 pub(in crate::daemon) const READY_TIMEOUT: Duration = Duration::from_secs(45);
-pub(in crate::daemon) const STOP_TIMEOUT: Duration = Duration::from_secs(45);
+pub(in crate::daemon) const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 pub(in crate::daemon) const STOP_RUNTIME_CLEAN_EXIT_GRACE: Duration = Duration::from_secs(5);
 pub(in crate::daemon) const FORCE_KILL_TIMEOUT: Duration = Duration::from_secs(5);
