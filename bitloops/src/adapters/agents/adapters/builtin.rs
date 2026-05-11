@@ -10,23 +10,18 @@ use super::types::{
     AgentProtocolFamilyDescriptor, AgentTargetProfileDescriptor,
 };
 use crate::adapters::agents::claude_code::agent::ClaudeCodeAgent;
-use crate::adapters::agents::claude_code::hook_output as claude_hook_output;
 use crate::adapters::agents::claude_code::hooks as claude_hooks;
 use crate::adapters::agents::claude_code::skills as claude_skills;
 use crate::adapters::agents::codex::agent::CodexAgent;
-use crate::adapters::agents::codex::hook_output as codex_hook_output;
 use crate::adapters::agents::codex::hooks as codex_hooks;
 use crate::adapters::agents::codex::skills as codex_skills;
 use crate::adapters::agents::copilot::agent::CopilotCliAgent;
-use crate::adapters::agents::copilot::hook_output as copilot_hook_output;
 use crate::adapters::agents::copilot::hooks as copilot_hooks;
 use crate::adapters::agents::copilot::skills as copilot_skills;
 use crate::adapters::agents::cursor::agent::CursorAgent;
-use crate::adapters::agents::cursor::hook_output as cursor_hook_output;
 use crate::adapters::agents::cursor::hooks as cursor_hooks;
 use crate::adapters::agents::cursor::rules as cursor_rules;
 use crate::adapters::agents::gemini::agent::GeminiCliAgent;
-use crate::adapters::agents::gemini::hook_output as gemini_hook_output;
 use crate::adapters::agents::gemini::skills as gemini_skills;
 use crate::adapters::agents::open_code::agent::OpenCodeAgent;
 use crate::adapters::agents::open_code::skills as open_code_skills;
@@ -47,28 +42,6 @@ const ANALYTICS_CAPABILITIES: &[AgentAdapterCapability] = &[
     AgentAdapterCapability::PresenceDetection,
     AgentAdapterCapability::ProjectDetection,
     AgentAdapterCapability::HookInstallation,
-    AgentAdapterCapability::SessionIo,
-    AgentAdapterCapability::TranscriptIo,
-    AgentAdapterCapability::TranscriptAnalysis,
-    AgentAdapterCapability::TokenCalculation,
-    AgentAdapterCapability::LifecycleRouting,
-];
-
-const BASE_PROMPT_AUGMENTATION_CAPABILITIES: &[AgentAdapterCapability] = &[
-    AgentAdapterCapability::PresenceDetection,
-    AgentAdapterCapability::ProjectDetection,
-    AgentAdapterCapability::HookInstallation,
-    AgentAdapterCapability::PromptAugmentation,
-    AgentAdapterCapability::SessionIo,
-    AgentAdapterCapability::TranscriptIo,
-    AgentAdapterCapability::LifecycleRouting,
-];
-
-const ANALYTICS_PROMPT_AUGMENTATION_CAPABILITIES: &[AgentAdapterCapability] = &[
-    AgentAdapterCapability::PresenceDetection,
-    AgentAdapterCapability::ProjectDetection,
-    AgentAdapterCapability::HookInstallation,
-    AgentAdapterCapability::PromptAugmentation,
     AgentAdapterCapability::SessionIo,
     AgentAdapterCapability::TranscriptIo,
     AgentAdapterCapability::TranscriptAnalysis,
@@ -126,7 +99,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_CLAUDE_CODE,
                 aliases: &[],
                 is_default: true,
-                capabilities: BASE_PROMPT_AUGMENTATION_CAPABILITIES,
+                capabilities: BASE_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
                 protocol_family: protocol_family_jsonl(),
@@ -135,7 +108,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     "Claude Code",
                     PROTOCOL_FAMILY_JSONL_CLI,
                     &[],
-                    BASE_PROMPT_AUGMENTATION_CAPABILITIES,
+                    BASE_CAPABILITIES,
                 ),
                 package: AgentAdapterPackageDescriptor::first_party_linked(
                     AGENT_NAME_CLAUDE_CODE,
@@ -158,7 +131,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             claude_skills::install_repo_skill,
             claude_skills::uninstall_repo_skill,
             |_session_id| "claude".to_string(),
-            Some(claude_hook_output::render_hook_output),
         ),
         AgentAdapterRegistration::new(
             AgentAdapterDescriptor {
@@ -167,10 +139,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_COPILOT,
                 aliases: &["copilot", "copilot-cli", "github-copilot"],
                 is_default: false,
-                // Copilot can receive shared session-start bootstrap output when the repo-local
-                // DevQL guidance surface exists, but the host no longer inlines the skill body or turn-time
-                // query suggestions. Keep the advertised capability surface conservative until
-                // end-to-end model visibility is proven.
                 capabilities: ANALYTICS_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -210,7 +178,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     format!("copilot --resume {session_id}")
                 }
             },
-            Some(copilot_hook_output::render_hook_output),
         ),
         AgentAdapterRegistration::new(
             AgentAdapterDescriptor {
@@ -219,7 +186,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_CODEX,
                 aliases: &[],
                 is_default: false,
-                capabilities: BASE_PROMPT_AUGMENTATION_CAPABILITIES,
+                capabilities: BASE_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
                 protocol_family: protocol_family_jsonl(),
@@ -228,7 +195,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     "Codex",
                     PROTOCOL_FAMILY_JSONL_CLI,
                     &[],
-                    BASE_PROMPT_AUGMENTATION_CAPABILITIES,
+                    BASE_CAPABILITIES,
                 ),
                 package: AgentAdapterPackageDescriptor::first_party_linked(
                     AGENT_NAME_CODEX,
@@ -258,7 +225,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     format!("codex --resume {session_id}")
                 }
             },
-            Some(codex_hook_output::render_hook_output),
         ),
         AgentAdapterRegistration::new(
             AgentAdapterDescriptor {
@@ -267,10 +233,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_CURSOR,
                 aliases: &[],
                 is_default: false,
-                // Cursor can receive shared session-start bootstrap output when the repo-local
-                // DevQL rule exists, but the host no longer inlines rule content or emits
-                // turn-time query suggestions. Keep the advertised capability surface
-                // conservative until live model visibility is validated outside repo tests.
                 capabilities: BASE_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
@@ -304,7 +266,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             cursor_rules::install_repo_rule,
             cursor_rules::uninstall_repo_rule,
             |_session_id| "Open this project in Cursor to continue the session.".to_string(),
-            Some(cursor_hook_output::render_hook_output),
         ),
         AgentAdapterRegistration::new(
             AgentAdapterDescriptor {
@@ -313,7 +274,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                 agent_type: AGENT_TYPE_GEMINI,
                 aliases: &[AGENT_NAME_GEMINI],
                 is_default: false,
-                capabilities: ANALYTICS_PROMPT_AUGMENTATION_CAPABILITIES,
+                capabilities: ANALYTICS_CAPABILITIES,
                 compatibility: AgentAdapterCompatibility::phase1(),
                 runtime: AgentAdapterRuntimeCompatibility::local_cli(),
                 protocol_family: protocol_family_json_event(),
@@ -322,7 +283,7 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     "Gemini",
                     PROTOCOL_FAMILY_JSON_EVENT,
                     &[AGENT_NAME_GEMINI],
-                    ANALYTICS_PROMPT_AUGMENTATION_CAPABILITIES,
+                    ANALYTICS_CAPABILITIES,
                 ),
                 package: AgentAdapterPackageDescriptor::first_party_linked(
                     AGENT_TYPE_GEMINI,
@@ -346,7 +307,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
             gemini_skills::install_repo_skill,
             gemini_skills::uninstall_repo_skill,
             |_session_id| "gemini".to_string(),
-            Some(gemini_hook_output::render_hook_output),
         ),
         AgentAdapterRegistration::new(
             AgentAdapterDescriptor {
@@ -394,11 +354,6 @@ pub(super) fn builtin_registrations() -> Vec<AgentAdapterRegistration> {
                     format!("opencode -s {session_id}")
                 }
             },
-            // OpenCode injects its own presence-only bootstrap through the repo-local plugin when
-            // the repo-local DevQL guidance surface exists. The stdout prompt-augmentation transport remains
-            // disabled here because OpenCode still does not surface Bitloops hook stdout back
-            // into the model.
-            None,
         ),
     ]
 }

@@ -93,23 +93,6 @@ fn install_devql_prompt_surface_for_agent(repo_root: &std::path::Path, agent_nam
     }
 }
 
-fn assert_direct_session_start_context(context: &str, surface_path: &str) {
-    assert!(context.contains("<EXTREMELY_IMPORTANT>"));
-    assert!(context.contains("This repo has DevQL guidance available"));
-    assert!(context.contains("use DevQL first for repo-aware understanding questions"));
-    assert!(context.contains("search"));
-    assert!(context.contains("overview"));
-    assert!(context.contains("expandHint"));
-    assert!(context.contains("\"what does this repo do\""));
-    assert!(context.contains("fall back to targeted repo search or file reads"));
-    assert!(context.contains(surface_path));
-    assert!(!context.contains("# Using DevQL"));
-    assert!(!context.contains("bitloops devql query '{"));
-    assert!(!context.contains("fuzzyName"));
-    assert!(!context.contains("naturalLanguage"));
-    assert!(!context.contains("semanticQuery"));
-}
-
 fn codex_response_item_line(role: &str, kind: &str, text: &str) -> String {
     serde_json::json!({
         "type": "response_item",
@@ -469,8 +452,7 @@ fn route_codex_user_prompt_submit_emits_no_turn_guidance_when_skill_exists() -> 
 }
 
 #[test]
-fn route_claude_user_prompt_submit_returns_targeted_devql_guidance_when_skill_exists() -> Result<()>
-{
+fn route_claude_user_prompt_submit_returns_no_turn_guidance_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_id = "claude-session-prompt";
     let transcript_path = repo.path().join("claude-transcript.json");
@@ -512,21 +494,7 @@ fn route_claude_user_prompt_submit_returns_targeted_devql_guidance_when_skill_ex
             &prompt_payload,
         )?;
 
-        let stdout = outcome.stdout.expect("stdout");
-        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-        let context = json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("additionalContext");
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            serde_json::Value::String("UserPromptSubmit".to_string())
-        );
-        assert!(context.contains("Use DevQL first"));
-        assert!(context.contains("when it is available in this session"));
-        assert!(context.contains("fall back to targeted repo search or file reads"));
-        assert!(context.contains(
-            crate::adapters::agents::claude_code::skills::CLAUDE_CODE_SKILL_RELATIVE_PATH
-        ));
+        assert!(outcome.stdout.is_none());
         Ok(())
     })
 }
@@ -686,7 +654,7 @@ devql_guidance_enabled = false
 }
 
 #[test]
-fn route_claude_session_start_returns_direct_context_when_skill_exists() -> Result<()> {
+fn route_claude_session_start_returns_no_context_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_id = "claude-session-start";
     let transcript_path = repo.path().join("claude-transcript.json");
@@ -711,19 +679,7 @@ fn route_claude_session_start_returns_direct_context_when_skill_exists() -> Resu
             &session_payload,
         )?;
 
-        let stdout = outcome.stdout.expect("stdout");
-        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-        let context = json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("additionalContext");
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            serde_json::Value::String("SessionStart".to_string())
-        );
-        assert_direct_session_start_context(
-            context,
-            ".claude/skills/bitloops/devql-explore-first/SKILL.md",
-        );
+        assert!(outcome.stdout.is_none());
         Ok(())
     })
 }
@@ -760,36 +716,28 @@ fn route_codex_session_start_validates_skill_without_emitting_context() -> Resul
 }
 
 #[test]
-fn route_codex_session_start_panics_when_guidance_enabled_but_skill_is_absent() {
+fn route_codex_session_start_returns_no_context_when_guidance_enabled_but_skill_is_absent() {
     let repo = seed_repo();
     let session_id = "codex-session-start-absent";
     let transcript_path = repo.path().join("codex-transcript-absent.json");
     let transcript_path_str = transcript_path.to_string_lossy().to_string();
     std::fs::write(&transcript_path, "").expect("write transcript");
 
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        with_route_test_state(repo.path(), &[], || {
-            let session_payload = serde_json::json!({
-                "session_id": session_id,
-                "transcript_path": transcript_path_str,
-            })
-            .to_string();
-            route_hook_command_to_lifecycle(
-                repo.path(),
-                AGENT_NAME_CODEX,
-                CODEX_HOOK_SESSION_START,
-                &session_payload,
-            )
-            .expect("route hook");
+    with_route_test_state(repo.path(), &[], || {
+        let session_payload = serde_json::json!({
+            "session_id": session_id,
+            "transcript_path": transcript_path_str,
         })
-    }))
-    .expect_err("expected missing Codex skill panic");
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied())
-        .expect("panic message");
-    assert!(message.contains("expected minimal skill is missing"));
+        .to_string();
+        let outcome = route_hook_command_to_lifecycle(
+            repo.path(),
+            AGENT_NAME_CODEX,
+            CODEX_HOOK_SESSION_START,
+            &session_payload,
+        )
+        .expect("route hook");
+        assert!(outcome.stdout.is_none());
+    });
 }
 
 #[test]
@@ -911,7 +859,7 @@ fn route_gemini_before_agent_returns_no_devql_query_suggestion() -> Result<()> {
 }
 
 #[test]
-fn route_gemini_session_start_returns_direct_context_when_skill_exists() -> Result<()> {
+fn route_gemini_session_start_returns_no_context_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_id = "gemini-session-start";
     let transcript_path = repo.path().join("gemini-transcript.json");
@@ -933,25 +881,13 @@ fn route_gemini_session_start_returns_direct_context_when_skill_exists() -> Resu
             &session_payload,
         )?;
 
-        let stdout = outcome.stdout.expect("stdout");
-        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-        let context = json["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("additionalContext");
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            serde_json::Value::String("SessionStart".to_string())
-        );
-        assert_direct_session_start_context(
-            context,
-            ".gemini/skills/bitloops/devql-explore-first/SKILL.md",
-        );
+        assert!(outcome.stdout.is_none());
         Ok(())
     })
 }
 
 #[test]
-fn route_cursor_session_start_returns_direct_context_when_rule_exists() -> Result<()> {
+fn route_cursor_session_start_returns_no_context_when_rule_exists() -> Result<()> {
     let repo = seed_repo();
     let transcript_path = repo.path().join("cursor-transcript.json");
     let transcript_path_str = transcript_path.to_string_lossy().to_string();
@@ -973,21 +909,13 @@ fn route_cursor_session_start_returns_direct_context_when_rule_exists() -> Resul
             &session_payload,
         )?;
 
-        let stdout = outcome.stdout.expect("stdout");
-        let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-        let context = json["additional_context"]
-            .as_str()
-            .expect("additional_context");
-        assert_direct_session_start_context(
-            context,
-            ".cursor/rules/bitloops-devql-explore-first.mdc",
-        );
+        assert!(outcome.stdout.is_none());
         Ok(())
     })
 }
 
 #[test]
-fn route_copilot_session_start_returns_direct_context_when_skill_exists() -> Result<()> {
+fn route_copilot_session_start_returns_no_context_when_skill_exists() -> Result<()> {
     let repo = seed_repo();
     let session_dir = repo.path().join("copilot-session-state");
     std::fs::create_dir_all(&session_dir).expect("create copilot session dir");
@@ -1016,15 +944,7 @@ fn route_copilot_session_start_returns_direct_context_when_skill_exists() -> Res
                 &session_payload,
             )?;
 
-            let stdout = outcome.stdout.expect("stdout");
-            let json: serde_json::Value = serde_json::from_str(&stdout).expect("json stdout");
-            let context = json["additionalContext"]
-                .as_str()
-                .expect("additionalContext");
-            assert_direct_session_start_context(
-                context,
-                ".github/skills/bitloops/devql-explore-first/SKILL.md",
-            );
+            assert!(outcome.stdout.is_none());
             Ok(())
         },
     )

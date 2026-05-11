@@ -49,9 +49,7 @@ pub fn render_plugin_template(repo_root: &Path, local_dev: bool) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::agents::open_code::skills::{
-        OPEN_CODE_SKILL_RELATIVE_PATH, install_repo_skill,
-    };
+    use crate::adapters::agents::open_code::skills::install_repo_skill;
     use serde::de::DeserializeOwned;
 
     struct RenderedMessage {
@@ -109,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn render_plugin_template_injects_capability_aware_bootstrap_when_skill_exists() {
+    fn render_plugin_template_omits_bootstrap_context_even_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo_root = dir.path();
         write_repo_policy(
@@ -124,37 +122,10 @@ enabled = true
         let rendered = render_plugin_template(repo_root, false).expect("render should succeed");
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = ["bitloops"]"#));
-        assert!(
-            rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH),
-            "bootstrap text should reference the repo-local skill path"
-        );
-        assert!(
-            rendered.contains("DevQL-capable guidance surface"),
-            "bootstrap text should preserve the capability-aware guidance"
-        );
-        assert!(
-            rendered.contains("When DevQL is available in this session"),
-            "bootstrap text should prefer DevQL conditionally"
-        );
-        assert!(
-            rendered.contains("fall back to targeted repo search or file reads"),
-            "bootstrap text should preserve the fallback guidance"
-        );
-        assert!(
-            !rendered.contains("bitloops devql query"),
-            "bootstrap text should not inline DevQL query suggestions"
-        );
-        assert!(
-            !rendered.contains("name: devql-explore-first"),
-            "bootstrap text should not inline the managed skill body"
-        );
-        assert!(
-            rendered.contains("<EXTREMELY_IMPORTANT>"),
-            "plugin should inject bootstrap context through OpenCode's messages transform"
-        );
+        assert_eq!(rendered_const::<String>(&rendered, "BOOTSTRAP_CONTEXT"), "");
         assert!(
             rendered.contains("\"experimental.chat.messages.transform\": async"),
-            "plugin should inject bootstrap context through OpenCode's messages transform"
+            "plugin should keep the transform scaffold even when bootstrap is empty"
         );
         assert!(
             rendered.contains("config.skills.paths.push(repoSkillsDir)"),
@@ -295,7 +266,6 @@ devql_guidance_enabled = false
 
         assert!(rendered.contains(r#"const BITLOOPS_CMD = ["bitloops"]"#));
         assert_eq!(rendered_const::<String>(&rendered, "BOOTSTRAP_CONTEXT"), "");
-        assert!(!rendered.contains(OPEN_CODE_SKILL_RELATIVE_PATH));
         assert!(!rendered.contains("DevQL-capable guidance surface"));
         assert!(!rendered.contains("<EXTREMELY_IMPORTANT>"));
     }
@@ -312,7 +282,7 @@ devql_guidance_enabled = false
     }
 
     #[test]
-    fn render_plugin_template_transform_injects_bootstrap_only_by_message_role() {
+    fn render_plugin_template_transform_leaves_messages_unchanged_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
         write_repo_policy(
             &dir,
@@ -337,22 +307,16 @@ enabled = true
         apply_rendered_transform(&rendered, &mut messages);
         apply_rendered_transform(&rendered, &mut messages);
 
-        assert_eq!(
-            count_parts_containing(&messages[0], "EXTREMELY_IMPORTANT"),
-            1
-        );
+        assert_eq!(messages[0].parts, vec!["Initial request"]);
         assert_eq!(
             messages[2].parts,
             vec!["Explain src/adapters/agents/open_code/plugin.rs"]
         );
-        assert_eq!(
-            count_parts_containing(&messages[1], "EXTREMELY_IMPORTANT"),
-            0
-        );
+        assert_eq!(messages[1].parts, vec!["Assistant response"]);
     }
 
     #[test]
-    fn render_plugin_template_transform_does_not_append_guidance_to_later_prompts() {
+    fn render_plugin_template_transform_does_not_modify_prompts_when_skill_exists() {
         let dir = tempfile::tempdir().expect("tempdir");
         write_repo_policy(
             &dir,
@@ -371,10 +335,7 @@ enabled = true
 
         apply_rendered_transform(&rendered, &mut messages);
 
-        assert_eq!(
-            count_parts_containing(&messages[0], "EXTREMELY_IMPORTANT"),
-            1
-        );
+        assert_eq!(messages[0].parts, vec!["Initial request"]);
         assert_eq!(messages[1].parts, vec!["Explain src/lib.rs"]);
     }
 
