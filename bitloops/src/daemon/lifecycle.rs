@@ -215,11 +215,7 @@ pub(super) async fn stop() -> Result<()> {
                 stop_service_managed_repo_runtime()?;
             }
             if let Some(runtime) = runtime.as_ref() {
-                wait_for_shutdown_cleanup(
-                    runtime.pid,
-                    &runtime_state_path(Path::new(".")),
-                    STOP_TIMEOUT,
-                )?;
+                wait_for_shutdown_cleanup(runtime.pid, STOP_TIMEOUT)?;
             }
             stop_supervisor_service_if_idle();
             log::info!("daemon stop completed for service-managed runtime");
@@ -235,11 +231,11 @@ pub(super) async fn stop() -> Result<()> {
             runtime.mode
         );
         stop_current_repo_watcher_if_present();
-        terminate_process(runtime.pid)?;
-        wait_for_shutdown_cleanup(
+        terminate_process_and_wait_for_shutdown_cleanup(
             runtime.pid,
-            &runtime_state_path(Path::new(".")),
             STOP_TIMEOUT,
+            STOP_RUNTIME_CLEAN_EXIT_GRACE,
+            FORCE_KILL_TIMEOUT,
         )?;
         log::info!("daemon stop completed");
         Ok(())

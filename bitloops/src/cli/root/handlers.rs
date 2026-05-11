@@ -18,10 +18,10 @@ pub fn run_clean_command(args: &CleanArgs) -> Result<()> {
     clean::run_clean(&mut out, args.force)
 }
 
-pub fn run_disable_command(args: &DisableArgs) -> Result<()> {
+pub async fn run_disable_command(args: &DisableArgs) -> Result<()> {
     let cwd = env::current_dir().context("getting current directory")?;
     let mut out = io::stdout();
-    enable::run_disable_with_args(&cwd, &mut out, args)
+    enable::run_disable_with_args_async(&cwd, &mut out, args).await
 }
 
 pub fn run_doctor_command(args: &DoctorArgs) -> Result<()> {

@@ -25,6 +25,25 @@ fn is_dev_mode() -> bool {
     env::var("BITLOOPS_DEV").is_ok()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownTrigger {
+    CtrlC,
+    Sigterm,
+}
+
+impl ShutdownTrigger {
+    fn label(self) -> &'static str {
+        match self {
+            ShutdownTrigger::CtrlC => "ctrl-c",
+            ShutdownTrigger::Sigterm => "sigterm",
+        }
+    }
+}
+
+fn log_shutdown_signal(component: &str, trigger: ShutdownTrigger) {
+    log::info!("{component} shutdown signal received: {}", trigger.label());
+}
+
 pub(super) async fn run(
     config: DashboardServerConfig,
     options: DashboardRuntimeOptions,
@@ -260,7 +279,7 @@ pub(super) async fn run(
     run_shutdown_actions(
         options.on_shutdown,
         options.shutdown_message,
-        Duration::from_secs(5),
+        options.shutdown_delay,
     )
     .await;
 
@@ -365,7 +384,7 @@ async fn serve_until_shutdown_http(listener: TcpListener, state: DashboardState)
     .await
 }
 
-async fn wait_for_shutdown_signal() {
+async fn wait_for_shutdown_signal() -> ShutdownTrigger {
     #[cfg(unix)]
     {
         let mut sigterm =
@@ -376,14 +395,14 @@ async fn wait_for_shutdown_signal() {
             }
         };
         tokio::select! {
-            _ = ctrl_c => {}
+            _ = ctrl_c => ShutdownTrigger::CtrlC,
             _ = async {
                 if let Some(sigterm) = sigterm.as_mut() {
                     sigterm.recv().await;
                 } else {
                     std::future::pending::<()>().await;
                 }
-            } => {}
+            } => ShutdownTrigger::Sigterm,
         }
     }
 
@@ -392,6 +411,7 @@ async fn wait_for_shutdown_signal() {
         if tokio::signal::ctrl_c().await.is_err() {
             std::future::pending::<()>().await;
         }
+        ShutdownTrigger::CtrlC
     }
 }
 
@@ -408,7 +428,8 @@ where
 
     loop {
         tokio::select! {
-            _ = &mut shutdown => {
+            trigger = &mut shutdown => {
+                log_shutdown_signal("dashboard server", trigger);
                 break;
             }
             accept = listener.accept() => {
@@ -530,8 +551,12 @@ pub(super) fn open_in_default_browser(url: &str) -> Result<()> {
 
 #[cfg(test)]
 mod dashboard_runtime_unit_tests {
-    use super::{clickable_url, run_shutdown_actions, warning_block_lines};
+    use super::{
+        ShutdownTrigger, clickable_url, log_shutdown_signal, run_shutdown_actions,
+        warning_block_lines,
+    };
     use crate::api::DashboardShutdownHook;
+    use crate::test_support::log_capture::capture_logs;
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -557,6 +582,21 @@ mod dashboard_runtime_unit_tests {
         assert!(lines.iter().any(|l| l.contains('⚠')));
         assert!(lines.iter().any(|l| l.contains("line one")));
         assert!(lines.iter().any(|l| l.contains("line two")));
+    }
+
+    #[test]
+    fn log_shutdown_signal_records_component_and_reason() {
+        let (_, logs) = capture_logs(|| {
+            log_shutdown_signal("dashboard server", ShutdownTrigger::Sigterm);
+        });
+
+        assert!(
+            logs.iter().any(|entry| entry.level == log::Level::Info
+                && entry
+                    .message
+                    .contains("dashboard server shutdown signal received: sigterm")),
+            "expected shutdown signal log entry, got logs: {logs:?}"
+        );
     }
 
     #[tokio::test(start_paused = true, flavor = "current_thread")]

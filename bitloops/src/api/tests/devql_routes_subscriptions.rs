@@ -317,21 +317,27 @@ async fn devql_runtime_routes_serve_runtime_schema_and_playground() {
     );
     assert!(sdl_body.contains("validateSync(repoId: String!): RuntimeTaskEnqueueResultObject!"));
     assert!(
+        sdl_body
+            .contains("reconcileWatcher(repoId: String!): RuntimeWatcherReconcileResultObject!")
+    );
+    assert!(
         sdl_body.contains("runtimeEvents(repoId: String!, initSessionId: ID): RuntimeEventObject!")
     );
 
-    let slim_sdl = crate::graphql::slim_schema_sdl();
+    let slim_sdl = crate::graphql::build_slim_schema_template().sdl();
     assert!(!slim_sdl.contains("runtimeSnapshot("));
     assert!(!slim_sdl.contains("startInit("));
     assert!(!slim_sdl.contains("validateSync("));
+    assert!(!slim_sdl.contains("reconcileWatcher("));
     assert!(!slim_sdl.contains("runtimeEvents("));
 
-    let global_sdl = crate::graphql::schema_sdl();
+    let global_sdl = crate::graphql::build_global_schema_template().sdl();
     assert!(!global_sdl.contains("configTargets"));
     assert!(!global_sdl.contains("updateConfig("));
     assert!(!global_sdl.contains("runtimeSnapshot("));
     assert!(!global_sdl.contains("startInit("));
     assert!(!global_sdl.contains("validateSync("));
+    assert!(!global_sdl.contains("reconcileWatcher("));
     assert!(!global_sdl.contains("runtimeEvents("));
 }
 
@@ -882,6 +888,61 @@ async fn devql_runtime_route_executes_validate_sync_mutation() {
         0
     );
     assert_eq!(task["syncProgress"]["phase"], "queued");
+}
+
+#[tokio::test]
+async fn devql_runtime_route_executes_reconcile_watcher_mutation() {
+    let temp = TempDir::new().expect("temp dir");
+    let repo_root = temp.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Alice", "alice@example.com");
+    crate::test_support::git_fixtures::write_test_daemon_config(&repo_root);
+    let repo_id = crate::host::devql::resolve_repo_identity(&repo_root)
+        .expect("resolve repo identity")
+        .repo_id;
+    fs::write(
+        repo_root.join(".bitloops.local.toml"),
+        "[capture]\nenabled = true\nstrategy = \"manual-commit\"\n[devql]\nsync_enabled = false\ningest_enabled = true\n",
+    )
+    .expect("write repo policy");
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(".bitloops.local.toml"),
+        &repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),
+    )
+    .expect("write daemon binding");
+
+    let app = build_dashboard_router(test_state(
+        repo_root.clone(),
+        ServeMode::HelloWorld,
+        repo_root.clone(),
+    ));
+
+    let (status, payload) = request_json_with_method_and_content_type(
+        app,
+        Method::POST,
+        "/devql/runtime",
+        "application/json",
+        Body::from(
+            json!({
+                "query": "mutation ReconcileWatcher($repoId: String!) { reconcileWatcher(repoId: $repoId) { repoId watcherEnabled action } }",
+                "variables": {
+                    "repoId": repo_id,
+                }
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        payload.get("errors").is_none(),
+        "runtime graphql errors: {:?}",
+        payload.get("errors")
+    );
+    assert_eq!(payload["data"]["reconcileWatcher"]["repoId"], repo_id);
+    assert_eq!(payload["data"]["reconcileWatcher"]["watcherEnabled"], false);
+    assert_eq!(payload["data"]["reconcileWatcher"]["action"], "stopped");
 }
 
 #[test]
