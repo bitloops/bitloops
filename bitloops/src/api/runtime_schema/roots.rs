@@ -15,6 +15,7 @@ use super::events::RuntimeEventObject;
 use super::snapshot::RuntimeSnapshotObject;
 use super::start_init::{StartInitInput, StartInitResult};
 use super::util::{current_unix_timestamp, to_graphql_i64};
+use super::watchers::{RuntimeWatcherReconcileResultObject, reconcile_runtime_watcher};
 use crate::api::DashboardState;
 use crate::graphql::{TaskObject, bad_user_input_error, graphql_error};
 
@@ -161,6 +162,20 @@ impl RuntimeMutationRoot {
                 format!("failed to enqueue validate sync task: {err:#}"),
             )
         })
+    }
+
+    #[graphql(name = "reconcileWatcher")]
+    async fn reconcile_watcher(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "repoId")] repo_id: String,
+    ) -> Result<RuntimeWatcherReconcileResultObject> {
+        let state = ctx.data_unchecked::<DashboardState>();
+        let request_context = ctx
+            .data_opt::<RuntimeRequestContext>()
+            .cloned()
+            .unwrap_or_default();
+        reconcile_runtime_watcher(state, request_context, repo_id.as_str()).await
     }
 }
 

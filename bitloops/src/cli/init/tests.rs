@@ -1559,7 +1559,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
 }
 
 #[test]
-fn run_init_reports_repo_watcher_disabled_when_sync_is_disabled() {
+fn run_init_requests_daemon_watcher_reconcile_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -1575,7 +1575,7 @@ fn run_init_reports_repo_watcher_disabled_when_sync_is_disabled() {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
                         !watcher_enabled,
-                        "init --sync=false should not reconcile/start a DevQL watcher"
+                        "init --sync=false should request daemon-side watcher reconciliation with watcher disabled"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1619,7 +1619,7 @@ fn run_init_reports_repo_watcher_disabled_when_sync_is_disabled() {
         assert_eq!(
             *reconcile_count.borrow(),
             1,
-            "successful init should reconcile the watcher exactly once"
+            "successful init should request watcher reconciliation exactly once"
         );
         assert!(
             crate::config::settings::is_enabled(repo_root.as_path())
@@ -1630,7 +1630,124 @@ fn run_init_reports_repo_watcher_disabled_when_sync_is_disabled() {
 }
 
 #[test]
-fn run_init_surfaces_repo_watcher_reconcile_failures() {
+fn run_init_requests_daemon_watcher_reconcile_when_sync_is_enabled() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-sync-watcher-reconcile";
+    setup_git_repo(&repo);
+    let reconcile_count = std::rc::Rc::new(std::cell::RefCell::new(0usize));
+    let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
+    let saw_runtime_snapshot = std::rc::Rc::new(std::cell::RefCell::new(false));
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let reconcile_count = std::rc::Rc::clone(&reconcile_count);
+                let repo_root = repo_root.clone();
+                move |actual_repo_root, watcher_enabled| {
+                    assert_eq!(actual_repo_root, repo_root.as_path());
+                    assert!(
+                        watcher_enabled,
+                        "init --sync=true should request daemon-side watcher reconciliation with watcher enabled"
+                    );
+                    *reconcile_count.borrow_mut() += 1;
+                    Ok(())
+                }
+            },
+            || {
+                with_graphql_executor_hook(
+                    {
+                        let repo_id = repo_id.clone();
+                        let saw_start_init = std::rc::Rc::clone(&saw_start_init);
+                        let saw_runtime_snapshot = std::rc::Rc::clone(&saw_runtime_snapshot);
+                        move |_repo_root, query, variables| {
+                            if query.contains("startInit(") {
+                                *saw_start_init.borrow_mut() = true;
+                                assert_eq!(variables["repoId"], repo_id);
+                                assert_eq!(variables["input"]["runSync"], json!(true));
+                                assert_eq!(variables["input"]["runIngest"], json!(false));
+                                return Ok(runtime_start_init_result_json(session_id));
+                            }
+
+                            if query.contains("runtimeSnapshot(") {
+                                *saw_runtime_snapshot.borrow_mut() = true;
+                                return Ok(runtime_snapshot_json(
+                                    repo_id.as_str(),
+                                    session_id,
+                                    RuntimeSessionSnapshotFixture {
+                                        status: "COMPLETED",
+                                        run_sync: true,
+                                        ..RuntimeSessionSnapshotFixture::default()
+                                    },
+                                ));
+                            }
+
+                            panic!("unexpected repo-scoped query: {query}");
+                        }
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        run_with_writer_for_project_root(
+                            InitArgs {
+                                command: None,
+                                install_default_daemon: false,
+                                force: false,
+                                disable_devql_guidance: false,
+                                agent: Vec::new(),
+                                telemetry: None,
+                                no_telemetry: false,
+                                skip_baseline: false,
+                                sync: Some(true),
+                                ingest: Some(false),
+                                backfill: None,
+                                exclude: Vec::new(),
+                                exclude_from: Vec::new(),
+                                embeddings_runtime: None,
+                                no_embeddings: true,
+                                no_summaries: true,
+                                context_guidance_runtime: None,
+                                no_context_guidance: true,
+                                context_guidance_gateway_url: None,
+                                context_guidance_api_key_env: None,
+                                embeddings_gateway_url: None,
+                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                    .to_string(),
+                            },
+                            repo_root.as_path(),
+                            &mut out,
+                            None,
+                        )
+                        .expect("run init");
+                    },
+                );
+            },
+        );
+
+        assert_eq!(
+            *reconcile_count.borrow(),
+            1,
+            "successful init should request watcher reconciliation exactly once"
+        );
+        assert!(
+            *saw_start_init.borrow(),
+            "sync-enabled init should start a runtime init session before watcher reconciliation"
+        );
+        assert!(
+            *saw_runtime_snapshot.borrow(),
+            "sync-enabled init should poll runtime init completion before watcher reconciliation"
+        );
+        assert!(
+            crate::config::settings::is_enabled(repo_root.as_path())
+                .expect("repo capture settings"),
+            "successful init should leave capture enabled in repo settings"
+        );
+    });
+}
+
+#[test]
+fn run_init_surfaces_daemon_watcher_reconcile_failures() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -1644,9 +1761,9 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
                         !watcher_enabled,
-                        "init --sync=false should surface watcher reconcile failures with watcher disabled"
+                        "init --sync=false should surface daemon watcher reconciliation failures with watcher disabled"
                     );
-                    anyhow::bail!("watcher reconcile exploded");
+                    anyhow::bail!("daemon watcher reconcile exploded");
                 }
             },
             || {
@@ -1680,11 +1797,11 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
                     &mut out,
                     None,
                 )
-                .expect_err("init should surface watcher reconciliation failures");
+                .expect_err("init should surface daemon watcher reconciliation failures");
 
                 let rendered = format!("{err:#}");
                 assert!(
-                    rendered.contains("watcher reconcile exploded"),
+                    rendered.contains("daemon watcher reconcile exploded"),
                     "unexpected init error: {rendered}"
                 );
             },
@@ -1693,7 +1810,116 @@ fn run_init_surfaces_repo_watcher_reconcile_failures() {
 }
 
 #[test]
-fn run_init_reports_nested_repo_watcher_disabled_when_sync_is_disabled() {
+fn run_init_sync_enabled_fails_when_daemon_watcher_reconcile_fails() {
+    let repo = tempfile::tempdir().expect("repo tempdir");
+    let app_dirs = tempfile::tempdir().expect("app tempdir");
+    let repo_root = repo.path().to_path_buf();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-sync-watcher-reconcile-failure";
+    setup_git_repo(&repo);
+    let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
+    let saw_runtime_snapshot = std::rc::Rc::new(std::cell::RefCell::new(false));
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        crate::cli::watcher_bootstrap::with_watcher_reconciliation_hook(
+            {
+                let repo_root = repo_root.clone();
+                move |actual_repo_root, watcher_enabled| {
+                    assert_eq!(actual_repo_root, repo_root.as_path());
+                    assert!(
+                        watcher_enabled,
+                        "init --sync=true should request daemon-side watcher reconciliation with watcher enabled"
+                    );
+                    anyhow::bail!("daemon watcher reconcile failed");
+                }
+            },
+            || {
+                with_graphql_executor_hook(
+                    {
+                        let repo_id = repo_id.clone();
+                        let saw_start_init = std::rc::Rc::clone(&saw_start_init);
+                        let saw_runtime_snapshot = std::rc::Rc::clone(&saw_runtime_snapshot);
+                        move |_repo_root, query, variables| {
+                            if query.contains("startInit(") {
+                                *saw_start_init.borrow_mut() = true;
+                                assert_eq!(variables["repoId"], repo_id);
+                                assert_eq!(variables["input"]["runSync"], json!(true));
+                                assert_eq!(variables["input"]["runIngest"], json!(false));
+                                return Ok(runtime_start_init_result_json(session_id));
+                            }
+
+                            if query.contains("runtimeSnapshot(") {
+                                *saw_runtime_snapshot.borrow_mut() = true;
+                                return Ok(runtime_snapshot_json(
+                                    repo_id.as_str(),
+                                    session_id,
+                                    RuntimeSessionSnapshotFixture {
+                                        status: "COMPLETED",
+                                        run_sync: true,
+                                        ..RuntimeSessionSnapshotFixture::default()
+                                    },
+                                ));
+                            }
+
+                            panic!("unexpected repo-scoped query: {query}");
+                        }
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let err = run_with_writer_for_project_root(
+                            InitArgs {
+                                command: None,
+                                install_default_daemon: false,
+                                force: false,
+                                disable_devql_guidance: false,
+                                agent: Vec::new(),
+                                telemetry: None,
+                                no_telemetry: false,
+                                skip_baseline: false,
+                                sync: Some(true),
+                                ingest: Some(false),
+                                backfill: None,
+                                exclude: Vec::new(),
+                                exclude_from: Vec::new(),
+                                embeddings_runtime: None,
+                                no_embeddings: true,
+                                no_summaries: true,
+                                context_guidance_runtime: None,
+                                no_context_guidance: true,
+                                context_guidance_gateway_url: None,
+                                context_guidance_api_key_env: None,
+                                embeddings_gateway_url: None,
+                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                    .to_string(),
+                            },
+                            repo_root.as_path(),
+                            &mut out,
+                            None,
+                        )
+                        .expect_err("init should surface daemon watcher reconciliation failures");
+
+                        let rendered = format!("{err:#}");
+                        assert!(
+                            rendered.contains("daemon watcher reconcile failed"),
+                            "unexpected init error: {rendered}"
+                        );
+                        assert!(
+                            *saw_start_init.borrow(),
+                            "sync-enabled init should start a runtime init session before watcher reconciliation"
+                        );
+                        assert!(
+                            *saw_runtime_snapshot.borrow(),
+                            "sync-enabled init should poll runtime init completion before watcher reconciliation"
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_requests_nested_repo_daemon_watcher_reconcile_when_sync_is_disabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let project_root = repo.path().join("apps/nested-project");
@@ -1710,7 +1936,7 @@ fn run_init_reports_nested_repo_watcher_disabled_when_sync_is_disabled() {
                     assert_eq!(actual_repo_root, project_root.as_path());
                     assert!(
                         !watcher_enabled,
-                        "nested init --sync=false should not reconcile/start a DevQL watcher"
+                        "nested init --sync=false should request daemon-side watcher reconciliation with watcher disabled"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1754,7 +1980,7 @@ fn run_init_reports_nested_repo_watcher_disabled_when_sync_is_disabled() {
         assert_eq!(
             *reconcile_count.borrow(),
             1,
-            "successful nested init should reconcile the watcher exactly once"
+            "successful nested init should request watcher reconciliation exactly once"
         );
         assert!(
             crate::config::settings::is_enabled(project_root.as_path())
@@ -1765,7 +1991,7 @@ fn run_init_reports_nested_repo_watcher_disabled_when_sync_is_disabled() {
 }
 
 #[test]
-fn run_init_does_not_bootstrap_repo_watcher_when_repo_setup_fails() {
+fn run_init_does_not_request_daemon_watcher_reconcile_when_repo_setup_fails() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();

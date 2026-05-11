@@ -36,6 +36,18 @@ const WATCHER_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const WATCHER_GIT_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 const WATCHER_CHECKOUT_PROMOTION_WINDOW: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatcherStartPolicy {
+    RespectAutostartDisable,
+    ExplicitRequest,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatcherRestartOutcome {
+    Started,
+    Skipped,
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct WatcherProcessArgs {
     #[arg(long)]
@@ -73,11 +85,37 @@ fn watcher_autostart_disabled() -> bool {
 }
 
 pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
-    if watcher_autostart_disabled() {
-        return Ok(());
+    ensure_watcher_running_with_policy(
+        repo_root,
+        daemon_config_root,
+        WatcherStartPolicy::RespectAutostartDisable,
+    )?;
+    Ok(())
+}
+
+pub fn ensure_watcher_running_explicit(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
+    ensure_watcher_running_with_policy(
+        repo_root,
+        daemon_config_root,
+        WatcherStartPolicy::ExplicitRequest,
+    )?;
+    Ok(())
+}
+
+fn should_skip_watcher_start(policy: WatcherStartPolicy) -> bool {
+    policy == WatcherStartPolicy::RespectAutostartDisable && watcher_autostart_disabled()
+}
+
+fn ensure_watcher_running_with_policy(
+    repo_root: &Path,
+    daemon_config_root: &Path,
+    policy: WatcherStartPolicy,
+) -> Result<WatcherRestartOutcome> {
+    if should_skip_watcher_start(policy) {
+        return Ok(WatcherRestartOutcome::Skipped);
     }
     if !crate::config::settings::devql_sync_enabled(repo_root)? {
-        return Ok(());
+        return Ok(WatcherRestartOutcome::Skipped);
     }
 
     let restart_token = current_watcher_restart_token()?;
@@ -98,7 +136,9 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
                 WATCHER_READY_TIMEOUT,
                 WATCHER_READY_POLL_INTERVAL,
             )? {
-                ExistingWatcherRegistrationHandle::Handled => return Ok(()),
+                ExistingWatcherRegistrationHandle::Handled => {
+                    return Ok(WatcherRestartOutcome::Started);
+                }
                 ExistingWatcherRegistrationHandle::RetrySpawn => continue,
             }
         }
@@ -129,7 +169,9 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
                 WATCHER_READY_TIMEOUT,
                 WATCHER_READY_POLL_INTERVAL,
             )? {
-                ExistingWatcherRegistrationHandle::Handled => return Ok(()),
+                ExistingWatcherRegistrationHandle::Handled => {
+                    return Ok(WatcherRestartOutcome::Started);
+                }
                 ExistingWatcherRegistrationHandle::RetrySpawn => continue,
             }
         }
@@ -143,7 +185,7 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
             || Ok(child.try_wait()?.is_none()),
         );
         let wait_error = match wait_result {
-            Ok(()) => return Ok(()),
+            Ok(()) => return Ok(WatcherRestartOutcome::Started),
             Err(wait_error) => wait_error,
         };
         match wait_error.downcast_ref::<WatcherRegistrationReadyError>() {
@@ -153,7 +195,9 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
                     child.id(),
                     &restart_token,
                 )? {
-                    Some(TimedOutPendingRecovery::ReadyRegistrationPresent) => return Ok(()),
+                    Some(TimedOutPendingRecovery::ReadyRegistrationPresent) => {
+                        return Ok(WatcherRestartOutcome::Started);
+                    }
                     Some(TimedOutPendingRecovery::PendingReleased) => {
                         kill_process(child.id());
                         let _ = runtime_store
@@ -177,14 +221,38 @@ pub fn ensure_watcher_running(repo_root: &Path, daemon_config_root: &Path) -> Re
     }
 }
 
-pub fn restart_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {
+pub fn restart_watcher(
+    repo_root: &Path,
+    daemon_config_root: &Path,
+) -> Result<WatcherRestartOutcome> {
     stop_watcher(repo_root, daemon_config_root)?;
     if crate::config::settings::is_enabled_for_hooks(repo_root)
         && crate::config::settings::devql_sync_enabled(repo_root)?
     {
-        ensure_watcher_running(repo_root, daemon_config_root)?;
+        return ensure_watcher_running_with_policy(
+            repo_root,
+            daemon_config_root,
+            WatcherStartPolicy::RespectAutostartDisable,
+        );
     }
-    Ok(())
+    Ok(WatcherRestartOutcome::Skipped)
+}
+
+pub fn restart_watcher_explicit(
+    repo_root: &Path,
+    daemon_config_root: &Path,
+) -> Result<WatcherRestartOutcome> {
+    stop_watcher(repo_root, daemon_config_root)?;
+    if crate::config::settings::is_enabled_for_hooks(repo_root)
+        && crate::config::settings::devql_sync_enabled(repo_root)?
+    {
+        return ensure_watcher_running_with_policy(
+            repo_root,
+            daemon_config_root,
+            WatcherStartPolicy::ExplicitRequest,
+        );
+    }
+    Ok(WatcherRestartOutcome::Skipped)
 }
 
 pub fn stop_watcher(repo_root: &Path, daemon_config_root: &Path) -> Result<()> {

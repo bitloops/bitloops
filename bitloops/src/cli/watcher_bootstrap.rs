@@ -26,8 +26,7 @@ impl Drop for WatcherReconciliationHookGuard {
     }
 }
 
-pub(crate) fn reconcile_repo_watcher(repo_root: &Path) -> Result<()> {
-    #[cfg(test)]
+pub(crate) async fn reconcile_repo_watcher(repo_root: &Path) -> Result<()> {
     let watcher_enabled = crate::config::settings::is_enabled_for_hooks(repo_root)
         && crate::config::settings::devql_sync_enabled(repo_root)?;
 
@@ -43,13 +42,14 @@ pub(crate) fn reconcile_repo_watcher(repo_root: &Path) -> Result<()> {
 
     #[cfg(not(test))]
     {
-        let daemon_config_root =
-            crate::config::resolve_bound_daemon_config_root_for_repo(repo_root)?;
-        if crate::config::settings::devql_sync_enabled(repo_root)? {
-            crate::host::devql::watch::restart_watcher(repo_root, &daemon_config_root)
-        } else {
-            crate::host::devql::watch::stop_watcher(repo_root, &daemon_config_root)
+        if !watcher_enabled && crate::daemon::runtime_state()?.is_none() {
+            return Ok(());
         }
+
+        let scope = crate::devql_transport::discover_slim_cli_repo_scope(Some(repo_root))?;
+        let _result: crate::cli::devql::graphql::RuntimeWatcherReconcileGraphqlRecord =
+            crate::cli::devql::graphql::reconcile_repo_watcher_via_runtime_graphql(&scope).await?;
+        Ok(())
     }
 }
 

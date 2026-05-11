@@ -98,6 +98,12 @@ pub(crate) use self::init_runtime::{
     InitRuntimeWorkplaneSnapshot, PersistedInitSessionState, PersistedSummaryBootstrapState,
 };
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
+// Staged for the runtime schema watcher mutation added in CLI-1832 Task 2.
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use self::server_runtime::{
+    RepoWatcherReconcileAction, RepoWatcherReconcileResult, reconcile_bound_repo_watcher,
+    reconcile_bound_repo_watcher_explicit,
+};
 pub use self::tasks::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
 pub(crate) use self::types::BlockedMailboxStatus;
 pub(crate) use self::types::EmbeddingsBootstrapState as PersistedEmbeddingsBootstrapState;

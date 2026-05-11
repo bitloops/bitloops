@@ -195,7 +195,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::Login(args) => login::run(args).await,
         Commands::Logout(args) => logout::run(args).await,
         Commands::Enable(args) => enable::run(args).await,
-        Commands::Disable(args) => root::run_disable_command(&args),
+        Commands::Disable(args) => root::run_disable_command(&args).await,
         Commands::Uninstall(args) => uninstall::run(args).await,
         Commands::Dashboard(args) => dashboard::run(args).await,
         Commands::Hooks(args) => {
