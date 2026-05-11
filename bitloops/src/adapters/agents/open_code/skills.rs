@@ -7,8 +7,7 @@ use crate::adapters::agents::skill_install::{
 };
 use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
-pub const OPEN_CODE_SKILL_RELATIVE_PATH: &str =
-    ".opencode/skills/bitloops/devql-explore-first/SKILL.md";
+pub const OPEN_CODE_SKILL_RELATIVE_PATH: &str = ".opencode/skills/devql-explore-first/SKILL.md";
 
 pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
     repo_root.join(OPEN_CODE_SKILL_RELATIVE_PATH)
@@ -16,8 +15,7 @@ pub fn repo_skill_path(repo_root: &Path) -> PathBuf {
 
 pub fn install_repo_skill(repo_root: &Path) -> Result<bool> {
     let path = repo_skill_path(repo_root);
-    let changed = write_managed_file(&path, DEVQL_EXPLORE_FIRST_SKILL)?;
-    Ok(changed)
+    write_managed_file(&path, DEVQL_EXPLORE_FIRST_SKILL)
 }
 
 pub fn uninstall_repo_skill(repo_root: &Path) -> Result<()> {
@@ -89,12 +87,8 @@ mod tests {
             "non-empty skills directory should be preserved"
         );
         assert!(
-            !repo_root.join(".opencode/skills/bitloops").exists(),
-            "managed bitloops directory should still be pruned when empty"
-        );
-        assert!(
             !repo_root
-                .join(".opencode/skills/bitloops/devql-explore-first")
+                .join(".opencode/skills/devql-explore-first")
                 .exists(),
             "managed skill directory should be removed"
         );

@@ -760,7 +760,7 @@ devql_guidance_enabled = false
     let transcript_path_str = transcript_path.to_string_lossy().to_string();
     let skill_path = repo
         .path()
-        .join(".agents/skills/bitloops/devql-explore-first/SKILL.md");
+        .join(".agents/skills/devql-explore-first/SKILL.md");
     let hooks_path = repo.path().join(".codex/config.toml");
     std::fs::write(
         &transcript_path,

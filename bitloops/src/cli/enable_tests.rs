@@ -501,7 +501,7 @@ enabled = true
         assert!(codex_hooks::are_hooks_installed_at(dir.path()));
         assert!(
             dir.path()
-                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".agents/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(dir.path().join(".codex/config.toml").exists());
@@ -546,7 +546,7 @@ supported = ["codex"]
         assert!(crate::adapters::agents::codex::hooks::are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".agents/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(git_hooks::is_git_hook_installed(dir.path()));
@@ -596,13 +596,13 @@ supported = ["cursor", "gemini"]
         assert!(crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+                .join(".cursor/rules/devql-explore-first.mdc")
                 .exists()
         );
         assert!(GeminiCliAgent.are_hooks_installed_at(dir.path()));
         assert!(
             !dir.path()
-                .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".gemini/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
         assert!(!dir.path().join("GEMINI.md").exists());
@@ -652,7 +652,7 @@ devql_guidance_enabled = true
         assert!(git_hooks::is_git_hook_installed(dir.path()));
         assert!(
             !dir.path()
-                .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+                .join(".agents/skills/devql-explore-first/SKILL.md")
                 .exists()
         );
 
@@ -1762,16 +1762,16 @@ supported = ["cursor", "gemini"]
     assert!(dir.path().join(".cursor/hooks.json").exists());
     assert!(
         dir.path()
-            .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+            .join(".cursor/rules/devql-explore-first.mdc")
             .exists()
     );
     assert!(
         dir.path()
-            .join(".gemini/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".gemini/skills/devql-explore-first/SKILL.md")
             .exists()
     );
     let gemini_md = std::fs::read_to_string(dir.path().join("GEMINI.md")).unwrap();
-    assert!(gemini_md.contains("@./.gemini/skills/bitloops/devql-explore-first/SKILL.md"));
+    assert!(gemini_md.contains("@./.gemini/skills/devql-explore-first/SKILL.md"));
     assert!(git_hooks::is_git_hook_installed(dir.path()));
 }
 
@@ -1803,12 +1803,12 @@ devql_guidance_enabled = false
     assert!(crate::adapters::agents::cursor::hooks::are_hooks_installed_at(dir.path()));
     assert!(
         !dir.path()
-            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".agents/skills/devql-explore-first/SKILL.md")
             .exists()
     );
     assert!(
         !dir.path()
-            .join(".cursor/rules/bitloops-devql-explore-first.mdc")
+            .join(".cursor/rules/devql-explore-first.mdc")
             .exists()
     );
 }
@@ -1842,7 +1842,7 @@ devql_guidance_enabled = false
     assert!(policy.contains("devql_guidance_enabled = true"));
     assert!(
         dir.path()
-            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".agents/skills/devql-explore-first/SKILL.md")
             .exists()
     );
     assert!(!codex_hooks::are_hooks_installed_at(dir.path()));
@@ -1880,7 +1880,7 @@ devql_guidance_enabled = false
     assert!(git_hooks::is_git_hook_installed(dir.path()));
     assert!(
         dir.path()
-            .join(".agents/skills/bitloops/devql-explore-first/SKILL.md")
+            .join(".agents/skills/devql-explore-first/SKILL.md")
             .exists()
     );
 }
