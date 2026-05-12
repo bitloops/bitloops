@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **Daemon log level filtering now applies before tail limits**: `bitloops daemon logs --level ...` now returns the last matching log lines instead of filtering only the already-tailed mixed log window, so recent INFO noise no longer hides older WARN or ERROR entries.
+- **DevQL producer spool no longer blocks unrelated same-repo sync and ingest work**: producer-spool admission now distinguishes promotion-only sync and ingest tasks from expansion-only and inline repo-exclusive producer actions, so watcher sync can be promoted while an unrelated ingest task is already running. Same-kind work, repo policy changes, and inline producer actions still keep the previous repo-exclusive guard.
 
 ## [0.0.24] - 2026-05-12
 
