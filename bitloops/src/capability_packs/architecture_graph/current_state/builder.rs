@@ -65,7 +65,7 @@ impl GraphBuilder {
         });
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(super) fn add_code_nodes(&mut self, artefacts: &[CurrentCanonicalArtefactRecord]) {
         for artefact in artefacts {
             self.add_code_node(artefact);
@@ -115,13 +115,6 @@ impl GraphBuilder {
             }),
             last_observed_generation: Some(self.generation),
         });
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn add_dependency_edges(&mut self, dependency_edges: &[CurrentCanonicalEdgeRecord]) {
-        for dependency in dependency_edges {
-            self.add_dependency_edge(dependency);
-        }
     }
 
     pub(super) fn add_dependency_edge(&mut self, dependency: &CurrentCanonicalEdgeRecord) {

@@ -3,20 +3,6 @@ mod parsing;
 use super::*;
 use parsing::*;
 
-#[allow(dead_code)]
-pub(super) fn group_entry_point_artefacts_by_path(
-    artefacts: &[CurrentCanonicalArtefactRecord],
-) -> BTreeMap<String, Vec<LanguageEntryPointArtefact>> {
-    let mut grouped: BTreeMap<String, Vec<LanguageEntryPointArtefact>> = BTreeMap::new();
-    for artefact in artefacts {
-        grouped
-            .entry(artefact.path.clone())
-            .or_default()
-            .push(entry_point_artefact_from_current(artefact));
-    }
-    grouped
-}
-
 pub(super) fn entry_point_artefact_from_current(
     artefact: &CurrentCanonicalArtefactRecord,
 ) -> LanguageEntryPointArtefact {
@@ -35,7 +21,7 @@ pub(super) fn entry_point_artefact_from_current(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn dependency_adjacency(
     edges: &[CurrentCanonicalEdgeRecord],
 ) -> BTreeMap<String, BTreeSet<String>> {

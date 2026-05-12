@@ -193,6 +193,7 @@ fn execute_architecture_graph_replace(
     connection: &mut Connection,
     request: &ArchitectureGraphReplaceRequest,
 ) -> Result<()> {
+    validate_architecture_graph_repo_scope(request)?;
     let tx = connection
         .transaction()
         .context("starting architecture graph replacement transaction")?;
@@ -220,7 +221,7 @@ fn execute_architecture_graph_replace(
             .context("preparing architecture graph node insert")?;
         for node in &request.facts.nodes {
             stmt.execute(rusqlite::params![
-                node.repo_id,
+                request.repo_id,
                 node.node_id,
                 node.node_kind,
                 node.label,
@@ -252,7 +253,7 @@ fn execute_architecture_graph_replace(
             .context("preparing architecture graph edge insert")?;
         for edge in &request.facts.edges {
             stmt.execute(rusqlite::params![
-                edge.repo_id,
+                request.repo_id,
                 edge.edge_id,
                 edge.edge_kind,
                 edge.from_node_id,
@@ -293,6 +294,30 @@ fn execute_architecture_graph_replace(
 
     tx.commit()
         .context("committing architecture graph replacement transaction")?;
+    Ok(())
+}
+
+fn validate_architecture_graph_repo_scope(request: &ArchitectureGraphReplaceRequest) -> Result<()> {
+    for node in &request.facts.nodes {
+        if node.repo_id != request.repo_id {
+            bail!(
+                "architecture graph node `{}` repo_id `{}` did not match replacement repo `{}`",
+                node.node_id,
+                node.repo_id,
+                request.repo_id
+            );
+        }
+    }
+    for edge in &request.facts.edges {
+        if edge.repo_id != request.repo_id {
+            bail!(
+                "architecture graph edge `{}` repo_id `{}` did not match replacement repo `{}`",
+                edge.edge_id,
+                edge.repo_id,
+                request.repo_id
+            );
+        }
+    }
     Ok(())
 }
 
@@ -615,6 +640,106 @@ mod tests {
 
         assert_eq!(labels, vec!["Stable"]);
         assert_eq!(run_count, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn serialised_writer_rejects_node_repo_scope_mismatches() -> Result<()> {
+        let (_temp, db_path) = create_architecture_graph_db()?;
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO architecture_graph_nodes_current (
+                repo_id, node_id, node_kind, label, source_kind, confidence,
+                provenance_json, evidence_json, properties_json, updated_at
+             ) VALUES (?1, 'stable-node', 'NODE', 'Stable', 'COMPUTED', 0.5, '{}', '[]', '{}', datetime('now'))",
+            rusqlite::params!["repo-1"],
+        )
+        .expect("insert stable node");
+        drop(conn);
+
+        let mut facts = sample_architecture_facts("repo-1");
+        facts.nodes[0].repo_id = "repo-2".to_string();
+
+        let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
+            .replace_architecture_graph(ArchitectureGraphReplaceRequest {
+                repo_id: "repo-1".to_string(),
+                facts,
+                generation_seq: 8,
+                warnings: Vec::new(),
+                metrics: json!({ "nodes": 1 }),
+                fail_after_writes: None,
+            })
+            .await
+            .expect_err("replacement should fail");
+        assert!(
+            err.to_string().contains("did not match replacement repo"),
+            "unexpected error: {err:#}"
+        );
+
+        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
+        let labels = conn
+            .prepare(
+                "SELECT label FROM architecture_graph_nodes_current
+                 WHERE repo_id = 'repo-1' ORDER BY node_id ASC",
+            )
+            .expect("prepare label query")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query labels")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect labels");
+
+        assert_eq!(labels, vec!["Stable"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn serialised_writer_rejects_edge_repo_scope_mismatches() -> Result<()> {
+        let (_temp, db_path) = create_architecture_graph_db()?;
+        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO architecture_graph_nodes_current (
+                repo_id, node_id, node_kind, label, source_kind, confidence,
+                provenance_json, evidence_json, properties_json, updated_at
+             ) VALUES (?1, 'stable-node', 'NODE', 'Stable', 'COMPUTED', 0.5, '{}', '[]', '{}', datetime('now'))",
+            rusqlite::params!["repo-1"],
+        )
+        .expect("insert stable node");
+        drop(conn);
+
+        let mut facts = sample_architecture_facts("repo-1");
+        facts.edges[0].repo_id = "repo-2".to_string();
+
+        let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
+            .replace_architecture_graph(ArchitectureGraphReplaceRequest {
+                repo_id: "repo-1".to_string(),
+                facts,
+                generation_seq: 8,
+                warnings: Vec::new(),
+                metrics: json!({ "edges": 1 }),
+                fail_after_writes: None,
+            })
+            .await
+            .expect_err("replacement should fail");
+        assert!(
+            err.to_string().contains("did not match replacement repo"),
+            "unexpected error: {err:#}"
+        );
+
+        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
+        let labels = conn
+            .prepare(
+                "SELECT label FROM architecture_graph_nodes_current
+                 WHERE repo_id = 'repo-1' ORDER BY node_id ASC",
+            )
+            .expect("prepare label query")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query labels")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect labels");
+
+        assert_eq!(labels, vec!["Stable"]);
 
         Ok(())
     }
