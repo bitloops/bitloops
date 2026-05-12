@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **Architecture-graph current-state reconcile now uses substantially less memory on large repositories**: `architecture_graph` now streams current canonical artefacts and dependency edges from the relational gateway instead of loading both tables into full in-memory vectors, `CHANGE_UNIT -> IMPACTS` edges now keep only the matched target paths instead of duplicating the entire affected-path set on every edge, and graph replacement now writes nodes, edges, and run metadata through prepared SQLite statements inside one atomic serialized transaction instead of materializing one giant SQL-string batch. This reduces init-time memory spikes while preserving graph topology, current-table atomicity, and reconcile metrics.
+
 ## [0.0.24] - 2026-05-12
 
 ### Fixed
