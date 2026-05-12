@@ -1,10 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::time::Instant;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_graphql::Result as GraphqlResult;
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::artefact_query_planner::plan_graphql_artefact_query;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
@@ -86,6 +87,7 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
     let inference = host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
     let representation_kinds = dedup_representation_kinds(representation_kinds);
 
+    let open_relational_started = Instant::now();
     let relational = context
         .open_relational_storage("semantic search selection")
         .await
@@ -94,6 +96,16 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
                 "failed to open relational storage for search selection: {err:#}"
             ))
         })?;
+    crate::devql_timing::record_current_stage(
+        "search.semantic.open_relational_storage",
+        open_relational_started.elapsed(),
+        json!({
+            "representationKinds": representation_kinds
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        }),
+    );
 
     let mut hits_by_representation = representation_kinds
         .iter()
@@ -123,6 +135,7 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
                 "failed to resolve {representation_kind} embedding setup for search: {err:#}"
             ))
         })?;
+        let load_active_setup_started = Instant::now();
         let active_setup = load_primary_active_embedding_setup(
             &relational,
             &repo_id,
@@ -134,6 +147,14 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
                 "failed to load active {representation_kind} embedding setup for search: {err:#}"
             ))
         })?;
+        crate::devql_timing::record_current_stage(
+            "search.semantic.load_active_setup",
+            load_active_setup_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "hasActiveSetup": active_setup.is_some(),
+            }),
+        );
         if let Some(active_setup) = active_setup
             && active_setup.setup != query_setup
         {
@@ -149,6 +170,7 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
             if let Some(query_embedding) = query_embeddings_by_setup.get(&embedding_cache_key) {
                 query_embedding.clone()
             } else {
+                let embed_query_started = Instant::now();
                 let query_embedding = provider
                     .embed(trimmed_query, EmbeddingInputType::Query)
                     .map_err(|err| {
@@ -156,6 +178,15 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
                             "failed to embed search query for {representation_kind}: {err:#}"
                         ))
                     })?;
+                crate::devql_timing::record_current_stage(
+                    "search.semantic.embed_query",
+                    embed_query_started.elapsed(),
+                    json!({
+                        "representationKind": representation_kind.to_string(),
+                        "dimension": query_embedding.len(),
+                        "setupFingerprint": query_setup.setup_fingerprint.as_str(),
+                    }),
+                );
                 query_embeddings_by_setup.insert(embedding_cache_key, query_embedding.clone());
                 query_embedding
             };
@@ -168,6 +199,7 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
             continue;
         }
 
+        let vector_lookup_started = Instant::now();
         let candidate_ids = vector_backend
             .nearest_current_candidates(SemanticVectorQuery {
                 repo_id: &repo_id,
@@ -186,10 +218,21 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
             .into_iter()
             .map(|candidate| candidate.artefact_id)
             .collect::<Vec<_>>();
+        crate::devql_timing::record_current_stage(
+            "search.semantic.vector_lookup",
+            vector_lookup_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "candidateCount": candidate_ids.len(),
+                "dimension": query_setup.dimension,
+                "setupFingerprint": query_setup.setup_fingerprint.as_str(),
+            }),
+        );
         if candidate_ids.is_empty() {
             continue;
         }
 
+        let hydrate_candidates_started = Instant::now();
         let hydrated_candidates = load_semantic_candidates_for_artefact_ids(
             context,
             scope,
@@ -205,16 +248,34 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
                 "failed to hydrate semantic candidates for {representation_kind}: {err:#}"
             ))
         })?;
+        crate::devql_timing::record_current_stage(
+            "search.semantic.hydrate_candidates",
+            hydrate_candidates_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "candidateCount": candidate_ids.len(),
+                "hydratedCount": hydrated_candidates.len(),
+            }),
+        );
         if hydrated_candidates.is_empty() {
             continue;
         }
 
+        let rank_candidates_started = Instant::now();
         let hits = rank_semantic_candidates(
             &query_embedding,
             hydrated_candidates,
             VectorSearchMode::Auto,
             DEFAULT_MIN_SEMANTIC_SCORE,
             DEFAULT_RESULT_LIMIT,
+        );
+        crate::devql_timing::record_current_stage(
+            "search.semantic.rank_candidates",
+            rank_candidates_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "hitCount": hits.len(),
+            }),
         );
         hits_by_representation.insert(representation_kind, hits);
     }

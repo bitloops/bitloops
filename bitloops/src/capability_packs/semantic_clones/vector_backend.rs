@@ -518,7 +518,7 @@ async fn load_sqlite_nearest_current_candidates(
                AND repo_id = '{repo_id}' \
                AND representation_kind = '{representation_kind}' \
                AND setup_fingerprint = '{setup_fingerprint}' \
-             ORDER BY distance, artefact_id",
+             ORDER BY distance",
             table_name = table_name,
             embedding_json = embedding_json,
             limit = query.limit.max(1),
@@ -821,5 +821,67 @@ mod tests {
             .await
             .expect("query sqlite vec rows after clear");
         assert!(after_clear.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sqlite_vec_nearest_current_candidates_returns_identity_hits() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp.path().join("semantic.sqlite");
+        let relational = RelationalStorage::local_only(sqlite_path.clone());
+        crate::host::devql::sqlite_exec_path_allow_create(
+            &sqlite_path,
+            "CREATE TABLE symbol_embeddings_current (
+                artefact_id TEXT NOT NULL,
+                repo_id TEXT NOT NULL,
+                representation_kind TEXT NOT NULL,
+                setup_fingerprint TEXT NOT NULL,
+                dimension INTEGER NOT NULL,
+                embedding TEXT NOT NULL,
+                path TEXT NOT NULL
+            );",
+        )
+        .await
+        .expect("create sqlite schema");
+
+        let setup_fingerprint = "provider=provider-a|model=model-a|dimension=3".to_string();
+        let backend = SemanticVectorBackend::resolve(&relational);
+
+        for (artefact_id, path, embedding) in [
+            ("artefact-1", "src/a.ts", vec![0.1, 0.2, 0.3]),
+            ("artefact-2", "src/b.ts", vec![0.3, 0.2, 0.1]),
+        ] {
+            let row = embeddings::SymbolEmbeddingRow {
+                artefact_id: artefact_id.to_string(),
+                repo_id: "repo-1".to_string(),
+                blob_sha: format!("blob-sha-{artefact_id}"),
+                representation_kind: embeddings::EmbeddingRepresentationKind::Identity,
+                provider: "provider-a".to_string(),
+                model: "model-a".to_string(),
+                dimension: 3,
+                setup_fingerprint: setup_fingerprint.clone(),
+                embedding_input_hash: format!("embedding-input-hash-{artefact_id}"),
+                embedding,
+            };
+            backend
+                .sync_current_row(path, &row)
+                .await
+                .expect("sync sqlite vec row");
+        }
+
+        let candidates = backend
+            .nearest_current_candidates(SemanticVectorQuery {
+                repo_id: "repo-1",
+                representation_kind: embeddings::EmbeddingRepresentationKind::Identity,
+                setup_fingerprint: &setup_fingerprint,
+                dimension: 3,
+                query_embedding: &[0.1, 0.2, 0.3],
+                limit: 2,
+            })
+            .await
+            .expect("load sqlite nearest candidates");
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].artefact_id, "artefact-1");
+        assert!(candidates[0].distance <= candidates[1].distance);
     }
 }

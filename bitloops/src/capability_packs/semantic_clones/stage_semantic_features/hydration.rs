@@ -204,6 +204,32 @@ pub(crate) async fn load_semantic_feature_inputs_for_current_artefacts(
     .await
 }
 
+pub(crate) async fn load_semantic_feature_inputs_for_current_paths(
+    relational: &RelationalStorage,
+    repo_root: &Path,
+    repo_id: &str,
+    paths: &[String],
+) -> Result<Vec<semantic::SemanticFeatureInput>> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let current_paths = paths.iter().cloned().collect::<BTreeSet<_>>();
+    let projection_states =
+        load_current_projection_path_states(relational, repo_id, Some(&current_paths)).await?;
+    let mut hydrated_inputs =
+        hydrate_current_projection_inputs(relational, repo_root, repo_id, &projection_states, None)
+            .await?;
+    hydrated_inputs.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then(left.symbol_fqn.cmp(&right.symbol_fqn))
+            .then(left.artefact_id.cmp(&right.artefact_id))
+    });
+    hydrated_inputs.dedup_by(|left, right| left.artefact_id == right.artefact_id);
+    Ok(hydrated_inputs)
+}
+
 async fn hydrate_semantic_feature_inputs(
     relational: &RelationalStorage,
     repo_root: &Path,

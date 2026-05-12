@@ -1769,8 +1769,230 @@ async fn prepare_embedding_mailbox_batch_persists_multiple_rows_from_one_batch()
         "embedding batches should mirror current rows into sqlite-vec tables"
     );
     assert!(
-        prepared_sql.contains("DELETE FROM symbol_embeddings_current"),
-        "embedding batches should prune stale current embedding rows before upserting replacements"
+        !prepared_sql.contains("DELETE FROM symbol_embeddings_current"),
+        "repo-backfill embedding batches should skip stale current pruning during fresh indexing"
+    );
+}
+
+#[tokio::test]
+async fn repo_backfill_batch_reembeds_when_current_projection_is_missing() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let requested_ids = inputs
+        .iter()
+        .take(2)
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(requested_ids.len(), 2, "fixture should include two inputs");
+
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "repo-backfill-repair-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "repo-backfill-repair-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::json!(requested_ids)),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("repo-backfill-repair-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let first_prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare first embedding batch");
+    relational
+        .exec_serialized_batch_transactional(&first_prepared.commit.embedding_statements)
+        .await
+        .expect("persist first embedding batch statements");
+    relational
+        .exec_serialized_batch_transactional(&first_prepared.commit.setup_statements)
+        .await
+        .expect("persist first embedding batch setup state");
+    relational
+        .exec(&format!(
+            "DELETE FROM symbol_embeddings_current WHERE repo_id = '{}'",
+            crate::host::devql::esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("clear current embedding projection only");
+
+    let repaired = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("prepare second embedding batch after clearing current projection");
+    let repaired_sql = repaired.commit.embedding_statements.join("\n");
+    let non_probe_embedding_requests = fake_embedding_request_lines(repo.path())
+        .into_iter()
+        .filter(|line| !line.contains("bitloops python embedding dimension probe"))
+        .count();
+
+    assert!(
+        repaired_sql.contains("INSERT INTO symbol_embeddings_current"),
+        "repo-backfill batches should rebuild current projection rows even when historical embeddings already exist"
+    );
+    assert_eq!(
+        non_probe_embedding_requests, 2,
+        "clearing only the current projection should force one additional embedding request"
+    );
+}
+
+#[tokio::test]
+async fn prepare_embedding_mailbox_batch_artefact_batch_keeps_sibling_current_rows_for_same_path() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, inputs, input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "path-pruning-model",
+        "3",
+    )
+    .await;
+    let selected_path = inputs
+        .iter()
+        .map(|input| input.path.clone())
+        .find(|path| inputs.iter().filter(|input| input.path == *path).count() > 1)
+        .expect("fixture should include a path with multiple current artefacts");
+    let path_inputs = inputs
+        .iter()
+        .filter(|input| input.path == selected_path)
+        .cloned()
+        .collect::<Vec<_>>();
+    let requested_ids = path_inputs
+        .iter()
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    let selected = path_inputs
+        .first()
+        .expect("path fixture should include at least one artefact");
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let count_current_code_rows_for_path = |path: &str| {
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        conn.query_row(
+            "SELECT COUNT(*)
+             FROM symbol_embeddings_current
+             WHERE repo_id = ?1
+               AND representation_kind = 'code'
+               AND path = ?2",
+            rusqlite::params![cfg.repo.repo_id.as_str(), path],
+            |row| row.get::<_, i64>(0),
+        )
+        .expect("count current code rows for path")
+    };
+
+    let full_code_job = build_embedding_job_for_representation(
+        &cfg,
+        requested_ids.clone(),
+        requested_ids
+            .iter()
+            .map(|artefact_id| {
+                (
+                    artefact_id.clone(),
+                    input_hashes
+                        .get(artefact_id)
+                        .expect("input hash for selected path artefact")
+                        .clone(),
+                )
+            })
+            .collect(),
+        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+    );
+    let seed_outcome = run_embedding_job_with_env(
+        &full_code_job,
+        TEST_EMBEDDINGS_DRIVER,
+        "path-pruning-model",
+        "3",
+    )
+    .await;
+    assert!(
+        seed_outcome.error.is_none(),
+        "seed code embedding job should succeed"
+    );
+
+    let baseline_count = count_current_code_rows_for_path(&selected.path);
+    assert_eq!(
+        usize::try_from(baseline_count).expect("baseline count should fit into usize"),
+        path_inputs.len(),
+        "full code embedding seed should populate every current artefact on the selected path"
+    );
+
+    let artefact_batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "path-pruning-artefact-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "path-pruning-artefact-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(selected.artefact_id.clone()),
+            payload_json: None,
+            dedupe_key: Some(format!(
+                "{}:{}",
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                selected.artefact_id
+            )),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("path-pruning-artefact-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let second_prepared = prepare_embedding_mailbox_batch(&artefact_batch)
+        .await
+        .expect("prepare code artefact embedding batch");
+    relational
+        .exec_serialized_batch_transactional(&second_prepared.commit.embedding_statements)
+        .await
+        .expect("persist code artefact embedding statements");
+
+    let after_count = count_current_code_rows_for_path(&selected.path);
+    assert_eq!(
+        after_count, baseline_count,
+        "single-artefact embedding refresh should not delete sibling current rows from the same path"
     );
 }
 
@@ -1847,6 +2069,116 @@ async fn prepare_embedding_mailbox_batch_repairs_current_feature_projection_for_
             .iter()
             .any(|sql| sql.contains("symbol_features_current")),
         "code embedding batches should repair current feature projection before clone rebuild"
+    );
+}
+
+#[tokio::test]
+async fn explicit_embedding_batch_for_one_path_uses_only_selected_ids_in_stale_delete_scope() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let mega_path = repo.path().join("src/mega.ts");
+    let mega_source = (0..40)
+        .map(|index| {
+            format!(
+                "export function megaHandler{index:02}(input: string): string {{\n  return `${{input}}:{index}`;\n}}\n"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&mega_path, mega_source).expect("write large same-path source fixture");
+    git_ok(repo.path(), &["add", "src/mega.ts"]);
+    git_ok(
+        repo.path(),
+        &["commit", "-m", "add large same-path source fixture"],
+    );
+
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "same-path-model",
+        "3",
+    )
+    .await;
+    let mega_inputs = inputs
+        .iter()
+        .filter(|input| input.path == "src/mega.ts")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert!(
+        mega_inputs.len() > super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
+        "fixture should include more than one embedding batch for the same path"
+    );
+
+    let first_batch_ids = mega_inputs
+        .iter()
+        .take(super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE)
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    let second_batch_ids = mega_inputs
+        .iter()
+        .skip(super::super::workplane::SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE)
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        !second_batch_ids.is_empty(),
+        "fixture should leave a second batch"
+    );
+    let later_same_path_id = second_batch_ids
+        .first()
+        .cloned()
+        .expect("fixture should expose a later same-path artefact id");
+
+    let first_batch_items = first_batch_ids
+        .iter()
+        .enumerate()
+        .map(|(index, artefact_id)| SemanticEmbeddingMailboxItemRecord {
+            item_id: format!("same-path-batch-item-{index}"),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(artefact_id.clone()),
+            payload_json: None,
+            dedupe_key: None,
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("same-path-batch-1".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        })
+        .collect::<Vec<_>>();
+    let first_batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "same-path-batch-1".to_string(),
+        items: first_batch_items,
+    };
+    let prepared_first = prepare_embedding_mailbox_batch(&first_batch)
+        .await
+        .expect("prepare first same-path batch");
+    let delete_sql = prepared_first
+        .commit
+        .embedding_statements
+        .iter()
+        .find(|sql| {
+            sql.contains("DELETE FROM symbol_embeddings_current") && sql.contains("src/mega.ts")
+        })
+        .expect("expected stale delete SQL for the touched same-path batch");
+
+    assert!(
+        !delete_sql.contains(&later_same_path_id),
+        "selected-batch stale delete scope should not retain artefact ids from later same-path batches"
     );
 }
 
