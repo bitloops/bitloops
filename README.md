@@ -34,13 +34,6 @@
 
 ## What Bitloops Gives You
 
-> [!WARNING]
-> **Project status: alpha / work in progress**
->
-> Bitloops is under active development in the open and is **not production-ready yet**.
-> Expect breaking changes, evolving documentation, rough onboarding edges, and uneven
-> support across environments while the system matures.
-
 AI coding agents are powerful, but most of them still start every task by crawling the repository again: read files, grep for symbols, infer architecture, guess which tests matter, inspect old docs, and compress all of that into a prompt.
 
 Bitloops gives them a maintained operating picture instead.
@@ -53,6 +46,13 @@ Bitloops gives them a maintained operating picture instead.
 | Shared memory across agents | Claude Code, Codex, Cursor, Gemini, Copilot, and OpenCode can feed one repository-scoped model instead of creating isolated mental models. |
 | Fresher repository understanding | Current-state sync and historical ingest keep repository facts aligned with the worktree and Git history. |
 | A foundation for safer autonomy | Provenance, evidence, confidence, freshness, and lifecycle primitives are represented where available and are being expanded across the system. |
+
+> [!WARNING]
+> **Project status: alpha / work in progress**
+>
+> Bitloops is under active development in the open and is **not production-ready yet**.
+> Expect breaking changes, evolving documentation, rough onboarding edges, and uneven
+> support across environments while the system matures.
 
 ## Install
 
