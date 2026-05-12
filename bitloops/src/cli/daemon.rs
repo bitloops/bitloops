@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs::File;
 use std::future::Future;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -349,11 +350,9 @@ where
 
     ensure_log_file_exists(&log_path)?;
     let tail_lines = args.tail.unwrap_or(DEFAULT_LOG_TAIL_LINES);
-    write_filtered_log_lines(
-        out,
-        read_tail_lines(log_path.clone(), tail_lines).await?,
-        &args.levels,
-    )?;
+    let initial_lines =
+        read_log_view_lines(log_path.clone(), tail_lines, args.levels.clone()).await?;
+    write_filtered_log_lines(out, initial_lines, &args.levels)?;
     out.flush().context("flushing daemon log output")?;
     if args.follow {
         follow_log_file_until_shutdown(&log_path, out, shutdown, poll_interval, args.levels)
@@ -515,6 +514,20 @@ async fn read_tail_lines(path: std::path::PathBuf, lines: usize) -> Result<Vec<S
         .context("joining daemon log tail task")?
 }
 
+async fn read_log_view_lines(
+    path: std::path::PathBuf,
+    lines: usize,
+    levels: Vec<DaemonLogLevel>,
+) -> Result<Vec<String>> {
+    if levels.is_empty() {
+        return read_tail_lines(path, lines).await;
+    }
+
+    task::spawn_blocking(move || tail_log_file_after_filter(&path, lines, &levels))
+        .await
+        .context("joining filtered daemon log tail task")?
+}
+
 fn write_filtered_log_lines(
     out: &mut dyn Write,
     lines: Vec<String>,
@@ -575,6 +588,37 @@ fn tail_log_file(path: &Path, lines: usize) -> Result<Vec<String>> {
         .with_context(|| format!("decoding daemon log {}", path.display()))?;
 
     Ok(content.lines().map(str::to_owned).collect())
+}
+
+fn tail_log_file_after_filter(
+    path: &Path,
+    lines: usize,
+    levels: &[DaemonLogLevel],
+) -> Result<Vec<String>> {
+    if lines == 0 {
+        return Ok(Vec::new());
+    }
+
+    let file =
+        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut tail = VecDeque::with_capacity(lines);
+
+    for line in reader.lines() {
+        let line = line.with_context(|| format!("reading daemon log {}", path.display()))?;
+        if should_emit_log_line(&line, levels) {
+            push_tail_line(&mut tail, line, lines);
+        }
+    }
+
+    Ok(tail.into_iter().collect())
+}
+
+fn push_tail_line(tail: &mut VecDeque<String>, line: String, lines: usize) {
+    if tail.len() == lines {
+        tail.pop_front();
+    }
+    tail.push_back(line);
 }
 
 fn find_tail_start_offset(file: &mut File, lines: usize, path: &Path) -> Result<u64> {
