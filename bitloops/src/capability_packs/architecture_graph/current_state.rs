@@ -41,5 +41,17 @@ use synthesis::add_agent_synthesised_facts;
 use synthesis::architecture_fact_synthesis_user_prompt;
 use test_harness::add_test_harness_facts;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ComponentArtefactInput {
+    pub artefact_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ChangeUnitMetrics {
+    pub affected_paths: usize,
+    pub impacted_nodes: usize,
+}
+
 #[cfg(test)]
 mod tests;

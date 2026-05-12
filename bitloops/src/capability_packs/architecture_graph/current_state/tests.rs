@@ -485,7 +485,14 @@ fn components_are_inferred_inside_detected_container() {
     };
     builder.ensure_deployment_container_for_candidate(&candidate);
 
-    builder.add_components_for_containers(&artefacts);
+    let component_inputs = artefacts
+        .iter()
+        .map(|artefact| ComponentArtefactInput {
+            artefact_id: artefact.artefact_id.clone(),
+            path: artefact.path.clone(),
+        })
+        .collect::<Vec<_>>();
+    builder.add_components_for_containers(&component_inputs);
     let facts = builder.finish();
 
     assert!(facts.nodes.iter().any(|node| {
@@ -634,6 +641,167 @@ fn architecture_fact_synthesis_prompt_limits_nodes_without_snapshot_edges() {
     );
 }
 
+#[test]
+fn change_unit_impacts_edges_only_keep_target_matched_paths() {
+    let mut builder = GraphBuilder::new("repo", 7, "run");
+    builder.seed_repo_structure();
+
+    let first = current_artefact("src/a.rs", "first");
+    let second = current_artefact("src/b.rs", "second");
+    builder.add_code_nodes(&[first.clone(), second.clone()]);
+
+    let first_node_id = builder
+        .artefact_nodes
+        .get(&first.artefact_id)
+        .cloned()
+        .expect("first node id");
+    builder
+        .path_nodes
+        .entry("src/alias.rs".to_string())
+        .or_default()
+        .push(first_node_id.clone());
+
+    let mut request = synthesis_request();
+    request.affected_paths = vec![
+        "src/a.rs".to_string(),
+        "src/alias.rs".to_string(),
+        "src/b.rs".to_string(),
+    ];
+
+    let metrics = builder.add_change_unit(&request);
+    assert_eq!(metrics.affected_paths, 3);
+    assert_eq!(metrics.impacted_nodes, 2);
+
+    let facts = builder.finish();
+    let change_node = facts
+        .nodes
+        .iter()
+        .find(|node| node.node_kind == ArchitectureGraphNodeKind::ChangeUnit.as_str())
+        .expect("change unit node");
+    let stored_paths = change_node.properties["affected_paths"]
+        .as_array()
+        .expect("change unit paths array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(stored_paths, vec!["src/a.rs", "src/alias.rs", "src/b.rs"]);
+
+    let impacts_edges = facts
+        .edges
+        .iter()
+        .filter(|edge| edge.edge_kind == ArchitectureGraphEdgeKind::Impacts.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(impacts_edges.len(), 2);
+
+    let first_edge = impacts_edges
+        .iter()
+        .find(|edge| edge.to_node_id == first_node_id)
+        .expect("edge for first node");
+    assert!(
+        first_edge.evidence.get("affectedPaths").is_none(),
+        "legacy affectedPaths payload should be removed"
+    );
+    let first_paths = first_edge
+        .evidence
+        .as_array()
+        .expect("first edge evidence array")
+        .iter()
+        .filter_map(|item| item.get("path").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(first_paths, vec!["src/a.rs", "src/alias.rs"]);
+
+    let second_node_id = builder_node_id_for_artefact("repo", &second.artefact_id);
+    let second_edge = impacts_edges
+        .iter()
+        .find(|edge| edge.to_node_id == second_node_id)
+        .expect("edge for second node");
+    let second_paths = second_edge
+        .evidence
+        .as_array()
+        .expect("second edge evidence array")
+        .iter()
+        .filter_map(|item| item.get("path").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    assert_eq!(second_paths, vec!["src/b.rs"]);
+}
+
+#[tokio::test]
+async fn reconcile_streams_current_state_and_persists_metrics() -> Result<()> {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db_path = temp.path().join("runtime.sqlite");
+    crate::storage::init::init_database(&db_path, false, "seed-commit")?;
+    let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
+    conn.execute_batch(
+        crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql(),
+    )
+    .expect("create architecture graph schema");
+    let storage = std::sync::Arc::new(crate::host::devql::RelationalStorage::local_only(db_path));
+
+    let mut request = synthesis_request();
+    request.repo_root = temp.path().to_path_buf();
+    request.affected_paths = vec!["src/lib.rs".to_string()];
+
+    let context = CurrentStateConsumerContext {
+        config_root: json!({}),
+        storage: storage.clone(),
+        relational: std::sync::Arc::new(StreamingOnlyRelationalGateway {
+            files: vec![file("src/lib.rs", "rust")],
+            artefacts: vec![current_artefact("src/lib.rs", "main")],
+            edges: Vec::new(),
+        }),
+        language_services: std::sync::Arc::new(
+            crate::host::capability_host::gateways::EmptyLanguageServicesGateway,
+        ),
+        git_history: std::sync::Arc::new(
+            crate::host::capability_host::gateways::EmptyGitHistoryGateway,
+        ),
+        inference: std::sync::Arc::new(crate::host::inference::EmptyInferenceGateway),
+        host_services: std::sync::Arc::new(
+            crate::host::capability_host::gateways::DefaultHostServicesGateway::new("repo"),
+        ),
+        workplane: std::sync::Arc::new(NoopArchitectureWorkplaneGateway),
+        test_harness: None,
+        init_session_id: None,
+    };
+
+    let result = ArchitectureGraphCurrentStateConsumer
+        .reconcile(&request, &context)
+        .await?;
+
+    let metrics = result.metrics.expect("metrics payload");
+    assert_eq!(metrics["files"], json!(1));
+    assert_eq!(metrics["artefacts"], json!(1));
+    assert_eq!(metrics["dependency_edges"], json!(0));
+    assert_eq!(metrics["affected_paths"], json!(1));
+    assert_eq!(metrics["impacted_nodes"], json!(1));
+
+    let node_count = storage
+        .query_rows(
+            "SELECT COUNT(*) AS count FROM architecture_graph_nodes_current WHERE repo_id = 'repo'",
+        )
+        .await?;
+    assert_eq!(node_count[0]["count"], json!(3));
+
+    let impacts = storage
+        .query_rows(
+            "SELECT evidence_json FROM architecture_graph_edges_current
+             WHERE repo_id = 'repo' AND edge_kind = 'IMPACTS'",
+        )
+        .await?;
+    assert_eq!(impacts.len(), 1);
+    assert_eq!(
+        serde_json::from_str::<Value>(
+            impacts[0]["evidence_json"]
+                .as_str()
+                .expect("stored evidence JSON string"),
+        )
+        .expect("parse impacts evidence"),
+        json!([{ "path": "src/lib.rs" }])
+    );
+
+    Ok(())
+}
+
 fn group_artefacts_for_test(
     artefacts: Vec<LanguageEntryPointArtefact>,
 ) -> BTreeMap<String, Vec<LanguageEntryPointArtefact>> {
@@ -645,4 +813,114 @@ fn group_artefacts_for_test(
             .push(artefact);
     }
     grouped
+}
+
+fn builder_node_id_for_artefact(repo_id: &str, artefact_id: &str) -> String {
+    node_id(repo_id, ArchitectureGraphNodeKind::Node, artefact_id)
+}
+
+#[derive(Clone)]
+struct StreamingOnlyRelationalGateway {
+    files: Vec<CurrentCanonicalFileRecord>,
+    artefacts: Vec<CurrentCanonicalArtefactRecord>,
+    edges: Vec<CurrentCanonicalEdgeRecord>,
+}
+
+impl crate::host::capability_host::gateways::RelationalGateway for StreamingOnlyRelationalGateway {
+    fn resolve_checkpoint_id(&self, _repo_id: &str, checkpoint_ref: &str) -> Result<String> {
+        Ok(checkpoint_ref.to_string())
+    }
+
+    fn artefact_exists(&self, _repo_id: &str, _artefact_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn load_repo_id_for_commit(&self, _commit_sha: &str) -> Result<String> {
+        Ok("repo".to_string())
+    }
+
+    fn load_current_canonical_files(
+        &self,
+        _repo_id: &str,
+    ) -> Result<Vec<CurrentCanonicalFileRecord>> {
+        Ok(self.files.clone())
+    }
+
+    fn load_current_canonical_artefacts(
+        &self,
+        _repo_id: &str,
+    ) -> Result<Vec<CurrentCanonicalArtefactRecord>> {
+        panic!("architecture_graph consumer should stream artefacts via visitor");
+    }
+
+    fn visit_current_canonical_artefacts(
+        &self,
+        _repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalArtefactRecord) -> Result<()>,
+    ) -> Result<()> {
+        for artefact in self.artefacts.clone() {
+            visitor(artefact)?;
+        }
+        Ok(())
+    }
+
+    fn load_current_canonical_edges(
+        &self,
+        _repo_id: &str,
+    ) -> Result<Vec<CurrentCanonicalEdgeRecord>> {
+        panic!("architecture_graph consumer should stream dependency edges via visitor");
+    }
+
+    fn visit_current_canonical_edges(
+        &self,
+        _repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalEdgeRecord) -> Result<()>,
+    ) -> Result<()> {
+        for edge in self.edges.clone() {
+            visitor(edge)?;
+        }
+        Ok(())
+    }
+
+    fn load_current_production_artefacts(
+        &self,
+        _repo_id: &str,
+    ) -> Result<Vec<crate::models::ProductionArtefact>> {
+        Ok(Vec::new())
+    }
+
+    fn load_production_artefacts(
+        &self,
+        _commit_sha: &str,
+    ) -> Result<Vec<crate::models::ProductionArtefact>> {
+        Ok(Vec::new())
+    }
+
+    fn load_artefacts_for_file_lines(
+        &self,
+        _commit_sha: &str,
+        _file_path: &str,
+    ) -> Result<Vec<(String, i64, i64)>> {
+        Ok(Vec::new())
+    }
+}
+
+struct NoopArchitectureWorkplaneGateway;
+
+impl crate::host::capability_host::gateways::CapabilityWorkplaneGateway
+    for NoopArchitectureWorkplaneGateway
+{
+    fn enqueue_jobs(
+        &self,
+        _jobs: Vec<crate::host::capability_host::gateways::CapabilityWorkplaneJob>,
+    ) -> Result<crate::host::capability_host::gateways::CapabilityWorkplaneEnqueueResult> {
+        Ok(crate::host::capability_host::gateways::CapabilityWorkplaneEnqueueResult::default())
+    }
+
+    fn mailbox_status(
+        &self,
+    ) -> Result<BTreeMap<String, crate::host::capability_host::gateways::CapabilityMailboxStatus>>
+    {
+        Ok(BTreeMap::new())
+    }
 }

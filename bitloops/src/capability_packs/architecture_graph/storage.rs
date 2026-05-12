@@ -139,41 +139,8 @@ pub async fn replace_computed_graph(
     warnings: &[String],
     metrics: Value,
 ) -> Result<()> {
-    let mut statements = Vec::new();
-    statements.push(format!(
-        "DELETE FROM architecture_graph_edges_current WHERE repo_id = {};",
-        sql_text(repo_id)
-    ));
-    statements.push(format!(
-        "DELETE FROM architecture_graph_nodes_current WHERE repo_id = {};",
-        sql_text(repo_id)
-    ));
-
-    for node in facts.nodes {
-        statements.push(insert_node_sql(relational, &node));
-    }
-    for edge in facts.edges {
-        statements.push(insert_edge_sql(relational, &edge));
-    }
-    statements.push(format!(
-        "INSERT INTO architecture_graph_runs_current (
-            repo_id, last_generation_seq, status, warnings_json, metrics_json, updated_at
-         ) VALUES ({repo_id}, {generation}, 'ready', {warnings}, {metrics}, {now})
-         ON CONFLICT(repo_id) DO UPDATE SET
-            last_generation_seq = excluded.last_generation_seq,
-            status = excluded.status,
-            warnings_json = excluded.warnings_json,
-            metrics_json = excluded.metrics_json,
-            updated_at = excluded.updated_at;",
-        repo_id = sql_text(repo_id),
-        generation = generation_seq,
-        warnings = sql_json_value(relational, &json!(warnings)),
-        metrics = sql_json_value(relational, &metrics),
-        now = sql_now(relational),
-    ));
-
     relational
-        .exec_serialized_batch_transactional(&statements)
+        .replace_architecture_graph_current(repo_id, facts, generation_seq, warnings, metrics)
         .await
         .context("replacing architecture graph computed facts")
 }
@@ -215,54 +182,6 @@ pub async fn revoke_assertion(
         ))
         .await?;
     Ok(true)
-}
-
-fn insert_node_sql(relational: &RelationalStorage, node: &ArchitectureGraphNodeFact) -> String {
-    format!(
-        "INSERT INTO architecture_graph_nodes_current (
-            repo_id, node_id, node_kind, label, artefact_id, symbol_id, path, entry_kind,
-            source_kind, confidence, provenance_json, evidence_json, properties_json,
-            last_observed_generation, updated_at
-         ) VALUES ({repo_id}, {node_id}, {node_kind}, {label}, {artefact_id}, {symbol_id}, {path}, {entry_kind},
-            {source_kind}, {confidence}, {provenance}, {evidence}, {properties}, {generation}, {now});",
-        repo_id = sql_text(&node.repo_id),
-        node_id = sql_text(&node.node_id),
-        node_kind = sql_text(&node.node_kind),
-        label = sql_text(&node.label),
-        artefact_id = sql_opt_text(node.artefact_id.as_deref()),
-        symbol_id = sql_opt_text(node.symbol_id.as_deref()),
-        path = sql_opt_text(node.path.as_deref()),
-        entry_kind = sql_opt_text(node.entry_kind.as_deref()),
-        source_kind = sql_text(&node.source_kind),
-        confidence = node.confidence,
-        provenance = sql_json_value(relational, &node.provenance),
-        evidence = sql_json_value(relational, &node.evidence),
-        properties = sql_json_value(relational, &node.properties),
-        generation = sql_opt_u64(node.last_observed_generation),
-        now = sql_now(relational),
-    )
-}
-
-fn insert_edge_sql(relational: &RelationalStorage, edge: &ArchitectureGraphEdgeFact) -> String {
-    format!(
-        "INSERT INTO architecture_graph_edges_current (
-            repo_id, edge_id, edge_kind, from_node_id, to_node_id, source_kind, confidence,
-            provenance_json, evidence_json, properties_json, last_observed_generation, updated_at
-         ) VALUES ({repo_id}, {edge_id}, {edge_kind}, {from_node_id}, {to_node_id}, {source_kind}, {confidence},
-            {provenance}, {evidence}, {properties}, {generation}, {now});",
-        repo_id = sql_text(&edge.repo_id),
-        edge_id = sql_text(&edge.edge_id),
-        edge_kind = sql_text(&edge.edge_kind),
-        from_node_id = sql_text(&edge.from_node_id),
-        to_node_id = sql_text(&edge.to_node_id),
-        source_kind = sql_text(&edge.source_kind),
-        confidence = edge.confidence,
-        provenance = sql_json_value(relational, &edge.provenance),
-        evidence = sql_json_value(relational, &edge.evidence),
-        properties = sql_json_value(relational, &edge.properties),
-        generation = sql_opt_u64(edge.last_observed_generation),
-        now = sql_now(relational),
-    )
 }
 
 fn insert_assertion_sql(
@@ -363,12 +282,6 @@ fn sql_text(value: &str) -> String {
 
 fn sql_opt_text(value: Option<&str>) -> String {
     value.map(sql_text).unwrap_or_else(|| "NULL".to_string())
-}
-
-fn sql_opt_u64(value: Option<u64>) -> String {
-    value
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "NULL".to_string())
 }
 
 #[cfg(test)]
