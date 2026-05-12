@@ -98,6 +98,19 @@ The producer lane supplies its filter in code, so `CUCUMBER_FILTER_TAGS` does no
 - `post-commit` and `post-merge` execute hook-specific refresh paths rather than ordinary watcher path tasks.
 - The daemon claims at most one producer spool job per repo at a time, and queued compatible sync tasks can be coalesced before execution.
 
+### Producer-Spool Admission Boundary
+
+Producer-spool claiming is an admission step, not the primary DevQL task scheduler. Payloads that only promote visible DevQL tasks may be claimed while unrelated same-repo visible task lanes are running; the visible task queue then owns execution ordering through its `(repo_id, task kind)` lane model.
+
+Current admission classes:
+
+- `Task { Sync(..) }` promotes a visible sync task and conflicts with running same-repo sync or repo-policy-change sync.
+- `Task { Ingest(..) }` promotes a visible ingest task and conflicts with running same-repo ingest or repo-policy-change sync.
+- `PostCommitRefresh` and `PostMergeRefresh` expand into visible task work and remain conservative against their produced task kinds.
+- `PostCommitDerivation` and `PrePushSync` perform inline work in the producer-spool worker and remain repo-exclusive.
+
+This boundary keeps watcher sync visible during long-running ingest while preserving ordering for inline hook work.
+
 ## Follow-up risks
 
 - Multi-repo daemon watcher rehydration still needs manual and automated coverage beyond single-repo smoke tests.
