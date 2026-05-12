@@ -4,7 +4,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::contracts::{RoleAdjudicationRequest, RoleFactsReader, RoleTaxonomyReader};
+use super::contracts::{
+    RoleAdjudicationRequest, RoleCandidateDescriptor, RoleFactsReader, RoleTaxonomyReader,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidencePacketLimits {
@@ -35,7 +37,7 @@ impl Default for EvidencePacketLimits {
 #[serde(deny_unknown_fields)]
 pub struct RoleEvidencePacket {
     pub request: RoleAdjudicationRequest,
-    pub candidate_roles: Vec<String>,
+    pub candidate_roles: Vec<RoleCandidateDescriptor>,
     #[serde(default)]
     pub facts: Vec<Value>,
     #[serde(default)]
@@ -60,7 +62,7 @@ impl<'a> RoleEvidencePacketBuilder<'a> {
     pub async fn build(&self, request: &RoleAdjudicationRequest) -> Result<RoleEvidencePacket> {
         let active_roles = self
             .taxonomy
-            .load_active_role_ids(&request.repo_id, request.generation)
+            .load_active_roles(&request.repo_id, request.generation)
             .await?;
 
         let role_candidates =
@@ -101,23 +103,32 @@ impl<'a> RoleEvidencePacketBuilder<'a> {
 
 fn candidate_roles_for_request(
     request: &RoleAdjudicationRequest,
-    active_roles: &BTreeSet<String>,
+    active_roles: &[RoleCandidateDescriptor],
     max_candidate_roles: usize,
-) -> Vec<String> {
+) -> Vec<RoleCandidateDescriptor> {
+    if max_candidate_roles == 0 {
+        return Vec::new();
+    }
+
     let mut out = Vec::new();
+    let mut selected = BTreeSet::new();
 
     for role_id in &request.candidate_role_ids {
-        if active_roles.contains(role_id) && !out.contains(role_id) {
-            out.push(role_id.clone());
+        if selected.contains(role_id) {
+            continue;
+        }
+        if let Some(role) = active_roles.iter().find(|role| role.role_id == *role_id) {
+            selected.insert(role.role_id.clone());
+            out.push(role.clone());
             if out.len() >= max_candidate_roles {
                 return out;
             }
         }
     }
 
-    for role_id in active_roles {
-        if !out.contains(role_id) {
-            out.push(role_id.clone());
+    for role in active_roles {
+        if selected.insert(role.role_id.clone()) {
+            out.push(role.clone());
             if out.len() >= max_candidate_roles {
                 return out;
             }
@@ -151,29 +162,45 @@ fn trim_snippets(snippets: Vec<String>, max_chars: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use super::*;
     use crate::capability_packs::architecture_graph::roles::contracts::{
-        RoleFactsBundle, RuleSignalFact,
+        RoleCandidateDescriptor, RoleFactsBundle, RuleSignalFact,
     };
 
     struct FakeTaxonomy;
     impl RoleTaxonomyReader for FakeTaxonomy {
-        fn load_active_role_ids<'a>(
+        fn load_active_roles<'a>(
             &'a self,
             _repo_id: &'a str,
             _generation: u64,
         ) -> crate::capability_packs::architecture_graph::roles::contracts::RoleBoxFuture<
             'a,
-            BTreeSet<String>,
+            Vec<RoleCandidateDescriptor>,
         > {
             Box::pin(async move {
-                Ok(BTreeSet::from([
-                    "entrypoint".to_string(),
-                    "storage_adapter".to_string(),
-                    "command_dispatcher".to_string(),
-                ]))
+                Ok(vec![
+                    RoleCandidateDescriptor {
+                        role_id: "command_dispatcher".to_string(),
+                        canonical_key: "command_dispatcher".to_string(),
+                        family: "application".to_string(),
+                        display_name: "Command Dispatcher".to_string(),
+                        description: "Dispatches application commands".to_string(),
+                    },
+                    RoleCandidateDescriptor {
+                        role_id: "entrypoint".to_string(),
+                        canonical_key: "entrypoint_http_api".to_string(),
+                        family: "interface".to_string(),
+                        display_name: "HTTP API Entry Point".to_string(),
+                        description: "Accepts inbound HTTP API requests".to_string(),
+                    },
+                    RoleCandidateDescriptor {
+                        role_id: "storage_adapter".to_string(),
+                        canonical_key: "storage_adapter".to_string(),
+                        family: "infrastructure".to_string(),
+                        display_name: "Storage Adapter".to_string(),
+                        description: "Persists and loads data".to_string(),
+                    },
+                ])
             })
         }
     }
@@ -243,11 +270,33 @@ mod tests {
             .await
             .expect("packet should build");
 
+        assert_eq!(packet.candidate_roles.len(), 2);
+        assert_eq!(packet.candidate_roles[0].role_id, "entrypoint");
         assert_eq!(
-            packet.candidate_roles,
-            vec!["entrypoint".to_string(), "command_dispatcher".to_string()]
+            packet.candidate_roles[0].canonical_key,
+            "entrypoint_http_api"
         );
+        assert_eq!(
+            packet.candidate_roles[0].display_name,
+            "HTTP API Entry Point"
+        );
+        assert_eq!(packet.candidate_roles[1].role_id, "command_dispatcher");
+        assert_eq!(packet.candidate_roles[1].family, "application");
         assert_eq!(packet.source_snippets.join(""), "0123456789ab");
         assert_eq!(packet.rule_signals.len(), 1);
+
+        let zero_candidate_packet = RoleEvidencePacketBuilder {
+            taxonomy: &FakeTaxonomy,
+            facts: &FakeFacts,
+            limits: EvidencePacketLimits {
+                max_candidate_roles: 0,
+                ..EvidencePacketLimits::default()
+            },
+        }
+        .build(&request())
+        .await
+        .expect("packet should build");
+
+        assert!(zero_candidate_packet.candidate_roles.is_empty());
     }
 }

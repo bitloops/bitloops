@@ -1,4 +1,5 @@
 mod adjudication;
+mod adjudication_attempts;
 mod assignments;
 mod facts;
 mod management;
@@ -10,6 +11,10 @@ mod rules;
 mod signals;
 
 pub use adjudication::{DbRoleAssignmentWriter, DbRoleFactsReader, DbRoleTaxonomyReader};
+pub use adjudication_attempts::{
+    DbRoleAdjudicationAttemptWriter, RoleAdjudicationAttemptRecord,
+    list_recent_role_adjudication_attempts,
+};
 pub use assignments::{
     AssignmentHistoryWrite, RoleClassificationStateReplacement, RoleClassificationStateWriteCounts,
     list_active_current_assignments_for_role, list_current_assignments_for_role,

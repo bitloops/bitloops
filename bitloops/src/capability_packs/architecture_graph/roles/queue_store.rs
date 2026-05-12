@@ -1,11 +1,13 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::contracts::{
-    RoleAdjudicationFailure, RoleAdjudicationProvenance, RoleAdjudicationRequest,
-    RoleAdjudicationResult, RoleAssignmentWriteEvent, RoleAssignmentWriteOutcome,
-    RoleAssignmentWriter, RoleBoxFuture, RoleFactsBundle, RoleFactsReader, RoleQueueEnqueueResult,
-    RoleQueueJobStatus, RoleTaxonomyReader,
+    AdjudicationOutcome, RoleAdjudicationAttemptEvent, RoleAdjudicationAttemptWriteResult,
+    RoleAdjudicationAttemptWriter, RoleAdjudicationFailure, RoleAdjudicationProvenance,
+    RoleAdjudicationRequest, RoleAdjudicationResult, RoleAssignmentWriteEvent,
+    RoleAssignmentWriteOutcome, RoleAssignmentWriter, RoleBoxFuture, RoleCandidateDescriptor,
+    RoleFactsBundle, RoleFactsReader, RoleQueueEnqueueResult, RoleQueueJobStatus,
+    RoleTaxonomyReader,
 };
 use anyhow::Result;
 
@@ -118,6 +120,73 @@ pub fn default_queue_store() -> Arc<dyn RoleAdjudicationQueueStore> {
         .clone()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InMemoryAttemptWriteResult {
+    pub repo_id: String,
+    pub attempt_id: String,
+    pub assignment_write_persisted: bool,
+    pub assignment_write_source: String,
+}
+
+#[derive(Default)]
+pub struct InMemoryRoleAdjudicationAttemptWriter {
+    attempts: Mutex<Vec<RoleAdjudicationAttemptEvent>>,
+    write_results: Mutex<Vec<InMemoryAttemptWriteResult>>,
+}
+
+impl InMemoryRoleAdjudicationAttemptWriter {
+    pub fn recorded_attempts(&self) -> Vec<RoleAdjudicationAttemptEvent> {
+        self.attempts
+            .lock()
+            .expect("attempt mutex poisoned")
+            .clone()
+    }
+
+    pub fn write_results(&self) -> Vec<InMemoryAttemptWriteResult> {
+        self.write_results
+            .lock()
+            .expect("attempt write result mutex poisoned")
+            .clone()
+    }
+}
+
+impl RoleAdjudicationAttemptWriter for InMemoryRoleAdjudicationAttemptWriter {
+    fn record_attempt<'a>(
+        &'a self,
+        event: RoleAdjudicationAttemptEvent,
+    ) -> RoleBoxFuture<'a, RoleAdjudicationAttemptWriteResult> {
+        Box::pin(async move {
+            let attempt_id = event.attempt_id.clone();
+            self.attempts
+                .lock()
+                .expect("attempt mutex poisoned")
+                .push(event);
+            Ok(RoleAdjudicationAttemptWriteResult { attempt_id })
+        })
+    }
+
+    fn mark_assignment_write_result<'a>(
+        &'a self,
+        repo_id: &'a str,
+        attempt_id: &'a str,
+        assignment_write_persisted: bool,
+        assignment_write_source: &'a str,
+    ) -> RoleBoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.write_results
+                .lock()
+                .expect("attempt write result mutex poisoned")
+                .push(InMemoryAttemptWriteResult {
+                    repo_id: repo_id.to_string(),
+                    attempt_id: attempt_id.to_string(),
+                    assignment_write_persisted,
+                    assignment_write_source: assignment_write_source.to_string(),
+                });
+            Ok(())
+        })
+    }
+}
+
 #[derive(Default)]
 pub struct InMemoryRoleAssignmentWriter {
     applied: Mutex<Vec<RoleAssignmentWriteEvent>>,
@@ -152,6 +221,14 @@ impl RoleAssignmentWriter for InMemoryRoleAssignmentWriter {
         event: RoleAssignmentWriteEvent,
     ) -> RoleBoxFuture<'a, RoleAssignmentWriteOutcome> {
         Box::pin(async move {
+            if event.result.outcome != AdjudicationOutcome::Assigned
+                || event.result.assignments.is_empty()
+            {
+                return Ok(RoleAssignmentWriteOutcome {
+                    source: "in_memory",
+                    persisted: false,
+                });
+            }
             self.applied
                 .lock()
                 .expect("writer mutex poisoned")
@@ -185,27 +262,39 @@ impl RoleAssignmentWriter for InMemoryRoleAssignmentWriter {
 
 #[derive(Default)]
 pub struct InMemoryRoleTaxonomyReader {
-    active_roles: Mutex<BTreeSet<String>>,
+    active_roles: Mutex<Vec<RoleCandidateDescriptor>>,
 }
 
 impl InMemoryRoleTaxonomyReader {
     pub fn with_roles(roles: &[&str]) -> Self {
-        let mut set = BTreeSet::new();
-        for role in roles {
-            set.insert((*role).to_string());
-        }
+        let active_roles = roles
+            .iter()
+            .map(|role| RoleCandidateDescriptor {
+                role_id: (*role).to_string(),
+                canonical_key: (*role).to_string(),
+                family: "test".to_string(),
+                display_name: (*role).to_string(),
+                description: String::new(),
+            })
+            .collect();
         Self {
-            active_roles: Mutex::new(set),
+            active_roles: Mutex::new(active_roles),
+        }
+    }
+
+    pub fn with_role_descriptors(active_roles: Vec<RoleCandidateDescriptor>) -> Self {
+        Self {
+            active_roles: Mutex::new(active_roles),
         }
     }
 }
 
 impl RoleTaxonomyReader for InMemoryRoleTaxonomyReader {
-    fn load_active_role_ids<'a>(
+    fn load_active_roles<'a>(
         &'a self,
         _repo_id: &'a str,
         _generation: u64,
-    ) -> RoleBoxFuture<'a, BTreeSet<String>> {
+    ) -> RoleBoxFuture<'a, Vec<RoleCandidateDescriptor>> {
         Box::pin(async move {
             Ok(self
                 .active_roles

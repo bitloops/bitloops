@@ -19,9 +19,9 @@ use super::types::{
 };
 use super::{
     roles::{
-        DbRoleAssignmentWriter, DbRoleFactsReader, DbRoleTaxonomyReader,
-        RoleAdjudicationMailboxPayload, RoleAdjudicationServices, default_queue_store,
-        run_adjudication_request,
+        DbRoleAdjudicationAttemptWriter, DbRoleAssignmentWriter, DbRoleFactsReader,
+        DbRoleTaxonomyReader, RoleAdjudicationMailboxPayload, RoleAdjudicationServices,
+        default_queue_store, run_adjudication_request,
     },
     types::ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
 };
@@ -200,12 +200,14 @@ async fn run_role_adjudication_payload(
     let taxonomy = DbRoleTaxonomyReader::new(relational);
     let facts = DbRoleFactsReader::new(relational);
     let writer = DbRoleAssignmentWriter::new(relational);
+    let attempts = DbRoleAdjudicationAttemptWriter::new(relational);
 
     let services = RoleAdjudicationServices {
         queue: queue.as_ref(),
         taxonomy: &taxonomy,
         facts: &facts,
         writer: &writer,
+        attempts: &attempts,
     };
     run_adjudication_request(&payload.request, inference, repo_root, &services).await
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::capability_packs::architecture_graph::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
@@ -12,19 +13,25 @@ use crate::host::inference::InferenceGateway;
 use super::adjudication_selector::{DeterministicRoleOutcomeInput, select_adjudication_reason};
 use super::assignment_applier::apply_adjudication_result;
 use super::contracts::{
+    AdjudicationOutcome, RoleAdjudicationAttemptEvent, RoleAdjudicationAttemptOutcome,
     RoleAdjudicationFailure, RoleAdjudicationMailboxPayload, RoleAdjudicationRequest,
     RoleAssignmentWriteOutcome,
 };
-use super::evidence_packet_builder::{EvidencePacketLimits, RoleEvidencePacketBuilder};
+use super::evidence_packet_builder::{
+    EvidencePacketLimits, RoleEvidencePacket, RoleEvidencePacketBuilder,
+};
 use super::llm_executor::execute_llm_adjudication;
 use super::queue_store::RoleAdjudicationQueueStore;
 use super::response_validator::validate_adjudication_result;
+
+const SKIPPED_NON_ASSIGNMENT_WRITE_SOURCE: &str = "skipped_non_assignment";
 
 pub struct RoleAdjudicationServices<'a> {
     pub queue: &'a dyn RoleAdjudicationQueueStore,
     pub taxonomy: &'a dyn super::contracts::RoleTaxonomyReader,
     pub facts: &'a dyn super::contracts::RoleFactsReader,
     pub writer: &'a dyn super::contracts::RoleAssignmentWriter,
+    pub attempts: &'a dyn super::contracts::RoleAdjudicationAttemptWriter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +140,87 @@ fn infer_deterministic_outcome(
     }
 }
 
+fn unix_timestamp_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn unix_timestamp_nanos_now() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
+}
+
+fn attempt_id_for(request: &RoleAdjudicationRequest, observed_at_unix_nanos: u128) -> String {
+    crate::host::devql::deterministic_uuid(&format!(
+        "architecture_role_adjudication_attempt|{}|{}|{}",
+        request.repo_id,
+        request.scope_key(),
+        observed_at_unix_nanos
+    ))
+}
+
+fn attempt_outcome_from_result(
+    result: &super::contracts::RoleAdjudicationResult,
+) -> RoleAdjudicationAttemptOutcome {
+    match result.outcome {
+        AdjudicationOutcome::Assigned => RoleAdjudicationAttemptOutcome::Assigned,
+        AdjudicationOutcome::Unknown => RoleAdjudicationAttemptOutcome::Unknown,
+        AdjudicationOutcome::NeedsReview => RoleAdjudicationAttemptOutcome::NeedsReview,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn role_adjudication_attempt_event(
+    request: &RoleAdjudicationRequest,
+    dedupe_key: &str,
+    packet: &RoleEvidencePacket,
+    packet_json: &Value,
+    packet_sha256: &str,
+    attempt_id: &str,
+    observed_at_unix: u64,
+    model_descriptor: &str,
+    outcome: RoleAdjudicationAttemptOutcome,
+    raw_response_json: Option<Value>,
+    validated_result_json: Option<Value>,
+    failure_message: Option<String>,
+    retryable: bool,
+) -> Result<RoleAdjudicationAttemptEvent> {
+    Ok(RoleAdjudicationAttemptEvent {
+        attempt_id: attempt_id.to_string(),
+        repo_id: request.repo_id.clone(),
+        scope_key: dedupe_key.to_string(),
+        generation: request.generation,
+        target_kind: request.target_kind.clone(),
+        artefact_id: request.artefact_id.clone(),
+        symbol_id: request.symbol_id.clone(),
+        path: request.path.clone(),
+        reason: request.reason,
+        deterministic_confidence: request.deterministic_confidence,
+        candidate_roles: packet.candidate_roles.clone(),
+        current_assignment: request.current_assignment.clone(),
+        request_json: serde_json::to_value(request)?,
+        evidence_packet_sha256: packet_sha256.to_string(),
+        evidence_packet_json: packet_json.clone(),
+        model_descriptor: model_descriptor.to_string(),
+        slot_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT.to_string(),
+        outcome,
+        raw_response_json,
+        validated_result_json,
+        failure_message,
+        retryable,
+        observed_at_unix,
+    })
+}
+
 pub async fn run_adjudication_request(
     request: &RoleAdjudicationRequest,
     inference: &dyn InferenceGateway,
@@ -153,10 +241,15 @@ pub async fn run_adjudication_request(
     };
 
     let packet = packet_builder.build(request).await?;
+    let packet_json = json!(packet);
+    let packet_sha256 = sha256_hex(&serde_json::to_vec(&packet_json)?);
+    let observed_at_unix = unix_timestamp_now();
+    let observed_at_unix_nanos = unix_timestamp_nanos_now();
+    let attempt_id = attempt_id_for(request, observed_at_unix_nanos);
     let active_role_ids = packet
         .candidate_roles
         .iter()
-        .cloned()
+        .map(|role| role.role_id.clone())
         .collect::<BTreeSet<_>>();
 
     if active_role_ids.is_empty() {
@@ -164,16 +257,44 @@ pub async fn run_adjudication_request(
             message: "no active taxonomy roles available for adjudication".to_string(),
             retryable: false,
         };
+        let attempt_write = services
+            .attempts
+            .record_attempt(role_adjudication_attempt_event(
+                request,
+                &dedupe_key,
+                &packet,
+                &packet_json,
+                &packet_sha256,
+                &attempt_id,
+                observed_at_unix,
+                "unavailable",
+                RoleAdjudicationAttemptOutcome::NoActiveRoles,
+                None,
+                None,
+                Some(failure.message.clone()),
+                failure.retryable,
+            )?)
+            .await?;
         services.queue.fail(&dedupe_key, &failure)?;
-        return apply_adjudication_result(
+        let outcome = apply_adjudication_result(
             services.writer,
             request,
             Err(failure),
             "unavailable",
             ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
-            &json!(packet),
+            &packet_json,
         )
-        .await;
+        .await?;
+        services
+            .attempts
+            .mark_assignment_write_result(
+                &request.repo_id,
+                &attempt_write.attempt_id,
+                outcome.persisted,
+                outcome.source,
+            )
+            .await?;
+        return Ok(outcome);
     }
 
     let (raw_result, model_descriptor) =
@@ -184,16 +305,44 @@ pub async fn run_adjudication_request(
                     message: format!("llm adjudication failed: {err:#}"),
                     retryable: true,
                 };
+                let attempt_write = services
+                    .attempts
+                    .record_attempt(role_adjudication_attempt_event(
+                        request,
+                        &dedupe_key,
+                        &packet,
+                        &packet_json,
+                        &packet_sha256,
+                        &attempt_id,
+                        observed_at_unix,
+                        "unknown",
+                        RoleAdjudicationAttemptOutcome::LlmError,
+                        None,
+                        None,
+                        Some(failure.message.clone()),
+                        failure.retryable,
+                    )?)
+                    .await?;
                 services.queue.fail(&dedupe_key, &failure)?;
-                return apply_adjudication_result(
+                let outcome = apply_adjudication_result(
                     services.writer,
                     request,
                     Err(failure),
                     "unknown",
                     ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
-                    &json!(packet),
+                    &packet_json,
                 )
-                .await;
+                .await?;
+                services
+                    .attempts
+                    .mark_assignment_write_result(
+                        &request.repo_id,
+                        &attempt_write.attempt_id,
+                        outcome.persisted,
+                        outcome.source,
+                    )
+                    .await?;
+                return Ok(outcome);
             }
         };
 
@@ -204,18 +353,93 @@ pub async fn run_adjudication_request(
                 message: err.to_string(),
                 retryable: false,
             };
+            let attempt_write = services
+                .attempts
+                .record_attempt(role_adjudication_attempt_event(
+                    request,
+                    &dedupe_key,
+                    &packet,
+                    &packet_json,
+                    &packet_sha256,
+                    &attempt_id,
+                    observed_at_unix,
+                    &model_descriptor,
+                    RoleAdjudicationAttemptOutcome::ValidationError,
+                    Some(raw_result.clone()),
+                    None,
+                    Some(failure.message.clone()),
+                    failure.retryable,
+                )?)
+                .await?;
             services.queue.fail(&dedupe_key, &failure)?;
-            return apply_adjudication_result(
+            let outcome = apply_adjudication_result(
                 services.writer,
                 request,
                 Err(failure),
                 &model_descriptor,
                 ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
-                &json!(packet),
+                &packet_json,
             )
-            .await;
+            .await?;
+            services
+                .attempts
+                .mark_assignment_write_result(
+                    &request.repo_id,
+                    &attempt_write.attempt_id,
+                    outcome.persisted,
+                    outcome.source,
+                )
+                .await?;
+            return Ok(outcome);
         }
     };
+
+    let attempt_write = services
+        .attempts
+        .record_attempt(role_adjudication_attempt_event(
+            request,
+            &dedupe_key,
+            &packet,
+            &packet_json,
+            &packet_sha256,
+            &attempt_id,
+            observed_at_unix,
+            &model_descriptor,
+            attempt_outcome_from_result(&validated),
+            Some(raw_result.clone()),
+            Some(serde_json::to_value(&validated)?),
+            None,
+            false,
+        )?)
+        .await?;
+
+    if !matches!(validated.outcome, AdjudicationOutcome::Assigned) {
+        services
+            .attempts
+            .mark_assignment_write_result(
+                &request.repo_id,
+                &attempt_write.attempt_id,
+                false,
+                SKIPPED_NON_ASSIGNMENT_WRITE_SOURCE,
+            )
+            .await?;
+        services.queue.complete(
+            &dedupe_key,
+            &validated,
+            &super::contracts::RoleAdjudicationProvenance {
+                source: "llm".to_string(),
+                model_descriptor,
+                slot_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT.to_string(),
+                packet_sha256,
+                adjudication_reason: request.reason,
+                adjudicated_at_unix: observed_at_unix,
+            },
+        )?;
+        return Ok(RoleAssignmentWriteOutcome {
+            source: SKIPPED_NON_ASSIGNMENT_WRITE_SOURCE,
+            persisted: false,
+        });
+    }
 
     let outcome = apply_adjudication_result(
         services.writer,
@@ -223,9 +447,18 @@ pub async fn run_adjudication_request(
         Ok(validated.clone()),
         &model_descriptor,
         ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
-        &json!(packet),
+        &packet_json,
     )
     .await?;
+    services
+        .attempts
+        .mark_assignment_write_result(
+            &request.repo_id,
+            &attempt_write.attempt_id,
+            outcome.persisted,
+            outcome.source,
+        )
+        .await?;
     services.queue.complete(
         &dedupe_key,
         &validated,
@@ -233,310 +466,13 @@ pub async fn run_adjudication_request(
             source: "llm".to_string(),
             model_descriptor,
             slot_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT.to_string(),
-            packet_sha256: "deferred".to_string(),
+            packet_sha256,
             adjudication_reason: request.reason,
-            adjudicated_at_unix: 0,
+            adjudicated_at_unix: observed_at_unix,
         },
     )?;
     Ok(outcome)
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use anyhow::Result;
-    use serde_json::json;
-
-    use super::*;
-    use crate::capability_packs::architecture_graph::roles::contracts::{
-        AdjudicationOutcome, AdjudicationReason, RoleAdjudicationResult,
-    };
-    use crate::capability_packs::architecture_graph::roles::queue_store::{
-        InMemoryRoleAdjudicationQueueStore, InMemoryRoleAssignmentWriter,
-    };
-    use crate::host::inference::{
-        EmptyInferenceGateway, InferenceGateway, StructuredGenerationRequest,
-        StructuredGenerationService,
-    };
-
-    struct FakeStructuredService {
-        response: serde_json::Value,
-    }
-
-    impl StructuredGenerationService for FakeStructuredService {
-        fn descriptor(&self) -> String {
-            "fake:model".to_string()
-        }
-
-        fn generate(&self, _request: StructuredGenerationRequest) -> Result<serde_json::Value> {
-            Ok(self.response.clone())
-        }
-    }
-
-    struct FakeInferenceGateway {
-        response: serde_json::Value,
-    }
-
-    impl InferenceGateway for FakeInferenceGateway {
-        fn embeddings(
-            &self,
-            slot_name: &str,
-        ) -> Result<Arc<dyn crate::host::inference::EmbeddingService>> {
-            anyhow::bail!("no embeddings for slot `{slot_name}`")
-        }
-
-        fn text_generation(
-            &self,
-            slot_name: &str,
-        ) -> Result<Arc<dyn crate::host::inference::TextGenerationService>> {
-            anyhow::bail!("no text generation for slot `{slot_name}`")
-        }
-
-        fn structured_generation(
-            &self,
-            _slot_name: &str,
-        ) -> Result<Arc<dyn StructuredGenerationService>> {
-            Ok(Arc::new(FakeStructuredService {
-                response: self.response.clone(),
-            }))
-        }
-
-        fn has_slot(&self, _slot_name: &str) -> bool {
-            true
-        }
-    }
-
-    #[test]
-    fn high_confidence_skip_does_not_select_delta_jobs() {
-        let artefacts = vec![crate::host::capability_host::ChangedArtefact {
-            artefact_id: "a1".to_string(),
-            symbol_id: "s1".to_string(),
-            path: "src/lib.rs".to_string(),
-            canonical_kind: Some("function".to_string()),
-            name: "helper".to_string(),
-        }];
-
-        let requests = role_requests_from_delta("repo", 10, &artefacts);
-        assert!(requests.is_empty());
-    }
-
-    #[test]
-    fn ambiguous_delta_enqueues_request() {
-        let artefacts = vec![crate::host::capability_host::ChangedArtefact {
-            artefact_id: "a1".to_string(),
-            symbol_id: "s1".to_string(),
-            path: "src/lib.rs".to_string(),
-            canonical_kind: None,
-            name: "helper".to_string(),
-        }];
-        let requests = role_requests_from_delta("repo", 10, &artefacts);
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].reason, AdjudicationReason::Unknown);
-    }
-
-    #[tokio::test]
-    async fn invalid_response_marks_needs_review_without_assignment_apply() {
-        let queue = InMemoryRoleAdjudicationQueueStore::new();
-        let writer = InMemoryRoleAssignmentWriter::default();
-        let taxonomy = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleTaxonomyReader::with_roles(&["entrypoint"]);
-        let facts = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleFactsReader::default();
-
-        let request = RoleAdjudicationRequest {
-            repo_id: "repo".to_string(),
-            generation: 7,
-            target_kind: Some("artefact".to_string()),
-            artefact_id: Some("a1".to_string()),
-            symbol_id: Some("s1".to_string()),
-            path: Some("src/main.rs".to_string()),
-            language: Some("rust".to_string()),
-            canonical_kind: Some("function".to_string()),
-            reason: AdjudicationReason::LowConfidence,
-            deterministic_confidence: Some(0.5),
-            candidate_role_ids: vec!["entrypoint".to_string()],
-            current_assignment: None,
-        };
-        queue
-            .enqueue(&request, &request.scope_key())
-            .expect("enqueue should succeed");
-
-        let services = RoleAdjudicationServices {
-            queue: &queue,
-            taxonomy: &taxonomy,
-            facts: &facts,
-            writer: &writer,
-        };
-
-        let inference = FakeInferenceGateway {
-            response: json!({
-                "outcome": "assigned",
-                "assignments": [{
-                    "role_id": "unknown_role",
-                    "confidence": 0.9,
-                    "primary": true,
-                    "evidence": []
-                }],
-                "confidence": 0.9,
-                "evidence": [],
-                "reasoning_summary": "looks like entrypoint",
-                "rule_suggestions": []
-            }),
-        };
-
-        run_adjudication_request(&request, &inference, std::path::Path::new("."), &services)
-            .await
-            .expect("adjudication write path should succeed");
-
-        assert!(writer.applied_events().is_empty());
-        assert_eq!(writer.needs_review_events().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn valid_response_is_persisted_with_llm_source() {
-        let queue = InMemoryRoleAdjudicationQueueStore::new();
-        let writer = InMemoryRoleAssignmentWriter::default();
-        let taxonomy = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleTaxonomyReader::with_roles(&["entrypoint"]);
-        let facts = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleFactsReader::default();
-
-        let request = RoleAdjudicationRequest {
-            repo_id: "repo".to_string(),
-            generation: 7,
-            target_kind: Some("artefact".to_string()),
-            artefact_id: Some("a1".to_string()),
-            symbol_id: Some("s1".to_string()),
-            path: Some("src/main.rs".to_string()),
-            language: Some("rust".to_string()),
-            canonical_kind: Some("function".to_string()),
-            reason: AdjudicationReason::LowConfidence,
-            deterministic_confidence: Some(0.5),
-            candidate_role_ids: vec!["entrypoint".to_string()],
-            current_assignment: None,
-        };
-        queue
-            .enqueue(&request, &request.scope_key())
-            .expect("enqueue should succeed");
-
-        let services = RoleAdjudicationServices {
-            queue: &queue,
-            taxonomy: &taxonomy,
-            facts: &facts,
-            writer: &writer,
-        };
-
-        let inference = FakeInferenceGateway {
-            response: json!({
-                "outcome": "assigned",
-                "assignments": [{
-                    "role_id": "entrypoint",
-                    "confidence": 0.9,
-                    "primary": true,
-                    "evidence": ["main.rs"]
-                }],
-                "confidence": 0.92,
-                "evidence": ["signal"],
-                "reasoning_summary": "clear entrypoint semantics",
-                "rule_suggestions": []
-            }),
-        };
-
-        run_adjudication_request(&request, &inference, std::path::Path::new("."), &services)
-            .await
-            .expect("adjudication should succeed");
-
-        assert_eq!(writer.applied_events().len(), 1);
-        assert_eq!(writer.applied_events()[0].provenance.source, "llm");
-    }
-
-    #[tokio::test]
-    async fn fallback_inference_marks_retryable_failure() {
-        let queue = InMemoryRoleAdjudicationQueueStore::new();
-        let writer = InMemoryRoleAssignmentWriter::default();
-        let taxonomy = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleTaxonomyReader::with_roles(&["entrypoint"]);
-        let facts = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleFactsReader::default();
-
-        let request = RoleAdjudicationRequest {
-            repo_id: "repo".to_string(),
-            generation: 7,
-            target_kind: Some("artefact".to_string()),
-            artefact_id: Some("a1".to_string()),
-            symbol_id: Some("s1".to_string()),
-            path: Some("src/main.rs".to_string()),
-            language: Some("rust".to_string()),
-            canonical_kind: Some("function".to_string()),
-            reason: AdjudicationReason::LowConfidence,
-            deterministic_confidence: Some(0.5),
-            candidate_role_ids: vec!["entrypoint".to_string()],
-            current_assignment: None,
-        };
-        queue
-            .enqueue(&request, &request.scope_key())
-            .expect("enqueue should succeed");
-
-        let services = RoleAdjudicationServices {
-            queue: &queue,
-            taxonomy: &taxonomy,
-            facts: &facts,
-            writer: &writer,
-        };
-
-        run_adjudication_request(
-            &request,
-            &EmptyInferenceGateway,
-            std::path::Path::new("."),
-            &services,
-        )
-        .await
-        .expect("failure should still be persisted as needs-review");
-
-        assert_eq!(writer.applied_events().len(), 0);
-        assert_eq!(writer.needs_review_events().len(), 1);
-    }
-
-    #[test]
-    fn queue_retry_only_requeues_failed_items() {
-        let queue = InMemoryRoleAdjudicationQueueStore::new();
-        let request = RoleAdjudicationRequest {
-            repo_id: "repo".to_string(),
-            generation: 1,
-            target_kind: Some("artefact".to_string()),
-            artefact_id: Some("a1".to_string()),
-            symbol_id: None,
-            path: Some("src/lib.rs".to_string()),
-            language: None,
-            canonical_kind: None,
-            reason: AdjudicationReason::Unknown,
-            deterministic_confidence: None,
-            candidate_role_ids: vec![],
-            current_assignment: None,
-        };
-        let key = request.scope_key();
-        queue.enqueue(&request, &key).expect("enqueue");
-
-        assert!(!queue.retry(&key).expect("retry queued should be false"));
-
-        queue.claim(&key).expect("claim");
-        queue
-            .fail(
-                &key,
-                &RoleAdjudicationFailure {
-                    message: "temporary".to_string(),
-                    retryable: true,
-                },
-            )
-            .expect("fail");
-
-        assert!(queue.retry(&key).expect("retry failed should be true"));
-    }
-
-    #[test]
-    fn result_shape_can_be_constructed_for_regression_guard() {
-        let _ = RoleAdjudicationResult {
-            outcome: AdjudicationOutcome::Unknown,
-            assignments: Vec::new(),
-            confidence: 0.2,
-            evidence: json!([]),
-            reasoning_summary: "none".to_string(),
-            rule_suggestions: Vec::new(),
-        };
-    }
-}
+mod tests;

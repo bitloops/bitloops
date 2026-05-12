@@ -15,6 +15,7 @@ use crate::capability_packs::architecture_graph::roles::migrations::{
     create_rule_draft_proposal, create_rule_edit_proposal, create_split_role_proposal,
     show_proposal,
 };
+use crate::capability_packs::architecture_graph::roles::storage::list_recent_role_adjudication_attempts;
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     RoleSplitSpecFile, RuleSpecFile,
 };
@@ -235,6 +236,8 @@ struct RolesStatusOutput {
     queue_summary: RoleAdjudicationQueueSummary,
     queue_items: Vec<RoleAdjudicationQueueItem>,
     review_items: Vec<RoleReviewItem>,
+    adjudication_attempt_summary: RoleAdjudicationAttemptSummary,
+    adjudication_attempts: Vec<RoleAdjudicationAttemptItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,6 +273,33 @@ struct RoleAdjudicationQueueItem {
     deterministic_confidence: Option<f64>,
     parse_error: Option<String>,
     last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RoleAdjudicationAttemptSummary {
+    total: usize,
+    by_outcome: BTreeMap<String, usize>,
+    persisted_assignments: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RoleAdjudicationAttemptItem {
+    attempt_id: String,
+    scope_key: String,
+    generation: u64,
+    target_kind: Option<String>,
+    artefact_id: Option<String>,
+    symbol_id: Option<String>,
+    path: Option<String>,
+    reason: String,
+    outcome: String,
+    model_descriptor: String,
+    assignment_write_persisted: bool,
+    assignment_write_source: Option<String>,
+    failure_message: Option<String>,
+    reasoning_summary: Option<String>,
+    observed_at_unix: u64,
+    updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -512,11 +542,17 @@ async fn run_architecture_roles_status(
     let queue_items = load_role_adjudication_queue_items(scope, limit)?;
     let review_items =
         load_role_review_items(context.storage.as_ref(), &scope.repo.repo_id, limit).await?;
+    let adjudication_attempts =
+        load_role_adjudication_attempt_items(context.storage.as_ref(), &scope.repo.repo_id, limit)
+            .await?;
     let summary = summarise_queue_items(&queue_items);
+    let adjudication_attempt_summary = summarise_adjudication_attempts(&adjudication_attempts);
     let output = RolesStatusOutput {
         queue_summary: summary,
         queue_items,
         review_items,
+        adjudication_attempt_summary,
+        adjudication_attempts,
     };
 
     if args.json {
@@ -616,6 +652,53 @@ fn summarise_queue_items(items: &[RoleAdjudicationQueueItem]) -> RoleAdjudicatio
     }
 }
 
+async fn load_role_adjudication_attempt_items(
+    relational: &crate::host::devql::RelationalStorage,
+    repo_id: &str,
+    limit: usize,
+) -> Result<Vec<RoleAdjudicationAttemptItem>> {
+    let records = list_recent_role_adjudication_attempts(relational, repo_id, limit).await?;
+    Ok(records
+        .into_iter()
+        .map(|record| RoleAdjudicationAttemptItem {
+            attempt_id: record.attempt_id,
+            scope_key: record.scope_key,
+            generation: record.generation,
+            target_kind: record.target_kind,
+            artefact_id: record.artefact_id,
+            symbol_id: record.symbol_id,
+            path: record.path,
+            reason: record.reason,
+            outcome: record.outcome,
+            model_descriptor: record.model_descriptor,
+            assignment_write_persisted: record.assignment_write_persisted,
+            assignment_write_source: record.assignment_write_source,
+            failure_message: record.failure_message,
+            reasoning_summary: record.reasoning_summary,
+            observed_at_unix: record.observed_at_unix,
+            updated_at: record.updated_at,
+        })
+        .collect())
+}
+
+fn summarise_adjudication_attempts(
+    items: &[RoleAdjudicationAttemptItem],
+) -> RoleAdjudicationAttemptSummary {
+    let mut by_outcome = BTreeMap::<String, usize>::new();
+    let mut persisted_assignments = 0usize;
+    for item in items {
+        *by_outcome.entry(item.outcome.clone()).or_default() += 1;
+        if item.assignment_write_persisted {
+            persisted_assignments += 1;
+        }
+    }
+    RoleAdjudicationAttemptSummary {
+        total: items.len(),
+        by_outcome,
+        persisted_assignments,
+    }
+}
+
 async fn load_role_review_items(
     relational: &crate::host::devql::RelationalStorage,
     repo_id: &str,
@@ -687,7 +770,10 @@ async fn load_role_review_items(
 }
 
 fn print_roles_status_human(output: &RolesStatusOutput) {
-    if output.queue_items.is_empty() && output.review_items.is_empty() {
+    if output.queue_items.is_empty()
+        && output.review_items.is_empty()
+        && output.adjudication_attempts.is_empty()
+    {
         println!("no ambiguous architecture roles found");
         return;
     }
@@ -743,6 +829,39 @@ fn print_roles_status_human(output: &RolesStatusOutput) {
             }
             if let Some(last_error) = item.last_error.as_deref() {
                 println!("    last_error={last_error}");
+            }
+        }
+    }
+
+    if !output.adjudication_attempts.is_empty() {
+        println!("recent adjudication attempts:");
+        for item in &output.adjudication_attempts {
+            println!(
+                "  attempt={} outcome={} persisted={} reason={} path={} artefact={} symbol={} generation={} model={} observed_at_unix={}",
+                item.attempt_id,
+                item.outcome,
+                item.assignment_write_persisted,
+                item.reason,
+                item.path.as_deref().unwrap_or("<unknown>"),
+                item.artefact_id.as_deref().unwrap_or("<unknown>"),
+                item.symbol_id.as_deref().unwrap_or("<unknown>"),
+                item.generation,
+                item.model_descriptor,
+                item.observed_at_unix,
+            );
+            if let Some(summary) = item
+                .reasoning_summary
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                println!("    reasoning={summary}");
+            }
+            if let Some(failure) = item
+                .failure_message
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                println!("    failure={failure}");
             }
         }
     }

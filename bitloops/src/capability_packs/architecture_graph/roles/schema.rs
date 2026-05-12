@@ -9,6 +9,7 @@ pub const ARCHITECTURE_ROLE_TABLES: &[&str] = &[
     "architecture_role_assignments",
     "architecture_role_change_proposals",
     "architecture_role_assignment_migrations",
+    "architecture_role_adjudication_attempts",
 ];
 
 pub fn architecture_graph_roles_sqlite_schema_sql() -> &'static str {
@@ -237,6 +238,46 @@ CREATE TABLE IF NOT EXISTS architecture_role_assignment_migrations (
 
 CREATE INDEX IF NOT EXISTS architecture_role_migrations_repo_proposal_idx
 ON architecture_role_assignment_migrations (repo_id, proposal_id, created_at);
+
+CREATE TABLE IF NOT EXISTS architecture_role_adjudication_attempts (
+    repo_id TEXT NOT NULL,
+    attempt_id TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    generation_seq INTEGER NOT NULL,
+    target_kind TEXT,
+    artefact_id TEXT,
+    symbol_id TEXT,
+    path TEXT,
+    reason TEXT NOT NULL,
+    deterministic_confidence REAL,
+    candidate_roles_json TEXT NOT NULL DEFAULT '[]',
+    current_assignment_json TEXT,
+    request_json TEXT NOT NULL DEFAULT '{}',
+    evidence_packet_sha256 TEXT NOT NULL,
+    evidence_packet_json TEXT NOT NULL DEFAULT '{}',
+    model_descriptor TEXT NOT NULL DEFAULT '',
+    slot_name TEXT NOT NULL DEFAULT '',
+    outcome TEXT NOT NULL,
+    raw_response_json TEXT,
+    validated_result_json TEXT,
+    failure_message TEXT,
+    retryable INTEGER NOT NULL DEFAULT 0,
+    assignment_write_persisted INTEGER NOT NULL DEFAULT 0,
+    assignment_write_source TEXT,
+    observed_at_unix INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (repo_id, attempt_id)
+);
+
+CREATE INDEX IF NOT EXISTS architecture_role_adjudication_attempts_scope_idx
+ON architecture_role_adjudication_attempts (repo_id, scope_key, observed_at_unix DESC);
+
+CREATE INDEX IF NOT EXISTS architecture_role_adjudication_attempts_outcome_idx
+ON architecture_role_adjudication_attempts (repo_id, outcome, observed_at_unix DESC);
+
+CREATE INDEX IF NOT EXISTS architecture_role_adjudication_attempts_path_idx
+ON architecture_role_adjudication_attempts (repo_id, path, observed_at_unix DESC);
 "#
 }
 

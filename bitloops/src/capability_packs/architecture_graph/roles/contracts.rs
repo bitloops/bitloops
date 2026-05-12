@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -36,6 +35,40 @@ pub enum AdjudicationOutcome {
     Assigned,
     Unknown,
     NeedsReview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleCandidateDescriptor {
+    pub role_id: String,
+    pub canonical_key: String,
+    pub family: String,
+    pub display_name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleAdjudicationAttemptOutcome {
+    Assigned,
+    Unknown,
+    NeedsReview,
+    LlmError,
+    ValidationError,
+    NoActiveRoles,
+}
+
+impl RoleAdjudicationAttemptOutcome {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Assigned => "assigned",
+            Self::Unknown => "unknown",
+            Self::NeedsReview => "needs_review",
+            Self::LlmError => "llm_error",
+            Self::ValidationError => "validation_error",
+            Self::NoActiveRoles => "no_active_roles",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -190,6 +223,38 @@ pub struct RoleAssignmentWriteOutcome {
     pub persisted: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoleAdjudicationAttemptEvent {
+    pub attempt_id: String,
+    pub repo_id: String,
+    pub scope_key: String,
+    pub generation: u64,
+    pub target_kind: Option<String>,
+    pub artefact_id: Option<String>,
+    pub symbol_id: Option<String>,
+    pub path: Option<String>,
+    pub reason: AdjudicationReason,
+    pub deterministic_confidence: Option<f64>,
+    pub candidate_roles: Vec<RoleCandidateDescriptor>,
+    pub current_assignment: Option<RoleCurrentAssignmentSnapshot>,
+    pub request_json: Value,
+    pub evidence_packet_sha256: String,
+    pub evidence_packet_json: Value,
+    pub model_descriptor: String,
+    pub slot_name: String,
+    pub outcome: RoleAdjudicationAttemptOutcome,
+    pub raw_response_json: Option<Value>,
+    pub validated_result_json: Option<Value>,
+    pub failure_message: Option<String>,
+    pub retryable: bool,
+    pub observed_at_unix: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleAdjudicationAttemptWriteResult {
+    pub attempt_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoleQueueEnqueueResult {
     Enqueued,
@@ -255,12 +320,27 @@ pub struct RoleFactsBundle {
 
 pub type RoleBoxFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+pub trait RoleAdjudicationAttemptWriter: Send + Sync {
+    fn record_attempt<'a>(
+        &'a self,
+        event: RoleAdjudicationAttemptEvent,
+    ) -> RoleBoxFuture<'a, RoleAdjudicationAttemptWriteResult>;
+
+    fn mark_assignment_write_result<'a>(
+        &'a self,
+        repo_id: &'a str,
+        attempt_id: &'a str,
+        assignment_write_persisted: bool,
+        assignment_write_source: &'a str,
+    ) -> RoleBoxFuture<'a, ()>;
+}
+
 pub trait RoleTaxonomyReader: Send + Sync {
-    fn load_active_role_ids<'a>(
+    fn load_active_roles<'a>(
         &'a self,
         repo_id: &'a str,
         generation: u64,
-    ) -> RoleBoxFuture<'a, BTreeSet<String>>;
+    ) -> RoleBoxFuture<'a, Vec<RoleCandidateDescriptor>>;
 }
 
 pub trait RoleFactsReader: Send + Sync {

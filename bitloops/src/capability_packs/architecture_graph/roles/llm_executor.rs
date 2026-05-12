@@ -54,14 +54,16 @@ pub fn execute_llm_adjudication(
 }
 
 fn adjudication_system_prompt() -> &'static str {
-    "You adjudicate architectural roles for one artefact at a time. Use only the provided evidence packet. Return strict JSON that matches the schema. Do not invent role IDs outside candidate_roles. Prefer needs_review over speculation."
+    "You adjudicate architectural roles for one artefact at a time. Use only the provided evidence packet. Return strict JSON that matches the schema. Use only role IDs from packet.candidate_roles[].role_id. Prefer needs_review over speculation."
 }
 
 fn adjudication_user_prompt(packet: &RoleEvidencePacket) -> String {
     json!({
         "task": "Classify architectural role assignment for one artefact using compact evidence.",
         "rules": [
-            "Use only role IDs listed in candidate_roles.",
+            "Use only role IDs from packet.candidate_roles[].role_id.",
+            "Use candidate role canonical_key, family, display_name, and description to decide between roles.",
+            "Return assigned only when the evidence supports one or more supplied role IDs.",
             "If evidence is insufficient or conflicting, return outcome needs_review or unknown.",
             "Confidence must be a number between 0 and 1.",
             "Return concise reasoning_summary without hidden chain-of-thought."

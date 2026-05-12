@@ -873,12 +873,17 @@ mod deterministic_tests {
             crate::capability_packs::architecture_graph::roles::DbRoleAssignmentWriter::new(
                 &relational,
             );
+        let attempts =
+            crate::capability_packs::architecture_graph::roles::DbRoleAdjudicationAttemptWriter::new(
+                &relational,
+            );
         let services =
             crate::capability_packs::architecture_graph::roles::RoleAdjudicationServices {
                 queue: &queue,
                 taxonomy: &taxonomy,
                 facts: &facts,
                 writer: &writer,
+                attempts: &attempts,
             };
         let write_outcome =
             crate::capability_packs::architecture_graph::roles::run_adjudication_request(

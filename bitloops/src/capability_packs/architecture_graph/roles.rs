@@ -37,11 +37,15 @@ pub use orchestrator::{
     enqueue_adjudication_requests, run_adjudication_request,
 };
 pub use queue_store::{
-    InMemoryRoleAdjudicationQueueStore, InMemoryRoleAssignmentWriter, InMemoryRoleFactsReader,
-    InMemoryRoleTaxonomyReader, RoleAdjudicationQueueStore, default_queue_store,
+    InMemoryRoleAdjudicationAttemptWriter, InMemoryRoleAdjudicationQueueStore,
+    InMemoryRoleAssignmentWriter, InMemoryRoleFactsReader, InMemoryRoleTaxonomyReader,
+    RoleAdjudicationQueueStore, default_queue_store,
 };
 pub use response_validator::validate_adjudication_result;
-pub use storage::{DbRoleAssignmentWriter, DbRoleFactsReader, DbRoleTaxonomyReader};
+pub use storage::{
+    DbRoleAdjudicationAttemptWriter, DbRoleAssignmentWriter, DbRoleFactsReader,
+    DbRoleTaxonomyReader,
+};
 pub use taxonomy::{
     ArchitectureArtefactFact, ArchitectureRole, ArchitectureRoleAssignment,
     ArchitectureRoleAssignmentHistory, ArchitectureRoleChangeProposal,

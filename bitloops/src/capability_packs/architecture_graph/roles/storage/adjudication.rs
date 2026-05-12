@@ -1,13 +1,11 @@
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 
 use crate::capability_packs::architecture_graph::roles::contracts::{
     AdjudicationOutcome, RoleAdjudicationFailure, RoleAdjudicationProvenance,
     RoleAdjudicationRequest, RoleAssignmentWriteEvent, RoleAssignmentWriteOutcome,
-    RoleAssignmentWriter, RoleBoxFuture, RoleFactsBundle, RoleFactsReader, RoleTaxonomyReader,
-    RuleSignalFact,
+    RoleAssignmentWriter, RoleBoxFuture, RoleCandidateDescriptor, RoleFactsBundle, RoleFactsReader,
+    RoleTaxonomyReader, RuleSignalFact,
 };
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     ArchitectureRoleAssignment, AssignmentPriority, AssignmentSource, AssignmentStatus, RoleTarget,
@@ -31,31 +29,26 @@ impl<'a> DbRoleTaxonomyReader<'a> {
 }
 
 impl RoleTaxonomyReader for DbRoleTaxonomyReader<'_> {
-    fn load_active_role_ids<'a>(
+    fn load_active_roles<'a>(
         &'a self,
         repo_id: &'a str,
         _generation: u64,
-    ) -> RoleBoxFuture<'a, BTreeSet<String>> {
+    ) -> RoleBoxFuture<'a, Vec<RoleCandidateDescriptor>> {
         Box::pin(async move {
             let rows = self
                 .relational
                 .query_rows(&format!(
-                    "SELECT role_id
+                    "SELECT role_id, canonical_key, family, display_name, description
                      FROM architecture_roles
                      WHERE repo_id = {} AND lifecycle_status = 'active'
-                     ORDER BY role_id ASC;",
+                     ORDER BY family ASC, canonical_key ASC, role_id ASC;",
                     sql_text(repo_id)
                 ))
                 .await
                 .context("loading active architecture role taxonomy")?;
-            Ok(rows
-                .iter()
-                .filter_map(|row| {
-                    row.get("role_id")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                })
-                .collect())
+            rows.into_iter()
+                .map(role_candidate_descriptor_from_row)
+                .collect::<Result<Vec<_>>>()
         })
     }
 }
@@ -370,6 +363,16 @@ fn rule_signal_from_row(row: Value) -> Result<RuleSignalFact> {
     })
 }
 
+fn role_candidate_descriptor_from_row(row: Value) -> Result<RoleCandidateDescriptor> {
+    Ok(RoleCandidateDescriptor {
+        role_id: string_field(&row, "role_id")?,
+        canonical_key: string_field(&row, "canonical_key")?,
+        family: string_field(&row, "family")?,
+        display_name: string_field(&row, "display_name")?,
+        description: string_field(&row, "description")?,
+    })
+}
+
 fn string_field(row: &Value, key: &str) -> Result<String> {
     row.get(key)
         .and_then(Value::as_str)
@@ -452,10 +455,16 @@ mod tests {
         upsert_classification_role(&relational, &role()).await?;
 
         let roles = DbRoleTaxonomyReader::new(&relational)
-            .load_active_role_ids("repo-1", 1)
+            .load_active_roles("repo-1", 1)
             .await?;
 
-        assert_eq!(roles, BTreeSet::from([role().role_id]));
+        assert_eq!(
+            roles
+                .iter()
+                .map(|role| role.role_id.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([role().role_id])
+        );
         Ok(())
     }
 
@@ -475,9 +484,15 @@ mod tests {
         upsert_classification_role(&relational, &role).await?;
 
         let reader = DbRoleTaxonomyReader::new(&relational);
-        let roles = reader.load_active_role_ids("repo-async-reader", 1).await?;
+        let roles = reader.load_active_roles("repo-async-reader", 1).await?;
 
-        assert!(roles.contains(&role.role_id));
+        assert_eq!(
+            roles
+                .iter()
+                .map(|role| role.role_id.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([role.role_id])
+        );
         Ok(())
     }
 
