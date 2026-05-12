@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1>Your agents remember, so you don’t have to.</h1>
+  <h1>Stop giving your AI agents the same repo tour.</h1>
   <p>
     <strong>Bitloops builds and maintains a local, typed, queryable model of your codebase so AI agents, developers, and reviewers can work from shared system state instead of rediscovering the repository from raw text.</strong>
   </p>
