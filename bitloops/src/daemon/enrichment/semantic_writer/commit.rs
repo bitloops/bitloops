@@ -3,6 +3,9 @@ use rusqlite::Connection;
 use std::fmt;
 use std::time::Instant;
 
+use crate::config::resolve_store_backend_config_for_repo;
+use crate::storage::PostgresSyncConnection;
+
 use super::runtime_store::{
     delete_runtime_embedding_mailbox_items, delete_runtime_summary_mailbox_items,
     insert_runtime_embedding_mailbox_item, insert_runtime_summary_mailbox_item,
@@ -223,6 +226,44 @@ pub(super) fn execute_embedding_commit(
         }
         tx.execute_batch(statement)
             .context("executing semantic embedding SQL")?;
+    }
+    if !request.remote_embedding_statements.is_empty()
+        || !request.remote_setup_statements.is_empty()
+    {
+        let backends = resolve_store_backend_config_for_repo(&request.repo.config_root)
+            .context("resolving backend config for semantic embedding remote commit")?;
+        let dsn = backends
+            .relational
+            .postgres_dsn
+            .ok_or_else(|| anyhow!("semantic embedding remote commit requires Postgres DSN"))?;
+        PostgresSyncConnection::connect(dsn)?
+            .with_client(|client| {
+                let statements = request
+                    .remote_embedding_statements
+                    .iter()
+                    .chain(request.remote_setup_statements.iter())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                Box::pin(async move {
+                    let tx = client
+                        .transaction()
+                        .await
+                        .context("starting remote semantic embedding transaction")?;
+                    for statement in &statements {
+                        if statement.trim().is_empty() {
+                            continue;
+                        }
+                        tx.batch_execute(statement)
+                            .await
+                            .context("executing remote semantic embedding SQL")?;
+                    }
+                    tx.commit()
+                        .await
+                        .context("committing remote semantic embedding transaction")?;
+                    Ok(())
+                })
+            })
+            .context("mirroring semantic embedding batch to Postgres")?;
     }
     if let Some(signal) = request.clone_rebuild_signal.as_ref() {
         upsert_runtime_clone_rebuild_signal(&tx, &request.repo, signal)?;

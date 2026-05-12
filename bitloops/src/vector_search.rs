@@ -46,6 +46,7 @@ impl HnswLikeIndex {
         self.nearest_to_vector_internal(query, limit, VectorSearchMode::Auto)
     }
 
+    #[cfg(test)]
     pub(crate) fn nearest_to_vector_with_mode(
         &self,
         query: &[f32],

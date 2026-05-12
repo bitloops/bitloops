@@ -1753,10 +1753,25 @@ async fn prepare_embedding_mailbox_batch_persists_multiple_rows_from_one_batch()
         .into_iter()
         .filter(|line| !line.contains("bitloops python embedding dimension probe"))
         .count();
+    let prepared_sql = prepared.commit.embedding_statements.join("\n");
 
     assert!(embedding_inserts >= 2);
     assert_eq!(prepared.expanded_count, 2);
     assert_eq!(non_probe_embedding_requests, 1);
+    assert!(
+        prepared_sql.contains(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS semantic_embedding_current_vec_dim_3 USING vec0"
+        ),
+        "embedding batches should initialize sqlite-vec current tables for encountered dimensions"
+    );
+    assert!(
+        prepared_sql.contains("vec_f32("),
+        "embedding batches should mirror current rows into sqlite-vec tables"
+    );
+    assert!(
+        prepared_sql.contains("DELETE FROM symbol_embeddings_current"),
+        "embedding batches should prune stale current embedding rows before upserting replacements"
+    );
 }
 
 #[tokio::test]

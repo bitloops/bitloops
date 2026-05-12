@@ -9,6 +9,8 @@ pub mod seed;
 
 pub fn init_database(db_path: &Path, seed: bool, commit_sha: &str) -> Result<()> {
     ensure_parent_dir_exists(db_path)?;
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("failed to register sqlite-vec auto-extension")?;
 
     let mut conn = Connection::open(db_path).with_context(|| {
         format!(
@@ -47,6 +49,8 @@ pub fn open_existing_database(db_path: &Path) -> Result<Connection> {
         anyhow::bail!("Database not found. Run init-fixture-db.sh first.");
     }
 
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("failed to register sqlite-vec auto-extension")?;
     let conn = Connection::open(db_path)
         .with_context(|| format!("failed to open sqlite database at {}", db_path.display()))?;
     configure_sqlite_connection(&conn).context("failed to configure sqlite connection")?;
