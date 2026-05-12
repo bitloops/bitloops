@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 use crate::daemon::{DevqlTaskSource, DevqlTaskSpec};
 
+#[allow(dead_code)] // Staged for producer-spool claim integration in Task 2.
+#[path = "producer_spool/admission.rs"]
+mod admission;
 #[path = "producer_spool/enqueue.rs"]
 mod enqueue;
 #[path = "producer_spool/payload.rs"]
@@ -16,6 +19,10 @@ mod storage;
 #[path = "producer_spool/tests.rs"]
 mod tests;
 
+#[allow(unused_imports)]
+pub(crate) use admission::{
+    ProducerSpoolRunningTask, producer_spool_payload_conflicts_with_running_task,
+};
 pub(crate) use enqueue::enqueue_spooled_ingest_task_for_repo_root;
 #[cfg(test)]
 pub(crate) use enqueue::enqueue_spooled_post_commit_derivation;
