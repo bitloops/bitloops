@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
-use crate::daemon::{DevqlTaskSource, DevqlTaskSpec, SyncTaskMode};
+use crate::daemon::{DevqlTaskKind, DevqlTaskSource, DevqlTaskSpec, SyncTaskMode};
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::test_support::git_fixtures::{init_test_repo, write_test_daemon_config};
 
@@ -213,7 +213,118 @@ fn running_producer_spool_repo_ids_returns_running_repos() {
 }
 
 #[test]
-fn producer_spool_claim_skips_repos_with_running_tasks() {
+fn producer_spool_claim_allows_spooled_sync_while_ingest_task_running() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+
+    enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+    )
+    .expect("enqueue sync");
+
+    let running_tasks = vec![ProducerSpoolRunningTask::new(
+        store.repo_id(),
+        DevqlTaskKind::Ingest,
+        DevqlTaskSource::PostMerge,
+    )];
+    let claimed = claim_next_producer_spool_jobs_excluding(
+        &store.config_root,
+        &HashSet::new(),
+        &running_tasks,
+        &PostCommitDerivationClaimGuards::default(),
+    )
+    .expect("claim producer spool jobs with running ingest");
+
+    assert_eq!(
+        claimed.len(),
+        1,
+        "watcher sync should be claimable while same-repo ingest is running"
+    );
+}
+
+#[test]
+fn producer_spool_claim_blocks_spooled_sync_while_sync_task_running() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+
+    enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+    )
+    .expect("enqueue sync");
+
+    let running_tasks = vec![ProducerSpoolRunningTask::new(
+        store.repo_id(),
+        DevqlTaskKind::Sync,
+        DevqlTaskSource::Watcher,
+    )];
+    let blocked = claim_next_producer_spool_jobs_excluding(
+        &store.config_root,
+        &HashSet::new(),
+        &running_tasks,
+        &PostCommitDerivationClaimGuards::default(),
+    )
+    .expect("claim producer spool jobs with running sync");
+
+    assert!(
+        blocked.is_empty(),
+        "spooled sync should wait while same-repo sync lane is running"
+    );
+
+    let unblocked =
+        claim_next_producer_spool_jobs(&store.config_root).expect("claim unblocked job");
+    assert_eq!(unblocked.len(), 1);
+}
+
+#[test]
+fn producer_spool_claim_allows_spooled_ingest_while_sync_task_running() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    enqueue_spooled_ingest_task_for_repo_root(
+        &repo_root,
+        DevqlTaskSource::PostCommit,
+        crate::daemon::IngestTaskSpec {
+            commits: vec!["commit-a".to_string()],
+            backfill: None,
+        },
+    )
+    .expect("enqueue ingest");
+
+    let running_tasks = vec![ProducerSpoolRunningTask::new(
+        store.repo_id(),
+        DevqlTaskKind::Sync,
+        DevqlTaskSource::PostCommit,
+    )];
+    let claimed = claim_next_producer_spool_jobs_excluding(
+        &store.config_root,
+        &HashSet::new(),
+        &running_tasks,
+        &PostCommitDerivationClaimGuards::default(),
+    )
+    .expect("claim producer spool jobs with running sync");
+
+    assert_eq!(
+        claimed.len(),
+        1,
+        "spooled ingest should be claimable while same-repo sync is running"
+    );
+}
+
+#[test]
+fn producer_spool_claim_excludes_explicitly_blocked_repo_ids() {
     let (_dir, repo_root, repo, store) = seed_store();
     let cfg = crate::host::devql::DevqlConfig::from_roots(
         store.config_root.clone(),
@@ -308,6 +419,7 @@ fn producer_spool_claim_skips_blocked_post_commit_derivation_until_unblocked() {
     let blocked_claim = claim_next_producer_spool_jobs_excluding(
         &store.config_root,
         &HashSet::new(),
+        &[],
         &blocked_derivations,
     )
     .expect("claim producer spool jobs with blocked derivation");
@@ -325,6 +437,7 @@ fn producer_spool_claim_skips_blocked_post_commit_derivation_until_unblocked() {
     let still_blocked = claim_next_producer_spool_jobs_excluding(
         &store.config_root,
         &HashSet::new(),
+        &[],
         &blocked_derivations,
     )
     .expect("claim producer spool jobs while derivation remains blocked");
@@ -361,7 +474,7 @@ fn producer_spool_claim_deletes_abandoned_post_commit_derivation() {
         abandoned: HashSet::from([(store.repo_id().to_string(), "commit-head".to_string())]),
     };
     let abandoned_claim =
-        claim_next_producer_spool_jobs_excluding(&store.config_root, &HashSet::new(), &guards)
+        claim_next_producer_spool_jobs_excluding(&store.config_root, &HashSet::new(), &[], &guards)
             .expect("claim producer spool jobs with abandoned derivation");
     assert!(
         abandoned_claim.is_empty(),
