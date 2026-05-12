@@ -1103,7 +1103,7 @@ fn run_logs_honours_explicit_line_count() {
 }
 
 #[test]
-fn run_logs_filters_tail_output_by_exact_levels() {
+fn run_logs_returns_last_matching_lines_for_selected_levels() {
     let (_log_dir, log_path) = temp_log_path();
     write_log_lines(
         &log_path,
@@ -1132,7 +1132,39 @@ fn run_logs_filters_tail_output_by_exact_levels() {
 
     assert_eq!(
         String::from_utf8(out).expect("utf8 output"),
-        "{\"line\":4,\"level\":\"WARNING\",\"message\":\"tail-warning\"}\n{\"line\":5,\"level\":\"ERROR\",\"message\":\"tail-error\"}\n"
+        "{\"line\":1,\"level\":\"ERROR\",\"message\":\"before-tail\"}\n{\"line\":4,\"level\":\"WARNING\",\"message\":\"tail-warning\"}\n{\"line\":5,\"level\":\"ERROR\",\"message\":\"tail-error\"}\n"
+    );
+}
+
+#[test]
+fn run_logs_filters_by_level_before_applying_tail_limit() {
+    let (_log_dir, log_path) = temp_log_path();
+    let mut lines = vec![
+        "{\"line\":1,\"level\":\"WARN\",\"message\":\"hidden-by-info\"}".to_string(),
+        "{\"line\":2,\"level\":\"ERROR\",\"message\":\"also-hidden-by-info\"}".to_string(),
+    ];
+    lines.extend((3..=20).map(|line| {
+        format!("{{\"line\":{line},\"level\":\"INFO\",\"message\":\"noisy-info-{line}\"}}")
+    }));
+    write_log_lines(&log_path, &lines);
+    let mut out = Vec::new();
+
+    test_runtime()
+        .block_on(run_logs_with_io_at_path(
+            DaemonLogsArgs {
+                tail: Some(2),
+                levels: vec![DaemonLogLevel::Warn, DaemonLogLevel::Error],
+                follow: false,
+                path: false,
+            },
+            &mut out,
+            log_path,
+        ))
+        .expect("run filtered daemon logs");
+
+    assert_eq!(
+        String::from_utf8(out).expect("utf8 output"),
+        "{\"line\":1,\"level\":\"WARN\",\"message\":\"hidden-by-info\"}\n{\"line\":2,\"level\":\"ERROR\",\"message\":\"also-hidden-by-info\"}\n"
     );
 }
 
