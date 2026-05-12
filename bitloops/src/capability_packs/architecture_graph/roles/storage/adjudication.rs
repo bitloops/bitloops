@@ -468,6 +468,36 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn db_taxonomy_reader_ignores_non_active_role_rows() -> Result<()> {
+        let (_temp, relational) = test_relational()?;
+        let mut active = role();
+        active.role_id = stable_role_id("repo-1", "application", "active_entrypoint");
+        active.slug = "active_entrypoint".to_string();
+        active.display_name = "Active Entrypoint".to_string();
+        upsert_classification_role(&relational, &active).await?;
+
+        relational
+            .exec_serialized(
+                "INSERT INTO architecture_roles (
+                    repo_id, role_id, family, canonical_key, display_name, description,
+                    lifecycle_status, provenance_json, evidence_json, metadata_json
+                ) VALUES (
+                    'repo-1', 'stable-role', 'application', 'stable_entrypoint',
+                    'Stable Entrypoint', 'Bad legacy row', 'stable', '{}', '{}', '{}'
+                );",
+            )
+            .await?;
+
+        let roles = DbRoleTaxonomyReader::new(&relational)
+            .load_active_roles("repo-1", 1)
+            .await?;
+
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0].role_id, active.role_id);
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn db_role_taxonomy_reader_loads_active_roles_without_blocking_bridge() -> Result<()> {
         let (_temp, relational) = test_relational()?;

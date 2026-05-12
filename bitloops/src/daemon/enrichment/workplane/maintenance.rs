@@ -145,6 +145,29 @@ pub(crate) fn requeue_leased_semantic_inbox_items(
     })
 }
 
+pub(crate) fn requeue_running_workplane_jobs(
+    workplane_store: &DaemonSqliteRuntimeStore,
+) -> Result<u64> {
+    let now = unix_timestamp_now();
+    workplane_store.with_connection(|conn| {
+        let recovered = conn.execute(
+            "UPDATE capability_workplane_jobs
+             SET status = ?1,
+                 started_at_unix = NULL,
+                 updated_at_unix = ?2,
+                 lease_owner = NULL,
+                 lease_expires_at_unix = NULL
+             WHERE status = ?3",
+            params![
+                WorkplaneJobStatus::Pending.as_str(),
+                sql_i64(now)?,
+                WorkplaneJobStatus::Running.as_str(),
+            ],
+        )?;
+        Ok(u64::try_from(recovered).unwrap_or_default())
+    })
+}
+
 pub(crate) fn prune_failed_semantic_inbox_items(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<()> {

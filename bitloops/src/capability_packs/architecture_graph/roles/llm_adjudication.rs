@@ -14,7 +14,7 @@ use super::taxonomy::{
     SeededArchitectureRuleCandidates, SeededArchitectureTaxonomy, allowed_rule_condition_kinds,
     architecture_roles_seed_roles_schema, architecture_roles_seed_rule_candidates_schema,
     generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
-    validate_seeded_taxonomy,
+    validate_seeded_roles, validate_seeded_taxonomy,
 };
 
 const MAX_FILE_EVIDENCE: usize = 120;
@@ -142,7 +142,8 @@ pub(crate) fn architecture_roles_seed_user_prompt(
         "rules": [
             "Return repository-specific roles, not a hardcoded generic taxonomy.",
             "Generic role families are examples only; adapt them to the repository evidence.",
-            "Return only stable role identities that are justified by the repository evidence.",
+            "Return only durable role identities that are justified by the repository evidence.",
+            "Do not include lifecycle state; newly inferred roles are activated by Bitloops after validation.",
             "Detection rules must be reviewable and safe for deterministic use.",
             "Use only rule condition kinds from rule_authoring_contract.allowed_condition_kinds.",
             "Do not invent additional condition kind names or aliases.",
@@ -176,7 +177,8 @@ pub(crate) fn architecture_roles_seed_roles_user_prompt(
         "rules": [
             "Return repository-specific roles, not a hardcoded generic taxonomy.",
             "Generic role families are examples only; adapt them to the repository evidence.",
-            "Return only stable role identities that are justified by the repository evidence.",
+            "Return only durable role identities that are justified by the repository evidence.",
+            "Do not include lifecycle state; newly inferred roles are activated by Bitloops after validation.",
             "Prefer fewer strong roles over many weak or redundant roles."
         ],
         "repository_identity": {
@@ -329,9 +331,7 @@ pub(crate) fn decode_seeded_role_discovery_response(
 ) -> Result<SeededArchitectureRoleDiscovery> {
     let discovery: SeededArchitectureRoleDiscovery =
         serde_json::from_value(value).context("parse seeded architecture role discovery")?;
-    if discovery.roles.is_empty() {
-        anyhow::bail!("seeded architecture role discovery did not include any roles");
-    }
+    validate_seeded_roles(&discovery.roles)?;
     Ok(discovery)
 }
 
@@ -688,6 +688,27 @@ mod tests {
                 .expect("valid taxonomy");
         assert_eq!(taxonomy.roles.len(), 1);
         assert_eq!(taxonomy.rule_candidates.len(), 1);
+    }
+
+    #[test]
+    fn role_discovery_rejects_stable_lifecycle_before_rule_generation() {
+        let err = decode_seeded_role_discovery_response(json!({
+            "roles": [{
+                "canonical_key": "command_dispatcher",
+                "display_name": "Command Dispatcher",
+                "description": "Routes CLI commands.",
+                "family": "entrypoint",
+                "lifecycle_status": "stable",
+                "provenance": {},
+                "evidence": {}
+            }]
+        }))
+        .expect_err("stable lifecycle should fail during role discovery decode");
+
+        assert!(
+            err.to_string()
+                .contains("unsupported seeded role lifecycle_status `stable`")
+        );
     }
 
     #[test]

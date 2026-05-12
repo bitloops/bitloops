@@ -12,7 +12,8 @@ pub use seed::{
     allowed_rule_condition_kinds, architecture_roles_seed_roles_schema,
     architecture_roles_seed_rule_candidates_schema, architecture_roles_seed_schema,
     generic_role_family_examples, role_rule_candidate_examples, role_rule_condition_catalog,
-    validate_role_split_spec, validate_rule_spec_file, validate_seeded_taxonomy,
+    seeded_role_lifecycle_status, validate_role_split_spec, validate_rule_spec_file,
+    validate_seeded_roles, validate_seeded_taxonomy,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

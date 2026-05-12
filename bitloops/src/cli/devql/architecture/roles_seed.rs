@@ -21,6 +21,7 @@ use crate::capability_packs::architecture_graph::roles::storage::{
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     SeededArchitectureRuleCandidate, SeededArchitectureTaxonomy,
     role_rule_candidate_selector_contract, role_rule_conditions_contract,
+    seeded_role_lifecycle_status,
 };
 use crate::config::InferenceTask;
 use crate::host::capability_host::{CurrentStateConsumerContext, DevqlCapabilityHost};
@@ -264,10 +265,10 @@ pub(super) async fn persist_seeded_taxonomy(
             display_name: seeded_role.display_name.clone(),
             description: seeded_role.description.clone(),
             family: seeded_role.family.clone(),
-            lifecycle_status: seeded_role
-                .lifecycle_status
-                .clone()
-                .unwrap_or_else(|| "active".to_string()),
+            lifecycle_status: seeded_role_lifecycle_status(
+                seeded_role.lifecycle_status.as_deref(),
+            )?
+            .to_string(),
             provenance: merge_provenance(
                 seeded_role.provenance,
                 json!({

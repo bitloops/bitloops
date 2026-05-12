@@ -157,6 +157,20 @@ mod seeded_tests {
     }
 
     #[test]
+    fn architecture_roles_seed_role_schema_does_not_ask_llm_for_lifecycle() {
+        let schema = architecture_roles_seed_roles_schema();
+        let role_properties = schema
+            .pointer("/properties/roles/items/properties")
+            .and_then(serde_json::Value::as_object)
+            .expect("role schema properties");
+
+        assert!(
+            !role_properties.contains_key("lifecycle_status"),
+            "seed LLM should not control role lifecycle"
+        );
+    }
+
+    #[test]
     fn rule_condition_catalog_documents_all_supported_condition_kinds() {
         let allowed: std::collections::BTreeSet<_> =
             allowed_rule_condition_kinds().iter().copied().collect();
@@ -354,6 +368,50 @@ mod seeded_tests {
         };
         let err = validate_seeded_taxonomy(&invalid_condition).expect_err("invalid condition kind");
         assert!(err.to_string().contains("unsupported rule condition kind"));
+    }
+
+    #[test]
+    fn validate_seeded_taxonomy_rejects_llm_lifecycle_words() {
+        for lifecycle_status in ["stable", "", "   "] {
+            let taxonomy = SeededArchitectureTaxonomy {
+                roles: vec![SeededArchitectureRole {
+                    canonical_key: "command_dispatcher".to_string(),
+                    display_name: "Command Dispatcher".to_string(),
+                    description: "Routes CLI commands".to_string(),
+                    family: Some("entrypoint".to_string()),
+                    lifecycle_status: Some(lifecycle_status.to_string()),
+                    provenance: json!({}),
+                    evidence: json!({}),
+                }],
+                rule_candidates: vec![],
+            };
+
+            let err = validate_seeded_taxonomy(&taxonomy).expect_err("unsupported seed lifecycle");
+            assert!(
+                err.to_string()
+                    .contains("unsupported seeded role lifecycle_status")
+            );
+        }
+    }
+
+    #[test]
+    fn validate_seeded_taxonomy_accepts_missing_null_and_active_lifecycle() {
+        for lifecycle_status in [None, Some("active".to_string())] {
+            let taxonomy = SeededArchitectureTaxonomy {
+                roles: vec![SeededArchitectureRole {
+                    canonical_key: "command_dispatcher".to_string(),
+                    display_name: "Command Dispatcher".to_string(),
+                    description: "Routes CLI commands".to_string(),
+                    family: Some("entrypoint".to_string()),
+                    lifecycle_status,
+                    provenance: json!({}),
+                    evidence: json!({}),
+                }],
+                rule_candidates: vec![],
+            };
+
+            validate_seeded_taxonomy(&taxonomy).expect("seed lifecycle should be accepted");
+        }
     }
 
     #[test]

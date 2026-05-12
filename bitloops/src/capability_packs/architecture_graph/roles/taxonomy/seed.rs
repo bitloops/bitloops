@@ -149,18 +149,13 @@ pub fn allowed_rule_condition_kinds() -> &'static [&'static str] {
 }
 
 pub fn validate_seeded_taxonomy(taxonomy: &SeededArchitectureTaxonomy) -> Result<()> {
-    if taxonomy.roles.is_empty() {
-        bail!("seeded taxonomy response did not include any roles");
-    }
+    validate_seeded_roles(&taxonomy.roles)?;
 
-    let mut keys = BTreeSet::new();
-    for role in &taxonomy.roles {
-        let key = normalise_non_empty("role.canonical_key", &role.canonical_key)?;
-        normalise_non_empty("role.display_name", &role.display_name)?;
-        if !keys.insert(key.clone()) {
-            bail!("seeded taxonomy response contained duplicate role key `{key}`");
-        }
-    }
+    let keys = taxonomy
+        .roles
+        .iter()
+        .map(|role| normalize_role_key(&role.canonical_key))
+        .collect::<BTreeSet<_>>();
 
     for candidate in &taxonomy.rule_candidates {
         let target =
@@ -176,6 +171,24 @@ pub fn validate_seeded_taxonomy(taxonomy: &SeededArchitectureTaxonomy) -> Result
             &candidate.score,
         )?;
     }
+    Ok(())
+}
+
+pub fn validate_seeded_roles(roles: &[SeededArchitectureRole]) -> Result<()> {
+    if roles.is_empty() {
+        bail!("seeded architecture role discovery did not include any roles");
+    }
+
+    let mut keys = BTreeSet::new();
+    for role in roles {
+        let key = normalise_non_empty("role.canonical_key", &role.canonical_key)?;
+        normalise_non_empty("role.display_name", &role.display_name)?;
+        seeded_role_lifecycle_status(role.lifecycle_status.as_deref())?;
+        if !keys.insert(key.clone()) {
+            bail!("seeded taxonomy response contained duplicate role key `{key}`");
+        }
+    }
+
     Ok(())
 }
 
@@ -369,7 +382,6 @@ fn seeded_role_schema() -> Value {
             "display_name",
             "description",
             "family",
-            "lifecycle_status",
             "provenance",
             "evidence"
         ],
@@ -378,7 +390,6 @@ fn seeded_role_schema() -> Value {
             "display_name": { "type": "string", "minLength": 1 },
             "description": { "type": "string" },
             "family": { "type": ["string", "null"] },
-            "lifecycle_status": { "type": ["string", "null"] },
             "provenance": strict_object.clone(),
             "evidence": strict_object
         }
@@ -498,6 +509,16 @@ fn normalise_non_empty(field_name: &str, value: &str) -> Result<String> {
         return Err(anyhow!("{field_name} must not be empty"));
     }
     Ok(normalized)
+}
+
+pub fn seeded_role_lifecycle_status(lifecycle_status: Option<&str>) -> Result<&'static str> {
+    match lifecycle_status.map(str::trim) {
+        None => Ok("active"),
+        Some("active") => Ok("active"),
+        Some(value) => bail!(
+            "unsupported seeded role lifecycle_status `{value}`; seed inference only creates active roles"
+        ),
+    }
 }
 
 fn validate_rule_shape(

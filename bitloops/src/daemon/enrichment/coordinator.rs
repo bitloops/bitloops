@@ -9,19 +9,16 @@ use crate::config::resolve_repo_runtime_db_path_for_config_root;
 use crate::graphql::SubscriptionHub;
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
-use rusqlite::params;
-
 use super::worker_count::{
     EnrichmentWorkerBudgets, EnrichmentWorkerPool, configured_enrichment_worker_budgets_for_repo,
 };
 use super::workplane::{
     compact_and_prune_workplane_jobs, default_state, migrate_legacy_semantic_workplane_rows,
     prune_failed_semantic_inbox_items, recover_expired_semantic_inbox_leases,
-    requeue_leased_semantic_inbox_items, sql_i64,
+    requeue_leased_semantic_inbox_items, requeue_running_workplane_jobs,
 };
 use super::{EnrichmentControlState, effective_worker_budgets};
 use crate::daemon::types::unix_timestamp_now;
-use crate::host::runtime_store::WorkplaneJobStatus;
 
 #[derive(Debug)]
 pub struct EnrichmentCoordinator {
@@ -198,34 +195,14 @@ impl EnrichmentCoordinator {
                     0
                 }
             };
-        let recovered_clone_rebuild_jobs = match self.workplane_store.with_connection(|conn| {
-            conn.execute(
-                "UPDATE capability_workplane_jobs
-                     SET status = ?1,
-                         started_at_unix = NULL,
-                         updated_at_unix = ?2,
-                         lease_owner = NULL,
-                         lease_expires_at_unix = NULL
-                     WHERE status = ?3
-                       AND mailbox_name = ?4",
-                params![
-                    WorkplaneJobStatus::Pending.as_str(),
-                    sql_i64(unix_timestamp_now())?,
-                    WorkplaneJobStatus::Running.as_str(),
-                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
-                ],
-            )
-            .map_err(anyhow::Error::from)
-        }) {
-            Ok(recovered) => u64::try_from(recovered).unwrap_or_default(),
+        let recovered_workplane_jobs = match requeue_running_workplane_jobs(&self.workplane_store) {
+            Ok(recovered) => recovered,
             Err(err) => {
-                log::warn!(
-                    "failed to recover stale clone rebuild enrichment jobs during startup: {err:#}"
-                );
+                log::warn!("failed to recover running workplane jobs during startup: {err:#}");
                 0
             }
         };
-        let recovered = recovered_mailbox_items.saturating_add(recovered_clone_rebuild_jobs);
+        let recovered = recovered_mailbox_items.saturating_add(recovered_workplane_jobs);
         if recovered == 0 {
             return;
         }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::capability_packs::architecture_graph::roles::contracts::RoleTaxonomyReader;
 use crate::capability_packs::architecture_graph::roles::fact_extraction::{
     ArchitectureRoleFactExtractionInput, extract_architecture_role_facts,
 };
@@ -427,6 +428,38 @@ fn seed_classify_requires_activate_rules() {
 }
 
 #[tokio::test]
+async fn persist_seeded_taxonomy_defaults_missing_lifecycle_to_active() -> Result<()> {
+    let relational = relational().await?;
+    let mut taxonomy = seeded_taxonomy("command_dispatcher");
+    taxonomy.roles[0].lifecycle_status = None;
+
+    persist_seeded_taxonomy(&relational, "repo-1", "local_agent", taxonomy).await?;
+
+    let roles = list_roles(&relational, "repo-1").await?;
+    assert_eq!(roles.len(), 1);
+    assert_eq!(roles[0].lifecycle_status, "active");
+    Ok(())
+}
+
+#[tokio::test]
+async fn persist_seeded_taxonomy_rejects_stable_lifecycle() -> Result<()> {
+    let relational = relational().await?;
+    let mut taxonomy = seeded_taxonomy("command_dispatcher");
+    taxonomy.roles[0].lifecycle_status = Some("stable".to_string());
+
+    let err = persist_seeded_taxonomy(&relational, "repo-1", "local_agent", taxonomy)
+        .await
+        .expect_err("stable lifecycle should not persist");
+
+    assert!(
+        err.to_string()
+            .contains("unsupported seeded role lifecycle_status `stable`")
+    );
+    assert!(list_roles(&relational, "repo-1").await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn persist_seeded_taxonomy_is_idempotent_for_repeated_runs() -> Result<()> {
     let relational = relational().await?;
 
@@ -455,6 +488,27 @@ async fn persist_seeded_taxonomy_is_idempotent_for_repeated_runs() -> Result<()>
     let rules = load_role_rules(&relational, "repo-1", &roles[0].role_id).await?;
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].lifecycle_status, "draft");
+    Ok(())
+}
+
+#[tokio::test]
+async fn persisted_seed_roles_are_active_adjudication_candidates() -> Result<()> {
+    let relational = relational().await?;
+    persist_seeded_taxonomy(
+        &relational,
+        "repo-1",
+        "local_agent",
+        seeded_taxonomy("command_dispatcher"),
+    )
+    .await?;
+
+    let candidates =
+        crate::capability_packs::architecture_graph::roles::DbRoleTaxonomyReader::new(&relational)
+            .load_active_roles("repo-1", 1)
+            .await?;
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].canonical_key, "command_dispatcher");
     Ok(())
 }
 
