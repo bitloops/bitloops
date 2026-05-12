@@ -1630,7 +1630,7 @@ fn run_init_requests_daemon_watcher_reconcile_when_sync_is_disabled() {
 }
 
 #[test]
-fn run_init_requests_daemon_watcher_reconcile_when_sync_is_enabled() {
+fn run_init_reconciles_daemon_watcher_before_sync_progress_when_sync_is_enabled() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();
@@ -1646,11 +1646,21 @@ fn run_init_requests_daemon_watcher_reconcile_when_sync_is_enabled() {
             {
                 let reconcile_count = std::rc::Rc::clone(&reconcile_count);
                 let repo_root = repo_root.clone();
+                let saw_start_init = std::rc::Rc::clone(&saw_start_init);
+                let saw_runtime_snapshot = std::rc::Rc::clone(&saw_runtime_snapshot);
                 move |actual_repo_root, watcher_enabled| {
                     assert_eq!(actual_repo_root, repo_root.as_path());
                     assert!(
                         watcher_enabled,
                         "init --sync=true should request daemon-side watcher reconciliation with watcher enabled"
+                    );
+                    assert!(
+                        !*saw_start_init.borrow(),
+                        "init should reconcile the daemon watcher before starting the runtime init session"
+                    );
+                    assert!(
+                        !*saw_runtime_snapshot.borrow(),
+                        "init should reconcile the daemon watcher before polling runtime init completion"
                     );
                     *reconcile_count.borrow_mut() += 1;
                     Ok(())
@@ -1814,8 +1824,6 @@ fn run_init_sync_enabled_fails_when_daemon_watcher_reconcile_fails() {
     let repo = tempfile::tempdir().expect("repo tempdir");
     let app_dirs = tempfile::tempdir().expect("app tempdir");
     let repo_root = repo.path().to_path_buf();
-    let repo_id = test_repo_id(repo.path());
-    let session_id = "init-session-sync-watcher-reconcile-failure";
     setup_git_repo(&repo);
     let saw_start_init = std::rc::Rc::new(std::cell::RefCell::new(false));
     let saw_runtime_snapshot = std::rc::Rc::new(std::cell::RefCell::new(false));
@@ -1836,32 +1844,20 @@ fn run_init_sync_enabled_fails_when_daemon_watcher_reconcile_fails() {
             || {
                 with_graphql_executor_hook(
                     {
-                        let repo_id = repo_id.clone();
                         let saw_start_init = std::rc::Rc::clone(&saw_start_init);
                         let saw_runtime_snapshot = std::rc::Rc::clone(&saw_runtime_snapshot);
-                        move |_repo_root, query, variables| {
+                        move |_repo_root, query, _variables| {
                             if query.contains("startInit(") {
                                 *saw_start_init.borrow_mut() = true;
-                                assert_eq!(variables["repoId"], repo_id);
-                                assert_eq!(variables["input"]["runSync"], json!(true));
-                                assert_eq!(variables["input"]["runIngest"], json!(false));
-                                return Ok(runtime_start_init_result_json(session_id));
                             }
 
                             if query.contains("runtimeSnapshot(") {
                                 *saw_runtime_snapshot.borrow_mut() = true;
-                                return Ok(runtime_snapshot_json(
-                                    repo_id.as_str(),
-                                    session_id,
-                                    RuntimeSessionSnapshotFixture {
-                                        status: "COMPLETED",
-                                        run_sync: true,
-                                        ..RuntimeSessionSnapshotFixture::default()
-                                    },
-                                ));
                             }
 
-                            panic!("unexpected repo-scoped query: {query}");
+                            panic!(
+                                "init should not run runtime progress queries after watcher reconcile fails: {query}"
+                            );
                         }
                     },
                     || {
@@ -1904,12 +1900,12 @@ fn run_init_sync_enabled_fails_when_daemon_watcher_reconcile_fails() {
                             "unexpected init error: {rendered}"
                         );
                         assert!(
-                            *saw_start_init.borrow(),
-                            "sync-enabled init should start a runtime init session before watcher reconciliation"
+                            !*saw_start_init.borrow(),
+                            "sync-enabled init should not start a runtime init session after watcher reconciliation fails"
                         );
                         assert!(
-                            *saw_runtime_snapshot.borrow(),
-                            "sync-enabled init should poll runtime init completion before watcher reconciliation"
+                            !*saw_runtime_snapshot.borrow(),
+                            "sync-enabled init should not poll runtime init completion after watcher reconciliation fails"
                         );
                     },
                 );
