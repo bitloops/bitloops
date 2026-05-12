@@ -352,7 +352,7 @@ where
     let tail_lines = args.tail.unwrap_or(DEFAULT_LOG_TAIL_LINES);
     let initial_lines =
         read_log_view_lines(log_path.clone(), tail_lines, args.levels.clone()).await?;
-    write_filtered_log_lines(out, initial_lines, &args.levels)?;
+    write_log_lines(out, initial_lines)?;
     out.flush().context("flushing daemon log output")?;
     if args.follow {
         follow_log_file_until_shutdown(&log_path, out, shutdown, poll_interval, args.levels)
@@ -528,16 +528,8 @@ async fn read_log_view_lines(
         .context("joining filtered daemon log tail task")?
 }
 
-fn write_filtered_log_lines(
-    out: &mut dyn Write,
-    lines: Vec<String>,
-    levels: &[DaemonLogLevel],
-) -> Result<()> {
+fn write_log_lines(out: &mut dyn Write, lines: Vec<String>) -> Result<()> {
     for line in lines {
-        if !should_emit_log_line(&line, levels) {
-            continue;
-        }
-
         writeln!(out, "{line}").context("writing daemon log output")?;
     }
     Ok(())
@@ -602,7 +594,7 @@ fn tail_log_file_after_filter(
     let file =
         File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
     let reader = BufReader::new(file);
-    let mut tail = VecDeque::with_capacity(lines);
+    let mut tail = VecDeque::new();
 
     for line in reader.lines() {
         let line = line.with_context(|| format!("reading daemon log {}", path.display()))?;
