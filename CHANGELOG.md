@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- **README getting-started video thumbnail now renders at a bounded width**: the hero README uses a centered HTML thumbnail (`<img>` inside a link) so `assets/bitloops_getting_started.png` displays correctly on GitHub and stays smaller on the page than the full source asset dimensions.
 ### Fixed
 
 - **Daemon log level filtering now applies before tail limits**: `bitloops daemon logs --level ...` now returns the last matching log lines instead of filtering only the already-tailed mixed log window, so recent INFO noise no longer hides older WARN or ERROR entries.
