@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1>Codebase truth maintenance for AI agents.</h1>
+  <h1>Your agents remember, so you don’t have to.</h1>
   <p>
     <strong>Bitloops builds and maintains a local, typed, queryable model of your codebase so AI agents, developers, and reviewers can work from shared system state instead of rediscovering the repository from raw text.</strong>
   </p>
@@ -24,8 +24,11 @@
 [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827)](https://github.com/bitloops/bitloops/blob/main/LICENSE)
 [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
 [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
-
 </div>
+
+[![Bitloops Getting Started](assets/bitloops_getting_started.png)](https://www.youtube.com/watch?v=hb8EAWlRjt8)
+
+## What Bitloops Gives You
 
 > [!WARNING]
 > **Project status: alpha / work in progress**
@@ -33,8 +36,6 @@
 > Bitloops is under active development in the open and is **not production-ready yet**.
 > Expect breaking changes, evolving documentation, rough onboarding edges, and uneven
 > support across environments while the system matures.
-
-## What Bitloops Gives You
 
 AI coding agents are powerful, but most of them still start every task by crawling the repository again: read files, grep for symbols, infer architecture, guess which tests matter, inspect old docs, and compress all of that into a prompt.
 
