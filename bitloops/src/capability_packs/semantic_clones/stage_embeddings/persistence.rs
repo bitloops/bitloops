@@ -5,11 +5,7 @@ use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
-use crate::capability_packs::semantic_clones::vector_backend::{
-    clear_sqlite_current_rows_for_paths, clear_sqlite_repo_rows,
-    clear_sqlite_repo_rows_for_representation, delete_sqlite_stale_current_rows_for_path,
-    ensure_postgres_pgvector_indexes_for_dimension, sync_sqlite_current_symbol_embedding_row,
-};
+use crate::capability_packs::semantic_clones::vector_backend::SemanticVectorBackend;
 use crate::host::devql::{RelationalPrimaryBackend, RelationalStorage, esc_pg, sql_string_list_pg};
 use crate::host::inference::EmbeddingService;
 
@@ -42,6 +38,7 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
     repo_id: &str,
 ) -> Result<()> {
     ensure_semantic_embeddings_schema(relational).await?;
+    let vector_backend = SemanticVectorBackend::resolve(relational);
     let statements = vec![
         format!(
             "DELETE FROM symbol_embeddings WHERE repo_id = '{}'",
@@ -56,7 +53,7 @@ pub(crate) async fn clear_repo_symbol_embedding_rows(
         .exec_serialized_batch_transactional(&statements)
         .await?;
     execute_remote_primary_batch_if_needed(relational, &statements).await?;
-    clear_sqlite_repo_rows(relational, repo_id).await
+    vector_backend.clear_repo_rows(repo_id).await
 }
 
 pub(crate) async fn clear_repo_symbol_embedding_rows_for_representation(
@@ -65,6 +62,7 @@ pub(crate) async fn clear_repo_symbol_embedding_rows_for_representation(
     representation_kind: embeddings::EmbeddingRepresentationKind,
 ) -> Result<()> {
     ensure_semantic_embeddings_schema(relational).await?;
+    let vector_backend = SemanticVectorBackend::resolve(relational);
     let predicate = representation_kind_sql_predicate("representation_kind", representation_kind);
     let statements = vec![
         format!(
@@ -82,7 +80,9 @@ pub(crate) async fn clear_repo_symbol_embedding_rows_for_representation(
         .exec_serialized_batch_transactional(&statements)
         .await?;
     execute_remote_primary_batch_if_needed(relational, &statements).await?;
-    clear_sqlite_repo_rows_for_representation(relational, repo_id, representation_kind).await
+    vector_backend
+        .clear_repo_rows_for_representation(repo_id, representation_kind)
+        .await
 }
 
 #[allow(dead_code)]
@@ -92,6 +92,7 @@ pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
     path: &str,
 ) -> Result<()> {
     ensure_semantic_embeddings_schema(relational).await?;
+    let vector_backend = SemanticVectorBackend::resolve(relational);
     let sql = format!(
         "DELETE FROM symbol_embeddings_current WHERE repo_id = '{}' AND path = '{}'",
         esc_pg(repo_id),
@@ -99,7 +100,9 @@ pub(crate) async fn clear_current_symbol_embedding_rows_for_path(
     );
     relational.exec_serialized(&sql).await?;
     execute_remote_primary_batch_if_needed(relational, &[sql]).await?;
-    clear_sqlite_current_rows_for_paths(relational, repo_id, &[path.to_string()]).await
+    vector_backend
+        .clear_current_rows_for_paths(repo_id, &[path.to_string()])
+        .await
 }
 
 pub(crate) async fn clear_current_symbol_embedding_rows_for_paths(
@@ -111,6 +114,7 @@ pub(crate) async fn clear_current_symbol_embedding_rows_for_paths(
         return Ok(());
     }
     ensure_semantic_embeddings_schema(relational).await?;
+    let vector_backend = SemanticVectorBackend::resolve(relational);
     let sql = format!(
         "DELETE FROM symbol_embeddings_current WHERE repo_id = '{}' AND path IN ({})",
         esc_pg(repo_id),
@@ -118,7 +122,9 @@ pub(crate) async fn clear_current_symbol_embedding_rows_for_paths(
     );
     relational.exec_serialized(&sql).await?;
     execute_remote_primary_batch_if_needed(relational, &[sql]).await?;
-    clear_sqlite_current_rows_for_paths(relational, repo_id, paths).await
+    vector_backend
+        .clear_current_rows_for_paths(repo_id, paths)
+        .await
 }
 
 pub(crate) async fn clear_repo_active_embedding_setup(
@@ -170,6 +176,7 @@ pub(super) async fn persist_symbol_embedding_row(
     relational: &RelationalStorage,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
+    let vector_backend = SemanticVectorBackend::resolve(relational);
     let setup = embeddings::EmbeddingSetup {
         provider: row.provider.clone(),
         model: row.model.clone(),
@@ -188,7 +195,7 @@ pub(super) async fn persist_symbol_embedding_row(
         build_postgres_symbol_embedding_persist_sql(row)?,
     ];
     execute_remote_primary_batch_if_needed(relational, &remote_statements).await?;
-    ensure_postgres_pgvector_indexes_for_dimension(relational, row.dimension).await
+    vector_backend.sync_historical_row(row).await
 }
 
 #[allow(dead_code)]
@@ -199,6 +206,7 @@ pub(super) async fn persist_current_symbol_embedding_row(
     content_id: &str,
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<()> {
+    let vector_backend = SemanticVectorBackend::resolve(relational);
     let setup = embeddings::EmbeddingSetup {
         provider: row.provider.clone(),
         model: row.model.clone(),
@@ -217,8 +225,7 @@ pub(super) async fn persist_current_symbol_embedding_row(
         build_postgres_current_symbol_embedding_persist_sql(input, path, content_id, row)?,
     ];
     execute_remote_primary_batch_if_needed(relational, &remote_statements).await?;
-    sync_sqlite_current_symbol_embedding_row(relational, path, row).await?;
-    ensure_postgres_pgvector_indexes_for_dimension(relational, row.dimension).await
+    vector_backend.sync_current_row(path, row).await
 }
 
 pub(super) async fn delete_stale_current_symbol_embedding_rows_for_path(
@@ -229,6 +236,7 @@ pub(super) async fn delete_stale_current_symbol_embedding_rows_for_path(
     representation_kind: embeddings::EmbeddingRepresentationKind,
     keep_artefact_ids: &[String],
 ) -> Result<()> {
+    let vector_backend = SemanticVectorBackend::resolve(relational);
     let sql = build_delete_stale_current_symbol_embedding_rows_for_path_sql(
         repo_id,
         path,
@@ -238,14 +246,9 @@ pub(super) async fn delete_stale_current_symbol_embedding_rows_for_path(
     );
     relational.exec_serialized(&sql).await?;
     execute_remote_primary_batch_if_needed(relational, &[sql]).await?;
-    delete_sqlite_stale_current_rows_for_path(
-        relational,
-        repo_id,
-        path,
-        representation_kind,
-        keep_artefact_ids,
-    )
-    .await
+    vector_backend
+        .delete_stale_current_rows_for_path(repo_id, path, representation_kind, keep_artefact_ids)
+        .await
 }
 
 pub(super) async fn upsert_current_repo_symbol_embedding_rows(

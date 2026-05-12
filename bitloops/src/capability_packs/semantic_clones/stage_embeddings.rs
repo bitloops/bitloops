@@ -46,7 +46,7 @@ use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
-use crate::capability_packs::semantic_clones::vector_backend::ensure_sqlite_current_vec_tables_for_existing_rows;
+use crate::capability_packs::semantic_clones::vector_backend::SemanticVectorBackend;
 use crate::host::devql::RelationalStorage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +72,9 @@ pub(crate) async fn ensure_semantic_embeddings_schema(
         |sqlite_path| async move { init_sqlite_semantic_embeddings_schema(&sqlite_path).await },
     )
     .await?;
-    ensure_sqlite_current_vec_tables_for_existing_rows(relational).await?;
+    SemanticVectorBackend::resolve(relational)
+        .ensure_schema()
+        .await?;
     if let Some(remote_client) = relational.remote_client() {
         crate::host::devql::ensure_sqlite_schema_once(
             relational.sqlite_path(),

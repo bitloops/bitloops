@@ -17,7 +17,7 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     resolve_semantic_clones_config,
 };
 use crate::capability_packs::semantic_clones::vector_backend::{
-    SemanticVectorQuery, nearest_current_candidates,
+    SemanticVectorBackend, SemanticVectorQuery,
 };
 use crate::graphql::types::{
     Artefact, CanonicalKind, DateTimeScalar,
@@ -101,6 +101,7 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
         .map(|representation_kind| (representation_kind, Vec::new()))
         .collect::<HashMap<_, _>>();
     let mut query_embeddings_by_setup = HashMap::<String, Vec<f32>>::new();
+    let vector_backend = SemanticVectorBackend::resolve(&relational);
 
     for representation_kind in representation_kinds {
         let selection = resolve_embedding_provider(
@@ -167,26 +168,24 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
             continue;
         }
 
-        let candidate_ids = nearest_current_candidates(
-            &relational,
-            SemanticVectorQuery {
+        let candidate_ids = vector_backend
+            .nearest_current_candidates(SemanticVectorQuery {
                 repo_id: &repo_id,
                 representation_kind,
                 setup_fingerprint: &query_setup.setup_fingerprint,
                 dimension: query_setup.dimension,
                 query_embedding: &query_embedding,
                 limit: semantic_candidate_prefilter_limit(DEFAULT_RESULT_LIMIT),
-            },
-        )
-        .await
-        .map_err(|err| {
-            backend_error(format!(
-                "failed to retrieve semantic vector candidates for {representation_kind}: {err:#}"
-            ))
-        })?
-        .into_iter()
-        .map(|candidate| candidate.artefact_id)
-        .collect::<Vec<_>>();
+            })
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to retrieve semantic vector candidates for {representation_kind}: {err:#}"
+                ))
+            })?
+            .into_iter()
+            .map(|candidate| candidate.artefact_id)
+            .collect::<Vec<_>>();
         if candidate_ids.is_empty() {
             continue;
         }

@@ -83,11 +83,11 @@
 - Implementation references: [sqlite-vec vec0 docs](https://alexgarcia.xyz/sqlite-vec/features/vec0.html), [sqlite-vec KNN docs](https://alexgarcia.xyz/sqlite-vec/features/knn.html), [pgvector README](https://github.com/pgvector/pgvector)
 
 ## TODOs
-[ ] Define `SemanticVectorBackend` and the backend selector on top of the existing relational abstraction, without leaking SQLite/Postgres details into the search/domain layer.
+[x] Define `SemanticVectorBackend` and the backend selector on top of the existing relational abstraction, without leaking SQLite/Postgres details into the search/domain layer.
 [x] Audit the current semantic search path and replace local-only SQLite entry points with backend-agnostic vector candidate lookup plus backend-agnostic artefact hydration.
 [x] Implement the SQLite adapter with dimension-scoped `vec0` tables, lazy table creation, backfill from `symbol_embeddings_current`, and synchronized upsert/delete/clear behavior.
 [x] Implement the Postgres adapter with `pgvector` schema initialization, mirrored vector writes for current and historical embeddings, partial HNSW indexes per dimension, and native nearest-neighbor queries.
 [x] Wire semantic embedding persistence so canonical embedding writes also update the selected vector backend and keep setup changes, stale-row deletion, and repo/path clears in sync.
 [x] Remove request-time `hnsw_rs` usage from semantic search while keeping current exact rerank, score thresholds, and dedupe behavior unchanged.
-[ ] Add backend-focused tests for schema/init, write synchronization, candidate retrieval, and GraphQL semantic search parity across `CODE`, `IDENTITY`, `SUMMARY`, and `AUTO`.
+[x] Add backend-focused tests for schema/init, write synchronization, candidate retrieval, and GraphQL semantic search parity across `CODE`, `IDENTITY`, `SUMMARY`, and `AUTO`.
 [ ] Run manual verification on `axum` for warm `CODE` and `AUTO` queries and confirm the result ordering remains stable while latency drops materially.
