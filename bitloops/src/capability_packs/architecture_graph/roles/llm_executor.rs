@@ -74,6 +74,7 @@ fn adjudication_user_prompt(packet: &RoleEvidencePacket) -> String {
 }
 
 fn adjudication_response_schema() -> Value {
+    let evidence_schema = evidence_value_schema();
     json!({
         "type": "object",
         "properties": {
@@ -89,14 +90,14 @@ fn adjudication_response_schema() -> Value {
                         "role_id": { "type": "string", "minLength": 1 },
                         "primary": { "type": "boolean" },
                         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                        "evidence": {}
+                        "evidence": evidence_schema.clone()
                     },
                     "required": ["role_id", "primary", "confidence", "evidence"],
                     "additionalProperties": false
                 }
             },
             "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-            "evidence": {},
+            "evidence": evidence_schema,
             "reasoning_summary": { "type": "string", "minLength": 1 },
             "rule_suggestions": {
                 "type": "array",
@@ -117,6 +118,24 @@ fn adjudication_response_schema() -> Value {
     })
 }
 
+fn evidence_value_schema() -> Value {
+    json!({
+        "anyOf": [
+            {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": false
+            },
+            { "type": "string" }
+        ]
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
@@ -131,16 +150,25 @@ mod tests {
     }
 
     #[test]
-    fn adjudication_response_schema_keeps_evidence_generic() {
+    fn adjudication_response_schema_has_no_untyped_nodes() {
         let schema = adjudication_response_schema();
 
-        assert_eq!(
-            schema.pointer("/properties/evidence"),
-            Some(&Value::Object(Default::default()))
+        assert_schema_nodes_are_typed_or_composed("$", &schema);
+    }
+
+    #[test]
+    fn adjudication_response_schema_keeps_evidence_provider_neutral() {
+        let schema = adjudication_response_schema();
+
+        assert_provider_neutral_evidence_schema(
+            schema
+                .pointer("/properties/evidence")
+                .expect("top-level evidence schema"),
         );
-        assert_eq!(
-            schema.pointer("/properties/assignments/items/properties/evidence"),
-            Some(&Value::Object(Default::default()))
+        assert_provider_neutral_evidence_schema(
+            schema
+                .pointer("/properties/assignments/items/properties/evidence")
+                .expect("assignment evidence schema"),
         );
     }
 
@@ -177,5 +205,58 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    fn assert_schema_nodes_are_typed_or_composed(path: &str, value: &Value) {
+        match value {
+            Value::Object(map) => {
+                if !matches!(path.rsplit('/').next(), Some("properties" | "$defs")) {
+                    let typed = map.contains_key("type")
+                        || map.contains_key("anyOf")
+                        || map.contains_key("oneOf")
+                        || map.contains_key("allOf")
+                        || map.contains_key("$ref");
+                    assert!(
+                        typed,
+                        "{path}: schema node must declare a type or composition"
+                    );
+                }
+
+                for (key, child) in map {
+                    assert_schema_nodes_are_typed_or_composed(&format!("{path}/{key}"), child);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    assert_schema_nodes_are_typed_or_composed(&format!("{path}/{index}"), item);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_provider_neutral_evidence_schema(schema: &Value) {
+        let variants = schema
+            .get("anyOf")
+            .and_then(Value::as_array)
+            .expect("evidence schema should use typed variants");
+        assert!(
+            variants
+                .iter()
+                .any(|variant| variant.get("type").and_then(Value::as_str) == Some("array")),
+            "evidence schema should allow array evidence"
+        );
+        assert!(
+            variants
+                .iter()
+                .any(|variant| variant.get("type").and_then(Value::as_str) == Some("object")),
+            "evidence schema should allow object evidence"
+        );
+        assert!(
+            variants
+                .iter()
+                .any(|variant| variant.get("type").and_then(Value::as_str) == Some("string")),
+            "evidence schema should allow string evidence"
+        );
     }
 }
