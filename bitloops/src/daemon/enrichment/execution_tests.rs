@@ -2073,7 +2073,8 @@ async fn prepare_embedding_mailbox_batch_repairs_current_feature_projection_for_
 }
 
 #[tokio::test]
-async fn explicit_embedding_batch_for_one_path_uses_only_selected_ids_in_stale_delete_scope() {
+async fn explicit_embedding_batch_for_one_path_preserves_later_same_path_ids_in_stale_delete_scope()
+{
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
     let mega_path = repo.path().join("src/mega.ts");
     let mega_source = (0..40)
@@ -2177,8 +2178,8 @@ async fn explicit_embedding_batch_for_one_path_uses_only_selected_ids_in_stale_d
         .expect("expected stale delete SQL for the touched same-path batch");
 
     assert!(
-        !delete_sql.contains(&later_same_path_id),
-        "selected-batch stale delete scope should not retain artefact ids from later same-path batches"
+        delete_sql.contains(&later_same_path_id),
+        "selected-batch stale delete scope should retain later same-path artefact ids that still belong to the current file state"
     );
 }
 

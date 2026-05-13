@@ -39,7 +39,6 @@ use crate::capability_packs::semantic_clones::{
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
     DevqlConfig, RelationalPrimaryBackend, RelationalStorage, build_capability_host, esc_pg,
-    sql_string_list_pg,
 };
 use crate::host::runtime_store::{
     CapabilityWorkplaneJobInsert, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
@@ -258,22 +257,17 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     if should_prune_stale_current_rows {
         for input in current_by_artefact.values() {
             current_paths_by_content.insert((input.path.clone(), input.blob_sha.clone()));
-            keep_current_artefact_ids_by_path_content
-                .entry((input.path.clone(), input.blob_sha.clone()))
-                .or_default()
-                .push(input.artefact_id.clone());
         }
         for (path, content_id) in &current_paths_by_content {
             keep_current_artefact_ids_by_path_content
                 .entry((path.clone(), content_id.clone()))
                 .or_default()
                 .extend(
-                    load_existing_current_embedding_artefact_ids_for_path_content(
+                    load_current_embedding_artefact_ids_for_path_content(
                         &relational,
                         &batch.repo_id,
                         path,
                         content_id,
-                        batch.representation_kind,
                     )
                     .await?,
                 );
@@ -582,35 +576,26 @@ ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.s
         .collect())
 }
 
-async fn load_existing_current_embedding_artefact_ids_for_path_content(
+async fn load_current_embedding_artefact_ids_for_path_content(
     relational: &RelationalStorage,
     repo_id: &str,
     path: &str,
     content_id: &str,
-    representation_kind: EmbeddingRepresentationKind,
 ) -> Result<Vec<String>> {
-    let representation_values = representation_kind
-        .storage_values()
-        .iter()
-        .map(|value| (*value).to_string())
-        .collect::<Vec<_>>();
     let rows = relational
         .query_rows(&format!(
             "SELECT DISTINCT current.artefact_id AS artefact_id \
 FROM artefacts_current current \
-JOIN symbol_embeddings_current embedding \
-  ON embedding.repo_id = current.repo_id \
- AND embedding.artefact_id = current.artefact_id \
- AND embedding.content_id = current.content_id \
+JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
 WHERE current.repo_id = '{repo_id}' \
   AND current.path = '{path}' \
   AND current.content_id = '{content_id}' \
-  AND embedding.representation_kind IN ({representation_values}) \
+  AND state.analysis_mode = 'code' \
+  AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) <> 'import' \
 ORDER BY current.artefact_id",
             repo_id = esc_pg(repo_id),
             path = esc_pg(path),
             content_id = esc_pg(content_id),
-            representation_values = sql_string_list_pg(&representation_values),
         ))
         .await?;
     Ok(rows
