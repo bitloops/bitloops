@@ -4,8 +4,8 @@ use serde_json::Value;
 use crate::host::devql::{RelationalStorage, deterministic_uuid, sql_json_value, sql_now};
 
 use super::management_rows::{
-    parse_alias_row, parse_assignment_row, parse_migration_row, parse_proposal_row, parse_role_row,
-    parse_rule_row, sql_opt_text, sql_text,
+    parse_alias_row, parse_migration_row, parse_proposal_row, parse_role_row, parse_rule_row,
+    sql_opt_text, sql_text,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,24 +49,6 @@ pub struct ArchitectureRoleRuleRecord {
     pub evidence: Value,
     pub metadata: Value,
     pub supersedes_rule_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ArchitectureRoleAssignmentRecord {
-    pub assignment_id: String,
-    pub repo_id: String,
-    pub artefact_id: String,
-    pub role_id: String,
-    pub source_kind: String,
-    pub confidence: f64,
-    pub status: String,
-    pub status_reason: String,
-    pub rule_id: Option<String>,
-    pub migration_id: Option<String>,
-    pub migrated_to_assignment_id: Option<String>,
-    pub provenance: Value,
-    pub evidence: Value,
-    pub metadata: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,12 +133,6 @@ pub fn deterministic_rule_id(
 ) -> String {
     deterministic_uuid(&format!(
         "architecture_roles|rule|{repo_id}|{role_id}|{version}|{canonical_hash}"
-    ))
-}
-
-pub fn deterministic_assignment_id(repo_id: &str, artefact_id: &str, role_id: &str) -> String {
-    deterministic_uuid(&format!(
-        "architecture_roles|assignment|{repo_id}|{artefact_id}|{role_id}"
     ))
 }
 
@@ -531,173 +507,6 @@ pub async fn update_role_rule_lifecycle(
         ))
         .await
         .context("updating architecture role rule lifecycle")?;
-    Ok(true)
-}
-
-pub async fn insert_role_assignment(
-    relational: &RelationalStorage,
-    assignment: &ArchitectureRoleAssignmentRecord,
-) -> Result<()> {
-    relational
-        .exec_serialized(&format!(
-            "INSERT INTO architecture_role_assignments (
-                repo_id, assignment_id, artefact_id, role_id, source_kind, confidence, status,
-                status_reason, rule_id, migration_id, migrated_to_assignment_id,
-                provenance_json, evidence_json, metadata_json, created_at, updated_at
-            ) VALUES (
-                {repo_id}, {assignment_id}, {artefact_id}, {role_id}, {source_kind}, {confidence}, {status},
-                {status_reason}, {rule_id}, {migration_id}, {migrated_to_assignment_id},
-                {provenance}, {evidence}, {metadata}, {now}, {now}
-            )
-            ON CONFLICT(repo_id, assignment_id) DO UPDATE SET
-                artefact_id = excluded.artefact_id,
-                role_id = excluded.role_id,
-                source_kind = excluded.source_kind,
-                confidence = excluded.confidence,
-                status = excluded.status,
-                status_reason = excluded.status_reason,
-                rule_id = excluded.rule_id,
-                migration_id = excluded.migration_id,
-                migrated_to_assignment_id = excluded.migrated_to_assignment_id,
-                provenance_json = excluded.provenance_json,
-                evidence_json = excluded.evidence_json,
-                metadata_json = excluded.metadata_json,
-                updated_at = excluded.updated_at;",
-            repo_id = sql_text(&assignment.repo_id),
-            assignment_id = sql_text(&assignment.assignment_id),
-            artefact_id = sql_text(&assignment.artefact_id),
-            role_id = sql_text(&assignment.role_id),
-            source_kind = sql_text(&assignment.source_kind),
-            confidence = assignment.confidence,
-            status = sql_text(&assignment.status),
-            status_reason = sql_text(&assignment.status_reason),
-            rule_id = sql_opt_text(assignment.rule_id.as_deref()),
-            migration_id = sql_opt_text(assignment.migration_id.as_deref()),
-            migrated_to_assignment_id = sql_opt_text(assignment.migrated_to_assignment_id.as_deref()),
-            provenance = sql_json_value(relational, &assignment.provenance),
-            evidence = sql_json_value(relational, &assignment.evidence),
-            metadata = sql_json_value(relational, &assignment.metadata),
-            now = sql_now(relational),
-        ))
-        .await
-        .context("inserting architecture role assignment")
-}
-
-pub async fn load_assignment_by_id(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    assignment_id: &str,
-) -> Result<Option<ArchitectureRoleAssignmentRecord>> {
-    let rows = relational
-        .query_rows(&format!(
-            "SELECT repo_id, assignment_id, artefact_id, role_id, source_kind, confidence, status, \
-                    status_reason, rule_id, migration_id, migrated_to_assignment_id, provenance_json, evidence_json, metadata_json \
-             FROM architecture_role_assignments \
-             WHERE repo_id = {repo_id} AND assignment_id = {assignment_id} \
-             LIMIT 1;",
-            repo_id = sql_text(repo_id),
-            assignment_id = sql_text(assignment_id),
-        ))
-        .await
-        .context("loading architecture role assignment by id")?;
-    rows.first().map(parse_assignment_row).transpose()
-}
-
-pub async fn list_assignments_for_role(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    role_id: &str,
-) -> Result<Vec<ArchitectureRoleAssignmentRecord>> {
-    let rows = relational
-        .query_rows(&format!(
-            "SELECT repo_id, assignment_id, artefact_id, role_id, source_kind, confidence, status, \
-                    status_reason, rule_id, migration_id, migrated_to_assignment_id, provenance_json, evidence_json, metadata_json \
-             FROM architecture_role_assignments \
-             WHERE repo_id = {repo_id} AND role_id = {role_id} \
-             ORDER BY assignment_id ASC;",
-            repo_id = sql_text(repo_id),
-            role_id = sql_text(role_id),
-        ))
-        .await
-        .context("listing assignments for role")?;
-    rows.iter().map(parse_assignment_row).collect()
-}
-
-pub async fn update_assignment_status(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    assignment_id: &str,
-    status: &str,
-    reason: &str,
-    migration_id: Option<&str>,
-) -> Result<bool> {
-    if load_assignment_by_id(relational, repo_id, assignment_id)
-        .await?
-        .is_none()
-    {
-        return Ok(false);
-    }
-    relational
-        .exec_serialized(&format!(
-            "UPDATE architecture_role_assignments SET \
-                status = {status}, status_reason = {reason}, migration_id = {migration_id}, updated_at = {now} \
-             WHERE repo_id = {repo_id} AND assignment_id = {assignment_id};",
-            status = sql_text(status),
-            reason = sql_text(reason),
-            migration_id = sql_opt_text(migration_id),
-            now = sql_now(relational),
-            repo_id = sql_text(repo_id),
-            assignment_id = sql_text(assignment_id),
-        ))
-        .await
-        .context("updating assignment status")?;
-    Ok(true)
-}
-
-pub async fn mark_assignment_invalidated(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    assignment_id: &str,
-    reason: &str,
-) -> Result<bool> {
-    update_assignment_status(
-        relational,
-        repo_id,
-        assignment_id,
-        "needs_review",
-        reason,
-        None,
-    )
-    .await
-}
-
-pub async fn mark_assignment_migrated(
-    relational: &RelationalStorage,
-    repo_id: &str,
-    assignment_id: &str,
-    migrated_to_assignment_id: &str,
-    migration_id: Option<&str>,
-) -> Result<bool> {
-    if load_assignment_by_id(relational, repo_id, assignment_id)
-        .await?
-        .is_none()
-    {
-        return Ok(false);
-    }
-    relational
-        .exec_serialized(&format!(
-            "UPDATE architecture_role_assignments SET \
-                status = 'migrated', status_reason = 'migrated by proposal', \
-                migration_id = {migration_id}, migrated_to_assignment_id = {migrated_to_assignment_id}, updated_at = {now} \
-             WHERE repo_id = {repo_id} AND assignment_id = {assignment_id};",
-            migration_id = sql_opt_text(migration_id),
-            migrated_to_assignment_id = sql_text(migrated_to_assignment_id),
-            now = sql_now(relational),
-            repo_id = sql_text(repo_id),
-            assignment_id = sql_text(assignment_id),
-        ))
-        .await
-        .context("marking assignment migrated")?;
     Ok(true)
 }
 

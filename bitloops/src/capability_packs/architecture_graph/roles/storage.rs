@@ -27,17 +27,14 @@ pub use assignments::{
 pub use facts::{delete_role_facts_for_paths, load_facts_for_paths, replace_facts_for_paths};
 pub use management::{
     AliasConflict, ArchitectureRoleAliasRecord, ArchitectureRoleAssignmentMigrationRecord,
-    ArchitectureRoleAssignmentRecord, ArchitectureRoleProposalRecord, ArchitectureRoleRecord,
-    ArchitectureRoleRuleRecord, create_role_alias, deterministic_alias_id,
-    deterministic_assignment_id, deterministic_migration_id, deterministic_proposal_id,
-    deterministic_role_id, deterministic_rule_id, insert_assignment_migration_record,
-    insert_role_assignment, insert_role_proposal, insert_role_rule,
-    list_assignment_migrations_for_proposal, list_assignments_for_role, list_role_aliases,
-    list_roles, load_assignment_by_id, load_role_by_alias, load_role_by_canonical_key,
-    load_role_by_id, load_role_proposal_by_id, load_role_rule_by_id, load_role_rules,
-    mark_assignment_invalidated, mark_assignment_migrated, mark_role_proposal_applied,
-    next_role_rule_version, normalize_role_alias, normalize_role_key, update_assignment_status,
-    update_role_proposal_preview, update_role_rule_lifecycle, upsert_role,
+    ArchitectureRoleProposalRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,
+    create_role_alias, deterministic_alias_id, deterministic_migration_id,
+    deterministic_proposal_id, deterministic_role_id, deterministic_rule_id,
+    insert_assignment_migration_record, insert_role_proposal, insert_role_rule,
+    list_assignment_migrations_for_proposal, list_role_aliases, list_roles, load_role_by_alias,
+    load_role_by_canonical_key, load_role_by_id, load_role_proposal_by_id, load_role_rule_by_id,
+    load_role_rules, mark_role_proposal_applied, next_role_rule_version, normalize_role_alias,
+    normalize_role_key, update_role_proposal_preview, update_role_rule_lifecycle, upsert_role,
 };
 pub use proposals::insert_change_proposal;
 pub use roles::{load_roles, rename_role, set_role_lifecycle, upsert_classification_role};

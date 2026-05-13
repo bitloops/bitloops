@@ -5,8 +5,7 @@ use crate::host::devql::esc_pg;
 
 use super::management::{
     ArchitectureRoleAliasRecord, ArchitectureRoleAssignmentMigrationRecord,
-    ArchitectureRoleAssignmentRecord, ArchitectureRoleProposalRecord, ArchitectureRoleRecord,
-    ArchitectureRoleRuleRecord,
+    ArchitectureRoleProposalRecord, ArchitectureRoleRecord, ArchitectureRoleRuleRecord,
 };
 
 pub(super) fn parse_role_row(row: &Value) -> Result<ArchitectureRoleRecord> {
@@ -52,25 +51,6 @@ pub(super) fn parse_rule_row(row: &Value) -> Result<ArchitectureRoleRuleRecord> 
         evidence: json_text_field(row, "evidence_json")?,
         metadata: json_text_field(row, "metadata_json")?,
         supersedes_rule_id: optional_string_field(row, "supersedes_rule_id"),
-    })
-}
-
-pub(super) fn parse_assignment_row(row: &Value) -> Result<ArchitectureRoleAssignmentRecord> {
-    Ok(ArchitectureRoleAssignmentRecord {
-        assignment_id: string_field(row, "assignment_id")?,
-        repo_id: string_field(row, "repo_id")?,
-        artefact_id: string_field(row, "artefact_id")?,
-        role_id: string_field(row, "role_id")?,
-        source_kind: string_field(row, "source_kind")?,
-        confidence: f64_field(row, "confidence")?,
-        status: string_field(row, "status")?,
-        status_reason: string_field(row, "status_reason")?,
-        rule_id: optional_string_field(row, "rule_id"),
-        migration_id: optional_string_field(row, "migration_id"),
-        migrated_to_assignment_id: optional_string_field(row, "migrated_to_assignment_id"),
-        provenance: json_text_field(row, "provenance_json")?,
-        evidence: json_text_field(row, "evidence_json")?,
-        metadata: json_text_field(row, "metadata_json")?,
     })
 }
 
@@ -121,17 +101,6 @@ fn u64_field(row: &Value, key: &str) -> Result<u64> {
     row.get(key)
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow!("row missing numeric field `{key}`"))
-}
-
-fn f64_field(row: &Value, key: &str) -> Result<f64> {
-    row.get(key)
-        .and_then(Value::as_f64)
-        .or_else(|| {
-            row.get(key)
-                .and_then(Value::as_i64)
-                .map(|value| value as f64)
-        })
-        .ok_or_else(|| anyhow!("row missing float field `{key}`"))
 }
 
 fn json_text_field(row: &Value, key: &str) -> Result<Value> {

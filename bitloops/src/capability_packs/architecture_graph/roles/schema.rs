@@ -6,7 +6,6 @@ pub const ARCHITECTURE_ROLE_TABLES: &[&str] = &[
     "architecture_role_rule_signals_current",
     "architecture_role_assignments_current",
     "architecture_role_assignment_history",
-    "architecture_role_assignments",
     "architecture_role_change_proposals",
     "architecture_role_assignment_migrations",
     "architecture_role_adjudication_attempts",
@@ -178,32 +177,6 @@ CREATE TABLE IF NOT EXISTS architecture_role_assignment_history (
 CREATE INDEX IF NOT EXISTS architecture_role_assignment_history_assignment_idx
 ON architecture_role_assignment_history (repo_id, assignment_id, generation_seq);
 
-CREATE TABLE IF NOT EXISTS architecture_role_assignments (
-    repo_id TEXT NOT NULL,
-    assignment_id TEXT NOT NULL,
-    artefact_id TEXT NOT NULL,
-    role_id TEXT NOT NULL,
-    source_kind TEXT NOT NULL DEFAULT 'manual',
-    confidence REAL NOT NULL DEFAULT 1.0,
-    status TEXT NOT NULL DEFAULT 'active',
-    status_reason TEXT NOT NULL DEFAULT '',
-    rule_id TEXT,
-    migration_id TEXT,
-    migrated_to_assignment_id TEXT,
-    provenance_json TEXT NOT NULL DEFAULT '{}',
-    evidence_json TEXT NOT NULL DEFAULT '[]',
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (repo_id, assignment_id)
-);
-
-CREATE INDEX IF NOT EXISTS architecture_role_assignments_repo_role_idx
-ON architecture_role_assignments (repo_id, role_id, status);
-
-CREATE INDEX IF NOT EXISTS architecture_role_assignments_repo_artefact_idx
-ON architecture_role_assignments (repo_id, artefact_id, status);
-
 CREATE TABLE IF NOT EXISTS architecture_role_change_proposals (
     repo_id TEXT NOT NULL,
     proposal_id TEXT NOT NULL,
@@ -291,5 +264,13 @@ mod tests {
         for table in ARCHITECTURE_ROLE_TABLES {
             assert!(sql.contains(table), "schema should include {table}");
         }
+    }
+
+    #[test]
+    fn schema_does_not_create_superseded_role_assignments_table() {
+        let sql = architecture_graph_roles_sqlite_schema_sql();
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS architecture_role_assignments (\n"));
+        assert!(!sql.contains("architecture_role_assignments_repo_role_idx"));
+        assert!(!sql.contains("architecture_role_assignments_repo_artefact_idx"));
     }
 }

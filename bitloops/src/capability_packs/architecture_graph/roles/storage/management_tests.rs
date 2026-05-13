@@ -56,25 +56,6 @@ mod deterministic_tests {
         }
     }
 
-    fn test_assignment(role_id: &str) -> ArchitectureRoleAssignmentRecord {
-        ArchitectureRoleAssignmentRecord {
-            assignment_id: deterministic_assignment_id("repo-1", "artefact-1", role_id),
-            repo_id: "repo-1".to_string(),
-            artefact_id: "artefact-1".to_string(),
-            role_id: role_id.to_string(),
-            source_kind: "deterministic_rule".to_string(),
-            confidence: 0.91,
-            status: "active".to_string(),
-            status_reason: String::new(),
-            rule_id: Some("rule-1".to_string()),
-            migration_id: None,
-            migrated_to_assignment_id: None,
-            provenance: json!({"source": "test"}),
-            evidence: json!(["src/payments/service.rs"]),
-            metadata: json!({"ticket": "ARCH-1"}),
-        }
-    }
-
     fn test_proposal() -> ArchitectureRoleProposalRecord {
         ArchitectureRoleProposalRecord {
             proposal_id: "proposal-1".to_string(),
@@ -150,7 +131,7 @@ mod deterministic_tests {
     }
 
     #[tokio::test]
-    async fn role_rule_assignment_proposal_and_migration_round_trip() -> Result<()> {
+    async fn role_rule_proposal_and_migration_round_trip() -> Result<()> {
         let relational = sqlite_relational_with_schema().await?;
         let role = test_role();
         upsert_role(&relational, &role).await?;
@@ -159,38 +140,6 @@ mod deterministic_tests {
         insert_role_rule(&relational, &rule).await?;
         let rules = load_role_rules(&relational, "repo-1", &role.role_id).await?;
         assert_eq!(rules, vec![rule.clone()]);
-
-        let assignment = test_assignment(&role.role_id);
-        insert_role_assignment(&relational, &assignment).await?;
-        assert!(
-            mark_assignment_invalidated(
-                &relational,
-                "repo-1",
-                &assignment.assignment_id,
-                "needs review after role change",
-            )
-            .await?
-        );
-        assert!(
-            mark_assignment_migrated(
-                &relational,
-                "repo-1",
-                &assignment.assignment_id,
-                "assignment-2",
-                Some("migration-1"),
-            )
-            .await?
-        );
-
-        let loaded_assignment =
-            load_assignment_by_id(&relational, "repo-1", &assignment.assignment_id)
-                .await?
-                .expect("assignment");
-        assert_eq!(loaded_assignment.status, "migrated");
-        assert_eq!(
-            loaded_assignment.migrated_to_assignment_id.as_deref(),
-            Some("assignment-2")
-        );
 
         let proposal = test_proposal();
         insert_role_proposal(&relational, &proposal).await?;
