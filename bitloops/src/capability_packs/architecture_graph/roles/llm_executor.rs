@@ -74,10 +74,6 @@ fn adjudication_user_prompt(packet: &RoleEvidencePacket) -> String {
 }
 
 fn adjudication_response_schema() -> Value {
-    let strict_object = json!({
-        "type": "object",
-        "additionalProperties": false
-    });
     json!({
         "type": "object",
         "properties": {
@@ -93,14 +89,14 @@ fn adjudication_response_schema() -> Value {
                         "role_id": { "type": "string", "minLength": 1 },
                         "primary": { "type": "boolean" },
                         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-                        "evidence": strict_object.clone()
+                        "evidence": {}
                     },
-                    "required": ["role_id", "confidence"],
+                    "required": ["role_id", "primary", "confidence", "evidence"],
                     "additionalProperties": false
                 }
             },
             "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-            "evidence": strict_object,
+            "evidence": {},
             "reasoning_summary": { "type": "string", "minLength": 1 },
             "rule_suggestions": {
                 "type": "array",
@@ -111,7 +107,7 @@ fn adjudication_response_schema() -> Value {
                         "summary": { "type": "string", "minLength": 1 },
                         "rationale": { "type": ["string", "null"] }
                     },
-                    "required": ["title", "summary"],
+                    "required": ["title", "summary", "rationale"],
                     "additionalProperties": false
                 }
             }
@@ -119,4 +115,67 @@ fn adjudication_response_schema() -> Value {
         "required": ["outcome", "assignments", "confidence", "reasoning_summary", "evidence", "rule_suggestions"],
         "additionalProperties": false
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    #[test]
+    fn adjudication_response_schema_requires_all_declared_properties() {
+        let schema = adjudication_response_schema();
+
+        assert_schema_objects_require_every_property("$", &schema);
+    }
+
+    #[test]
+    fn adjudication_response_schema_keeps_evidence_generic() {
+        let schema = adjudication_response_schema();
+
+        assert_eq!(
+            schema.pointer("/properties/evidence"),
+            Some(&Value::Object(Default::default()))
+        );
+        assert_eq!(
+            schema.pointer("/properties/assignments/items/properties/evidence"),
+            Some(&Value::Object(Default::default()))
+        );
+    }
+
+    fn assert_schema_objects_require_every_property(path: &str, value: &Value) {
+        match value {
+            Value::Object(map) => {
+                if let Some(properties) = map.get("properties").and_then(Value::as_object) {
+                    let required = map
+                        .get("required")
+                        .and_then(Value::as_array)
+                        .unwrap_or_else(|| {
+                            panic!("{path}: object with properties must declare required fields")
+                        })
+                        .iter()
+                        .map(|value| value.as_str().expect("required field must be a string"))
+                        .collect::<std::collections::BTreeSet<_>>();
+                    let property_keys = properties
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    assert_eq!(
+                        required, property_keys,
+                        "{path}: required fields must match declared properties"
+                    );
+                }
+                for (key, child) in map {
+                    assert_schema_objects_require_every_property(&format!("{path}/{key}"), child);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    assert_schema_objects_require_every_property(&format!("{path}/{index}"), item);
+                }
+            }
+            _ => {}
+        }
+    }
 }
