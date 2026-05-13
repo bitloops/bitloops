@@ -26,7 +26,7 @@ DevQL query commands are read-only from a producer-lifecycle perspective. Runnin
 | Daemon startup | Watcher lifecycle owner | Rehydrates watchers for initialized repo bindings. This is the normal way a watcher should come back after daemon restart. |
 | Watcher | Primary worktree edit producer | Queues path sync work for file add, change, delete, rename, and reset effects observed through filesystem events. |
 | `post-checkout` hook | Branch transition safety producer | Queues full sync work for branch checkouts. It covers semantic HEAD changes and final branch state even when filesystem events are incomplete or already handled. |
-| `post-merge` hook | Merge/pull safety producer | Queues changed-path refresh/backfill work for merge or pull results. It may complete as `unchanged` when checkout or watcher work already materialized the result. |
+| `post-merge` hook | Merge/pull safety producer | Queues lane-specific changed-path sync and, for non-squash merges, merge-head-anchored historical ingest backfill. Either lane may complete as `unchanged` or no-op when another producer already materialized the same state. |
 | `post-commit` hook | Commit-scoped safety producer | Queues committed-path semantic refresh work. It may complete as `changed` or `unchanged` when watcher work already indexed the edited files before commit. |
 | Manual `sync --repair` | Explicit recovery producer | Repairs known drift when validation or manual QA proves state is stale. |
 | Manual `sync --validate` | Read-only validator | Checks for drift. It should not mutate current-state data. |
@@ -106,7 +106,9 @@ Current admission classes:
 
 - `Task { Sync(..) }` promotes a visible sync task and conflicts with running same-repo sync or repo-policy-change sync.
 - `Task { Ingest(..) }` promotes a visible ingest task and conflicts with running same-repo ingest or repo-policy-change sync.
-- `PostCommitRefresh` and `PostMergeRefresh` expand into visible task work and remain conservative against their produced task kinds.
+- `PostCommitRefresh` and `PostMergeSyncRefresh` expand into visible sync work and conflict with running same-repo sync or repo-policy-change sync.
+- `PostMergeIngestBackfill` expands into visible ingest work and conflicts with running same-repo ingest or repo-policy-change sync. It resolves explicit commits from the captured merge HEAD before enqueueing the visible ingest task, so later checkout/reset does not retarget the historical ingest.
+- Legacy `PostMergeRefresh` rows may still be processed conservatively for compatibility with pending spool records created by older binaries.
 - `PostCommitDerivation` and `PrePushSync` perform inline work in the producer-spool worker and remain repo-exclusive.
 
 This boundary keeps watcher sync visible during long-running ingest while preserving ordering for inline hook work.
