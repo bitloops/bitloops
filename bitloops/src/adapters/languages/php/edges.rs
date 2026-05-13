@@ -148,7 +148,10 @@ fn collect_php_edges_recursive(
                             to_symbol_ref: Some(clean.to_string()),
                             start_line: Some(line_no),
                             end_line: Some(line_no),
-                            metadata: EdgeMetadata::reference(RefKind::Type, Resolution::Unresolved),
+                            metadata: EdgeMetadata::reference(
+                                RefKind::Type,
+                                Resolution::Unresolved,
+                            ),
                         });
                     }
                 }
@@ -200,8 +203,8 @@ function run() {
 }
 "#;
         let artefacts = extract_php_artefacts(content, "src/main.php").expect("artefacts");
-        let edges = extract_php_dependency_edges(content, "src/main.php", &artefacts)
-            .expect("php edges");
+        let edges =
+            extract_php_dependency_edges(content, "src/main.php", &artefacts).expect("php edges");
         assert!(edges.iter().any(|edge| {
             edge.edge_kind == EdgeKind::Imports
                 && edge.to_symbol_ref.as_deref() == Some("App\\Core\\Helper")

@@ -457,7 +457,9 @@ impl TryFrom<&str> for LanguageKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{CSharpKind, GoKind, JavaKind, LanguageKind, PhpKind, PythonKind, RustKind, TsJsKind};
+    use super::{
+        CSharpKind, GoKind, JavaKind, LanguageKind, PhpKind, PythonKind, RustKind, TsJsKind,
+    };
 
     #[test]
     fn per_language_kind_parsers_round_trip() {

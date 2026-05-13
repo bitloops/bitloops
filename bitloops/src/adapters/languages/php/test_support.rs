@@ -32,6 +32,7 @@ impl LanguageTestSupport for PhpLanguageTestSupport {
         relative_path: &str,
     ) -> Result<DiscoveredTestFile> {
         let source = std::fs::read_to_string(absolute_path)?;
+        let mut seen = std::collections::HashSet::new();
         let scenarios = source
             .lines()
             .enumerate()
@@ -39,9 +40,13 @@ impl LanguageTestSupport for PhpLanguageTestSupport {
                 let trimmed = line.trim();
                 if !(trimmed.starts_with("public function test")
                     || trimmed.starts_with("function test")
-                    || trimmed.contains("it('")
-                    || trimmed.contains("test('"))
+                    || trimmed.starts_with("it(")
+                    || trimmed.starts_with("test("))
                 {
+                    return None;
+                }
+                let key = normalize_identity_fragment(trimmed);
+                if !seen.insert(key) {
                     return None;
                 }
 
@@ -73,9 +78,22 @@ pub(crate) fn php_test_support() -> Arc<dyn LanguageTestSupport> {
     Arc::new(PhpLanguageTestSupport)
 }
 
+fn normalize_identity_fragment(input: &str) -> String {
+    let normalized = input
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    if normalized.is_empty() {
+        input.trim().to_string()
+    } else {
+        normalized
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn supports_php_test_paths() {
@@ -83,5 +101,31 @@ mod tests {
         assert!(support.supports_path(Path::new("tests/UserTest.php"), "tests/UserTest.php"));
         assert!(support.supports_path(Path::new("app/tests/Foo.php"), "app/tests/Foo.php"));
         assert!(!support.supports_path(Path::new("src/UserService.php"), "src/UserService.php"));
+    }
+
+    #[test]
+    fn discover_tests_dedupes_whitespace_equivalent_signatures() {
+        let support = PhpLanguageTestSupport;
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("PhpUnitMethodCasingFixerTest.php");
+        std::fs::write(
+            &path,
+            r#"<?php
+public function test_my_app() {}
+public function test_my_app () {}
+public function test_my_app () {}
+"#,
+        )
+        .expect("write fixture");
+
+        let discovered = support
+            .discover_tests(&path, "tests/PhpUnitMethodCasingFixerTest.php")
+            .expect("discover tests");
+        assert_eq!(discovered.suites.len(), 1);
+        assert_eq!(discovered.suites[0].scenarios.len(), 1);
+        assert_eq!(
+            discovered.suites[0].scenarios[0].name,
+            "public function test_my_app() {}"
+        );
     }
 }

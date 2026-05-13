@@ -39,6 +39,7 @@ fn devql_language_adapter_lifecycle_summary_reports_builtins_and_readiness() {
             CSHARP_LANGUAGE_PACK_ID,
             GO_LANGUAGE_PACK_ID,
             JAVA_LANGUAGE_PACK_ID,
+            PHP_LANGUAGE_PACK_ID,
             PYTHON_LANGUAGE_PACK_ID,
             RUST_LANGUAGE_PACK_ID,
             TS_JS_LANGUAGE_PACK_ID
@@ -79,6 +80,7 @@ fn core_extension_host_registry_report_with_language_adapter_snapshot_includes_a
             CSHARP_LANGUAGE_PACK_ID.to_string(),
             GO_LANGUAGE_PACK_ID.to_string(),
             JAVA_LANGUAGE_PACK_ID.to_string(),
+            PHP_LANGUAGE_PACK_ID.to_string(),
             PYTHON_LANGUAGE_PACK_ID.to_string(),
             RUST_LANGUAGE_PACK_ID.to_string(),
             TS_JS_LANGUAGE_PACK_ID.to_string()

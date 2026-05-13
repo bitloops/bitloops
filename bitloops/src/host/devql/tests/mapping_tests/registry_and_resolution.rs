@@ -27,7 +27,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_pack_owner("java"),
         Some(JAVA_LANGUAGE_PACK_ID)
     );
-    assert_eq!(resolve_language_pack_owner("php"), Some(PHP_LANGUAGE_PACK_ID));
+    assert_eq!(
+        resolve_language_pack_owner("php"),
+        Some(PHP_LANGUAGE_PACK_ID)
+    );
     assert_eq!(
         resolve_language_id_for_file_path("src/lib.rs"),
         Some("rust")
@@ -53,7 +56,10 @@ fn devql_extension_host_resolves_built_in_language_pack_ownership() {
         resolve_language_id_for_file_path("src/main.cs"),
         Some("csharp")
     );
-    assert_eq!(resolve_language_id_for_file_path("src/main.php"), Some("php"));
+    assert_eq!(
+        resolve_language_id_for_file_path("src/main.php"),
+        Some("php")
+    );
     assert!(resolve_language_id_for_file_path("README").is_none());
 }
 

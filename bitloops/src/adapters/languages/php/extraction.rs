@@ -84,7 +84,10 @@ fn collect_php_nodes_recursive(
                 },
             );
         }
-        "class_declaration" | "interface_declaration" | "trait_declaration" | "enum_declaration" => {
+        "class_declaration"
+        | "interface_declaration"
+        | "trait_declaration"
+        | "enum_declaration" => {
             if let Some(name_node) = node.child_by_field_name("name")
                 && let Ok(name) = name_node.utf8_text(content.as_bytes())
             {
@@ -268,8 +271,12 @@ fn push_php_artefact(
     );
 
     out.push(LanguageArtefact {
-        canonical_kind: resolve_canonical_kind(PHP_CANONICAL_MAPPINGS, descriptor.language_kind, false)
-            .map(|projection| projection.as_str().to_string()),
+        canonical_kind: resolve_canonical_kind(
+            PHP_CANONICAL_MAPPINGS,
+            descriptor.language_kind,
+            false,
+        )
+        .map(|projection| projection.as_str().to_string()),
         language_kind: descriptor.language_kind,
         name: descriptor.name,
         symbol_fqn: descriptor.symbol_fqn,
@@ -308,8 +315,8 @@ function helper() {
     return 1;
 }
 "#;
-        let artefacts = extract_php_artefacts(content, "src/UserService.php")
-            .expect("extract php artefacts");
+        let artefacts =
+            extract_php_artefacts(content, "src/UserService.php").expect("extract php artefacts");
         assert!(artefacts.iter().any(|a| a.name == "App\\Services"));
         assert!(artefacts.iter().any(|a| a.name == "UserService"));
         assert!(artefacts.iter().any(|a| a.name == "run"));
