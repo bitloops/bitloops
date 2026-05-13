@@ -1,19 +1,19 @@
 use anyhow::{Context, Result, anyhow};
-use serde::{Serialize, de::DeserializeOwned};
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 
 use crate::capability_packs::architecture_graph::roles::classifier::{
     ArchitectureRoleClassificationInput, ArchitectureRoleClassificationScope,
     classify_architecture_roles_for_current_state,
 };
 use crate::capability_packs::architecture_graph::roles::migrations::{
-    ProposalApplySummary, ProposalSummary, apply_proposal, create_alias_proposal,
-    create_deprecate_role_proposal, create_merge_role_proposal, create_remove_role_proposal,
-    create_rename_role_proposal, create_rule_activate_proposal, create_rule_disable_proposal,
-    create_rule_draft_proposal, create_rule_edit_proposal, create_split_role_proposal,
-    show_proposal,
+    apply_proposal, create_alias_proposal, create_deprecate_role_proposal,
+    create_merge_role_proposal, create_remove_role_proposal, create_rename_role_proposal,
+    create_rule_activate_proposal, create_rule_disable_proposal, create_rule_draft_proposal,
+    create_rule_edit_proposal, create_split_role_proposal, show_proposal,
 };
 use crate::capability_packs::architecture_graph::roles::storage::list_recent_role_adjudication_attempts;
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
@@ -34,6 +34,7 @@ use crate::host::runtime_store::{
 use super::*;
 
 mod roles_seed;
+mod support;
 
 use roles_seed::{
     BootstrapCommandSummary, SeedCommandSummary, activate_seeded_draft_rules,
@@ -44,6 +45,10 @@ use roles_seed::{
 use roles_seed::{
     SeedRuleActivationSummary, SeedSummary, architecture_seed_request_diagnostics,
     ensure_seed_alias, persist_seeded_taxonomy,
+};
+use support::{
+    cli_provenance, load_json_spec, print_apply_summary, print_proposal_summary, sql_text,
+    value_json, value_str,
 };
 
 const ROLE_REVIEW_STATUSES: &[&str] = &["needs_review", "stale", "rejected", "unknown"];
@@ -968,63 +973,6 @@ pub(super) fn format_roles_classify_output(
             .map(|warning| format!("warning: {warning}")),
     );
     Ok(lines.join("\n"))
-}
-
-fn sql_text(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn value_str<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
-    row.get(key).and_then(Value::as_str)
-}
-
-fn value_json(row: &Value, key: &str) -> Option<Value> {
-    match row.get(key) {
-        Some(Value::String(text)) => serde_json::from_str(text).ok(),
-        Some(value) => Some(value.clone()),
-        None => None,
-    }
-}
-
-fn print_proposal_summary(summary: &ProposalSummary) {
-    println!(
-        "proposal={} type={} status={}",
-        summary.proposal_id, summary.proposal_type, summary.status
-    );
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&summary.preview_payload)
-            .unwrap_or_else(|_| summary.preview_payload.to_string())
-    );
-}
-
-fn print_apply_summary(summary: &ProposalApplySummary) {
-    println!(
-        "proposal={} type={} applied",
-        summary.proposal_id, summary.proposal_type
-    );
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&summary.result_payload)
-            .unwrap_or_else(|_| summary.result_payload.to_string())
-    );
-    if !summary.migration_records.is_empty() {
-        println!("migrations={}", summary.migration_records.len());
-    }
-}
-
-fn load_json_spec<T: DeserializeOwned>(path: &std::path::Path) -> Result<T> {
-    let bytes = fs::read(path)
-        .with_context(|| format!("reading architecture roles spec from `{}`", path.display()))?;
-    serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing JSON spec from `{}`", path.display()))
-}
-
-fn cli_provenance(operation: &str) -> Value {
-    json!({
-        "source": "devql_cli",
-        "operation": operation,
-    })
 }
 
 #[cfg(test)]
