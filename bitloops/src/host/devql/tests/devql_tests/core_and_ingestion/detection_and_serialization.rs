@@ -21,6 +21,7 @@ fn detect_language_prefers_registered_language_pack_profiles() {
     assert_eq!(detect_language("src/main.go"), "go");
     assert_eq!(detect_language("src/Main.java"), "java");
     assert_eq!(detect_language("src/main.cs"), "csharp");
+    assert_eq!(detect_language("src/main.php"), "php");
     assert_eq!(detect_language("src/readme.custom"), "plain_text");
     assert_eq!(detect_language("README"), "plain_text");
 }

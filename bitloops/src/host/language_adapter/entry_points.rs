@@ -47,6 +47,7 @@ pub enum BuiltinEntryPointLanguage {
     CSharp,
     Go,
     Java,
+    Php,
     Python,
     Rust,
     TsJs,
@@ -191,6 +192,26 @@ pub fn detect_builtin_entry_points(
                         "python_handler",
                         0.76,
                         "Python handler-shaped function",
+                    ));
+                }
+            }
+            BuiltinEntryPointLanguage::Php => {
+                if is_callable(artefact)
+                    && matches!(
+                        artefact.name.as_str(),
+                        "main" | "handle" | "__invoke" | "run" | "boot"
+                    )
+                    && matches!(
+                        basename.as_str(),
+                        "index.php" | "artisan" | "console.php" | "server.php"
+                    )
+                {
+                    candidates.push(candidate(
+                        file,
+                        artefact,
+                        "php_runtime",
+                        0.84,
+                        "PHP runtime-shaped function in a conventional entry file",
                     ));
                 }
             }
@@ -441,6 +462,10 @@ fn file_level_entry(language: BuiltinEntryPointLanguage, path: &str, basename: &
                 "main.py" | "app.py" | "wsgi.py" | "asgi.py" | "__main__.py"
             )
         }
+        BuiltinEntryPointLanguage::Php => matches!(
+            basename,
+            "index.php" | "artisan" | "console.php" | "server.php"
+        ),
         BuiltinEntryPointLanguage::TsJs => matches!(
             basename,
             "index.ts"
