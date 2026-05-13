@@ -1,7 +1,8 @@
 use super::*;
 use crate::capability_packs::architecture_graph::roles::contracts::RoleTaxonomyReader;
 use crate::capability_packs::architecture_graph::roles::fact_extraction::{
-    ArchitectureRoleFactExtractionInput, extract_architecture_role_facts,
+    ArchitectureRoleFactExtractionInput, SliceArchitectureRoleCurrentStateSource,
+    extract_architecture_role_facts,
 };
 use crate::capability_packs::architecture_graph::roles::rules::{
     compile_detection_rules, evaluate_rules_over_facts,
@@ -609,27 +610,32 @@ async fn seeded_rule_candidate_persists_loads_compiles_and_evaluates_over_facts(
     let active_rules = load_active_detection_rules(&relational, "repo-1").await?;
     let compiled = compile_detection_rules(active_rules)?;
     let affected_paths = BTreeSet::from(["src/cli/commands/run.rs".to_string()]);
-    let extraction = extract_architecture_role_facts(ArchitectureRoleFactExtractionInput {
-        repo_id: "repo-1",
-        generation_seq: 7,
-        affected_paths: &affected_paths,
-        files: &[CurrentCanonicalFileRecord {
-            repo_id: "repo-1".to_string(),
-            path: "src/cli/commands/run.rs".to_string(),
-            analysis_mode: "parsed".to_string(),
-            file_role: "source".to_string(),
-            language: "rust".to_string(),
-            resolved_language: "rust".to_string(),
-            effective_content_id: "content-1".to_string(),
-            parser_version: "test".to_string(),
-            extractor_version: "test".to_string(),
-            exists_in_head: true,
-            exists_in_index: true,
-            exists_in_worktree: true,
-        }],
-        artefacts: &[],
-        dependency_edges: &[],
-    });
+    let files = vec![CurrentCanonicalFileRecord {
+        repo_id: "repo-1".to_string(),
+        path: "src/cli/commands/run.rs".to_string(),
+        analysis_mode: "parsed".to_string(),
+        file_role: "source".to_string(),
+        language: "rust".to_string(),
+        resolved_language: "rust".to_string(),
+        effective_content_id: "content-1".to_string(),
+        parser_version: "test".to_string(),
+        extractor_version: "test".to_string(),
+        exists_in_head: true,
+        exists_in_index: true,
+        exists_in_worktree: true,
+    }];
+    let artefacts = Vec::new();
+    let dependency_edges = Vec::new();
+    let current_state = SliceArchitectureRoleCurrentStateSource::new(&artefacts, &dependency_edges);
+    let extraction = extract_architecture_role_facts(
+        ArchitectureRoleFactExtractionInput {
+            repo_id: "repo-1",
+            generation_seq: 7,
+            affected_paths: &affected_paths,
+            files: &files,
+        },
+        &current_state,
+    )?;
 
     let result = evaluate_rules_over_facts(&compiled, &extraction.facts)?;
 
@@ -919,10 +925,14 @@ async fn seed_activation_enables_full_classification() -> Result<()> {
         exists_in_index: true,
         exists_in_worktree: true,
     }];
+    let artefacts = Vec::new();
+    let dependency_edges = Vec::new();
+    let current_state = SliceArchitectureRoleCurrentStateSource::new(&artefacts, &dependency_edges);
 
     let outcome =
         crate::capability_packs::architecture_graph::roles::classifier::classify_architecture_roles_for_current_state(
             &relational,
+            &current_state,
             crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
                 repo_id: "repo-1",
                 generation_seq: 7,
@@ -932,8 +942,6 @@ async fn seed_activation_enables_full_classification() -> Result<()> {
                     removed_paths: BTreeSet::new(),
                 },
                 files: &files,
-                artefacts: &[],
-                dependency_edges: &[],
             },
         )
         .await?;

@@ -1576,6 +1576,10 @@ async fn reconcile_streams_current_state_and_persists_metrics() -> Result<()> {
     assert_eq!(metrics["dependency_edges"], json!(0));
     assert_eq!(metrics["affected_paths"], json!(1));
     assert_eq!(metrics["impacted_nodes"], json!(1));
+    assert!(
+        metrics.get("roles").is_some(),
+        "role metrics should be present when the streaming role classifier runs"
+    );
 
     let node_count = storage
         .query_rows(

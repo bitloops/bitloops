@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod deterministic_tests {
     use super::super::*;
+    use crate::capability_packs::architecture_graph::roles::fact_extraction::SliceArchitectureRoleCurrentStateSource;
     use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
     use crate::models::{CurrentCanonicalArtefactRecord, ProductionArtefact};
 
@@ -808,9 +809,15 @@ mod deterministic_tests {
             exists_in_index: true,
             exists_in_worktree: true,
         }];
+        let dependency_edges = Vec::new();
+        let current_state = SliceArchitectureRoleCurrentStateSource::new(
+            &preview_gateway.artefacts,
+            &dependency_edges,
+        );
         let classification =
             crate::capability_packs::architecture_graph::roles::classifier::classify_architecture_roles_for_current_state(
                 &relational,
+                &current_state,
                 crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
                     repo_id: "repo-1",
                     generation_seq: 42,
@@ -822,8 +829,6 @@ mod deterministic_tests {
                         removed_paths: std::collections::BTreeSet::new(),
                     },
                     files: &files,
-                    artefacts: &preview_gateway.artefacts,
-                    dependency_edges: &[],
                 },
             )
             .await?;
@@ -923,6 +928,7 @@ mod deterministic_tests {
         let next_classification =
             crate::capability_packs::architecture_graph::roles::classifier::classify_architecture_roles_for_current_state(
                 &relational,
+                &current_state,
                 crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
                     repo_id: "repo-1",
                     generation_seq: 43,
@@ -934,8 +940,6 @@ mod deterministic_tests {
                         removed_paths: std::collections::BTreeSet::new(),
                     },
                     files: &files,
-                    artefacts: &preview_gateway.artefacts,
-                    dependency_edges: &[],
                 },
             )
             .await?;

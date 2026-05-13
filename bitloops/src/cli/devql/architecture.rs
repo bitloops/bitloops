@@ -9,6 +9,7 @@ use crate::capability_packs::architecture_graph::roles::classifier::{
     ArchitectureRoleClassificationInput, ArchitectureRoleClassificationScope,
     classify_architecture_roles_for_current_state,
 };
+use crate::capability_packs::architecture_graph::roles::fact_extraction::RelationalArchitectureRoleCurrentStateSource;
 use crate::capability_packs::architecture_graph::roles::migrations::{
     apply_proposal, create_alias_proposal, create_deprecate_role_proposal,
     create_merge_role_proposal, create_remove_role_proposal, create_rename_role_proposal,
@@ -358,14 +359,6 @@ async fn classify_architecture_roles_with_output(
         .relational
         .load_current_canonical_files(&scope.repo.repo_id)
         .context("loading current files for architecture role classification")?;
-    let artefacts = context
-        .relational
-        .load_current_canonical_artefacts(&scope.repo.repo_id)
-        .context("loading current artefacts for architecture role classification")?;
-    let dependency_edges = context
-        .relational
-        .load_current_canonical_edges(&scope.repo.repo_id)
-        .context("loading current dependency edges for architecture role classification")?;
     let generation_seq = crate::daemon::capability_event_latest_generation(&scope.repo.repo_id)
         .ok()
         .flatten()
@@ -387,16 +380,19 @@ async fn classify_architecture_roles_with_output(
             removed_paths: BTreeSet::new(),
         }
     };
+    let role_current_state = RelationalArchitectureRoleCurrentStateSource::new(
+        &scope.repo.repo_id,
+        context.relational.as_ref(),
+    );
 
     let outcome = classify_architecture_roles_for_current_state(
         context.storage.as_ref(),
+        &role_current_state,
         ArchitectureRoleClassificationInput {
             repo_id: &scope.repo.repo_id,
             generation_seq,
             scope: role_scope,
             files: &files,
-            artefacts: &artefacts,
-            dependency_edges: &dependency_edges,
         },
     )
     .await?;

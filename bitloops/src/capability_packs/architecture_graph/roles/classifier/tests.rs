@@ -1,8 +1,13 @@
+use super::super::fact_extraction::SliceArchitectureRoleCurrentStateSource;
 use super::super::taxonomy::{
     ArchitectureArtefactFact, ArchitectureRoleRuleSignal, AssignmentPriority, AssignmentStatus,
     RoleSignalPolarity, RoleTarget,
 };
 use super::*;
+
+fn empty_current_state() -> SliceArchitectureRoleCurrentStateSource<'static> {
+    SliceArchitectureRoleCurrentStateSource::new(&[], &[])
+}
 
 fn classifier_storage() -> anyhow::Result<(tempfile::TempDir, crate::host::devql::RelationalStorage)>
 {
@@ -522,8 +527,10 @@ async fn classification_extracts_facts_runs_rules_and_writes_assignment() -> any
         exists_in_worktree: true,
     }];
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 1,
@@ -533,8 +540,6 @@ async fn classification_extracts_facts_runs_rules_and_writes_assignment() -> any
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -615,9 +620,12 @@ async fn classification_matches_seeded_artefact_rule_with_path_language_and_symb
         "src/application/create_user.rs",
         "create_user_use_case",
     )];
+    let dependency_edges = Vec::new();
+    let current_state = SliceArchitectureRoleCurrentStateSource::new(&artefacts, &dependency_edges);
 
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 1,
@@ -629,8 +637,6 @@ async fn classification_matches_seeded_artefact_rule_with_path_language_and_symb
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
-            artefacts: &artefacts,
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -711,8 +717,10 @@ async fn classification_marks_removed_path_assignment_stale_and_counts_history()
     )
     .await?;
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 2,
@@ -722,8 +730,6 @@ async fn classification_marks_removed_path_assignment_stale_and_counts_history()
                 removed_paths: std::collections::BTreeSet::from(["src/removed.rs".to_string()]),
             },
             files: &[],
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -798,8 +804,10 @@ async fn full_reconcile_marks_missing_role_assignments_stale() -> anyhow::Result
         exists_in_worktree: true,
     }];
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 2,
@@ -809,8 +817,6 @@ async fn full_reconcile_marks_missing_role_assignments_stale() -> anyhow::Result
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -899,8 +905,10 @@ async fn classification_counts_needs_review_adjudication_candidates() -> anyhow:
         exists_in_worktree: true,
     }];
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 1,
@@ -910,8 +918,6 @@ async fn classification_counts_needs_review_adjudication_candidates() -> anyhow:
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -940,8 +946,10 @@ async fn classification_queues_unknown_when_changed_target_has_no_assignment() -
     let (_temp, relational) = classifier_storage()?;
     let files = vec![file_fixture("src/unknown.rs")];
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 3,
@@ -951,8 +959,6 @@ async fn classification_queues_unknown_when_changed_target_has_no_assignment() -
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -976,8 +982,10 @@ async fn classification_queues_high_impact_main_when_not_confidently_classified(
     let (_temp, relational) = classifier_storage()?;
     let files = vec![file_fixture("src/main.rs")];
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 4,
@@ -987,8 +995,6 @@ async fn classification_queues_high_impact_main_when_not_confidently_classified(
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -1050,8 +1056,10 @@ async fn role_metrics_count_deleted_facts_and_signals() -> anyhow::Result<()> {
     )
     .await?;
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-1",
             generation_seq: 2,
@@ -1061,8 +1069,6 @@ async fn role_metrics_count_deleted_facts_and_signals() -> anyhow::Result<()> {
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &[],
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;
@@ -1153,8 +1159,10 @@ async fn classification_returns_conflict_adjudication_request_for_top_conflictin
         exists_in_worktree: true,
     }];
 
+    let current_state = empty_current_state();
     let outcome = classify_architecture_roles_for_current_state(
         &relational,
+        &current_state,
         ArchitectureRoleClassificationInput {
             repo_id: "repo-conflict",
             generation_seq: 4,
@@ -1164,8 +1172,6 @@ async fn classification_returns_conflict_adjudication_request_for_top_conflictin
                 removed_paths: std::collections::BTreeSet::new(),
             },
             files: &files,
-            artefacts: &[],
-            dependency_edges: &[],
         },
     )
     .await?;

@@ -5,16 +5,15 @@ use anyhow::{Context, Result};
 use serde_json::json;
 
 use crate::host::devql::RelationalStorage;
-use crate::models::{
-    CurrentCanonicalArtefactRecord, CurrentCanonicalEdgeRecord, CurrentCanonicalFileRecord,
-};
+use crate::models::CurrentCanonicalFileRecord;
 
 use super::adjudication_selector::{DeterministicRoleOutcomeInput, select_adjudication_reason};
 use super::contracts::{
     AdjudicationReason, RoleAdjudicationRequest, RoleCurrentAssignmentSnapshot,
 };
 use super::fact_extraction::{
-    ArchitectureRoleFactExtractionInput, extract_architecture_role_facts,
+    ArchitectureRoleCurrentStateSource, ArchitectureRoleFactExtractionInput,
+    extract_architecture_role_facts,
 };
 use super::rules::{compile_detection_rules, evaluate_rules_over_facts};
 use super::storage::{
@@ -37,8 +36,6 @@ pub struct ArchitectureRoleClassificationInput<'a> {
     pub generation_seq: u64,
     pub scope: ArchitectureRoleClassificationScope,
     pub files: &'a [CurrentCanonicalFileRecord],
-    pub artefacts: &'a [CurrentCanonicalArtefactRecord],
-    pub dependency_edges: &'a [CurrentCanonicalEdgeRecord],
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -228,19 +225,21 @@ fn authoritative_current_assignment(assignment: &ArchitectureRoleAssignment) -> 
 
 pub async fn classify_architecture_roles_for_current_state(
     relational: &RelationalStorage,
+    current_state: &dyn ArchitectureRoleCurrentStateSource,
     input: ArchitectureRoleClassificationInput<'_>,
 ) -> Result<ArchitectureRoleReconcileOutcome> {
-    let extraction = extract_architecture_role_facts(ArchitectureRoleFactExtractionInput {
-        repo_id: input.repo_id,
-        generation_seq: input.generation_seq,
-        affected_paths: &input.scope.affected_paths,
-        files: input.files,
-        artefacts: input.artefacts,
-        dependency_edges: input.dependency_edges,
-    });
+    let extraction = extract_architecture_role_facts(
+        ArchitectureRoleFactExtractionInput {
+            repo_id: input.repo_id,
+            generation_seq: input.generation_seq,
+            affected_paths: &input.scope.affected_paths,
+            files: input.files,
+        },
+        current_state,
+    )?;
     let target_summaries = target_summaries_from_facts(&extraction.facts);
 
-    let live_paths = live_role_paths(input.files, input.artefacts);
+    let live_paths = extraction.live_paths.clone();
     let refreshed_path_set = extraction
         .refreshed_paths
         .iter()
@@ -613,17 +612,6 @@ fn assignment_refresh_paths(
         .iter()
         .filter(|path| !removed_paths.contains(path.as_str()))
         .cloned()
-        .collect()
-}
-
-fn live_role_paths(
-    files: &[CurrentCanonicalFileRecord],
-    artefacts: &[CurrentCanonicalArtefactRecord],
-) -> BTreeSet<String> {
-    files
-        .iter()
-        .map(|file| file.path.clone())
-        .chain(artefacts.iter().map(|artefact| artefact.path.clone()))
         .collect()
 }
 

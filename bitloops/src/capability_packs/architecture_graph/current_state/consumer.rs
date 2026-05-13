@@ -94,15 +94,19 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
             let facts = builder.finish();
             let mut role_metrics = serde_json::Value::Null;
             let mut adjudication_requests = Vec::new();
+            let role_current_state =
+                crate::capability_packs::architecture_graph::roles::fact_extraction::RelationalArchitectureRoleCurrentStateSource::new(
+                    &request.repo_id,
+                    context.relational.as_ref(),
+                );
             match crate::capability_packs::architecture_graph::roles::classifier::classify_architecture_roles_for_current_state(
                 context.storage.as_ref(),
+                &role_current_state,
                 crate::capability_packs::architecture_graph::roles::classifier::ArchitectureRoleClassificationInput {
                     repo_id: &request.repo_id,
                     generation_seq: request.to_generation_seq_inclusive,
                     scope: crate::capability_packs::architecture_graph::roles::classifier::role_classification_scope_from_request(request),
                     files: &files,
-                    artefacts: &artefacts,
-                    dependency_edges: &dependency_edges,
                 },
             )
             .await
