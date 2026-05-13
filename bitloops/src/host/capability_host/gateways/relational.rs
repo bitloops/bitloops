@@ -27,6 +27,16 @@ pub trait RelationalGateway: Send + Sync {
             "current canonical artefact loading is not implemented by this relational gateway (repo {repo_id})"
         )
     }
+    fn visit_current_canonical_artefacts(
+        &self,
+        repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalArtefactRecord) -> Result<()>,
+    ) -> Result<()> {
+        for artefact in self.load_current_canonical_artefacts(repo_id)? {
+            visitor(artefact)?;
+        }
+        Ok(())
+    }
     fn load_current_canonical_edges(
         &self,
         repo_id: &str,
@@ -34,6 +44,16 @@ pub trait RelationalGateway: Send + Sync {
         bail!(
             "current canonical edge loading is not implemented by this relational gateway (repo {repo_id})"
         )
+    }
+    fn visit_current_canonical_edges(
+        &self,
+        repo_id: &str,
+        visitor: &mut dyn FnMut(CurrentCanonicalEdgeRecord) -> Result<()>,
+    ) -> Result<()> {
+        for edge in self.load_current_canonical_edges(repo_id)? {
+            visitor(edge)?;
+        }
+        Ok(())
     }
     fn load_current_production_artefacts(&self, repo_id: &str) -> Result<Vec<ProductionArtefact>>;
     fn load_production_artefacts(&self, commit_sha: &str) -> Result<Vec<ProductionArtefact>>;

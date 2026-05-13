@@ -1,4 +1,5 @@
 use super::*;
+use crate::capability_packs::architecture_graph::storage::ArchitectureGraphFacts;
 use crate::config::{
     resolve_bound_daemon_config_root_for_repo, resolve_bound_store_backend_config_for_repo,
 };
@@ -188,6 +189,25 @@ impl RelationalStorage {
         super::sqlite_write_actor::sqlite_exec_serialized_batch_transactional_path(
             self.sqlite_path(),
             statements,
+        )
+        .await
+    }
+
+    pub async fn replace_architecture_graph_current(
+        &self,
+        repo_id: &str,
+        facts: ArchitectureGraphFacts,
+        generation_seq: u64,
+        warnings: &[String],
+        metrics: Value,
+    ) -> Result<()> {
+        super::sqlite_write_actor::sqlite_replace_architecture_graph_current_path(
+            self.sqlite_path(),
+            repo_id,
+            facts,
+            generation_seq,
+            warnings,
+            metrics,
         )
         .await
     }

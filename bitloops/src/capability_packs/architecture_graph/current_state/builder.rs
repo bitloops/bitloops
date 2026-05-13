@@ -65,97 +65,100 @@ impl GraphBuilder {
         });
     }
 
+    #[cfg(test)]
     pub(super) fn add_code_nodes(&mut self, artefacts: &[CurrentCanonicalArtefactRecord]) {
         for artefact in artefacts {
-            let code_node_id = node_id(
-                &self.repo_id,
-                ArchitectureGraphNodeKind::Node,
-                &artefact.artefact_id,
-            );
-            self.artefact_nodes
-                .insert(artefact.artefact_id.clone(), code_node_id.clone());
-            self.symbol_nodes
-                .insert(artefact.symbol_id.clone(), code_node_id.clone());
-            self.path_nodes
-                .entry(artefact.path.clone())
-                .or_default()
-                .push(code_node_id.clone());
-            let label = artefact_display_name(artefact);
-            self.upsert_node(ArchitectureGraphNodeFact {
-                repo_id: self.repo_id.clone(),
-                node_id: code_node_id.clone(),
-                node_kind: ArchitectureGraphNodeKind::Node.as_str().to_string(),
-                label,
-                artefact_id: Some(artefact.artefact_id.clone()),
-                symbol_id: Some(artefact.symbol_id.clone()),
-                path: Some(artefact.path.clone()),
-                entry_kind: None,
-                source_kind: "COMPUTED".to_string(),
-                confidence: 1.0,
-                provenance: self.provenance("devql_current_state"),
-                evidence: json!([{
-                    "path": &artefact.path,
-                    "startLine": artefact.start_line,
-                    "endLine": artefact.end_line,
-                    "canonicalKind": &artefact.canonical_kind,
-                }]),
-                properties: json!({
-                    "language": &artefact.language,
-                    "canonical_kind": &artefact.canonical_kind,
-                    "language_kind": &artefact.language_kind,
-                    "symbol_fqn": &artefact.symbol_fqn,
-                    "parent_artefact_id": &artefact.parent_artefact_id,
-                    "signature": &artefact.signature,
-                }),
-                last_observed_generation: Some(self.generation),
-            });
+            self.add_code_node(artefact);
         }
     }
 
-    pub(super) fn add_dependency_edges(&mut self, dependency_edges: &[CurrentCanonicalEdgeRecord]) {
-        for dependency in dependency_edges {
-            let Some(from_node_id) = self
-                .artefact_nodes
-                .get(&dependency.from_artefact_id)
-                .cloned()
-            else {
-                continue;
-            };
-            let to_node_id = dependency
-                .to_artefact_id
-                .as_ref()
-                .and_then(|artefact_id| self.artefact_nodes.get(artefact_id))
-                .or_else(|| {
-                    dependency
-                        .to_symbol_id
-                        .as_ref()
-                        .and_then(|symbol_id| self.symbol_nodes.get(symbol_id))
-                })
-                .cloned();
-            let Some(to_node_id) = to_node_id else {
-                continue;
-            };
-            self.upsert_edge_by_kind(
-                ArchitectureGraphEdgeKind::DependsOn,
-                from_node_id,
-                to_node_id,
-                "COMPUTED",
-                0.90,
-                self.provenance("devql_dependency_edge"),
-                json!([{
-                    "edgeId": &dependency.edge_id,
-                    "path": &dependency.path,
-                    "edgeKind": &dependency.edge_kind,
-                    "startLine": dependency.start_line,
-                    "endLine": dependency.end_line,
-                }]),
-                json!({
-                    "language": &dependency.language,
-                    "edge_kind": &dependency.edge_kind,
-                    "to_symbol_ref": &dependency.to_symbol_ref,
-                }),
-            );
-        }
+    pub(super) fn add_code_node(&mut self, artefact: &CurrentCanonicalArtefactRecord) {
+        let code_node_id = node_id(
+            &self.repo_id,
+            ArchitectureGraphNodeKind::Node,
+            &artefact.artefact_id,
+        );
+        self.artefact_nodes
+            .insert(artefact.artefact_id.clone(), code_node_id.clone());
+        self.symbol_nodes
+            .insert(artefact.symbol_id.clone(), code_node_id.clone());
+        self.path_nodes
+            .entry(artefact.path.clone())
+            .or_default()
+            .push(code_node_id.clone());
+        let label = artefact_display_name(artefact);
+        self.upsert_node(ArchitectureGraphNodeFact {
+            repo_id: self.repo_id.clone(),
+            node_id: code_node_id.clone(),
+            node_kind: ArchitectureGraphNodeKind::Node.as_str().to_string(),
+            label,
+            artefact_id: Some(artefact.artefact_id.clone()),
+            symbol_id: Some(artefact.symbol_id.clone()),
+            path: Some(artefact.path.clone()),
+            entry_kind: None,
+            source_kind: "COMPUTED".to_string(),
+            confidence: 1.0,
+            provenance: self.provenance("devql_current_state"),
+            evidence: json!([{
+                "path": &artefact.path,
+                "startLine": artefact.start_line,
+                "endLine": artefact.end_line,
+                "canonicalKind": &artefact.canonical_kind,
+            }]),
+            properties: json!({
+                "language": &artefact.language,
+                "canonical_kind": &artefact.canonical_kind,
+                "language_kind": &artefact.language_kind,
+                "symbol_fqn": &artefact.symbol_fqn,
+                "parent_artefact_id": &artefact.parent_artefact_id,
+                "signature": &artefact.signature,
+            }),
+            last_observed_generation: Some(self.generation),
+        });
+    }
+
+    pub(super) fn add_dependency_edge(&mut self, dependency: &CurrentCanonicalEdgeRecord) {
+        let Some(from_node_id) = self
+            .artefact_nodes
+            .get(&dependency.from_artefact_id)
+            .cloned()
+        else {
+            return;
+        };
+        let to_node_id = dependency
+            .to_artefact_id
+            .as_ref()
+            .and_then(|artefact_id| self.artefact_nodes.get(artefact_id))
+            .or_else(|| {
+                dependency
+                    .to_symbol_id
+                    .as_ref()
+                    .and_then(|symbol_id| self.symbol_nodes.get(symbol_id))
+            })
+            .cloned();
+        let Some(to_node_id) = to_node_id else {
+            return;
+        };
+        self.upsert_edge_by_kind(
+            ArchitectureGraphEdgeKind::DependsOn,
+            from_node_id,
+            to_node_id,
+            "COMPUTED",
+            0.90,
+            self.provenance("devql_dependency_edge"),
+            json!([{
+                "edgeId": &dependency.edge_id,
+                "path": &dependency.path,
+                "edgeKind": &dependency.edge_kind,
+                "startLine": dependency.start_line,
+                "endLine": dependency.end_line,
+            }]),
+            json!({
+                "language": &dependency.language,
+                "edge_kind": &dependency.edge_kind,
+                "to_symbol_ref": &dependency.to_symbol_ref,
+            }),
+        );
     }
 
     pub(super) fn add_entry_points_and_flows(
@@ -163,12 +166,10 @@ impl GraphBuilder {
         context: &CurrentStateConsumerContext,
         repo_root: &Path,
         files: &[CurrentCanonicalFileRecord],
-        artefacts: &[CurrentCanonicalArtefactRecord],
-        dependency_edges: &[CurrentCanonicalEdgeRecord],
+        artefacts_by_path: &BTreeMap<String, Vec<LanguageEntryPointArtefact>>,
+        adjacency: &BTreeMap<String, BTreeSet<String>>,
     ) {
-        let artefacts_by_path = group_entry_point_artefacts_by_path(artefacts);
-        let adjacency = dependency_adjacency(dependency_edges);
-        let config_candidates = detect_config_entry_points(repo_root, files, &artefacts_by_path);
+        let config_candidates = detect_config_entry_points(repo_root, files, artefacts_by_path);
         let mut deployment_by_path = BTreeMap::<String, DeploymentBinding>::new();
         let mut deployment_by_root = BTreeMap::<String, DeploymentBinding>::new();
         for candidate in &config_candidates {
@@ -208,7 +209,7 @@ impl GraphBuilder {
                     Some(file.resolved_language.as_str()),
                     "LANGUAGE_EVIDENCE",
                     "language_entry_point_support",
-                    &adjacency,
+                    adjacency,
                     binding,
                 );
             }
@@ -229,7 +230,7 @@ impl GraphBuilder {
                 language,
                 "CONFIG_EVIDENCE",
                 "config_entry_point_support",
-                &adjacency,
+                adjacency,
                 binding,
             );
         }
@@ -431,10 +432,7 @@ impl GraphBuilder {
         binding
     }
 
-    pub(super) fn add_components_for_containers(
-        &mut self,
-        artefacts: &[CurrentCanonicalArtefactRecord],
-    ) {
+    pub(super) fn add_components_for_containers(&mut self, artefacts: &[ComponentArtefactInput]) {
         let bindings = self.container_bindings.clone();
         for artefact in artefacts {
             let Some(code_node_id) = self.artefact_nodes.get(&artefact.artefact_id).cloned() else {
@@ -529,7 +527,10 @@ impl GraphBuilder {
             .collect()
     }
 
-    pub(super) fn add_change_unit(&mut self, request: &CurrentStateConsumerRequest) {
+    pub(super) fn add_change_unit(
+        &mut self,
+        request: &CurrentStateConsumerRequest,
+    ) -> ChangeUnitMetrics {
         let mut affected_paths = BTreeSet::new();
         affected_paths.extend(request.affected_paths.iter().cloned());
         affected_paths.extend(request.file_upserts.iter().map(|file| file.path.clone()));
@@ -547,7 +548,10 @@ impl GraphBuilder {
                 .map(|artefact| artefact.path.clone()),
         );
         if affected_paths.is_empty() && request.run_id.is_none() {
-            return;
+            return ChangeUnitMetrics {
+                affected_paths: 0,
+                impacted_nodes: 0,
+            };
         }
 
         let change_node_id = node_id(
@@ -579,12 +583,20 @@ impl GraphBuilder {
             }),
             last_observed_generation: Some(self.generation),
         });
-        let affected_node_ids: Vec<String> = affected_paths
-            .iter()
-            .filter_map(|path| self.path_nodes.get(path))
-            .flat_map(|nodes| nodes.iter().cloned())
-            .collect();
-        for node_id in affected_node_ids {
+        let mut impacted_paths_by_node = BTreeMap::<String, BTreeSet<String>>::new();
+        for path in &affected_paths {
+            let Some(node_ids) = self.path_nodes.get(path) else {
+                continue;
+            };
+            for node_id in node_ids {
+                impacted_paths_by_node
+                    .entry(node_id.clone())
+                    .or_default()
+                    .insert(path.clone());
+            }
+        }
+        let impacted_nodes = impacted_paths_by_node.len();
+        for (node_id, matched_paths) in impacted_paths_by_node {
             self.upsert_edge_by_kind(
                 ArchitectureGraphEdgeKind::Impacts,
                 change_node_id.clone(),
@@ -592,9 +604,18 @@ impl GraphBuilder {
                 "CHANGE_DATA",
                 0.75,
                 self.provenance("current_state_reconcile"),
-                json!([{ "affectedPaths": &affected_paths }]),
+                json!(
+                    matched_paths
+                        .into_iter()
+                        .map(|path| json!({ "path": path }))
+                        .collect::<Vec<_>>()
+                ),
                 json!({}),
             );
+        }
+        ChangeUnitMetrics {
+            affected_paths: affected_paths.len(),
+            impacted_nodes,
         }
     }
 

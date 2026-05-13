@@ -122,8 +122,8 @@ fn run_dev_install() -> Result<(), String> {
 
     run_command(
         &workspace_root,
-        "cargo install --path bitloops --force",
-        &["install", "--path", "bitloops", "--force"],
+        "cargo install --path bitloops --force --locked",
+        &["install", "--path", "bitloops", "--force", "--locked"],
     )?;
 
     let binary_path = installed_binary_path("bitloops")?;
