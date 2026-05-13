@@ -122,6 +122,15 @@ pub(crate) enum ProducerSpoolJobPayload {
         head_sha: String,
         changed_files: Vec<String>,
     },
+    PostMergeSyncRefresh {
+        merge_head_sha: String,
+        changed_files: Vec<String>,
+        is_squash: bool,
+    },
+    PostMergeIngestBackfill {
+        merge_head_sha: String,
+        is_squash: bool,
+    },
     PrePushSync {
         remote: String,
         stdin_lines: Vec<String>,

@@ -66,6 +66,25 @@ pub(super) fn prune_excluded_paths_from_payload(
                 })
             }
         }
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash,
+        } => {
+            let changed_files = changed_files
+                .into_iter()
+                .filter(|path| !matcher.excludes_repo_relative_path(path))
+                .collect::<Vec<_>>();
+            if changed_files.is_empty() {
+                None
+            } else {
+                Some(ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                    merge_head_sha,
+                    changed_files,
+                    is_squash,
+                })
+            }
+        }
         payload => Some(payload),
     }
 }

@@ -606,6 +606,7 @@ fn hook_enqueue_helpers_use_repo_binding_and_share_repo_runtime_store() {
         &repo_root,
         "merge-head",
         &["src/lib.rs".to_string()],
+        false,
     )
     .expect("enqueue post-merge refresh");
     crate::host::devql::enqueue_spooled_pre_push_sync(
@@ -629,9 +630,85 @@ fn hook_enqueue_helpers_use_repo_binding_and_share_repo_runtime_store() {
         })
         .expect("count queued producer spool jobs");
     assert_eq!(
-        queued_rows, 4,
+        queued_rows, 5,
         "helper enqueues should target the bound repo runtime db"
     );
+}
+
+#[test]
+fn post_merge_enqueue_splits_sync_and_ingest_for_non_squash_merge() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        " merge-head ",
+        &[
+            "./src/lib.rs".to_string(),
+            "src/main.rs".to_string(),
+            "src/lib.rs".to_string(),
+        ],
+        false,
+    )
+    .expect("enqueue split post-merge refresh");
+
+    let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    assert_eq!(
+        claimed.len(),
+        2,
+        "non-squash post-merge should create two lane jobs"
+    );
+
+    let payloads = claimed.iter().map(|job| &job.payload).collect::<Vec<_>>();
+    assert!(payloads.iter().any(|payload| matches!(
+        payload,
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash: false,
+        } if merge_head_sha == "merge-head"
+            && changed_files == &vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]
+    )));
+    assert!(payloads.iter().any(|payload| matches!(
+        payload,
+        ProducerSpoolJobPayload::PostMergeIngestBackfill {
+            merge_head_sha,
+            is_squash: false,
+        } if merge_head_sha == "merge-head"
+    )));
+}
+
+#[test]
+fn post_merge_enqueue_skips_ingest_for_squash_merge() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "squash-head",
+        &["src/lib.rs".to_string()],
+        true,
+    )
+    .expect("enqueue squash post-merge refresh");
+
+    let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    assert_eq!(
+        claimed.len(),
+        1,
+        "squash post-merge should only create sync work"
+    );
+    match &claimed[0].payload {
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash,
+        } => {
+            assert_eq!(merge_head_sha, "squash-head");
+            assert_eq!(changed_files, &vec!["src/lib.rs".to_string()]);
+            assert!(*is_squash);
+        }
+        other => panic!("unexpected squash post-merge payload: {other:?}"),
+    }
 }
 
 #[test]

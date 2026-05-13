@@ -52,6 +52,12 @@ pub(crate) fn producer_spool_admission_class(
                 kinds: SYNC_AND_INGEST_TASK_KINDS,
             }
         }
+        ProducerSpoolJobPayload::PostMergeSyncRefresh { .. }
+        | ProducerSpoolJobPayload::PostMergeIngestBackfill { .. } => {
+            ProducerSpoolAdmissionClass::ExpandVisibleTasks {
+                kinds: SYNC_AND_INGEST_TASK_KINDS,
+            }
+        }
         ProducerSpoolJobPayload::PostCommitDerivation { .. }
         | ProducerSpoolJobPayload::PrePushSync { .. } => {
             ProducerSpoolAdmissionClass::InlineRepoExclusive

@@ -1,12 +1,30 @@
 use super::helpers::{PROGRESS_PERSIST_INTERVAL, should_persist_embeddings_bootstrap_progress};
 use super::*;
 use crate::test_support::log_capture::capture_logs;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 use tokio::sync::Notify;
+
+async fn run_all_producer_spool_jobs(
+    coordinator: &Arc<DevqlTaskCoordinator>,
+    config_root: &Path,
+) -> anyhow::Result<usize> {
+    let mut processed = 0;
+    loop {
+        let jobs = crate::host::devql::claim_next_producer_spool_jobs(config_root)?;
+        if jobs.is_empty() {
+            return Ok(processed);
+        }
+        for job in jobs {
+            Arc::clone(coordinator).run_producer_spool_job(job).await?;
+            processed += 1;
+        }
+    }
+}
 
 #[tokio::test]
 async fn receive_embeddings_bootstrap_outcome_waits_for_result_after_progress_channel_closes() {
@@ -295,12 +313,9 @@ async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_r
         &repo_root,
         &head_sha,
         &["src/lib.rs".to_string()],
+        false,
     )
     .expect("enqueue post-merge producer spool job");
-
-    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
-        .expect("claim producer spool jobs");
-    assert_eq!(jobs.len(), 1, "expected one post-merge producer job");
 
     let coordinator = Arc::new(DevqlTaskCoordinator {
         runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
@@ -311,10 +326,10 @@ async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_r
         subscription_hub: Mutex::new(None),
     });
 
-    Arc::clone(&coordinator)
-        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+    let processed = run_all_producer_spool_jobs(&coordinator, &config_root)
         .await
-        .expect("process producer spool job");
+        .expect("process producer spool jobs");
+    assert_eq!(processed, 2, "expected split post-merge producer jobs");
 
     let ingest_tasks = coordinator
         .tasks(
@@ -408,12 +423,9 @@ async fn post_merge_producer_spool_job_skips_ingest_when_devql_ingest_disabled()
         &repo_root,
         &head_sha,
         &["src/lib.rs".to_string()],
+        false,
     )
     .expect("enqueue post-merge producer spool job");
-
-    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
-        .expect("claim producer spool jobs");
-    assert_eq!(jobs.len(), 1, "expected one post-merge producer job");
 
     let coordinator = Arc::new(DevqlTaskCoordinator {
         runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
@@ -424,10 +436,10 @@ async fn post_merge_producer_spool_job_skips_ingest_when_devql_ingest_disabled()
         subscription_hub: Mutex::new(None),
     });
 
-    Arc::clone(&coordinator)
-        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+    let processed = run_all_producer_spool_jobs(&coordinator, &config_root)
         .await
-        .expect("process producer spool job");
+        .expect("process producer spool jobs");
+    assert_eq!(processed, 2, "expected split post-merge producer jobs");
 
     let ingest_tasks = coordinator
         .tasks(
@@ -500,11 +512,10 @@ async fn post_merge_producer_spool_job_skips_sync_when_devql_sync_disabled() {
         &repo_root,
         &head_sha,
         &["src/lib.rs".to_string()],
+        false,
     )
     .expect("enqueue post-merge producer spool job");
 
-    let jobs = crate::host::devql::claim_next_producer_spool_jobs(&config_root)
-        .expect("claim producer spool jobs");
     let coordinator = Arc::new(DevqlTaskCoordinator {
         runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
             .expect("open daemon runtime store"),
@@ -514,10 +525,10 @@ async fn post_merge_producer_spool_job_skips_sync_when_devql_sync_disabled() {
         subscription_hub: Mutex::new(None),
     });
 
-    Arc::clone(&coordinator)
-        .run_producer_spool_job(jobs.into_iter().next().expect("producer spool job"))
+    let processed = run_all_producer_spool_jobs(&coordinator, &config_root)
         .await
-        .expect("process producer spool job");
+        .expect("process producer spool jobs");
+    assert_eq!(processed, 2, "expected split post-merge producer jobs");
 
     let sync_tasks = coordinator
         .tasks(

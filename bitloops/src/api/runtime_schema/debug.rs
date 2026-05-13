@@ -260,6 +260,26 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             commit_sha: None,
             head_sha: Some(head_sha.clone()),
         },
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            ..
+        } => MappedProducerSpoolPayload {
+            payload_kind: "post_merge_sync_refresh".to_string(),
+            source: Some("post_merge".to_string()),
+            paths: changed_files.clone(),
+            commit_sha: None,
+            head_sha: Some(merge_head_sha.clone()),
+        },
+        ProducerSpoolJobPayload::PostMergeIngestBackfill { merge_head_sha, .. } => {
+            MappedProducerSpoolPayload {
+                payload_kind: "post_merge_ingest_backfill".to_string(),
+                source: Some("post_merge".to_string()),
+                paths: Vec::new(),
+                commit_sha: None,
+                head_sha: Some(merge_head_sha.clone()),
+            }
+        }
         ProducerSpoolJobPayload::PrePushSync { .. } => MappedProducerSpoolPayload {
             payload_kind: "pre_push_sync".to_string(),
             source: Some("pre_push".to_string()),
