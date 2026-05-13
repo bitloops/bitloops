@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
@@ -309,9 +309,21 @@ impl InitRuntimeCoordinator {
         &self,
         cfg: &DevqlConfig,
     ) -> Result<Option<InitRuntimeSessionView>> {
-        let repo_store =
-            RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
-        self.current_session_view(cfg, &repo_store)
+        self.current_session_for_repo_roots(
+            &cfg.daemon_config_root,
+            &cfg.repo_root,
+            &cfg.repo.repo_id,
+        )
+    }
+
+    pub(crate) fn current_session_for_repo_roots(
+        &self,
+        daemon_config_root: &Path,
+        repo_root: &Path,
+        repo_id: &str,
+    ) -> Result<Option<InitRuntimeSessionView>> {
+        let repo_store = RepoSqliteRuntimeStore::open_for_roots(daemon_config_root, repo_root)?;
+        self.current_session_view(repo_root, repo_id, &repo_store)
     }
 
     pub(crate) fn snapshot_for_repo(&self, cfg: &DevqlConfig) -> Result<InitRuntimeSnapshot> {
@@ -347,7 +359,8 @@ impl InitRuntimeCoordinator {
 
     fn current_session_view(
         &self,
-        cfg: &DevqlConfig,
+        repo_root: &Path,
+        repo_id: &str,
         repo_store: &RepoSqliteRuntimeStore,
     ) -> Result<Option<InitRuntimeSessionView>> {
         let state = self
@@ -357,18 +370,14 @@ impl InitRuntimeCoordinator {
         let Some(session) = state
             .sessions
             .into_iter()
-            .filter(|session| session.repo_id == cfg.repo.repo_id)
+            .filter(|session| session.repo_id == repo_id)
             .max_by_key(|session| (session.updated_at_unix, session.submitted_at_unix))
         else {
             return Ok(None);
         };
 
-        let stats = load_session_workplane_stats(
-            &cfg.repo_root,
-            repo_store,
-            &cfg.repo.repo_id,
-            &session.init_session_id,
-        )?;
+        let stats =
+            load_session_workplane_stats(repo_root, repo_store, repo_id, &session.init_session_id)?;
         let summary_task = load_summary_task_by_id(session.summary_bootstrap_task_id.as_deref())?;
         let summary_run = summary_task.as_ref().and_then(summary_run_from_task_ref);
         let initial_sync = load_task_by_id(session.initial_sync_task_id.as_deref())?;
@@ -376,10 +385,10 @@ impl InitRuntimeCoordinator {
         let follow_up_sync = load_task_by_id(session.follow_up_sync_task_id.as_deref())?;
         let embeddings_task = load_task_by_id(session.embeddings_bootstrap_task_id.as_deref())?;
         let summary_in_memory_completed =
-            self.summary_in_memory_completed(&cfg.repo.repo_id, &session.init_session_id);
+            self.summary_in_memory_completed(repo_id, &session.init_session_id);
         let lane_progress = match load_runtime_lane_progress(
-            &cfg.repo_root,
-            &cfg.repo.repo_id,
+            repo_root,
+            repo_id,
             &session,
             &stats,
             summary_in_memory_completed,
@@ -388,7 +397,7 @@ impl InitRuntimeCoordinator {
             Err(err) => {
                 log::debug!(
                     "failed to load runtime lane progress for repo `{}`: {err:#}",
-                    cfg.repo.repo_id
+                    repo_id
                 );
                 RuntimeLaneProgressState::default()
             }

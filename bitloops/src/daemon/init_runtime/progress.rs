@@ -69,7 +69,11 @@ pub(crate) fn load_runtime_lane_progress(
         },
     )?;
     let total_eligible = embedding_freshness.eligible;
-    let summaries_completed = count_current_model_backed_summary_artefacts(&relational, repo_id)?;
+    let summaries_completed = if needs_summaries {
+        count_current_model_backed_summary_artefacts(&relational, repo_id)?
+    } else {
+        0
+    };
     let code_embeddings_total = u64::from(needs_code_embeddings) * total_eligible;
     let summary_embeddings_total = u64::from(needs_summary_embeddings) * total_eligible;
     let code_embeddings_completed = embedding_freshness
@@ -226,4 +230,162 @@ fn missing_progress_table(err: &anyhow::Error) -> bool {
 
 fn escape_sql_string(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io::Write;
+    use std::path::Path;
+
+    use rusqlite::Connection;
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::config::resolve_store_backend_config_for_repo;
+    use crate::daemon::{InitSessionRecord, StartInitSessionSelections};
+
+    #[test]
+    fn code_embeddings_only_progress_does_not_query_summary_counts() {
+        let repo = tempdir().expect("temp repo");
+        let config_path = crate::test_support::git_fixtures::write_test_daemon_config(repo.path());
+        let mut config = fs::OpenOptions::new()
+            .append(true)
+            .open(&config_path)
+            .expect("open daemon config");
+        writeln!(
+            config,
+            r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+"#
+        )
+        .expect("append semantic clones config");
+
+        initialise_progress_tables(repo.path());
+
+        let session = InitSessionRecord {
+            init_session_id: "init-session-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            repo_root: repo.path().to_path_buf(),
+            daemon_config_root: repo.path().to_path_buf(),
+            selections: StartInitSessionSelections {
+                run_sync: true,
+                run_ingest: true,
+                run_code_embeddings: true,
+                run_summaries: false,
+                run_summary_embeddings: false,
+                ingest_backfill: None,
+                embeddings_bootstrap: None,
+                summaries_bootstrap: None,
+            },
+            initial_sync_task_id: None,
+            initial_sync_terminal: None,
+            ingest_task_id: None,
+            ingest_terminal: None,
+            embeddings_bootstrap_task_id: None,
+            embeddings_bootstrap_terminal: None,
+            summary_bootstrap_task_id: None,
+            summary_bootstrap_terminal: None,
+            follow_up_sync_required: false,
+            follow_up_sync_task_id: None,
+            follow_up_sync_terminal: None,
+            next_completion_seq: 0,
+            initial_sync_completion_seq: None,
+            embeddings_bootstrap_completion_seq: None,
+            summary_bootstrap_completion_seq: None,
+            follow_up_sync_completion_seq: None,
+            submitted_at_unix: 1,
+            updated_at_unix: 1,
+            terminal_status: None,
+            terminal_error: None,
+        };
+
+        let progress = load_runtime_lane_progress(
+            repo.path(),
+            "repo-1",
+            &session,
+            &SessionWorkplaneStats::default(),
+            0,
+        )
+        .expect("load code embeddings progress without touching summary count tables");
+
+        assert!(progress.summaries.is_none());
+    }
+
+    fn initialise_progress_tables(repo_root: &Path) {
+        let backend =
+            resolve_store_backend_config_for_repo(repo_root).expect("resolve store backend");
+        let sqlite_path = backend
+            .relational
+            .resolve_sqlite_db_path_for_repo(repo_root)
+            .expect("resolve sqlite path");
+        fs::create_dir_all(sqlite_path.parent().expect("sqlite parent"))
+            .expect("create sqlite dir");
+        let conn = Connection::open(sqlite_path).expect("open sqlite");
+        conn.execute_batch(
+            "
+            CREATE TABLE artefacts_current (
+                repo_id TEXT,
+                path TEXT,
+                artefact_id TEXT,
+                content_id TEXT,
+                canonical_kind TEXT,
+                language_kind TEXT
+            );
+            CREATE TABLE current_file_state (
+                repo_id TEXT,
+                path TEXT,
+                analysis_mode TEXT
+            );
+            CREATE TABLE semantic_clone_embedding_setup_state (
+                repo_id TEXT,
+                representation_kind TEXT,
+                setup_fingerprint TEXT,
+                provider TEXT,
+                model TEXT,
+                dimension INTEGER
+            );
+            CREATE TABLE symbol_embeddings_current (
+                repo_id TEXT,
+                artefact_id TEXT,
+                content_id TEXT,
+                setup_fingerprint TEXT,
+                provider TEXT,
+                model TEXT,
+                dimension INTEGER,
+                representation_kind TEXT
+            );
+            CREATE TABLE symbol_features_current (
+                repo_id TEXT,
+                artefact_id TEXT,
+                content_id TEXT,
+                semantic_features_input_hash TEXT
+            );
+            CREATE TABLE symbol_semantics_current (
+                repo_id TEXT,
+                artefact_id TEXT,
+                content_id TEXT
+            );
+            CREATE TABLE symbol_features (
+                repo_id TEXT,
+                artefact_id TEXT,
+                blob_sha TEXT,
+                semantic_features_input_hash TEXT
+            );
+            CREATE TABLE symbol_semantics (
+                repo_id TEXT,
+                artefact_id TEXT,
+                blob_sha TEXT,
+                semantic_features_input_hash TEXT,
+                llm_summary TEXT,
+                source_model TEXT
+            );
+            ",
+        )
+        .expect("initialise progress tables");
+    }
 }

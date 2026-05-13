@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use async_graphql::{ID, Object, Result, SimpleObject};
 
 use super::init_session::RuntimeInitSessionObject;
@@ -11,10 +13,11 @@ use crate::daemon::{
 use crate::graphql::{TaskQueueStatusObject, graphql_error};
 use crate::host::devql::DevqlConfig;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct RuntimeSnapshotObject {
-    cfg: DevqlConfig,
     repo_id: String,
+    daemon_config_root: PathBuf,
+    repo_root: PathBuf,
     task_queue: TaskQueueStatusObject,
     current_state_consumer: RuntimeCurrentStateConsumerObject,
     workplane: RuntimeWorkplaneObject,
@@ -26,7 +29,8 @@ pub(crate) struct RuntimeSnapshotObject {
 impl RuntimeSnapshotObject {
     pub(crate) fn from_overview(cfg: DevqlConfig, value: InitRuntimeOverviewSnapshot) -> Self {
         Self {
-            cfg,
+            daemon_config_root: cfg.daemon_config_root,
+            repo_root: cfg.repo_root,
             repo_id: value.repo_id,
             task_queue: value.task_queue.into(),
             current_state_consumer: value.current_state_consumer.into(),
@@ -81,7 +85,11 @@ impl RuntimeSnapshotObject {
     #[graphql(name = "currentInitSession")]
     async fn current_init_session(&self) -> Result<Option<RuntimeInitSessionObject>> {
         crate::daemon::shared_init_runtime_coordinator()
-            .current_session_for_repo(&self.cfg)
+            .current_session_for_repo_roots(
+                &self.daemon_config_root,
+                &self.repo_root,
+                &self.repo_id,
+            )
             .map(|session| session.map(Into::into))
             .map_err(|err| {
                 graphql_error(
