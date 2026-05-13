@@ -248,6 +248,14 @@ impl DevqlCapabilityHost {
         self.build_current_state_consumer_context_with_session(capability_id, None)
     }
 
+    pub fn build_relational_storage(&self) -> Result<crate::host::devql::RelationalStorage> {
+        let relational_store = DefaultRelationalStore::open_local_for_backend_config(
+            self.repo_root(),
+            &self.runtime.backends.relational,
+        )?;
+        Ok(relational_store.to_local_inner())
+    }
+
     pub fn build_current_state_consumer_context_with_session(
         &self,
         capability_id: &str,

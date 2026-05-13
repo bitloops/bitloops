@@ -728,7 +728,7 @@ git commit -m "feat: add read-only runtime workplane status reader"
 - Modify: `bitloops/src/cli/devql/architecture.rs`
 - Modify: `bitloops/src/cli/devql/architecture/deterministic_tests.rs`
 
-- [ ] **Step 1: Add routing predicate test**
+- [x] **Step 1: Add routing predicate test**
 
 Add this test to `bitloops/src/cli/devql/architecture/deterministic_tests.rs`:
 
@@ -749,7 +749,7 @@ fn architecture_roles_status_does_not_require_current_state_context() {
 }
 ```
 
-- [ ] **Step 2: Run the focused failing predicate test**
+- [x] **Step 2: Run the focused failing predicate test**
 
 Run:
 
@@ -759,7 +759,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features --li
 
 Expected: FAIL because the predicate does not exist.
 
-- [ ] **Step 3: Add relational-only storage accessor**
+- [x] **Step 3: Add relational-only storage accessor**
 
 In `bitloops/src/host/capability_host/host.rs`, add:
 
@@ -775,7 +775,7 @@ pub fn build_relational_storage(&self) -> Result<crate::host::devql::RelationalS
 
 This intentionally mirrors the storage portion of `build_current_state_consumer_context` without constructing language services, inference, host services, test harness, or a workplane gateway.
 
-- [ ] **Step 4: Add context-routing helpers**
+- [x] **Step 4: Add context-routing helpers**
 
 In `bitloops/src/cli/devql/architecture.rs`, add:
 
@@ -833,7 +833,7 @@ async fn run_architecture_roles_command_without_current_state(
 
 The fallback arm is defensive; the predicate should keep all non-status commands on the context path.
 
-- [ ] **Step 5: Change status to accept relational storage directly**
+- [x] **Step 5: Change status to accept relational storage directly**
 
 Change the signature in `bitloops/src/cli/devql/architecture.rs`:
 
@@ -880,7 +880,7 @@ DevqlArchitectureRolesCommand::Status(args) => {
 }
 ```
 
-- [ ] **Step 6: Load queue items through the read-only status reader**
+- [x] **Step 6: Load queue items through the read-only status reader**
 
 In `bitloops/src/cli/devql/architecture.rs`, update imports:
 
@@ -928,7 +928,7 @@ fn load_role_adjudication_queue_items(
 
 Remove the `RepoSqliteRuntimeStore` import from `architecture.rs`.
 
-- [ ] **Step 7: Add status queue reader unit coverage**
+- [x] **Step 7: Add status queue reader unit coverage**
 
 Add this test to `bitloops/src/cli/devql/architecture/deterministic_tests.rs`:
 
@@ -968,7 +968,7 @@ fn role_adjudication_queue_item_maps_failed_job_payload_errors() {
 
 If the exact serde error string differs on this Rust/serde version, assert only that `item.parse_error.as_deref().unwrap_or_default().contains("expected struct RoleAdjudicationMailboxPayload")`.
 
-- [ ] **Step 8: Run focused status tests**
+- [x] **Step 8: Run focused status tests**
 
 Run:
 
@@ -978,7 +978,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features --li
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit this task**
+- [x] **Step 9: Commit this task**
 
 ```bash
 git add bitloops/src/host/capability_host/host.rs bitloops/src/cli/devql/architecture.rs bitloops/src/cli/devql/architecture/deterministic_tests.rs

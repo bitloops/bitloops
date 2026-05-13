@@ -27,7 +27,9 @@ use crate::capability_packs::architecture_graph::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
 };
 use crate::host::capability_host::DevqlCapabilityHost;
-use crate::host::runtime_store::{RepoSqliteRuntimeStore, WorkplaneJobQuery, WorkplaneJobStatus};
+use crate::host::runtime_store::{
+    RepoCapabilityWorkplaneStatusReader, WorkplaneJobQuery, WorkplaneJobStatus,
+};
 
 use super::*;
 
@@ -52,11 +54,38 @@ pub(super) async fn run_architecture_command(
 ) -> Result<()> {
     let host = DevqlCapabilityHost::builtin(scope.repo_root.clone(), scope.repo.clone())?;
     host.ensure_migrations_applied_sync()?;
-    let context = host.build_current_state_consumer_context("architecture_graph")?;
 
     match args.command {
         DevqlArchitectureCommand::Roles(args) => {
+            if !architecture_roles_command_requires_current_state_context(&args) {
+                return run_architecture_roles_command_without_current_state(scope, &host, args)
+                    .await;
+            }
+            let context = host.build_current_state_consumer_context("architecture_graph")?;
             run_architecture_roles_command(scope, &host, &context, args).await
+        }
+    }
+}
+
+fn architecture_roles_command_requires_current_state_context(
+    args: &DevqlArchitectureRolesArgs,
+) -> bool {
+    !matches!(&args.command, DevqlArchitectureRolesCommand::Status(_))
+}
+
+async fn run_architecture_roles_command_without_current_state(
+    scope: &SlimCliRepoScope,
+    host: &DevqlCapabilityHost,
+    args: DevqlArchitectureRolesArgs,
+) -> Result<()> {
+    match args.command {
+        DevqlArchitectureRolesCommand::Status(args) => {
+            let relational = host.build_relational_storage()?;
+            run_architecture_roles_status(scope, &relational, args).await
+        }
+        _ => {
+            let context = host.build_current_state_consumer_context("architecture_graph")?;
+            run_architecture_roles_command(scope, host, &context, args).await
         }
     }
 }
@@ -78,7 +107,7 @@ async fn run_architecture_roles_command(
             run_architecture_roles_classify(scope, context, args).await
         }
         DevqlArchitectureRolesCommand::Status(args) => {
-            run_architecture_roles_status(scope, context, args).await
+            run_architecture_roles_status(scope, context.storage.as_ref(), args).await
         }
         DevqlArchitectureRolesCommand::Rename(args) => {
             let summary = create_rename_role_proposal(
@@ -535,16 +564,14 @@ async fn run_architecture_roles_bootstrap_command(
 
 async fn run_architecture_roles_status(
     scope: &SlimCliRepoScope,
-    context: &crate::host::capability_host::CurrentStateConsumerContext,
+    relational: &crate::host::devql::RelationalStorage,
     args: DevqlArchitectureRolesStatusArgs,
 ) -> Result<()> {
     let limit = usize::try_from(args.limit).context("converting --limit to usize")?;
     let queue_items = load_role_adjudication_queue_items(scope, limit)?;
-    let review_items =
-        load_role_review_items(context.storage.as_ref(), &scope.repo.repo_id, limit).await?;
+    let review_items = load_role_review_items(relational, &scope.repo.repo_id, limit).await?;
     let adjudication_attempts =
-        load_role_adjudication_attempt_items(context.storage.as_ref(), &scope.repo.repo_id, limit)
-            .await?;
+        load_role_adjudication_attempt_items(relational, &scope.repo.repo_id, limit).await?;
     let summary = summarise_queue_items(&queue_items);
     let adjudication_attempt_summary = summarise_adjudication_attempts(&adjudication_attempts);
     let output = RolesStatusOutput {
@@ -572,9 +599,15 @@ fn load_role_adjudication_queue_items(
     scope: &SlimCliRepoScope,
     limit: usize,
 ) -> Result<Vec<RoleAdjudicationQueueItem>> {
-    let store = RepoSqliteRuntimeStore::open(&scope.repo_root)
-        .context("opening repo runtime store for architecture roles status")?;
-    let jobs = store
+    let Some(reader) =
+        RepoCapabilityWorkplaneStatusReader::open(&scope.repo_root, &scope.repo.repo_id).context(
+            "opening read-only repo runtime status reader for architecture roles status",
+        )?
+    else {
+        return Ok(Vec::new());
+    };
+
+    let jobs = reader
         .list_capability_workplane_jobs(WorkplaneJobQuery {
             capability_id: Some(ARCHITECTURE_GRAPH_CAPABILITY_ID.to_string()),
             mailbox_name: Some(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string()),
@@ -585,7 +618,7 @@ fn load_role_adjudication_queue_items(
             ],
             limit: Some(limit as u64),
         })
-        .context("loading architecture role adjudication queue jobs")?;
+        .context("loading architecture role adjudication queue jobs read-only")?;
 
     Ok(jobs
         .into_iter()

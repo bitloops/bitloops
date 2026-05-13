@@ -171,6 +171,58 @@ fn role_adjudication_queue_item_keeps_malformed_payload_as_parse_error() {
 }
 
 #[test]
+fn architecture_roles_status_does_not_require_current_state_context() {
+    let args = DevqlArchitectureRolesArgs {
+        command: DevqlArchitectureRolesCommand::Status(DevqlArchitectureRolesStatusArgs {
+            json: true,
+            limit: 10,
+        }),
+    };
+
+    assert!(
+        !architecture_roles_command_requires_current_state_context(&args),
+        "roles status must be routed before current-state consumer context construction"
+    );
+}
+
+#[test]
+fn role_adjudication_queue_item_maps_failed_job_payload_errors() {
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-job-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: std::path::PathBuf::from("/tmp/repo"),
+        config_root: std::path::PathBuf::from("/tmp/config"),
+        capability_id: ARCHITECTURE_GRAPH_CAPABILITY_ID.to_string(),
+        mailbox_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string(),
+        init_session_id: None,
+        dedupe_key: Some("dedupe-1".to_string()),
+        payload: serde_json::Value::Null,
+        status: WorkplaneJobStatus::Failed,
+        attempts: 2,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: Some(2),
+        updated_at_unix: 3,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: Some("database is locked".to_string()),
+    };
+
+    let item = role_adjudication_queue_item_from_job(job);
+
+    assert_eq!(item.status, "failed");
+    assert_eq!(item.attempts, 2);
+    assert!(
+        item.parse_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("expected struct RoleAdjudicationMailboxPayload")
+    );
+    assert_eq!(item.last_error.as_deref(), Some("database is locked"));
+}
+
+#[test]
 fn roles_classify_formats_json_metrics() -> Result<()> {
     let output = RolesClassifyOutput {
         roles: ArchitectureRoleReconcileMetrics {
