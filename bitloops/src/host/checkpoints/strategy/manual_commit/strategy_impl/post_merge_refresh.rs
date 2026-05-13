@@ -28,6 +28,7 @@ pub(crate) fn run_devql_post_merge_refresh(repo_root: &Path, is_squash: bool) ->
             repo_root,
             &head_sha,
             &changed_files,
+            is_squash,
         )
         .context("queueing post-merge DevQL refresh in repo-local spool")?;
         Ok(())

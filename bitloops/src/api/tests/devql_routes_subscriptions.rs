@@ -361,6 +361,7 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
         repo.path(),
         "merge-head",
         &["src/lib.rs".to_string()],
+        false,
     )
     .expect("enqueue post-merge refresh");
     crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo.path())
@@ -412,6 +413,7 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
                             pathCount
                             paths
                             headSha
+                            isSquash
                             lastError
                           }
                         }
@@ -460,15 +462,31 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
     );
     let snapshot = &payload["data"]["runtimeDebugSnapshot"];
     assert_eq!(snapshot["repoId"], repo_id);
-    assert_eq!(snapshot["producerSpool"]["pendingCount"], 1);
+    assert_eq!(snapshot["producerSpool"]["pendingCount"], 2);
     assert_eq!(snapshot["producerSpool"]["runningCount"], 0);
-    let first_job = &snapshot["producerSpool"]["jobs"][0];
-    assert_eq!(first_job["status"], "pending");
-    assert_eq!(first_job["payloadKind"], "post_merge_refresh");
-    assert_eq!(first_job["dedupeKey"], "post_merge:merge-head");
-    assert_eq!(first_job["pathCount"], 1);
-    assert_eq!(first_job["paths"][0], "src/lib.rs");
-    assert_eq!(first_job["headSha"], "merge-head");
+    let jobs = snapshot["producerSpool"]["jobs"]
+        .as_array()
+        .expect("producer spool jobs");
+    assert_eq!(jobs.len(), 2);
+    let sync_job = jobs
+        .iter()
+        .find(|job| job["payloadKind"] == "post_merge_sync_refresh")
+        .expect("post-merge sync job");
+    assert_eq!(sync_job["status"], "pending");
+    assert_eq!(sync_job["dedupeKey"], "post_merge_sync:merge-head");
+    assert_eq!(sync_job["pathCount"], 1);
+    assert_eq!(sync_job["paths"][0], "src/lib.rs");
+    assert_eq!(sync_job["headSha"], "merge-head");
+    assert_eq!(sync_job["isSquash"], false);
+    let ingest_job = jobs
+        .iter()
+        .find(|job| job["payloadKind"] == "post_merge_ingest_backfill")
+        .expect("post-merge ingest job");
+    assert_eq!(ingest_job["status"], "pending");
+    assert_eq!(ingest_job["dedupeKey"], "post_merge_ingest:merge-head");
+    assert_eq!(ingest_job["pathCount"], 0);
+    assert_eq!(ingest_job["headSha"], "merge-head");
+    assert_eq!(ingest_job["isSquash"], false);
 
     assert_eq!(snapshot["repoState"]["branch"], "main");
     assert_eq!(snapshot["repoState"]["mergeState"], "none");
@@ -507,6 +525,7 @@ async fn devql_runtime_debug_snapshot_counts_full_producer_spool_queue() {
             repo.path(),
             &format!("merge-head-{idx:03}"),
             &["README.md".to_string()],
+            false,
         )
         .expect("enqueue post-merge refresh");
     }
@@ -560,7 +579,7 @@ async fn devql_runtime_debug_snapshot_counts_full_producer_spool_queue() {
         payload.get("errors")
     );
     let producer_spool = &payload["data"]["runtimeDebugSnapshot"]["producerSpool"];
-    assert_eq!(producer_spool["pendingCount"], 101);
+    assert_eq!(producer_spool["pendingCount"], 202);
     assert_eq!(producer_spool["runningCount"], 0);
     assert_eq!(
         producer_spool["jobs"]

@@ -136,3 +136,34 @@ flowchart LR
 - It watches the repo with `notify`, debounces events, filters ignored paths, initializes local watch schema, and registers itself in repo runtime SQLite in [`bitloops/src/host/devql/watch.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/host/devql/watch.rs#L61).
 - After batching changes, it computes changed paths, records temporary workspace state, and writes producer-spool jobs for daemon follow-up via [`bitloops/src/host/devql/capture.rs`](https://github.com/bitloops/bitloops/blob/main/bitloops/src/host/devql/capture.rs#L23).
 - Its job is to detect filesystem changes and hand off follow-up work through repo-local runtime state.
+
+## Glossary
+
+| Term | Beginner explanation |
+| --- | --- |
+| C4 container | A separately runnable process, app, or storage boundary. It does not mean Docker here. |
+| Executable artifact | The built `bitloops` program file. The same binary can run in several roles. |
+| Binary | Another name for a compiled executable program. |
+| Interactive CLI process | A short-lived process started when a person runs a Bitloops command. |
+| Hook process | A short-lived Bitloops process started automatically by an agent or by Git. |
+| Long-lived process | A background process that keeps running after the original command returns. |
+| Daemon | A long-running background server that handles local API, query, and worker work. |
+| Supervisor | A small control process that starts, stops, or restarts the daemon in service mode. |
+| Watcher | A background process that notices repo file changes and queues follow-up sync work. |
+| Repo-local state | State stored for one repository, usually under paths tied to that repo. |
+| Repo runtime SQLite | A small local SQLite database for operational state about one repo. |
+| Producer spool | A repo-local queue where hooks and the watcher leave work for the daemon. |
+| Working tree | The checked-out files in the repository directory. |
+| `.git` | Git's internal metadata directory for commits, branches, index state, and hooks. |
+| HTTP | The request/response protocol used by browsers and local APIs. |
+| GraphQL | An API query language used by Bitloops for DevQL and runtime endpoints. |
+| WS | WebSocket, a long-lived browser/server connection for live updates. |
+| DevQL host | The Bitloops runtime that serves DevQL query and indexing behavior. |
+| Capability host | The runtime that loads and invokes Bitloops capability packs. |
+| Task / worker orchestration | The scheduling and execution of background work such as sync, ingest, and enrichment. |
+| Durable storage | Storage intended to keep useful data across process restarts. |
+| Relational store | A structured database for tables and queryable current-state data. |
+| Event / interaction store | Storage for historical events, interactions, or workflow history. |
+| Blob store | Storage for larger opaque objects that do not fit well in normal database rows. |
+| Runtime sidecar | An optional helper process or service used by Bitloops, such as a model runtime. |
+| Dashboard UI | The local web interface shown in a browser. |
