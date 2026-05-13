@@ -413,6 +413,7 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
                             pathCount
                             paths
                             headSha
+                            isSquash
                             lastError
                           }
                         }
@@ -476,6 +477,7 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
     assert_eq!(sync_job["pathCount"], 1);
     assert_eq!(sync_job["paths"][0], "src/lib.rs");
     assert_eq!(sync_job["headSha"], "merge-head");
+    assert_eq!(sync_job["isSquash"], false);
     let ingest_job = jobs
         .iter()
         .find(|job| job["payloadKind"] == "post_merge_ingest_backfill")
@@ -484,6 +486,7 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
     assert_eq!(ingest_job["dedupeKey"], "post_merge_ingest:merge-head");
     assert_eq!(ingest_job["pathCount"], 0);
     assert_eq!(ingest_job["headSha"], "merge-head");
+    assert_eq!(ingest_job["isSquash"], false);
 
     assert_eq!(snapshot["repoState"]["branch"], "main");
     assert_eq!(snapshot["repoState"]["mergeState"], "none");

@@ -639,7 +639,7 @@ fn hook_enqueue_helpers_use_repo_binding_and_share_repo_runtime_store() {
 fn post_merge_enqueue_splits_sync_and_ingest_for_non_squash_merge() {
     let (_dir, repo_root, _repo, store) = seed_store();
 
-    crate::host::devql::enqueue_spooled_post_merge_refresh(
+    let result = crate::host::devql::enqueue_spooled_post_merge_refresh(
         &repo_root,
         " merge-head ",
         &[
@@ -650,6 +650,7 @@ fn post_merge_enqueue_splits_sync_and_ingest_for_non_squash_merge() {
         false,
     )
     .expect("enqueue split post-merge refresh");
+    assert_eq!(result.inserted_jobs, 2);
 
     let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
         .expect("list producer spool jobs");
@@ -682,13 +683,14 @@ fn post_merge_enqueue_splits_sync_and_ingest_for_non_squash_merge() {
 fn post_merge_enqueue_skips_ingest_for_squash_merge() {
     let (_dir, repo_root, _repo, store) = seed_store();
 
-    crate::host::devql::enqueue_spooled_post_merge_refresh(
+    let result = crate::host::devql::enqueue_spooled_post_merge_refresh(
         &repo_root,
         "squash-head",
         &["src/lib.rs".to_string()],
         true,
     )
     .expect("enqueue squash post-merge refresh");
+    assert_eq!(result.inserted_jobs, 1);
 
     let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
         .expect("list producer spool jobs");
@@ -708,6 +710,91 @@ fn post_merge_enqueue_skips_ingest_for_squash_merge() {
             assert!(*is_squash);
         }
         other => panic!("unexpected squash post-merge payload: {other:?}"),
+    }
+}
+
+#[test]
+fn split_post_merge_sync_payload_prunes_excluded_changed_files() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+    crate::config::settings::set_scope_exclusions(
+        &repo_root.join(crate::config::REPO_POLICY_FILE_NAME),
+        &["generated/**".to_string()],
+        &[],
+    )
+    .expect("write exclusions");
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "merge-head",
+        &["src/lib.rs".to_string(), "generated/out.rs".to_string()],
+        false,
+    )
+    .expect("enqueue post-merge refresh");
+
+    let claimed =
+        claim_next_producer_spool_jobs(&store.config_root).expect("claim producer spool jobs");
+    assert!(
+        !claimed.is_empty(),
+        "claim should trigger pending producer spool pruning"
+    );
+    let jobs = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    let sync_job = claimed
+        .iter()
+        .chain(jobs.iter())
+        .find(|job| {
+            matches!(
+                job.payload,
+                ProducerSpoolJobPayload::PostMergeSyncRefresh { .. }
+            )
+        })
+        .expect("sync job");
+    match &sync_job.payload {
+        ProducerSpoolJobPayload::PostMergeSyncRefresh { changed_files, .. } => {
+            assert_eq!(changed_files, &vec!["src/lib.rs".to_string()]);
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
+fn split_post_merge_sync_dedupe_merges_changed_files() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "merge-head",
+        &["src/a.rs".to_string()],
+        false,
+    )
+    .expect("enqueue first post-merge refresh");
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "merge-head",
+        &["src/b.rs".to_string()],
+        false,
+    )
+    .expect("enqueue second post-merge refresh");
+
+    let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    let sync_job = claimed
+        .iter()
+        .find(|job| {
+            matches!(
+                job.payload,
+                ProducerSpoolJobPayload::PostMergeSyncRefresh { .. }
+            )
+        })
+        .expect("sync job");
+    match &sync_job.payload {
+        ProducerSpoolJobPayload::PostMergeSyncRefresh { changed_files, .. } => {
+            assert_eq!(
+                changed_files,
+                &vec!["src/a.rs".to_string(), "src/b.rs".to_string()]
+            );
+        }
+        other => panic!("unexpected payload: {other:?}"),
     }
 }
 

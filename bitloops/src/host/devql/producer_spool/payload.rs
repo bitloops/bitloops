@@ -130,6 +130,28 @@ pub(super) fn merge_pending_payload(
                 }),
             }
         }
+        (
+            ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                merge_head_sha,
+                changed_files: existing_paths,
+                is_squash: existing_is_squash,
+            },
+            ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                changed_files: incoming_paths,
+                is_squash: incoming_is_squash,
+                ..
+            },
+        ) => {
+            let mut changed_files = existing_paths;
+            changed_files.extend(incoming_paths);
+            changed_files.sort();
+            changed_files.dedup();
+            ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                merge_head_sha,
+                changed_files,
+                is_squash: existing_is_squash || incoming_is_squash,
+            }
+        }
         (_, incoming) => incoming,
     }
 }
