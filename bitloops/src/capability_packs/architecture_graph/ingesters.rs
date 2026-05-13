@@ -208,6 +208,7 @@ async fn run_role_adjudication_payload(
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
     run_adjudication_request(&payload.request, inference, repo_root, &services).await
 }

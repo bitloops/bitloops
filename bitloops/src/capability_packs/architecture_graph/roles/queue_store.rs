@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use super::contracts::{
     AdjudicationOutcome, RoleAdjudicationAttemptEvent, RoleAdjudicationAttemptWriteResult,
     RoleAdjudicationAttemptWriter, RoleAdjudicationFailure, RoleAdjudicationProvenance,
-    RoleAdjudicationRequest, RoleAdjudicationResult, RoleAssignmentWriteEvent,
-    RoleAssignmentWriteOutcome, RoleAssignmentWriter, RoleBoxFuture, RoleCandidateDescriptor,
-    RoleFactsBundle, RoleFactsReader, RoleQueueEnqueueResult, RoleQueueJobStatus,
-    RoleTaxonomyReader,
+    RoleAdjudicationRequest, RoleAdjudicationResult, RoleAssignmentStateReader,
+    RoleAssignmentStateSnapshot, RoleAssignmentWriteEvent, RoleAssignmentWriteOutcome,
+    RoleAssignmentWriter, RoleBoxFuture, RoleCandidateDescriptor, RoleFactsBundle, RoleFactsReader,
+    RoleQueueEnqueueResult, RoleQueueJobStatus, RoleTaxonomyReader,
 };
 use anyhow::Result;
 
@@ -256,6 +256,43 @@ impl RoleAssignmentWriter for InMemoryRoleAssignmentWriter {
                 source: "in_memory",
                 persisted: true,
             })
+        })
+    }
+}
+
+impl RoleAssignmentStateReader for InMemoryRoleAssignmentWriter {
+    fn active_rule_assignment_for_request<'a>(
+        &'a self,
+        _request: &'a RoleAdjudicationRequest,
+    ) -> RoleBoxFuture<'a, Option<RoleAssignmentStateSnapshot>> {
+        Box::pin(async move { Ok(None) })
+    }
+}
+
+#[derive(Default)]
+pub struct InMemoryRoleAssignmentStateReader {
+    active_rule_assignment: Mutex<Option<RoleAssignmentStateSnapshot>>,
+}
+
+impl InMemoryRoleAssignmentStateReader {
+    pub fn with_active_rule_assignment(assignment: RoleAssignmentStateSnapshot) -> Self {
+        Self {
+            active_rule_assignment: Mutex::new(Some(assignment)),
+        }
+    }
+}
+
+impl RoleAssignmentStateReader for InMemoryRoleAssignmentStateReader {
+    fn active_rule_assignment_for_request<'a>(
+        &'a self,
+        _request: &'a RoleAdjudicationRequest,
+    ) -> RoleBoxFuture<'a, Option<RoleAssignmentStateSnapshot>> {
+        Box::pin(async move {
+            Ok(self
+                .active_rule_assignment
+                .lock()
+                .expect("assignment state mutex poisoned")
+                .clone())
         })
     }
 }

@@ -871,10 +871,13 @@ fn print_roles_status_human(output: &RolesStatusOutput) {
         println!("recent adjudication attempts:");
         for item in &output.adjudication_attempts {
             println!(
-                "  attempt={} outcome={} persisted={} reason={} path={} artefact={} symbol={} generation={} model={} observed_at_unix={}",
+                "  attempt={} outcome={} persisted={} write_source={} reason={} path={} artefact={} symbol={} generation={} model={} observed_at_unix={}",
                 item.attempt_id,
                 item.outcome,
                 item.assignment_write_persisted,
+                item.assignment_write_source
+                    .as_deref()
+                    .unwrap_or("<unknown>"),
                 item.reason,
                 item.path.as_deref().unwrap_or("<unknown>"),
                 item.artefact_id.as_deref().unwrap_or("<unknown>"),

@@ -5,11 +5,12 @@ use serde_json::json;
 
 use super::*;
 use crate::capability_packs::architecture_graph::roles::contracts::{
-    AdjudicationOutcome, AdjudicationReason, RoleAdjudicationAttemptOutcome, RoleAdjudicationResult,
+    AdjudicationOutcome, AdjudicationReason, RoleAdjudicationAttemptOutcome,
+    RoleAdjudicationResult, RoleAssignmentStateSnapshot,
 };
 use crate::capability_packs::architecture_graph::roles::queue_store::{
     InMemoryRoleAdjudicationAttemptWriter, InMemoryRoleAdjudicationQueueStore,
-    InMemoryRoleAssignmentWriter,
+    InMemoryRoleAssignmentStateReader, InMemoryRoleAssignmentWriter,
 };
 use crate::host::inference::{
     EmptyInferenceGateway, InferenceGateway, StructuredGenerationRequest,
@@ -56,6 +57,35 @@ impl InferenceGateway for FakeInferenceGateway {
         Ok(Arc::new(FakeStructuredService {
             response: self.response.clone(),
         }))
+    }
+
+    fn has_slot(&self, _slot_name: &str) -> bool {
+        true
+    }
+}
+
+struct PanicInferenceGateway;
+
+impl InferenceGateway for PanicInferenceGateway {
+    fn embeddings(
+        &self,
+        slot_name: &str,
+    ) -> Result<Arc<dyn crate::host::inference::EmbeddingService>> {
+        anyhow::bail!("unexpected embeddings call for slot `{slot_name}`")
+    }
+
+    fn text_generation(
+        &self,
+        slot_name: &str,
+    ) -> Result<Arc<dyn crate::host::inference::TextGenerationService>> {
+        anyhow::bail!("unexpected text generation call for slot `{slot_name}`")
+    }
+
+    fn structured_generation(
+        &self,
+        slot_name: &str,
+    ) -> Result<Arc<dyn StructuredGenerationService>> {
+        panic!("stale deterministic adjudication should not call `{slot_name}`")
     }
 
     fn has_slot(&self, _slot_name: &str) -> bool {
@@ -123,6 +153,7 @@ async fn invalid_response_marks_needs_review_without_assignment_apply() {
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
 
     let inference = FakeInferenceGateway {
@@ -147,6 +178,76 @@ async fn invalid_response_marks_needs_review_without_assignment_apply() {
 
     assert!(writer.applied_events().is_empty());
     assert_eq!(writer.needs_review_events().len(), 1);
+}
+
+#[tokio::test]
+async fn stale_deterministic_adjudication_completes_without_inference() {
+    let queue = InMemoryRoleAdjudicationQueueStore::new();
+    let writer = InMemoryRoleAssignmentWriter::default();
+    let attempts = InMemoryRoleAdjudicationAttemptWriter::default();
+    let taxonomy = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleTaxonomyReader::with_roles(&["entrypoint"]);
+    let facts = crate::capability_packs::architecture_graph::roles::queue_store::InMemoryRoleFactsReader::default();
+    let assignment_state = InMemoryRoleAssignmentStateReader::with_active_rule_assignment(
+        RoleAssignmentStateSnapshot {
+            assignment_id: "assignment-rule-1".to_string(),
+            role_id: "entrypoint".to_string(),
+            source: "rule".to_string(),
+            status: "active".to_string(),
+            confidence: 1.0,
+            generation_seq: 8,
+        },
+    );
+
+    let request = RoleAdjudicationRequest {
+        repo_id: "repo".to_string(),
+        generation: 7,
+        target_kind: Some("artefact".to_string()),
+        artefact_id: Some("a1".to_string()),
+        symbol_id: Some("s1".to_string()),
+        path: Some("src/main.rs".to_string()),
+        language: Some("rust".to_string()),
+        canonical_kind: Some("function".to_string()),
+        reason: AdjudicationReason::LowConfidence,
+        deterministic_confidence: Some(0.5),
+        candidate_role_ids: vec!["entrypoint".to_string()],
+        current_assignment: None,
+    };
+    queue
+        .enqueue(&request, &request.scope_key())
+        .expect("enqueue should succeed");
+
+    let services = RoleAdjudicationServices {
+        queue: &queue,
+        taxonomy: &taxonomy,
+        facts: &facts,
+        writer: &writer,
+        attempts: &attempts,
+        assignment_state: &assignment_state,
+    };
+
+    let outcome = run_adjudication_request(
+        &request,
+        &PanicInferenceGateway,
+        std::path::Path::new("."),
+        &services,
+    )
+    .await
+    .expect("stale deterministic adjudication should complete");
+
+    assert!(!outcome.persisted);
+    assert_eq!(outcome.source, "skipped_deterministic_assignment");
+    assert!(writer.applied_events().is_empty());
+    assert!(writer.needs_review_events().is_empty());
+    assert_eq!(attempts.recorded_attempts().len(), 1);
+    assert_eq!(
+        attempts.recorded_attempts()[0].outcome,
+        RoleAdjudicationAttemptOutcome::SkippedDeterministic
+    );
+    assert!(!attempts.write_results()[0].assignment_write_persisted);
+    assert_eq!(
+        attempts.write_results()[0].assignment_write_source,
+        "skipped_deterministic_assignment"
+    );
 }
 
 #[tokio::test]
@@ -180,6 +281,7 @@ async fn unknown_response_without_request_candidate_persists_attempt() {
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
     let inference = FakeInferenceGateway {
         response: json!({
@@ -240,6 +342,7 @@ async fn valid_unknown_response_with_request_candidate_skips_assignment_writer()
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
     let inference = FakeInferenceGateway {
         response: json!({
@@ -311,6 +414,7 @@ async fn valid_needs_review_response_with_request_candidate_skips_assignment_wri
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
     let inference = FakeInferenceGateway {
         response: json!({
@@ -382,6 +486,7 @@ async fn invalid_response_persists_raw_attempt_before_review_mark() {
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
     let inference = FakeInferenceGateway {
         response: json!({
@@ -419,7 +524,7 @@ async fn invalid_response_persists_raw_attempt_before_review_mark() {
 }
 
 #[tokio::test]
-async fn valid_response_is_persisted_with_llm_source() {
+async fn successful_adjudication_applies_assignment() {
     let queue = InMemoryRoleAdjudicationQueueStore::new();
     let writer = InMemoryRoleAssignmentWriter::default();
     let attempts = InMemoryRoleAdjudicationAttemptWriter::default();
@@ -450,6 +555,7 @@ async fn valid_response_is_persisted_with_llm_source() {
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
 
     let inference = FakeInferenceGateway {
@@ -508,6 +614,7 @@ async fn fallback_inference_marks_retryable_failure() {
         facts: &facts,
         writer: &writer,
         attempts: &attempts,
+        assignment_state: &writer,
     };
 
     run_adjudication_request(

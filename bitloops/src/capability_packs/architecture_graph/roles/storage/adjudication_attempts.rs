@@ -317,4 +317,37 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn role_adjudication_attempt_storage_records_skipped_deterministic_outcome() -> Result<()>
+    {
+        let (_temp, relational) = test_relational()?;
+        let writer = DbRoleAdjudicationAttemptWriter::new(&relational);
+        let mut event = attempt_event();
+        event.outcome = RoleAdjudicationAttemptOutcome::SkippedDeterministic;
+        event.failure_message =
+            Some("active deterministic rule assignment already exists for target".to_string());
+        event.raw_response_json = None;
+        event.validated_result_json = None;
+        writer.record_attempt(event).await?;
+        writer
+            .mark_assignment_write_result(
+                "repo-1",
+                "attempt-1",
+                false,
+                "skipped_deterministic_assignment",
+            )
+            .await?;
+
+        let attempts = list_recent_role_adjudication_attempts(&relational, "repo-1", 10).await?;
+
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].outcome, "skipped_deterministic");
+        assert!(!attempts[0].assignment_write_persisted);
+        assert_eq!(
+            attempts[0].assignment_write_source.as_deref(),
+            Some("skipped_deterministic_assignment")
+        );
+        Ok(())
+    }
 }

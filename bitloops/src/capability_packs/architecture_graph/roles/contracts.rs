@@ -56,6 +56,7 @@ pub enum RoleAdjudicationAttemptOutcome {
     LlmError,
     ValidationError,
     NoActiveRoles,
+    SkippedDeterministic,
 }
 
 impl RoleAdjudicationAttemptOutcome {
@@ -67,6 +68,7 @@ impl RoleAdjudicationAttemptOutcome {
             Self::LlmError => "llm_error",
             Self::ValidationError => "validation_error",
             Self::NoActiveRoles => "no_active_roles",
+            Self::SkippedDeterministic => "skipped_deterministic",
         }
     }
 }
@@ -125,6 +127,17 @@ pub struct RoleCurrentAssignmentSnapshot {
     pub confidence: Option<f64>,
     #[serde(default)]
     pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleAssignmentStateSnapshot {
+    pub assignment_id: String,
+    pub role_id: String,
+    pub source: String,
+    pub status: String,
+    pub confidence: f64,
+    pub generation_seq: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -348,6 +361,13 @@ pub trait RoleFactsReader: Send + Sync {
         &'a self,
         request: &'a RoleAdjudicationRequest,
     ) -> RoleBoxFuture<'a, RoleFactsBundle>;
+}
+
+pub trait RoleAssignmentStateReader: Send + Sync {
+    fn active_rule_assignment_for_request<'a>(
+        &'a self,
+        request: &'a RoleAdjudicationRequest,
+    ) -> RoleBoxFuture<'a, Option<RoleAssignmentStateSnapshot>>;
 }
 
 pub trait RoleAssignmentWriter: Send + Sync {

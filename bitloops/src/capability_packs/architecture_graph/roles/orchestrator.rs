@@ -14,8 +14,8 @@ use super::adjudication_selector::{DeterministicRoleOutcomeInput, select_adjudic
 use super::assignment_applier::apply_adjudication_result;
 use super::contracts::{
     AdjudicationOutcome, RoleAdjudicationAttemptEvent, RoleAdjudicationAttemptOutcome,
-    RoleAdjudicationFailure, RoleAdjudicationMailboxPayload, RoleAdjudicationRequest,
-    RoleAssignmentWriteOutcome,
+    RoleAdjudicationFailure, RoleAdjudicationMailboxPayload, RoleAdjudicationProvenance,
+    RoleAdjudicationRequest, RoleAdjudicationResult, RoleAssignmentWriteOutcome,
 };
 use super::evidence_packet_builder::{
     EvidencePacketLimits, RoleEvidencePacket, RoleEvidencePacketBuilder,
@@ -25,6 +25,7 @@ use super::queue_store::RoleAdjudicationQueueStore;
 use super::response_validator::validate_adjudication_result;
 
 const SKIPPED_NON_ASSIGNMENT_WRITE_SOURCE: &str = "skipped_non_assignment";
+const SKIPPED_DETERMINISTIC_WRITE_SOURCE: &str = "skipped_deterministic_assignment";
 
 pub struct RoleAdjudicationServices<'a> {
     pub queue: &'a dyn RoleAdjudicationQueueStore,
@@ -32,6 +33,7 @@ pub struct RoleAdjudicationServices<'a> {
     pub facts: &'a dyn super::contracts::RoleFactsReader,
     pub writer: &'a dyn super::contracts::RoleAssignmentWriter,
     pub attempts: &'a dyn super::contracts::RoleAdjudicationAttemptWriter,
+    pub assignment_state: &'a dyn super::contracts::RoleAssignmentStateReader,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +234,85 @@ pub async fn run_adjudication_request(
     if queue_status.is_none() {
         let _ = services.queue.enqueue(request, &dedupe_key)?;
         let _ = services.queue.claim(&dedupe_key)?;
+    }
+
+    if let Some(current_rule) = services
+        .assignment_state
+        .active_rule_assignment_for_request(request)
+        .await?
+    {
+        let observed_at_unix = unix_timestamp_now();
+        let observed_at_unix_nanos = unix_timestamp_nanos_now();
+        let attempt_id = attempt_id_for(request, observed_at_unix_nanos);
+        let guard_packet = RoleEvidencePacket {
+            request: request.clone(),
+            candidate_roles: Vec::new(),
+            facts: vec![json!({
+                "kind": "adjudication_guard",
+                "key": "active_rule_assignment",
+                "value": current_rule.clone(),
+            })],
+            rule_signals: Vec::new(),
+            dependency_context: Vec::new(),
+            related_artefacts: Vec::new(),
+            source_snippets: Vec::new(),
+            reachability: None,
+        };
+        let guard_packet_json = json!(guard_packet);
+        let guard_packet_sha256 = sha256_hex(&serde_json::to_vec(&guard_packet_json)?);
+        let attempt_write = services
+            .attempts
+            .record_attempt(role_adjudication_attempt_event(
+                request,
+                &dedupe_key,
+                &guard_packet,
+                &guard_packet_json,
+                &guard_packet_sha256,
+                &attempt_id,
+                observed_at_unix,
+                "skipped",
+                RoleAdjudicationAttemptOutcome::SkippedDeterministic,
+                None,
+                None,
+                Some("active deterministic rule assignment already exists for target".to_string()),
+                false,
+            )?)
+            .await?;
+
+        services
+            .attempts
+            .mark_assignment_write_result(
+                &request.repo_id,
+                &attempt_write.attempt_id,
+                false,
+                SKIPPED_DETERMINISTIC_WRITE_SOURCE,
+            )
+            .await?;
+
+        services.queue.complete(
+            &dedupe_key,
+            &RoleAdjudicationResult {
+                outcome: AdjudicationOutcome::Unknown,
+                assignments: Vec::new(),
+                confidence: current_rule.confidence,
+                evidence: guard_packet_json,
+                reasoning_summary: "Skipped because an active deterministic rule assignment already exists for this target.".to_string(),
+                rule_suggestions: Vec::new(),
+            },
+            &RoleAdjudicationProvenance {
+                source: "deterministic_guard".to_string(),
+                model_descriptor: "skipped".to_string(),
+                slot_name: ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT.to_string(),
+                packet_sha256: guard_packet_sha256,
+                adjudication_reason: request.reason,
+                adjudicated_at_unix: observed_at_unix,
+            },
+        )?;
+
+        return Ok(RoleAssignmentWriteOutcome {
+            source: SKIPPED_DETERMINISTIC_WRITE_SOURCE,
+            persisted: false,
+        });
     }
 
     let packet_builder = RoleEvidencePacketBuilder {

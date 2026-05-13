@@ -889,6 +889,7 @@ mod deterministic_tests {
                 facts: &facts,
                 writer: &writer,
                 attempts: &attempts,
+                assignment_state: &writer,
             };
         let write_outcome =
             crate::capability_packs::architecture_graph::roles::run_adjudication_request(

@@ -702,18 +702,46 @@ async fn roles_status_reads_recent_adjudication_attempts() -> Result<()> {
                 sql_text(&json!({"reasoning_summary": "Selected command dispatcher"}).to_string()),
         ))
         .await?;
+    relational
+        .exec(&format!(
+            "INSERT INTO architecture_role_adjudication_attempts (
+                repo_id, attempt_id, scope_key, generation_seq, target_kind, artefact_id,
+                symbol_id, path, reason, deterministic_confidence, candidate_roles_json,
+                current_assignment_json, request_json, evidence_packet_sha256,
+                evidence_packet_json, model_descriptor, slot_name, outcome, raw_response_json,
+                validated_result_json, failure_message, retryable, assignment_write_persisted,
+                assignment_write_source, observed_at_unix
+             ) VALUES (
+                {repo_id}, 'attempt-2', 'repo-1:src/cli/run.rs:skipped', 8, 'artefact', 'artefact-1',
+                'symbol-1', 'src/cli/run.rs', 'low_confidence', 0.55, '[]',
+                NULL, '{{}}', 'sha-2', '{{}}', 'skipped', 'architecture-role-adjudication',
+                'skipped_deterministic', NULL, NULL,
+                'active deterministic rule assignment already exists for target', 0, 0,
+                'skipped_deterministic_assignment', 1235
+             );",
+            repo_id = sql_text("repo-1"),
+        ))
+        .await?;
 
     let attempts = load_role_adjudication_attempt_items(&relational, "repo-1", 10).await?;
 
-    assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0].attempt_id, "attempt-1");
-    assert_eq!(attempts[0].outcome, "assigned");
-    assert_eq!(attempts[0].path.as_deref(), Some("src/cli/run.rs"));
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0].attempt_id, "attempt-2");
+    assert_eq!(attempts[0].outcome, "skipped_deterministic");
     assert_eq!(
-        attempts[0].reasoning_summary.as_deref(),
+        attempts[0].assignment_write_source.as_deref(),
+        Some("skipped_deterministic_assignment")
+    );
+    assert!(!attempts[0].assignment_write_persisted);
+    assert_eq!(attempts[1].attempt_id, "attempt-1");
+    assert_eq!(attempts[1].outcome, "assigned");
+    assert_eq!(attempts[1].path.as_deref(), Some("src/cli/run.rs"));
+    assert_eq!(
+        attempts[1].reasoning_summary.as_deref(),
         Some("Selected command dispatcher")
     );
-    assert!(attempts[0].assignment_write_persisted);
+    assert!(attempts[1].assignment_write_persisted);
+    assert_eq!(attempts[1].assignment_write_source.as_deref(), Some("llm"));
     Ok(())
 }
 
