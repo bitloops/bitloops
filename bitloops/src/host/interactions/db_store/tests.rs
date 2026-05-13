@@ -130,6 +130,53 @@ fn test_spool() -> (tempfile::TempDir, SqliteInteractionSpool) {
 }
 
 #[test]
+fn opening_spool_does_not_rebuild_search_projections() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let sqlite = SqliteConnectionPool::connect(dir.path().join("interaction-spool.sqlite"))?;
+    initialise_interaction_spool_schema(&sqlite)?;
+
+    sqlite.with_connection(|conn| {
+        conn.execute(
+            "INSERT INTO interaction_sessions (session_id, repo_id, first_prompt, started_at, updated_at)
+             VALUES ('session-1', 'repo-test', 'hello from prompt', '2026-05-13T00:00:00Z', '2026-05-13T00:00:00Z')",
+            [],
+        )?;
+        Ok(())
+    })?;
+
+    let _spool = SqliteInteractionSpool::new(sqlite.clone(), "repo-test".into())?;
+
+    let docs_after_open: i64 = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM interaction_session_search_documents WHERE repo_id = 'repo-test'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert_eq!(
+        docs_after_open, 0,
+        "constructing a spool must not rebuild interaction search projections"
+    );
+
+    _spool.rebuild_search_projections()?;
+    let docs_after_rebuild: i64 = sqlite.with_connection(|conn| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM interaction_session_search_documents WHERE repo_id = 'repo-test'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(anyhow::Error::from)
+    })?;
+    assert_eq!(
+        docs_after_rebuild, 1,
+        "explicit projection rebuild should still repair search documents"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn initialising_spool_migrates_legacy_event_schema_before_creating_indexes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sqlite =

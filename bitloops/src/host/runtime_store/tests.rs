@@ -88,6 +88,45 @@ fn repo_runtime_store_can_open_with_known_repo_id_without_git_identity_lookup() 
 }
 
 #[test]
+fn runtime_schema_initialisation_does_not_rebuild_interaction_projections() {
+    let dir = TempDir::new().expect("tempdir");
+    let sqlite_path = dir.path().join("runtime.sqlite");
+    let sqlite =
+        crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("connect sqlite");
+    super::sqlite_migrate::initialise_repo_runtime_schema(&sqlite)
+        .expect("initialise runtime schema");
+
+    sqlite
+        .with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO interaction_sessions (session_id, repo_id, first_prompt, started_at, updated_at)
+                 VALUES ('session-1', '__runtime-bootstrap__', 'bootstrap prompt', '2026-05-13T00:00:00Z', '2026-05-13T00:00:00Z')",
+                [],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .expect("seed bootstrap interaction row");
+
+    super::sqlite_migrate::initialise_repo_runtime_schema(&sqlite)
+        .expect("reinitialise runtime schema");
+
+    let docs: i64 = sqlite
+        .with_connection(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM interaction_session_search_documents WHERE repo_id = '__runtime-bootstrap__'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(anyhow::Error::from)
+        })
+        .expect("count search docs");
+    assert_eq!(
+        docs, 0,
+        "runtime schema bootstrap must not rebuild interaction search projections"
+    );
+}
+
+#[test]
 fn repo_runtime_store_fails_without_daemon_config() {
     let dir = TempDir::new().expect("tempdir");
     init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
