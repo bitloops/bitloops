@@ -122,7 +122,9 @@ pub(crate) use self::producer_spool::{
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;
 pub use self::sync::types::SyncMode;
-pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
+pub use self::types::{
+    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalStorage, RepoIdentity,
+};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
 

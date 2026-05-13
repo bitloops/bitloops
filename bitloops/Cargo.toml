@@ -184,6 +184,7 @@ terminal_size = "0.4.4"
 tokio-postgres = "0.7"
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json", "blocking"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+sqlite-vec = "0.1.9"
 semver = "1"
 tar = "0.4"
 xz2 = "0.1"

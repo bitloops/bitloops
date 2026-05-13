@@ -225,8 +225,7 @@ ON CONFLICT (repo_id, representation_kind) DO UPDATE SET provider = excluded.pro
     )
 }
 
-#[cfg(test)]
-pub(super) fn build_postgres_symbol_embedding_persist_sql(
+pub(crate) fn build_postgres_symbol_embedding_persist_sql(
     row: &embeddings::SymbolEmbeddingRow,
 ) -> Result<String> {
     let embedding_expr = sql_vector_string(&row.embedding)?;
@@ -237,6 +236,37 @@ ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET 
         artefact_id = esc_pg(&row.artefact_id),
         repo_id = esc_pg(&row.repo_id),
         blob_sha = esc_pg(&row.blob_sha),
+        representation_kind = esc_pg(&row.representation_kind.to_string()),
+        setup_fingerprint = esc_pg(&row.setup_fingerprint),
+        provider = esc_pg(&row.provider),
+        model = esc_pg(&row.model),
+        dimension = row.dimension,
+        embedding_input_hash = esc_pg(&row.embedding_input_hash),
+        embedding = embedding_expr,
+    ))
+}
+
+pub(crate) fn build_postgres_current_symbol_embedding_persist_sql(
+    input: &semantic::SemanticFeatureInput,
+    path: &str,
+    content_id: &str,
+    row: &embeddings::SymbolEmbeddingRow,
+) -> Result<String> {
+    let embedding_expr = sql_vector_string(&row.embedding)?;
+    let symbol_id_sql = input
+        .symbol_id
+        .as_deref()
+        .map(|value| format!("'{}'", esc_pg(value)))
+        .unwrap_or_else(|| "NULL".to_string());
+    Ok(format!(
+        "INSERT INTO symbol_embeddings_current (artefact_id, repo_id, path, content_id, symbol_id, representation_kind, setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding) \
+VALUES ('{artefact_id}', '{repo_id}', '{path}', '{content_id}', {symbol_id}, '{representation_kind}', '{setup_fingerprint}', '{provider}', '{model}', {dimension}, '{embedding_input_hash}', {embedding}) \
+ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET repo_id = EXCLUDED.repo_id, path = EXCLUDED.path, content_id = EXCLUDED.content_id, symbol_id = EXCLUDED.symbol_id, provider = EXCLUDED.provider, model = EXCLUDED.model, dimension = EXCLUDED.dimension, embedding_input_hash = EXCLUDED.embedding_input_hash, embedding = EXCLUDED.embedding, generated_at = now()",
+        artefact_id = esc_pg(&row.artefact_id),
+        repo_id = esc_pg(&row.repo_id),
+        path = esc_pg(path),
+        content_id = esc_pg(content_id),
+        symbol_id = symbol_id_sql,
         representation_kind = esc_pg(&row.representation_kind.to_string()),
         setup_fingerprint = esc_pg(&row.setup_fingerprint),
         provider = esc_pg(&row.provider),
@@ -299,6 +329,34 @@ ON CONFLICT (artefact_id, representation_kind, setup_fingerprint) DO UPDATE SET 
     ))
 }
 
+pub(crate) fn build_delete_stale_current_symbol_embedding_rows_for_path_sql(
+    repo_id: &str,
+    path: &str,
+    content_id: &str,
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    keep_artefact_ids: &[String],
+) -> String {
+    let extra_delete_clause = if keep_artefact_ids.is_empty() {
+        " OR 1 = 1".to_string()
+    } else {
+        format!(
+            " OR artefact_id NOT IN ({})",
+            sql_string_list_pg(keep_artefact_ids)
+        )
+    };
+    format!(
+        "DELETE FROM symbol_embeddings_current \
+WHERE repo_id = '{repo_id}' AND path = '{path}' AND {representation_predicate} \
+  AND (content_id <> '{content_id}'{extra_delete_clause})",
+        repo_id = esc_pg(repo_id),
+        path = esc_pg(path),
+        content_id = esc_pg(content_id),
+        representation_predicate =
+            representation_kind_sql_predicate("representation_kind", representation_kind),
+        extra_delete_clause = extra_delete_clause,
+    )
+}
+
 pub(crate) fn build_embedding_setup_persist_sql(setup: &embeddings::EmbeddingSetup) -> String {
     format!(
         "INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension) \
@@ -324,7 +382,6 @@ pub(super) fn representation_kind_sql_predicate(
     format!("{column} IN ({values})")
 }
 
-#[cfg(test)]
 pub(super) fn sql_vector_string(values: &[f32]) -> Result<String> {
     let json = sql_json_string(values)?;
     Ok(format!("'{json}'::vector"))

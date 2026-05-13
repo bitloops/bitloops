@@ -397,6 +397,50 @@ fn semantic_embedding_sqlite_persist_sql_contains_json_literal() {
 }
 
 #[test]
+fn semantic_embedding_postgres_current_persist_sql_contains_vector_literal() {
+    let input = semantic::SemanticFeatureInput {
+        artefact_id: "artefact-1".to_string(),
+        symbol_id: Some("sym-1".to_string()),
+        repo_id: "repo-1".to_string(),
+        blob_sha: "blob-1".to_string(),
+        path: "src/a.ts".to_string(),
+        language: "typescript".to_string(),
+        canonical_kind: "function".to_string(),
+        language_kind: "function_declaration".to_string(),
+        symbol_fqn: "src/a.ts::handler".to_string(),
+        name: "handler".to_string(),
+        signature: Some("function handler()".to_string()),
+        modifiers: Vec::new(),
+        body: "return value;".to_string(),
+        docstring: None,
+        parent_kind: None,
+        dependency_signals: Vec::new(),
+        content_hash: Some("blob-1".to_string()),
+    };
+    let sql = build_postgres_current_symbol_embedding_persist_sql(
+        &input,
+        "src/a.ts",
+        "blob-1",
+        &embeddings::SymbolEmbeddingRow {
+            artefact_id: "artefact-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            representation_kind: embeddings::EmbeddingRepresentationKind::Code,
+            setup_fingerprint: test_setup_fingerprint("voyage", "voyage-code-3", 3),
+            provider: "voyage".to_string(),
+            model: "voyage-code-3".to_string(),
+            dimension: 3,
+            embedding_input_hash: "hash-1".to_string(),
+            embedding: vec![0.1, -0.2, 0.3],
+        },
+    )
+    .expect("persist sql");
+    assert!(sql.contains("INSERT INTO symbol_embeddings_current"));
+    assert!(sql.contains("'[0.1,-0.2,0.3]'::vector"));
+    assert!(sql.contains("generated_at = now()"));
+}
+
+#[test]
 fn semantic_embedding_vector_sql_contains_vector_cast() {
     let sql = sql_vector_string(&[0.1, -0.2, 0.3]).expect("vector sql");
     assert_eq!(sql, "'[0.1,-0.2,0.3]'::vector");

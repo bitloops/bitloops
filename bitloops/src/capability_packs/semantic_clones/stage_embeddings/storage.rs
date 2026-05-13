@@ -121,6 +121,26 @@ pub(crate) async fn load_symbol_embedding_index_states(
     Ok(parse_symbol_embedding_index_state_map_rows(&rows))
 }
 
+pub(crate) async fn load_current_symbol_embedding_index_states(
+    relational: &RelationalStorage,
+    artefact_ids: &[String],
+    representation_kind: embeddings::EmbeddingRepresentationKind,
+    setup_fingerprint: &str,
+) -> Result<HashMap<String, embeddings::SymbolEmbeddingIndexState>> {
+    if artefact_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = relational
+        .query_rows(&build_symbol_embedding_index_states_sql(
+            artefact_ids,
+            "symbol_embeddings_current",
+            representation_kind,
+            setup_fingerprint,
+        ))
+        .await?;
+    Ok(parse_symbol_embedding_index_state_map_rows(&rows))
+}
+
 pub(crate) async fn load_current_symbol_embedding_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
