@@ -27,10 +27,6 @@ fn skill_file(path: &Path) -> PathBuf {
     path.join(crate::adapters::agents::codex::skills::CODEX_SKILL_RELATIVE_PATH)
 }
 
-fn legacy_skill_file(path: &Path) -> PathBuf {
-    path.join(crate::adapters::agents::codex::skills::LEGACY_CODEX_SKILL_RELATIVE_PATH)
-}
-
 fn read_hooks(path: &Path) -> String {
     fs::read_to_string(hooks_file(path)).expect("read hooks.json")
 }
@@ -199,7 +195,6 @@ fn install_hooks_writes_the_minimal_repo_skill() {
             skill,
             crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL
         );
-        assert!(!legacy_skill_file(repo.path()).exists());
         assert!(
             !skill_file(home.path()).exists(),
             "must not write Codex skill into HOME"
@@ -217,7 +212,7 @@ fn installed_hooks_require_repo_local_codex_feature_config() {
 
         assert!(
             !are_hooks_installed_at(dir.path()),
-            "hooks should not be considered installed without .codex/config.toml enabling codex_hooks"
+            "hooks should not be considered installed without .codex/config.toml enabling hooks"
         );
     });
 }
@@ -228,12 +223,12 @@ fn installed_hooks_require_enabled_repo_local_codex_feature_config() {
     init_repo(dir.path());
     with_codex_test_env(dir.path(), || {
         install_hooks_at(dir.path(), false, false).expect("install");
-        fs::write(config_file(dir.path()), "[features]\ncodex_hooks = false\n")
+        fs::write(config_file(dir.path()), "[features]\nhooks = false\n")
             .expect("disable codex hooks");
 
         assert!(
             !are_hooks_installed_at(dir.path()),
-            "hooks should not be considered installed when codex_hooks is disabled"
+            "hooks should not be considered installed when hooks is disabled"
         );
     });
 }

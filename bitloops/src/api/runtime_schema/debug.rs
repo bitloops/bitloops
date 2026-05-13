@@ -1,5 +1,6 @@
+use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -68,6 +69,8 @@ pub(crate) struct RuntimeDebugProducerSpoolJobObject {
     pub commit_sha: Option<String>,
     #[graphql(name = "headSha")]
     pub head_sha: Option<String>,
+    #[graphql(name = "isSquash")]
+    pub is_squash: Option<bool>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -101,6 +104,14 @@ pub(crate) struct RuntimeDebugLogTailObject {
     pub available: bool,
     pub path: String,
     pub lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "errorLines")]
+    pub error_lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "warnLines")]
+    pub warn_lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "infoLines")]
+    pub info_lines: Vec<RuntimeDebugLogLineObject>,
+    #[graphql(name = "debugLines")]
+    pub debug_lines: Vec<RuntimeDebugLogLineObject>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -191,6 +202,7 @@ fn map_producer_spool_job(job: ProducerSpoolJobRecord) -> RuntimeDebugProducerSp
         paths: payload.paths,
         commit_sha: payload.commit_sha,
         head_sha: payload.head_sha,
+        is_squash: payload.is_squash,
     }
 }
 
@@ -200,6 +212,7 @@ struct MappedProducerSpoolPayload {
     paths: Vec<String>,
     commit_sha: Option<String>,
     head_sha: Option<String>,
+    is_squash: Option<bool>,
 }
 
 fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProducerSpoolPayload {
@@ -218,6 +231,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
                 paths,
                 commit_sha: None,
                 head_sha: None,
+                is_squash: None,
             }
         }
         ProducerSpoolJobPayload::PostCommitRefresh {
@@ -229,6 +243,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: changed_files.clone(),
             commit_sha: Some(commit_sha.clone()),
             head_sha: None,
+            is_squash: None,
         },
         ProducerSpoolJobPayload::PostCommitDerivation {
             commit_sha,
@@ -240,6 +255,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: committed_files.clone(),
             commit_sha: Some(commit_sha.clone()),
             head_sha: None,
+            is_squash: None,
         },
         ProducerSpoolJobPayload::PostMergeRefresh {
             head_sha,
@@ -250,6 +266,30 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: changed_files.clone(),
             commit_sha: None,
             head_sha: Some(head_sha.clone()),
+            is_squash: None,
+        },
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash,
+        } => MappedProducerSpoolPayload {
+            payload_kind: "post_merge_sync_refresh".to_string(),
+            source: Some("post_merge".to_string()),
+            paths: changed_files.clone(),
+            commit_sha: None,
+            head_sha: Some(merge_head_sha.clone()),
+            is_squash: Some(*is_squash),
+        },
+        ProducerSpoolJobPayload::PostMergeIngestBackfill {
+            merge_head_sha,
+            is_squash,
+        } => MappedProducerSpoolPayload {
+            payload_kind: "post_merge_ingest_backfill".to_string(),
+            source: Some("post_merge".to_string()),
+            paths: Vec::new(),
+            commit_sha: None,
+            head_sha: Some(merge_head_sha.clone()),
+            is_squash: Some(*is_squash),
         },
         ProducerSpoolJobPayload::PrePushSync { .. } => MappedProducerSpoolPayload {
             payload_kind: "pre_push_sync".to_string(),
@@ -257,6 +297,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: Vec::new(),
             commit_sha: None,
             head_sha: None,
+            is_squash: None,
         },
     }
 }
@@ -414,6 +455,10 @@ fn load_supporting_logs() -> RuntimeDebugLogTailObject {
                 available: false,
                 path: path.to_string_lossy().to_string(),
                 lines: Vec::new(),
+                error_lines: Vec::new(),
+                warn_lines: Vec::new(),
+                info_lines: Vec::new(),
+                debug_lines: Vec::new(),
             };
         }
     };
@@ -421,11 +466,28 @@ fn load_supporting_logs() -> RuntimeDebugLogTailObject {
         .into_iter()
         .map(|line| parse_log_line(&line))
         .collect();
+    let level_lines =
+        tail_log_lines_by_levels(&path, SUPPORTING_LOG_LINE_LIMIT).unwrap_or_default();
+    let error_lines = parse_log_lines(level_lines.error_lines);
+    let warn_lines = parse_log_lines(level_lines.warn_lines);
+    let info_lines = parse_log_lines(level_lines.info_lines);
+    let debug_lines = parse_log_lines(level_lines.debug_lines);
     RuntimeDebugLogTailObject {
         available: true,
         path: path.to_string_lossy().to_string(),
         lines,
+        error_lines,
+        warn_lines,
+        info_lines,
+        debug_lines,
     }
+}
+
+fn parse_log_lines(raw_lines: Vec<String>) -> Vec<RuntimeDebugLogLineObject> {
+    raw_lines
+        .into_iter()
+        .map(|line| parse_log_line(&line))
+        .collect()
 }
 
 fn tail_log_lines(path: &Path, lines: usize) -> anyhow::Result<Vec<String>> {
@@ -445,6 +507,74 @@ fn tail_log_lines(path: &Path, lines: usize) -> anyhow::Result<Vec<String>> {
         .with_context(|| format!("decoding daemon log {}", path.display()))?;
 
     Ok(content.lines().map(str::to_owned).collect())
+}
+
+#[derive(Debug, Default)]
+struct LogLevelLineTails {
+    error_lines: Vec<String>,
+    warn_lines: Vec<String>,
+    info_lines: Vec<String>,
+    debug_lines: Vec<String>,
+}
+
+fn tail_log_lines_by_levels(path: &Path, lines: usize) -> anyhow::Result<LogLevelLineTails> {
+    if lines == 0 {
+        return Ok(LogLevelLineTails::default());
+    }
+
+    let file =
+        File::open(path).with_context(|| format!("opening daemon log {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut error_lines = VecDeque::with_capacity(lines);
+    let mut warn_lines = VecDeque::with_capacity(lines);
+    let mut info_lines = VecDeque::with_capacity(lines);
+    let mut debug_lines = VecDeque::with_capacity(lines);
+    for raw_line in reader.lines() {
+        let raw_line =
+            raw_line.with_context(|| format!("reading daemon log {}", path.display()))?;
+        match log_line_level(&raw_line) {
+            Some("error") => push_tail_line(&mut error_lines, raw_line, lines),
+            Some("warn") => push_tail_line(&mut warn_lines, raw_line, lines),
+            Some("info") => push_tail_line(&mut info_lines, raw_line, lines),
+            Some("debug") => push_tail_line(&mut debug_lines, raw_line, lines),
+            Some(_) | None => {}
+        }
+    }
+
+    Ok(LogLevelLineTails {
+        error_lines: error_lines.into_iter().collect(),
+        warn_lines: warn_lines.into_iter().collect(),
+        info_lines: info_lines.into_iter().collect(),
+        debug_lines: debug_lines.into_iter().collect(),
+    })
+}
+
+fn push_tail_line(tail: &mut VecDeque<String>, raw_line: String, lines: usize) {
+    if tail.len() == lines {
+        tail.pop_front();
+    }
+    tail.push_back(raw_line);
+}
+
+fn log_line_level(raw: &str) -> Option<&'static str> {
+    let Ok(parsed) = serde_json::from_str::<Value>(raw) else {
+        return None;
+    };
+    let level = parsed
+        .get("level")
+        .or_else(|| parsed.get("lvl"))
+        .and_then(Value::as_str)?;
+    normalize_log_level(level)
+}
+
+fn normalize_log_level(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "DEBUG" => Some("debug"),
+        "INFO" => Some("info"),
+        "WARN" | "WARNING" => Some("warn"),
+        "ERROR" => Some("error"),
+        _ => None,
+    }
 }
 
 fn find_tail_start_offset(file: &mut File, lines: usize, path: &Path) -> anyhow::Result<u64> {
@@ -577,6 +707,34 @@ mod tests {
                 r#"{"level":"INFO","message":"line-118"}"#.to_string(),
                 r#"{"level":"INFO","message":"line-119"}"#.to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn tail_log_lines_by_levels_filters_before_limiting() {
+        let temp = TempDir::new().expect("temp dir");
+        let log_path = temp.path().join("daemon.log");
+        let mut lines = vec![
+            r#"{"level":"ERROR","message":"first-error"}"#.to_string(),
+            r#"{"level":"ERROR","message":"second-error"}"#.to_string(),
+        ];
+        lines.extend((0..120).map(|idx| format!(r#"{{"level":"INFO","message":"line-{idx}"}}"#)));
+        lines.push(r#"{"level":"WARN","message":"last-warn"}"#.to_string());
+        lines.push(r#"{"level":"ERROR","message":"last-error"}"#.to_string());
+        fs::write(&log_path, format!("{}\n", lines.join("\n"))).expect("write log");
+
+        let level_lines = tail_log_lines_by_levels(&log_path, 2).expect("tail level log lines");
+
+        assert_eq!(
+            level_lines.error_lines,
+            vec![
+                r#"{"level":"ERROR","message":"second-error"}"#.to_string(),
+                r#"{"level":"ERROR","message":"last-error"}"#.to_string(),
+            ]
+        );
+        assert_eq!(
+            level_lines.warn_lines,
+            vec![r#"{"level":"WARN","message":"last-warn"}"#.to_string()]
         );
     }
 }

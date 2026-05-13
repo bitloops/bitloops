@@ -98,6 +98,12 @@ pub(crate) use self::init_runtime::{
     InitRuntimeWorkplaneSnapshot, PersistedInitSessionState, PersistedSummaryBootstrapState,
 };
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
+// Staged for the runtime schema watcher mutation added in CLI-1832 Task 2.
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use self::server_runtime::{
+    RepoWatcherReconcileAction, RepoWatcherReconcileResult, reconcile_bound_repo_watcher,
+    reconcile_bound_repo_watcher_explicit,
+};
 pub use self::tasks::{DevqlTaskCoordinator, DevqlTaskEnqueueResult};
 pub(crate) use self::types::BlockedMailboxStatus;
 pub(crate) use self::types::EmbeddingsBootstrapState as PersistedEmbeddingsBootstrapState;
@@ -135,9 +141,10 @@ use self::types::RUNTIME_STATE_FILE_NAME;
 #[cfg(test)]
 use self::types::global_daemon_dir_fallback;
 use self::types::{
-    GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME, READY_TIMEOUT, STOP_TIMEOUT,
-    SupervisorAppState, SupervisorHealthResponse, SupervisorStartRequest, SupervisorStopRequest,
-    global_daemon_dir, supervisor_service_metadata_path, unix_timestamp_now,
+    FORCE_KILL_TIMEOUT, GLOBAL_SUPERVISOR_SERVICE_NAME, INTERNAL_SUPERVISOR_COMMAND_NAME,
+    READY_TIMEOUT, STOP_RUNTIME_CLEAN_EXIT_GRACE, STOP_TIMEOUT, SupervisorAppState,
+    SupervisorHealthResponse, SupervisorStartRequest, SupervisorStopRequest, global_daemon_dir,
+    supervisor_service_metadata_path, unix_timestamp_now,
 };
 
 pub fn runtime_state_path(repo_root: &Path) -> PathBuf {

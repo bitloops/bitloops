@@ -6,6 +6,3 @@ members = [
 ]
 exclude = ["third_party/fastembed"]
 resolver = "2"
-
-[patch.crates-io]
-libduckdb-sys = { path = "third_party/libduckdb-sys" }

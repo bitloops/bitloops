@@ -24,14 +24,6 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                 .relational
                 .load_current_canonical_files(&request.repo_id)
                 .context("loading current files for architecture graph")?;
-            let artefacts = context
-                .relational
-                .load_current_canonical_artefacts(&request.repo_id)
-                .context("loading current artefacts for architecture graph")?;
-            let dependency_edges = context
-                .relational
-                .load_current_canonical_edges(&request.repo_id)
-                .context("loading current dependency edges for architecture graph")?;
 
             let mut warnings = Vec::new();
             let mut builder = GraphBuilder::new(
@@ -43,18 +35,49 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                     .unwrap_or(ARCHITECTURE_GRAPH_CONSUMER_ID),
             );
             builder.seed_repo_structure();
-            builder.add_code_nodes(&artefacts);
-            builder.add_dependency_edges(&dependency_edges);
+
+            let mut artefacts_by_path = BTreeMap::<String, Vec<LanguageEntryPointArtefact>>::new();
+            let mut component_inputs = Vec::<ComponentArtefactInput>::new();
+            let mut artefact_count = 0usize;
+            context
+                .relational
+                .visit_current_canonical_artefacts(&request.repo_id, &mut |artefact| {
+                    builder.add_code_node(&artefact);
+                    artefacts_by_path
+                        .entry(artefact.path.clone())
+                        .or_default()
+                        .push(entry_point_artefact_from_current(&artefact));
+                    component_inputs.push(ComponentArtefactInput {
+                        artefact_id: artefact.artefact_id.clone(),
+                        path: artefact.path.clone(),
+                    });
+                    artefact_count += 1;
+                    Ok(())
+                })
+                .context("visiting current artefacts for architecture graph")?;
+
+            let mut adjacency = BTreeMap::<String, BTreeSet<String>>::new();
+            let mut dependency_edge_count = 0usize;
+            context
+                .relational
+                .visit_current_canonical_edges(&request.repo_id, &mut |dependency| {
+                    builder.add_dependency_edge(&dependency);
+                    insert_dependency_adjacency(&mut adjacency, &dependency);
+                    dependency_edge_count += 1;
+                    Ok(())
+                })
+                .context("visiting current dependency edges for architecture graph")?;
+
             builder.add_entry_points_and_flows(
                 context,
                 &request.repo_root,
                 &files,
-                &artefacts,
-                &dependency_edges,
+                &artefacts_by_path,
+                &adjacency,
             );
-            builder.add_components_for_containers(&artefacts);
+            builder.add_components_for_containers(&component_inputs);
             add_test_harness_facts(context, &mut builder, &mut warnings).await;
-            builder.add_change_unit(request);
+            let change_metrics = builder.add_change_unit(request);
             let mut synthesised_nodes = 0usize;
             let mut synthesised_edges = 0usize;
             match add_agent_synthesised_facts(context, request, &mut builder).await {
@@ -100,8 +123,10 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                 "synthesised_nodes": synthesised_nodes,
                 "synthesised_edges": synthesised_edges,
                 "files": files.len(),
-                "artefacts": artefacts.len(),
-                "dependency_edges": dependency_edges.len(),
+                "artefacts": artefact_count,
+                "dependency_edges": dependency_edge_count,
+                "affected_paths": change_metrics.affected_paths,
+                "impacted_nodes": change_metrics.impacted_nodes,
                 "reconcile_mode": format!("{:?}", request.reconcile_mode),
                 "roles": role_metrics,
             });

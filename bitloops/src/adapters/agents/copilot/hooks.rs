@@ -447,7 +447,6 @@ mod tests {
             dir.path()
                 .join(".github")
                 .join("skills")
-                .join("bitloops")
                 .join("devql-explore-first")
                 .join("SKILL.md"),
         )

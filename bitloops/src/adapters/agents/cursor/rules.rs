@@ -7,15 +7,10 @@ use crate::adapters::agents::skill_install::{
 };
 use crate::host::hooks::augmentation::skill_content::DEVQL_EXPLORE_FIRST_SKILL;
 
-pub const CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/bitloops-devql-explore-first.mdc";
-pub const LEGACY_CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/bitloops-using-devql.mdc";
+pub const CURSOR_RULE_RELATIVE_PATH: &str = ".cursor/rules/devql-explore-first.mdc";
 
 pub fn repo_rule_path(repo_root: &Path) -> PathBuf {
     repo_root.join(CURSOR_RULE_RELATIVE_PATH)
-}
-
-fn legacy_repo_rule_path(repo_root: &Path) -> PathBuf {
-    repo_root.join(LEGACY_CURSOR_RULE_RELATIVE_PATH)
 }
 
 fn cursor_rule_content() -> String {
@@ -32,24 +27,13 @@ alwaysApply: true\n\
 pub fn install_repo_rule(repo_root: &Path) -> Result<bool> {
     let path = repo_rule_path(repo_root);
     let content = cursor_rule_content();
-    let changed = write_managed_file(&path, &content)?;
-
-    let legacy_path = legacy_repo_rule_path(repo_root);
-    let removed_legacy = legacy_path.exists();
-    remove_managed_file(&legacy_path)?;
-    prune_empty_parents(&legacy_path, &repo_root.join(".cursor"))?;
-
-    Ok(changed || removed_legacy)
+    write_managed_file(&path, &content)
 }
 
 pub fn uninstall_repo_rule(repo_root: &Path) -> Result<()> {
     let path = repo_rule_path(repo_root);
     remove_managed_file(&path)?;
-    prune_empty_parents(&path, &repo_root.join(".cursor"))?;
-
-    let legacy_path = legacy_repo_rule_path(repo_root);
-    remove_managed_file(&legacy_path)?;
-    prune_empty_parents(&legacy_path, &repo_root.join(".cursor"))
+    prune_empty_parents(&path, &repo_root.join(".cursor"))
 }
 
 #[cfg(test)]
@@ -91,25 +75,5 @@ mod tests {
         uninstall_repo_rule(dir.path()).expect("uninstall");
         assert!(!rule_path.exists());
         assert!(dir.path().join(".cursor").exists());
-    }
-
-    #[test]
-    fn install_repo_rule_replaces_legacy_using_devql_rule() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let legacy_path = legacy_repo_rule_path(dir.path());
-        std::fs::create_dir_all(legacy_path.parent().expect("legacy parent"))
-            .expect("create legacy parent");
-        std::fs::write(&legacy_path, "legacy rule content").expect("write legacy rule");
-
-        assert!(install_repo_rule(dir.path()).expect("install"));
-
-        let rule_path = repo_rule_path(dir.path());
-        assert!(rule_path.exists());
-        assert!(!legacy_path.exists());
-        assert!(
-            std::fs::read_to_string(rule_path)
-                .expect("read rule")
-                .contains("alwaysApply: true")
-        );
     }
 }

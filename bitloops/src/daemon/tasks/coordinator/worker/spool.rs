@@ -109,6 +109,7 @@ impl DevqlTaskCoordinator {
                     *is_rebase_in_progress,
                 )
             }
+            // Legacy pending spool rows from before split post-merge payloads.
             crate::host::devql::ProducerSpoolJobPayload::PostMergeRefresh {
                 changed_files,
                 ..
@@ -147,6 +148,73 @@ impl DevqlTaskCoordinator {
                         )?;
                     }
                 }
+                Ok(())
+            }
+            crate::host::devql::ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                changed_files,
+                ..
+            } => {
+                let sync_enabled = crate::config::settings::devql_sync_enabled(&job.repo_root)
+                    .context("loading DevQL sync producer policy for post-merge sync refresh")?;
+                if !sync_enabled {
+                    return Ok(());
+                }
+                let cfg = self.devql_config_from_producer_spool_job(job)?;
+                let paths =
+                    crate::host::devql::refresh_paths_for_sync(&cfg, changed_files, "post-merge")?;
+                if paths.is_empty() {
+                    return Ok(());
+                }
+                self.enqueue(
+                    &cfg,
+                    crate::daemon::DevqlTaskSource::PostMerge,
+                    crate::daemon::DevqlTaskSpec::Sync(crate::daemon::SyncTaskSpec {
+                        mode: crate::daemon::SyncTaskMode::Paths { paths },
+                        post_commit_snapshot: None,
+                    }),
+                )?;
+                Ok(())
+            }
+            crate::host::devql::ProducerSpoolJobPayload::PostMergeIngestBackfill {
+                merge_head_sha,
+                is_squash,
+            } => {
+                if *is_squash {
+                    return Ok(());
+                }
+                let ingest_enabled =
+                    crate::config::settings::devql_ingest_enabled(&job.repo_root).context(
+                        "loading DevQL ingest producer policy for post-merge ingest backfill",
+                    )?;
+                if !ingest_enabled {
+                    return Ok(());
+                }
+                let cfg = self.devql_config_from_producer_spool_job(job)?;
+                let backfill =
+                    crate::host::checkpoints::strategy::manual_commit::default_post_merge_history_backfill();
+                let commits = crate::host::devql::select_ingest_backfill_commits_for_head(
+                    &cfg,
+                    merge_head_sha,
+                    backfill,
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "selecting post-merge ingest commits anchored at `{}`",
+                        merge_head_sha
+                    )
+                })?;
+                if commits.is_empty() {
+                    return Ok(());
+                }
+                self.enqueue(
+                    &cfg,
+                    crate::daemon::DevqlTaskSource::PostMerge,
+                    crate::daemon::DevqlTaskSpec::Ingest(crate::daemon::IngestTaskSpec {
+                        commits,
+                        backfill: None,
+                    }),
+                )?;
                 Ok(())
             }
             crate::host::devql::ProducerSpoolJobPayload::PrePushSync {

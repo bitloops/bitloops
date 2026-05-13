@@ -119,22 +119,14 @@ pub(super) async fn run_server(
         stop_bound_repo_watchers_for_daemon_shutdown(&on_shutdown_config);
     });
 
-    let result = api::run_with_options(
-        config,
-        DashboardRuntimeOptions {
-            ready_subject: options.ready_subject.to_string(),
-            print_ready_banner: options.print_banner,
-            open_browser: options.open_browser,
-            bootstrap_devql_schema: false,
-            shutdown_message: Some("Bitloops daemon stopped.".to_string()),
-            on_ready: Some(ready_hook),
-            on_shutdown: Some(on_shutdown),
-            config_path: Some(daemon_config.config_path.clone()),
-            config_root: Some(config_root),
-            repo_registry_path: Some(daemon_config.repo_registry_path.clone()),
-        },
-    )
-    .await;
+    let runtime_options = daemon_dashboard_runtime_options(
+        &options,
+        daemon_config,
+        config_root,
+        Some(ready_hook),
+        Some(on_shutdown),
+    );
+    let result = api::run_with_options(config, runtime_options).await;
 
     if runtime_state_written.load(std::sync::atomic::Ordering::SeqCst)
         && let Err(err) = delete_runtime_state()
@@ -143,6 +135,28 @@ pub(super) async fn run_server(
     }
 
     result
+}
+
+fn daemon_dashboard_runtime_options(
+    options: &RunServerOptions<'_>,
+    daemon_config: &ResolvedDaemonConfig,
+    config_root: PathBuf,
+    on_ready: Option<DashboardReadyHook>,
+    on_shutdown: Option<api::DashboardShutdownHook>,
+) -> DashboardRuntimeOptions {
+    DashboardRuntimeOptions {
+        ready_subject: options.ready_subject.to_string(),
+        print_ready_banner: options.print_banner,
+        open_browser: options.open_browser,
+        bootstrap_devql_schema: false,
+        shutdown_message: Some("Bitloops daemon stopped.".to_string()),
+        shutdown_delay: Duration::ZERO,
+        on_ready,
+        on_shutdown,
+        config_path: Some(daemon_config.config_path.clone()),
+        config_root: Some(config_root),
+        repo_registry_path: Some(daemon_config.repo_registry_path.clone()),
+    }
 }
 
 pub(super) async fn ensure_service_managed_repo_runtime(
@@ -206,11 +220,11 @@ pub(super) fn stop_service_managed_repo_runtime() -> Result<()> {
             if state.mode == DaemonMode::Service
                 && state.service_name.as_deref() == Some(GLOBAL_SUPERVISOR_SERVICE_NAME) =>
         {
-            terminate_process(state.pid)?;
-            wait_for_shutdown_cleanup(
+            terminate_process_and_wait_for_shutdown_cleanup(
                 state.pid,
-                &runtime_state_path(Path::new(".")),
                 STOP_TIMEOUT,
+                STOP_RUNTIME_CLEAN_EXIT_GRACE,
+                FORCE_KILL_TIMEOUT,
             )?;
             Ok(())
         }
@@ -332,18 +346,100 @@ pub(super) fn stop_bound_repo_watchers_for_daemon_shutdown(daemon_config: &Resol
     }
 }
 
-pub(super) fn ensure_bound_repo_watchers_for_daemon_startup(daemon_config: &ResolvedDaemonConfig) {
-    ensure_bound_repo_watchers_for_daemon_startup_with(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepoWatcherReconcileAction {
+    Restarted,
+    Skipped,
+    Stopped,
+}
+
+impl RepoWatcherReconcileAction {
+    // Staged for the runtime schema mutation added in CLI-1832 Task 2.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Restarted => "restarted",
+            Self::Skipped => "skipped",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RepoWatcherReconcileResult {
+    pub(crate) repo_root: PathBuf,
+    pub(crate) watcher_enabled: bool,
+    pub(crate) action: RepoWatcherReconcileAction,
+}
+
+pub(crate) fn reconcile_bound_repo_watcher(
+    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
+) -> Result<RepoWatcherReconcileResult> {
+    reconcile_bound_repo_watcher_with(
+        repo_root,
         daemon_config,
-        crate::host::devql::watch::ensure_watcher_running,
-    );
+        crate::host::devql::watch::restart_watcher,
+    )
+}
+
+pub(crate) fn reconcile_bound_repo_watcher_explicit(
+    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
+) -> Result<RepoWatcherReconcileResult> {
+    reconcile_bound_repo_watcher_with(
+        repo_root,
+        daemon_config,
+        crate::host::devql::watch::restart_watcher_explicit,
+    )
+}
+
+fn reconcile_bound_repo_watcher_with(
+    repo_root: &Path,
+    daemon_config: &ResolvedDaemonConfig,
+    restart_watcher: fn(&Path, &Path) -> Result<crate::host::devql::watch::WatcherRestartOutcome>,
+) -> Result<RepoWatcherReconcileResult> {
+    let repo_root = repo_root
+        .canonicalize()
+        .unwrap_or_else(|_| repo_root.to_path_buf());
+    let watcher_enabled = crate::config::settings::is_enabled_for_hooks(&repo_root)
+        && crate::config::settings::devql_sync_enabled(&repo_root)?;
+
+    if watcher_enabled {
+        // Reconciliation intentionally restarts so any registered watcher
+        // left by a previous daemon or short-lived CLI process is replaced here.
+        let restart_outcome = restart_watcher(&repo_root, &daemon_config.config_root)?;
+        Ok(RepoWatcherReconcileResult {
+            repo_root,
+            watcher_enabled,
+            action: match restart_outcome {
+                crate::host::devql::watch::WatcherRestartOutcome::Started => {
+                    RepoWatcherReconcileAction::Restarted
+                }
+                crate::host::devql::watch::WatcherRestartOutcome::Skipped => {
+                    RepoWatcherReconcileAction::Skipped
+                }
+            },
+        })
+    } else {
+        crate::host::devql::watch::stop_watcher(&repo_root, &daemon_config.config_root)?;
+        Ok(RepoWatcherReconcileResult {
+            repo_root,
+            watcher_enabled,
+            action: RepoWatcherReconcileAction::Stopped,
+        })
+    }
+}
+
+pub(super) fn ensure_bound_repo_watchers_for_daemon_startup(daemon_config: &ResolvedDaemonConfig) {
+    ensure_bound_repo_watchers_for_daemon_startup_with(daemon_config, reconcile_bound_repo_watcher);
 }
 
 pub(super) fn ensure_bound_repo_watchers_for_daemon_startup_with<F>(
     daemon_config: &ResolvedDaemonConfig,
-    mut ensure_watcher_running: F,
+    mut reconcile_watcher: F,
 ) where
-    F: FnMut(&Path, &Path) -> Result<()>,
+    F: FnMut(&Path, &ResolvedDaemonConfig) -> Result<RepoWatcherReconcileResult>,
 {
     let repo_roots = match bound_repo_roots_for_daemon_config(daemon_config) {
         Ok(repo_roots) => repo_roots,
@@ -357,23 +453,9 @@ pub(super) fn ensure_bound_repo_watchers_for_daemon_startup_with<F>(
     };
 
     for repo_root in repo_roots {
-        if !crate::config::settings::is_enabled_for_hooks(&repo_root) {
-            continue;
-        }
-        match crate::config::settings::devql_sync_enabled(&repo_root) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(err) => {
-                log::warn!(
-                    "failed to inspect DevQL sync settings during daemon startup for repo {}: {err:#}",
-                    repo_root.display()
-                );
-                continue;
-            }
-        }
-        if let Err(err) = ensure_watcher_running(&repo_root, &daemon_config.config_root) {
+        if let Err(err) = reconcile_watcher(&repo_root, daemon_config) {
             log::warn!(
-                "failed to start DevQL watcher during daemon startup for repo {}: {err:#}",
+                "failed to reconcile DevQL watcher during daemon startup for repo {}: {err:#}",
                 repo_root.display()
             );
         }
@@ -454,4 +536,51 @@ fn repo_root_for_current_working_tree(cwd: &Path) -> Result<Option<PathBuf>> {
 
     let repo_root = PathBuf::from(repo_root);
     Ok(Some(repo_root.canonicalize().unwrap_or(repo_root)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DashboardRuntimeOptions, RunServerOptions, daemon_dashboard_runtime_options};
+    use crate::daemon::{DaemonMode, ResolvedDaemonConfig};
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[test]
+    fn daemon_runtime_options_skip_shutdown_delay() {
+        let options = daemon_dashboard_runtime_options(
+            &RunServerOptions {
+                mode: DaemonMode::Detached,
+                service_name: None,
+                open_browser: false,
+                ready_subject: "Bitloops daemon",
+                print_banner: false,
+                telemetry: None,
+            },
+            &ResolvedDaemonConfig {
+                config_path: PathBuf::from("/tmp/.bitloops.toml"),
+                config_root: PathBuf::from("/tmp"),
+                relational_db_path: PathBuf::from("/tmp/stores/daemon.sqlite"),
+                events_db_path: PathBuf::from("/tmp/stores/daemon.duckdb"),
+                blob_store_path: PathBuf::from("/tmp/blob-store"),
+                repo_registry_path: PathBuf::from("/tmp/repo-registry.json"),
+            },
+            PathBuf::from("/tmp"),
+            None,
+            None,
+        );
+
+        assert_eq!(options.shutdown_delay, Duration::ZERO);
+        assert_eq!(
+            options.shutdown_message.as_deref(),
+            Some("Bitloops daemon stopped.")
+        );
+    }
+
+    #[test]
+    fn dashboard_runtime_options_default_shutdown_delay_remains_five_seconds() {
+        assert_eq!(
+            DashboardRuntimeOptions::default().shutdown_delay,
+            Duration::from_secs(5)
+        );
+    }
 }

@@ -10,8 +10,8 @@ use std::future::Future;
 
 use super::documents::{
     CANCEL_TASK_MUTATION, ENQUEUE_TASK_MUTATION, INIT_SCHEMA_MUTATION, PAUSE_TASK_QUEUE_MUTATION,
-    RESUME_TASK_QUEUE_MUTATION, RUNTIME_SNAPSHOT_QUERY, START_INIT_MUTATION, TASK_QUERY,
-    TASK_QUEUE_QUERY, TASKS_QUERY,
+    RECONCILE_WATCHER_MUTATION, RESUME_TASK_QUEUE_MUTATION, RUNTIME_SNAPSHOT_QUERY,
+    START_INIT_MUTATION, TASK_QUERY, TASK_QUEUE_QUERY, TASKS_QUERY,
 };
 use super::progress::{
     TASK_PROGRESS_POLL_INTERVAL, TASK_RENDER_TICK_INTERVAL, TaskProgressRenderer,
@@ -19,11 +19,12 @@ use super::progress::{
 use super::subscription::watch_task_via_subscription;
 use super::types::{
     CancelTaskMutationData, EnqueueTaskMutationData, InitSchemaMutationData,
-    PauseTaskQueueMutationData, ResumeTaskQueueMutationData,
+    PauseTaskQueueMutationData, ReconcileWatcherMutationData, ResumeTaskQueueMutationData,
     RuntimeEmbeddingsBootstrapRequestInput, RuntimeSnapshotGraphqlRecord, RuntimeSnapshotQueryData,
-    RuntimeStartInitInput, RuntimeSummaryBootstrapRequestInput, StartInitMutationData,
-    StartInitResultGraphqlRecord, TaskGraphqlRecord, TaskQueryData, TaskQueueControlGraphqlRecord,
-    TaskQueueGraphqlRecord, TaskQueueQueryData, TasksQueryData,
+    RuntimeStartInitInput, RuntimeSummaryBootstrapRequestInput,
+    RuntimeWatcherReconcileGraphqlRecord, StartInitMutationData, StartInitResultGraphqlRecord,
+    TaskGraphqlRecord, TaskQueryData, TaskQueueControlGraphqlRecord, TaskQueueGraphqlRecord,
+    TaskQueueQueryData, TasksQueryData,
 };
 use crate::devql_transport::SlimCliRepoScope;
 use crate::host::devql::format_init_schema_summary;
@@ -200,6 +201,33 @@ pub(crate) async fn runtime_snapshot_via_graphql(
     )
     .await?;
     Ok(response.runtime_snapshot)
+}
+
+pub(crate) async fn reconcile_repo_watcher_via_runtime_graphql(
+    scope: &SlimCliRepoScope,
+) -> Result<RuntimeWatcherReconcileGraphqlRecord> {
+    #[cfg(test)]
+    let should_require_daemon = !graphql_executor_hook_installed();
+    #[cfg(not(test))]
+    let should_require_daemon = true;
+
+    if should_require_daemon {
+        ensure_daemon_available_for_tasks(
+            scope.repo_root.as_path(),
+            DaemonStartPolicy::RequireRunning,
+        )
+        .await?;
+    }
+
+    let response: ReconcileWatcherMutationData = execute_runtime_graphql(
+        scope,
+        RECONCILE_WATCHER_MUTATION,
+        json!({
+            "repoId": scope.repo.repo_id,
+        }),
+    )
+    .await?;
+    Ok(response.reconcile_watcher)
 }
 
 pub(crate) async fn enqueue_sync_task_via_graphql(
@@ -954,7 +982,6 @@ fn maybe_execute_devql_graphql_via_hook(
         },
     )
 }
-
 #[cfg(test)]
 fn graphql_executor_hook_installed() -> bool {
     GRAPHQL_EXECUTOR_HOOK.with(

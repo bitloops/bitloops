@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ### Fixed
 
+- **Architecture-graph current-state reconcile now uses substantially less memory on large repositories**: `architecture_graph` now streams current canonical artefacts and dependency edges from the relational gateway instead of loading both tables into full in-memory vectors, `CHANGE_UNIT -> IMPACTS` edges now keep only the matched target paths instead of duplicating the entire affected-path set on every edge, and graph replacement now writes nodes, edges, and run metadata through prepared SQLite statements inside one atomic serialized transaction instead of materializing one giant SQL-string batch. This reduces init-time memory spikes while preserving graph topology, current-table atomicity, and reconcile metrics.
+- **DevQL producer spool no longer blocks unrelated same-repo sync and ingest work**: producer-spool admission now distinguishes promotion-only sync and ingest tasks from expansion-only and inline repo-exclusive producer actions, so watcher sync can be promoted while an unrelated ingest task is already running. Post-merge hook follow-up is now split into sync and ingest producer payloads, with ingest anchored to the merge HEAD captured by the hook. Same-kind work, repo policy changes, and inline producer actions still keep the previous conservative guard.
+
+## [0.0.25] - 2026-05-12
+
+### Changed
+
+- **README getting-started video thumbnail now renders at a bounded width**: the hero README uses a centered HTML thumbnail (`<img>` inside a link) so `assets/bitloops_getting_started.png` displays correctly on GitHub and stays smaller on the page than the full source asset dimensions.
+
+### Fixed
+
+- **Daemon log level filtering now applies before tail limits**: `bitloops daemon logs --level ...` now returns the last matching log lines instead of filtering only the already-tailed mixed log window, so recent INFO noise no longer hides older WARN or ERROR entries.
+
+## [0.0.24] - 2026-05-12
+
+### Fixed
+
+- **Default-daemon restart now handles slow shutdown and startup paths more reliably**: service-managed daemon shutdown no longer inherits the shared dashboard's extra 5-second shutdown grace period, daemon stop/restart keeps a 20-second graceful shutdown budget while daemon readiness still allows up to 45 seconds, and once shutdown hooks have already cleaned the runtime marker a lingering daemon process is force-stopped after a short grace instead of waiting for the full stop timeout behind stuck background work. Supervisor logs also now record shutdown triggers plus reaped child exit details. This reduces false `did not shut down within 20 seconds` / `did not become ready within 20 seconds` restart failures and helps avoid the stale `service_running: true` with missing runtime-marker state seen after timed-out restarts.
+- **Repo-local Codex hook config now uses the canonical feature flag**: Bitloops now writes `.codex/config.toml` with a `[features]` table containing `hooks = true`, still recognizes legacy `codex_hooks = true` entries in that table when reading older installs, and rewrites that legacy key during hook enable/install so Codex stops surfacing the deprecation warning in trusted repositories.
+
+## [0.0.23] - 2026-05-11
+
+### Changed
+
+- **DevQL guidance no longer uses runtime prompt augmentation**: Bitloops no longer injects DevQL guidance through runtime hook augmentation or OpenCode bootstrap prompt text. Agents now rely on their native repo-local prompt surfaces instead of per-session or per-turn reminder payloads.
+- **Repo-local DevQL prompt surfaces now use consistent top-level paths across supported agents**: Claude now uses `.claude/skills/devql-explore-first/SKILL.md`, Codex uses `.agents/skills/devql-explore-first/SKILL.md`, Gemini uses `.gemini/skills/devql-explore-first/SKILL.md` plus a managed `GEMINI.md` import, Copilot uses `.github/skills/devql-explore-first/SKILL.md`, OpenCode uses `.opencode/skills/devql-explore-first/SKILL.md`, and Cursor uses `.cursor/rules/devql-explore-first.mdc` instead of nesting the current DevQL guidance under a `bitloops/` namespace.
+
+### Fixed
+
+- **Claude Code now picks up and uses the repo-local DevQL skill reliably**: Claude repo setup now installs the DevQL skill at `.claude/skills/devql-explore-first/SKILL.md`, matching Claude's canonical project-skill location. This fixes the previous nested `bitloops/...` path layout that Claude was not reliably loading, so Claude can use DevQL guidance from the repo-local skill again.
 - **Existing repo-local OpenCode plugins could silently stop dashboard capture after model-metadata updates**: the generated `.opencode/plugins/bitloops.ts` plugin now keeps rich OpenCode transcript metadata such as nested `model.id`, `model.modelID`, and provider ids in the exported transcript while emitting only the single canonical `model` field on lifecycle hook payloads. This prevents Bitloops from rejecting OpenCode hook payloads with duplicate-model parse errors, restores live session and turn capture for fresh OpenCode runs, and ensures newly generated plugins come out with the corrected payload shape after rebuild/regeneration.
 
 ## [0.0.22] - 2026-05-09

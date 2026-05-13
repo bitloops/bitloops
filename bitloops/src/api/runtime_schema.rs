@@ -17,6 +17,7 @@ mod schema;
 mod snapshot;
 mod start_init;
 mod util;
+mod watchers;
 
 pub(crate) use handlers::{
     runtime_graphql_handler, runtime_graphql_playground_handler, runtime_graphql_sdl_handler,

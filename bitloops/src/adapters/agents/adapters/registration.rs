@@ -3,9 +3,6 @@ use std::path::Path;
 
 use super::super::Agent;
 use super::types::AgentAdapterDescriptor;
-use crate::host::hooks::augmentation::builder::HookAugmentation;
-
-pub type PromptAugmentationRenderer = fn(&str, &HookAugmentation) -> Option<String>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentHookInstallOptions {
@@ -32,7 +29,6 @@ pub struct AgentAdapterRegistration {
     install_prompt_surface: fn(&Path) -> Result<bool>,
     uninstall_prompt_surface: fn(&Path) -> Result<()>,
     format_resume_command: fn(&str) -> String,
-    render_prompt_augmentation: Option<PromptAugmentationRenderer>,
 }
 
 impl AgentAdapterRegistration {
@@ -48,7 +44,6 @@ impl AgentAdapterRegistration {
         install_prompt_surface: fn(&Path) -> Result<bool>,
         uninstall_prompt_surface: fn(&Path) -> Result<()>,
         format_resume_command: fn(&str) -> String,
-        render_prompt_augmentation: Option<PromptAugmentationRenderer>,
     ) -> Self {
         Self {
             descriptor,
@@ -61,7 +56,6 @@ impl AgentAdapterRegistration {
             install_prompt_surface,
             uninstall_prompt_surface,
             format_resume_command,
-            render_prompt_augmentation,
         }
     }
 
@@ -109,14 +103,5 @@ impl AgentAdapterRegistration {
 
     pub fn format_resume_command(&self, session_id: &str) -> String {
         (self.format_resume_command)(session_id)
-    }
-
-    pub fn render_prompt_augmentation(
-        &self,
-        hook_name: &str,
-        augmentation: &HookAugmentation,
-    ) -> Option<String> {
-        self.render_prompt_augmentation
-            .and_then(|render| render(hook_name, augmentation))
     }
 }

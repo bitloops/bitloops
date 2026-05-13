@@ -219,10 +219,8 @@ fn load_from_file_or_default(path: &Path) -> BitloopsSettings {
     settings::load_settings(repo_root).unwrap_or_default()
 }
 
-fn reconcile_repo_watcher(repo_root: &Path) {
-    if let Err(err) = crate::cli::watcher_bootstrap::reconcile_repo_watcher(repo_root) {
-        log::debug!("skipping watcher restart after policy change: {err:#}");
-    }
+async fn reconcile_repo_watcher(repo_root: &Path) -> Result<()> {
+    crate::cli::watcher_bootstrap::reconcile_repo_watcher(repo_root).await
 }
 
 #[cfg(test)]
@@ -510,7 +508,9 @@ Run `bitloops init --agent {agent}` to persist supported agents before enabling 
             out,
         )?;
         set_capture_enabled(&target_path, true)?;
-        reconcile_repo_watcher(&git_root);
+        reconcile_repo_watcher(&git_root)
+            .await
+            .context("Bitloops capture was enabled, but DevQL watcher reconcile failed")?;
 
         writeln!(out, "Bitloops enabled in this project! :)")?;
         writeln!(out, "Strategy: {}.", settings.strategy)?;
@@ -766,7 +766,11 @@ pub fn initialized_agents(repo_root: &Path) -> Vec<String> {
 
 // ── internal helpers used by tests ──────────────────────────────────────────
 
-pub fn run_disable_with_args(start: &Path, out: &mut dyn Write, args: &DisableArgs) -> Result<()> {
+pub async fn run_disable_with_args_async(
+    start: &Path,
+    out: &mut dyn Write,
+    args: &DisableArgs,
+) -> Result<()> {
     if args.project {
         eprintln!(
             "Note: `--project` is deprecated and ignored. \
@@ -793,7 +797,9 @@ pub fn run_disable_with_args(start: &Path, out: &mut dyn Write, args: &DisableAr
     if capture_selected {
         set_capture_enabled(&target_path, false)?;
         let repo_root = find_repo_root(start)?;
-        reconcile_repo_watcher(&repo_root);
+        reconcile_repo_watcher(&repo_root)
+            .await
+            .context("Bitloops capture was disabled, but DevQL watcher reconcile failed")?;
         writeln!(
             out,
             "Bitloops capture is now disabled for this project ({})",
@@ -815,6 +821,14 @@ pub fn run_disable_with_args(start: &Path, out: &mut dyn Write, args: &DisableAr
         )?;
     }
     Ok(())
+}
+
+pub fn run_disable_with_args(start: &Path, out: &mut dyn Write, args: &DisableArgs) -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("creating test runtime for disable command")?
+        .block_on(run_disable_with_args_async(start, out, args))
 }
 
 /// Sets `enabled = false` in the nearest project policy. This helper preserves
