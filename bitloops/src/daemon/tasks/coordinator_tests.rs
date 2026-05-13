@@ -309,6 +309,9 @@ async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_r
     let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
     let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo.clone())
         .expect("build devql config");
+    crate::host::devql::execute_init_schema(&cfg, "post-merge producer spool test")
+        .await
+        .expect("initialise devql schema");
     crate::host::devql::enqueue_spooled_post_merge_refresh(
         &repo_root,
         &head_sha,
@@ -344,12 +347,11 @@ async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_r
         1,
         "post-merge history catch-up should be a visible queued task"
     );
+    let ingest_spec = ingest_tasks[0].ingest_spec().expect("ingest task spec");
+    assert_eq!(ingest_spec.backfill, None);
     assert_eq!(
-        ingest_tasks[0]
-            .ingest_spec()
-            .expect("ingest task spec")
-            .backfill,
-        Some(200)
+        ingest_spec.commits.last().map(String::as_str),
+        Some(head_sha.as_str())
     );
 
     let sync_tasks = coordinator
@@ -379,6 +381,93 @@ async fn post_merge_producer_spool_job_enqueues_visible_tasks_and_clears_spool_r
         remaining_jobs.is_empty(),
         "completed producer spool jobs should be removed from the repo runtime store"
     );
+}
+
+#[tokio::test]
+async fn post_merge_ingest_backfill_uses_captured_merge_head_when_current_head_moves() {
+    let dir = TempDir::new().expect("temp dir");
+    let config_root = dir.path().join("config");
+    let repo_root = dir.path().join("repo");
+    std::fs::create_dir_all(&config_root).expect("create config root");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo src dir");
+
+    crate::test_support::git_fixtures::init_test_repo(
+        &repo_root,
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn base() {}\n").expect("write base file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "base"]);
+
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["checkout", "-b", "feature"]);
+    std::fs::write(repo_root.join("src/feature.rs"), "pub fn feature() {}\n")
+        .expect("write feature file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "feature"]);
+    let merge_head_sha =
+        crate::test_support::git_fixtures::git_ok(&repo_root, &["rev-parse", "HEAD"]);
+
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["checkout", "main"]);
+    std::fs::write(
+        repo_root.join("src/main_only.rs"),
+        "pub fn main_only() {}\n",
+    )
+    .expect("write main-only file");
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["add", "."]);
+    crate::test_support::git_fixtures::git_ok(&repo_root, &["commit", "-m", "main moved"]);
+
+    let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+    crate::config::settings::write_repo_daemon_binding(
+        &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+        &config_path,
+    )
+    .expect("write repo daemon binding");
+    let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
+    let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo)
+        .expect("build devql config");
+    crate::host::devql::execute_init_schema(&cfg, "post-merge captured head test")
+        .await
+        .expect("initialise devql schema");
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        &merge_head_sha,
+        &["src/feature.rs".to_string()],
+        false,
+    )
+    .expect("enqueue post-merge producer spool job");
+
+    let coordinator = Arc::new(DevqlTaskCoordinator {
+        runtime_store: DaemonSqliteRuntimeStore::open_at(dir.path().join("daemon-runtime.sqlite"))
+            .expect("open daemon runtime store"),
+        lock: Mutex::new(()),
+        notify: Notify::new(),
+        worker_started: AtomicBool::new(false),
+        subscription_hub: Mutex::new(None),
+    });
+
+    let processed = run_all_producer_spool_jobs(&coordinator, &config_root)
+        .await
+        .expect("process producer spool jobs");
+    assert_eq!(processed, 2, "expected split post-merge producer jobs");
+
+    let ingest_tasks = coordinator
+        .tasks(
+            None,
+            Some(DevqlTaskKind::Ingest),
+            Some(DevqlTaskStatus::Queued),
+            None,
+        )
+        .expect("load queued ingest tasks");
+    assert_eq!(ingest_tasks.len(), 1);
+    let spec = ingest_tasks[0].ingest_spec().expect("ingest spec");
+    assert_eq!(
+        spec.commits.last().map(String::as_str),
+        Some(merge_head_sha.as_str())
+    );
+    assert_eq!(spec.backfill, None);
 }
 
 #[tokio::test]
@@ -508,6 +597,9 @@ async fn post_merge_producer_spool_job_skips_sync_when_devql_sync_disabled() {
     let repo = crate::host::devql::resolve_repo_identity(&repo_root).expect("resolve repo");
     let cfg = DevqlConfig::from_roots(config_root.clone(), repo_root.clone(), repo.clone())
         .expect("build devql config");
+    crate::host::devql::execute_init_schema(&cfg, "post-merge producer spool sync disabled test")
+        .await
+        .expect("initialise devql schema");
     crate::host::devql::enqueue_spooled_post_merge_refresh(
         &repo_root,
         &head_sha,

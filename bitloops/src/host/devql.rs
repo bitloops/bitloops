@@ -70,6 +70,7 @@ pub(crate) use self::classification::{
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_ingest::{
     execute_ingest_with_backfill_window, execute_ingest_with_commits, execute_ingest_with_observer,
+    select_ingest_backfill_commits_for_head,
 };
 #[cfg(test)]
 pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
