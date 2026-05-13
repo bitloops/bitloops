@@ -1,7 +1,7 @@
 ---
 name: devql-explore-first
 description: >
-  Use before codebase exploration, bug fixing, SWE-bench tasks, locating
+  Use always before codebase exploration, bug fixing, SWE-bench tasks, locating
   symbols, files, or tests, or before using rg, grep, sed, find, or source-file
   reads in a repository.
 ---
