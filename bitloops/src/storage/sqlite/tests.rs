@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use tempfile::TempDir;
 
-use super::SqliteConnectionPool;
 use super::introspection::{sqlite_table_has_column, sqlite_table_pk_columns};
+use super::{ReadOnlySqliteConnectionPool, SqliteConnectionPool};
 
 #[test]
 fn sqlite_connection_pool_uses_wal_and_normal_synchronous() -> Result<()> {
@@ -26,6 +26,52 @@ fn sqlite_connection_pool_uses_wal_and_normal_synchronous() -> Result<()> {
         "SQLite NORMAL synchronous pragma should be enabled"
     );
 
+    Ok(())
+}
+
+#[test]
+fn read_only_sqlite_pool_reads_existing_database_without_writes() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let sqlite_path = temp.path().join("runtime.sqlite");
+    let writable = SqliteConnectionPool::connect(sqlite_path.clone())?;
+    writable.execute_batch(
+        "CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+         INSERT INTO sample (value) VALUES ('stored');",
+    )?;
+
+    let readonly = ReadOnlySqliteConnectionPool::connect_existing(sqlite_path)?;
+    let value: String = readonly.with_connection(|conn| {
+        conn.query_row("SELECT value FROM sample WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .map_err(anyhow::Error::from)
+    })?;
+    assert_eq!(value, "stored");
+
+    let write_err = readonly
+        .with_connection(|conn| {
+            conn.execute("INSERT INTO sample (value) VALUES ('blocked')", [])?;
+            Ok(())
+        })
+        .expect_err("read-only pool should reject writes");
+    let message = format!("{write_err:#}");
+    assert!(
+        message.contains("readonly") || message.contains("read-only"),
+        "expected read-only error, got {message}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn read_only_sqlite_pool_refuses_missing_database() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let err = ReadOnlySqliteConnectionPool::connect_existing(temp.path().join("missing.sqlite"))
+        .expect_err("missing DB should fail");
+    assert!(
+        err.to_string().contains("SQLite database file not found"),
+        "unexpected error: {err:#}"
+    );
     Ok(())
 }
 

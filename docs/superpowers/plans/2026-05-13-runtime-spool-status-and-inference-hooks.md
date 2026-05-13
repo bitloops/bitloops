@@ -308,7 +308,7 @@ git commit -m "fix: keep runtime interaction spool bootstrap schema-only"
 - Modify: `bitloops/src/host/runtime_store.rs`
 - Test: `bitloops/src/host/runtime_store/tests.rs`
 
-- [ ] **Step 1: Add read-only SQLite pool tests**
+- [x] **Step 1: Add read-only SQLite pool tests**
 
 Add these tests to `bitloops/src/storage/sqlite/tests.rs`:
 
@@ -360,7 +360,7 @@ fn read_only_sqlite_pool_refuses_missing_database() -> Result<()> {
 }
 ```
 
-- [ ] **Step 2: Run the focused failing storage tests**
+- [x] **Step 2: Run the focused failing storage tests**
 
 Run:
 
@@ -370,7 +370,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features --li
 
 Expected: FAIL because `ReadOnlySqliteConnectionPool` does not exist.
 
-- [ ] **Step 3: Add the read-only pool type**
+- [x] **Step 3: Add the read-only pool type**
 
 In `bitloops/src/storage/sqlite.rs`, add the new type next to `SqliteConnectionPool`:
 
@@ -387,7 +387,7 @@ impl ReadOnlySqliteConnectionPool {
 }
 ```
 
-- [ ] **Step 4: Implement read-only SQLite opening**
+- [x] **Step 4: Implement read-only SQLite opening**
 
 In `bitloops/src/storage/sqlite/filesystem.rs`, update the import:
 
@@ -441,7 +441,7 @@ fn configure_read_only_sqlite_connection(conn: &rusqlite::Connection) -> Result<
 
 Do not call `create_sqlite_file_if_missing` and do not set `PRAGMA journal_mode = WAL` in the read-only path.
 
-- [ ] **Step 5: Export the read-only pool**
+- [x] **Step 5: Export the read-only pool**
 
 In `bitloops/src/storage.rs`, change the SQLite export to:
 
@@ -449,7 +449,7 @@ In `bitloops/src/storage.rs`, change the SQLite export to:
 pub use sqlite::{ReadOnlySqliteConnectionPool, SqliteConnectionPool};
 ```
 
-- [ ] **Step 6: Factor workplane list query into a connection helper**
+- [x] **Step 6: Factor workplane list query into a connection helper**
 
 In `bitloops/src/host/runtime_store/repo_workplane/jobs.rs`, move the SQL body of `RepoSqliteRuntimeStore::list_capability_workplane_jobs` into a helper:
 
@@ -557,7 +557,7 @@ pub fn list_capability_workplane_jobs(
 }
 ```
 
-- [ ] **Step 7: Create the read-only workplane status reader**
+- [x] **Step 7: Create the read-only workplane status reader**
 
 Create `bitloops/src/host/runtime_store/repo_workplane/read_only_status.rs`:
 
@@ -630,7 +630,7 @@ fn table_exists(conn: &rusqlite::Connection, table_name: &str) -> Result<bool> {
 }
 ```
 
-- [ ] **Step 8: Export the reader**
+- [x] **Step 8: Export the reader**
 
 In `bitloops/src/host/runtime_store/repo_workplane.rs`, add the module and export:
 
@@ -648,7 +648,7 @@ In `bitloops/src/host/runtime_store.rs`, add it to the `repo_workplane` export l
 RepoCapabilityWorkplaneStatusReader,
 ```
 
-- [ ] **Step 9: Add read-only reader regression tests**
+- [x] **Step 9: Add read-only reader regression tests**
 
 Add this test to `bitloops/src/host/runtime_store/tests.rs` near existing workplane job tests:
 
@@ -702,7 +702,7 @@ fn read_only_workplane_status_reader_returns_none_for_missing_runtime_db() {
 }
 ```
 
-- [ ] **Step 10: Run focused tests for this task**
+- [x] **Step 10: Run focused tests for this task**
 
 Run:
 
@@ -712,7 +712,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features --li
 
 Expected: PASS for all four tests.
 
-- [ ] **Step 11: Commit this task**
+- [x] **Step 11: Commit this task**
 
 ```bash
 git add bitloops/src/storage.rs bitloops/src/storage/sqlite.rs bitloops/src/storage/sqlite/filesystem.rs bitloops/src/storage/sqlite/tests.rs bitloops/src/host/runtime_store.rs bitloops/src/host/runtime_store/repo_workplane.rs bitloops/src/host/runtime_store/repo_workplane/jobs.rs bitloops/src/host/runtime_store/repo_workplane/read_only_status.rs bitloops/src/host/runtime_store/tests.rs

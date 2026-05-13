@@ -984,6 +984,52 @@ fn repo_runtime_store_lists_workplane_jobs_by_capability_mailbox_and_status() {
 }
 
 #[test]
+fn read_only_workplane_status_reader_lists_existing_jobs_without_runtime_open() {
+    let dir = TempDir::new().expect("tempdir");
+    let repo_root = dir.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+
+    let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
+        .expect("open repo runtime store");
+    store
+        .enqueue_capability_workplane_jobs(
+            "architecture_graph",
+            vec![CapabilityWorkplaneJobInsert::new(
+                "architecture_graph.roles.adjudication",
+                None,
+                Some("queue-1".to_string()),
+                serde_json::json!({"request": {"reason": "unknown_kind", "generation": 7}}),
+            )],
+        )
+        .expect("enqueue workplane job");
+
+    let reader =
+        RepoCapabilityWorkplaneStatusReader::open_for_config_root(dir.path(), store.repo_id())
+            .expect("open read-only status reader")
+            .expect("runtime db should exist");
+    let rows = reader
+        .list_capability_workplane_jobs(WorkplaneJobQuery {
+            capability_id: Some("architecture_graph".to_string()),
+            mailbox_name: Some("architecture_graph.roles.adjudication".to_string()),
+            statuses: vec![WorkplaneJobStatus::Pending],
+            limit: Some(10),
+        })
+        .expect("list jobs read-only");
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].dedupe_key.as_deref(), Some("queue-1"));
+}
+
+#[test]
+fn read_only_workplane_status_reader_returns_none_for_missing_runtime_db() {
+    let dir = TempDir::new().expect("tempdir");
+    let reader = RepoCapabilityWorkplaneStatusReader::open_for_config_root(dir.path(), "repo-1")
+        .expect("open status reader");
+    assert!(reader.is_none());
+}
+
+#[test]
 fn semantic_embedding_enqueue_batches_dedupe_pending_items() {
     let dir = TempDir::new().expect("tempdir");
     let repo_root = dir.path().join("repo");

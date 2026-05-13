@@ -6,4 +6,4 @@ pub mod sqlite;
 
 pub use connections::CheckpointDbConnections;
 pub use postgres::PostgresSyncConnection;
-pub use sqlite::SqliteConnectionPool;
+pub use sqlite::{ReadOnlySqliteConnectionPool, SqliteConnectionPool};

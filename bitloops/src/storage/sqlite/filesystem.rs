@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::SqliteConnectionPool;
+use super::{ReadOnlySqliteConnectionPool, SqliteConnectionPool};
 
 impl SqliteConnectionPool {
     pub fn connect(db_path: std::path::PathBuf) -> Result<Self> {
@@ -32,6 +32,23 @@ impl SqliteConnectionPool {
         operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
     ) -> Result<T> {
         let conn = open_sqlite_connection(&self.db_path)?;
+        operation(&conn)
+    }
+}
+
+impl ReadOnlySqliteConnectionPool {
+    pub fn connect_existing(db_path: std::path::PathBuf) -> Result<Self> {
+        ensure_sqlite_file_exists(&db_path)?;
+        let pool = Self { db_path };
+        pool.with_connection(|_| Ok(()))?;
+        Ok(pool)
+    }
+
+    pub fn with_connection<T>(
+        &self,
+        operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+    ) -> Result<T> {
+        let conn = open_read_only_sqlite_connection(&self.db_path)?;
         operation(&conn)
     }
 }
@@ -79,6 +96,17 @@ pub(super) fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connect
     Ok(conn)
 }
 
+pub(super) fn open_read_only_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+    ensure_sqlite_file_exists(db_path)?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| {
+                format!("opening SQLite database read-only at {}", db_path.display())
+            })?;
+    configure_read_only_sqlite_connection(&conn)?;
+    Ok(conn)
+}
+
 fn configure_sqlite_connection(conn: &rusqlite::Connection) -> Result<()> {
     conn.busy_timeout(std::time::Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
@@ -86,5 +114,13 @@ fn configure_sqlite_connection(conn: &rusqlite::Connection) -> Result<()> {
         "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
     )
     .context("configuring SQLite pragmas")?;
+    Ok(())
+}
+
+fn configure_read_only_sqlite_connection(conn: &rusqlite::Connection) -> Result<()> {
+    conn.busy_timeout(std::time::Duration::from_secs(30))
+        .context("setting SQLite busy timeout")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA query_only = ON;")
+        .context("configuring read-only SQLite pragmas")?;
     Ok(())
 }
