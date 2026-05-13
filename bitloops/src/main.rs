@@ -1,4 +1,5 @@
 use clap::Parser;
+use mimalloc::MiMalloc;
 
 pub use bitloops::adapters;
 pub use bitloops::api;
@@ -17,6 +18,9 @@ pub use bitloops::utils;
 #[cfg(test)]
 #[allow(dead_code)]
 pub(crate) mod test_support;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 fn init_standard_logger() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))

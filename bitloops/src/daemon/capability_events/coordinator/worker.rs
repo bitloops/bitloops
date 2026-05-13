@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::FutureExt;
@@ -13,7 +12,7 @@ use crate::daemon::capability_events::plan::{
     build_execution_plan, find_current_state_consumer, validate_consumer_result,
 };
 use crate::daemon::capability_events::queue::{StoredRunRecord, load_runs, sql_i64};
-use crate::daemon::memory::ProcessMemorySnapshot;
+use crate::daemon::memory::{PageReleaseResult, ProcessMemorySnapshot};
 use crate::daemon::types::{
     CapabilityEventRunRecord, CapabilityEventRunStatus, unix_timestamp_now,
 };
@@ -21,8 +20,8 @@ use crate::host::capability_host::{DevqlCapabilityHost, ReconcileMode};
 use crate::host::devql::resolve_repo_identity;
 
 use super::types::{
-    CapabilityEventCoordinator, MAX_RUN_ATTEMPTS, RunCompletion, WORKER_POLL_INTERVAL,
-    WorkerStartedGuard,
+    CapabilityEventCoordinator, IDLE_RECLAIM_MAX_ATTEMPTS, IDLE_RECLAIM_RETRY_INTERVAL,
+    MAX_RUN_ATTEMPTS, RunCompletion, WORKER_POLL_INTERVAL, WorkerStartedGuard,
 };
 
 impl CapabilityEventCoordinator {
@@ -45,21 +44,46 @@ impl CapabilityEventCoordinator {
         }
 
         let before = self.memory_maintenance.capture_process_memory();
-        let release_called = self.memory_maintenance.release_unused_pages();
-        sleep(Duration::from_millis(250)).await;
-        let after = self.memory_maintenance.capture_process_memory();
-        let fields = build_idle_reclaim_log_fields(before, after, release_called);
+        let mut after = before.clone();
+        let mut release_result = PageReleaseResult {
+            strategy: "unsupported",
+            released: false,
+        };
+        let mut attempt_count = 0;
+
+        while attempt_count < IDLE_RECLAIM_MAX_ATTEMPTS {
+            attempt_count += 1;
+            release_result = self.memory_maintenance.release_unused_pages();
+            sleep(IDLE_RECLAIM_RETRY_INTERVAL).await;
+            after = self.memory_maintenance.capture_process_memory();
+
+            if memory_drop_detected(before.as_ref(), after.as_ref()) {
+                break;
+            }
+
+            if before.is_none()
+                || self
+                    .snapshot(Some(&run.repo_id))?
+                    .current_repo_run
+                    .is_some()
+            {
+                break;
+            }
+        }
+        let fields = build_idle_reclaim_log_fields(before, after, release_result, attempt_count);
 
         log::info!(
-            "current-state consumer memory reclaim: repo_id={} capability_id={} consumer_id={} reclaim_trigger=post_full_reconcile_idle resident_before_bytes={} resident_after_bytes={} phys_before_bytes={} phys_after_bytes={} release_called={}",
+            "current-state consumer memory reclaim: repo_id={} capability_id={} consumer_id={} reclaim_trigger=post_full_reconcile_idle strategy={} attempt_count={} resident_before_bytes={} resident_after_bytes={} phys_before_bytes={} phys_after_bytes={} released={}",
             run.repo_id,
             run.capability_id,
             run.consumer_id,
+            fields.strategy,
+            fields.attempt_count,
             optional_u64_log_value(fields.resident_before_bytes),
             optional_u64_log_value(fields.resident_after_bytes),
             optional_u64_log_value(fields.phys_before_bytes),
             optional_u64_log_value(fields.phys_after_bytes),
-            fields.release_called,
+            fields.released,
         );
         Ok(())
     }
@@ -271,7 +295,9 @@ pub(crate) struct IdleReclaimLogFields {
     pub(crate) resident_after_bytes: Option<u64>,
     pub(crate) phys_before_bytes: Option<u64>,
     pub(crate) phys_after_bytes: Option<u64>,
-    pub(crate) release_called: bool,
+    pub(crate) strategy: &'static str,
+    pub(crate) attempt_count: u8,
+    pub(crate) released: bool,
 }
 
 pub(crate) fn should_attempt_idle_reclaim(completion: &RunCompletion) -> bool {
@@ -284,15 +310,37 @@ pub(crate) fn should_attempt_idle_reclaim(completion: &RunCompletion) -> bool {
 pub(crate) fn build_idle_reclaim_log_fields(
     before: Option<ProcessMemorySnapshot>,
     after: Option<ProcessMemorySnapshot>,
-    release_called: bool,
+    release_result: PageReleaseResult,
+    attempt_count: u8,
 ) -> IdleReclaimLogFields {
     IdleReclaimLogFields {
         resident_before_bytes: before.as_ref().and_then(|snapshot| snapshot.resident_bytes),
         resident_after_bytes: after.as_ref().and_then(|snapshot| snapshot.resident_bytes),
         phys_before_bytes: before.and_then(|snapshot| snapshot.phys_footprint_bytes),
         phys_after_bytes: after.and_then(|snapshot| snapshot.phys_footprint_bytes),
-        release_called,
+        strategy: release_result.strategy,
+        attempt_count,
+        released: release_result.released,
     }
+}
+
+fn memory_drop_detected(
+    before: Option<&ProcessMemorySnapshot>,
+    after: Option<&ProcessMemorySnapshot>,
+) -> bool {
+    let Some(before) = before else {
+        return true;
+    };
+    let Some(after) = after else {
+        return false;
+    };
+
+    dropped_metric(before.resident_bytes, after.resident_bytes)
+        || dropped_metric(before.phys_footprint_bytes, after.phys_footprint_bytes)
+}
+
+fn dropped_metric(before: Option<u64>, after: Option<u64>) -> bool {
+    matches!((before, after), (Some(before), Some(after)) if after < before)
 }
 
 fn optional_u64_log_value(value: Option<u64>) -> String {

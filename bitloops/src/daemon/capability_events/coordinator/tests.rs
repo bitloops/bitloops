@@ -8,7 +8,7 @@ use rusqlite::params;
 use tempfile::TempDir;
 
 use crate::daemon::capability_events::queue::sql_i64;
-use crate::daemon::memory::{MemoryMaintenance, ProcessMemorySnapshot};
+use crate::daemon::memory::{MemoryMaintenance, PageReleaseResult, ProcessMemorySnapshot};
 use crate::daemon::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
 use crate::host::devql::{DevqlConfig, SyncSummary, resolve_repo_identity};
@@ -113,15 +113,18 @@ fn test_cfg(repo_root: &std::path::Path) -> DevqlConfig {
 struct StubMemoryMaintenance {
     snapshots: Mutex<VecDeque<Option<ProcessMemorySnapshot>>>,
     release_calls: AtomicUsize,
-    release_result: bool,
+    release_results: Mutex<VecDeque<PageReleaseResult>>,
 }
 
 impl StubMemoryMaintenance {
-    fn new(snapshots: Vec<Option<ProcessMemorySnapshot>>, release_result: bool) -> Self {
+    fn new(
+        snapshots: Vec<Option<ProcessMemorySnapshot>>,
+        release_results: Vec<PageReleaseResult>,
+    ) -> Self {
         Self {
             snapshots: Mutex::new(VecDeque::from(snapshots)),
             release_calls: AtomicUsize::new(0),
-            release_result,
+            release_results: Mutex::new(VecDeque::from(release_results)),
         }
     }
 
@@ -139,9 +142,16 @@ impl MemoryMaintenance for StubMemoryMaintenance {
             .unwrap_or(None)
     }
 
-    fn release_unused_pages(&self) -> bool {
+    fn release_unused_pages(&self) -> PageReleaseResult {
         self.release_calls.fetch_add(1, Ordering::SeqCst);
-        self.release_result
+        self.release_results
+            .lock()
+            .expect("lock release results")
+            .pop_front()
+            .unwrap_or(PageReleaseResult {
+                strategy: "unsupported",
+                released: false,
+            })
     }
 }
 
@@ -341,7 +351,11 @@ fn idle_reclaim_log_fields_tolerate_missing_snapshot_values() {
             phys_footprint_bytes: None,
         }),
         None,
-        false,
+        PageReleaseResult {
+            strategy: "unsupported",
+            released: false,
+        },
+        1,
     );
 
     assert_eq!(
@@ -351,7 +365,9 @@ fn idle_reclaim_log_fields_tolerate_missing_snapshot_values() {
             resident_after_bytes: None,
             phys_before_bytes: None,
             phys_after_bytes: None,
-            release_called: false,
+            strategy: "unsupported",
+            attempt_count: 1,
+            released: false,
         }
     );
 }
@@ -371,7 +387,10 @@ async fn maybe_reclaim_after_repo_idle_triggers_for_completed_full_reconcile() {
                 phys_footprint_bytes: Some(500),
             }),
         ],
-        true,
+        vec![PageReleaseResult {
+            strategy: "mimalloc_collect",
+            released: true,
+        }],
     ));
     let coordinator =
         CapabilityEventCoordinator::new_shared_instance_with_memory(store, memory.clone());
@@ -393,7 +412,13 @@ async fn maybe_reclaim_after_repo_idle_triggers_for_completed_full_reconcile() {
 async fn maybe_reclaim_after_repo_idle_skips_when_repo_still_has_current_work() {
     let temp = TempDir::new().expect("tempdir");
     let store = test_runtime_store(&temp);
-    let memory = Arc::new(StubMemoryMaintenance::new(Vec::new(), true));
+    let memory = Arc::new(StubMemoryMaintenance::new(
+        Vec::new(),
+        vec![PageReleaseResult {
+            strategy: "mimalloc_collect",
+            released: true,
+        }],
+    ));
     let coordinator =
         CapabilityEventCoordinator::new_shared_instance_with_memory(store.clone(), memory.clone());
 
@@ -415,4 +440,102 @@ async fn maybe_reclaim_after_repo_idle_skips_when_repo_still_has_current_work() 
         .expect("skip path should succeed");
 
     assert_eq!(memory.release_calls(), 0);
+}
+
+#[tokio::test]
+async fn maybe_reclaim_after_repo_idle_retries_until_memory_drops() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let memory = Arc::new(StubMemoryMaintenance::new(
+        vec![
+            Some(ProcessMemorySnapshot {
+                resident_bytes: Some(8_000),
+                phys_footprint_bytes: Some(2_000),
+            }),
+            Some(ProcessMemorySnapshot {
+                resident_bytes: Some(8_000),
+                phys_footprint_bytes: Some(2_000),
+            }),
+            Some(ProcessMemorySnapshot {
+                resident_bytes: Some(4_000),
+                phys_footprint_bytes: Some(1_000),
+            }),
+        ],
+        vec![
+            PageReleaseResult {
+                strategy: "mimalloc_collect",
+                released: true,
+            },
+            PageReleaseResult {
+                strategy: "mimalloc_collect",
+                released: true,
+            },
+        ],
+    ));
+    let coordinator =
+        CapabilityEventCoordinator::new_shared_instance_with_memory(store, memory.clone());
+    let mut run = sample_run(CapabilityEventRunStatus::Completed);
+    run.reconcile_mode = "full_reconcile".to_string();
+
+    coordinator
+        .maybe_reclaim_after_repo_idle(&RunCompletion::Completed {
+            run,
+            applied_to_generation_seq: 5,
+        })
+        .await
+        .expect("reclaim retries should succeed");
+
+    assert_eq!(memory.release_calls(), 2);
+}
+
+#[tokio::test]
+async fn maybe_reclaim_after_repo_idle_stops_retrying_when_repo_becomes_busy() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let store_for_enqueue = store.clone();
+    let memory = Arc::new(StubMemoryMaintenance::new(
+        vec![
+            Some(ProcessMemorySnapshot {
+                resident_bytes: Some(8_000),
+                phys_footprint_bytes: Some(2_000),
+            }),
+            Some(ProcessMemorySnapshot {
+                resident_bytes: Some(8_000),
+                phys_footprint_bytes: Some(2_000),
+            }),
+        ],
+        vec![
+            PageReleaseResult {
+                strategy: "mimalloc_collect",
+                released: true,
+            },
+            PageReleaseResult {
+                strategy: "mimalloc_collect",
+                released: true,
+            },
+        ],
+    ));
+    let coordinator =
+        CapabilityEventCoordinator::new_shared_instance_with_memory(store, memory.clone());
+    let mut run = sample_run(CapabilityEventRunStatus::Completed);
+    run.reconcile_mode = "full_reconcile".to_string();
+
+    let enqueue_handle = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let mut queued = sample_run(CapabilityEventRunStatus::Queued);
+        queued.run_id = "queued-during-reclaim".to_string();
+        queued.reconcile_mode = "merged_delta".to_string();
+        insert_run_row(&store_for_enqueue, &queued);
+    });
+
+    coordinator
+        .maybe_reclaim_after_repo_idle(&RunCompletion::Completed {
+            run,
+            applied_to_generation_seq: 5,
+        })
+        .await
+        .expect("reclaim should stop once repo becomes busy");
+    enqueue_handle.await.expect("enqueue task should finish");
+
+    assert_eq!(memory.release_calls(), 1);
 }

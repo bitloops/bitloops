@@ -7,9 +7,15 @@ pub(crate) struct ProcessMemorySnapshot {
     pub(crate) phys_footprint_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PageReleaseResult {
+    pub(crate) strategy: &'static str,
+    pub(crate) released: bool,
+}
+
 pub(crate) trait MemoryMaintenance: std::fmt::Debug + Send + Sync {
     fn capture_process_memory(&self) -> Option<ProcessMemorySnapshot>;
-    fn release_unused_pages(&self) -> bool;
+    fn release_unused_pages(&self) -> PageReleaseResult;
 }
 
 #[derive(Debug, Default)]
@@ -20,7 +26,7 @@ impl MemoryMaintenance for PlatformMemoryMaintenance {
         capture_process_memory()
     }
 
-    fn release_unused_pages(&self) -> bool {
+    fn release_unused_pages(&self) -> PageReleaseResult {
         release_unused_pages()
     }
 }
@@ -40,7 +46,7 @@ pub(crate) fn capture_process_memory() -> Option<ProcessMemorySnapshot> {
     }
 }
 
-pub(crate) fn release_unused_pages() -> bool {
+pub(crate) fn release_unused_pages() -> PageReleaseResult {
     #[cfg(target_os = "macos")]
     {
         release_unused_pages_macos()
@@ -99,19 +105,30 @@ fn capture_process_memory_unsupported() -> Option<ProcessMemorySnapshot> {
 }
 
 #[cfg(target_os = "macos")]
-fn release_unused_pages_macos() -> bool {
-    let released = unsafe { malloc_zone_pressure_relief(malloc_default_zone(), 0) };
-    released > 0
+fn release_unused_pages_macos() -> PageReleaseResult {
+    release_unused_pages_mimalloc()
 }
 
 #[cfg(target_os = "linux")]
-fn release_unused_pages_linux() -> bool {
-    unsafe { malloc_trim(0) != 0 }
+fn release_unused_pages_linux() -> PageReleaseResult {
+    release_unused_pages_mimalloc()
 }
 
 #[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
-fn release_unused_pages_unsupported() -> bool {
-    false
+fn release_unused_pages_unsupported() -> PageReleaseResult {
+    PageReleaseResult {
+        strategy: "unsupported",
+        released: false,
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn release_unused_pages_mimalloc() -> PageReleaseResult {
+    unsafe { libmimalloc_sys::mi_collect(true) };
+    PageReleaseResult {
+        strategy: "mimalloc_collect",
+        released: true,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -123,8 +140,6 @@ unsafe extern "C" {
         task_info_out: *mut libc::integer_t,
         task_info_out_count: *mut libc::mach_msg_type_number_t,
     ) -> libc::c_int;
-    fn malloc_default_zone() -> *mut libc::c_void;
-    fn malloc_zone_pressure_relief(zone: *mut libc::c_void, goal: libc::size_t) -> libc::size_t;
 }
 
 #[cfg(target_os = "macos")]
@@ -163,15 +178,11 @@ struct TaskVmInfoRev1 {
     phys_footprint: u64,
 }
 
-#[cfg(target_os = "linux")]
-unsafe extern "C" {
-    fn malloc_trim(pad: libc::size_t) -> libc::c_int;
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessMemorySnapshot, capture_process_memory_unsupported, release_unused_pages_unsupported,
+        PageReleaseResult, ProcessMemorySnapshot, capture_process_memory_unsupported,
+        release_unused_pages_unsupported,
     };
 
     #[test]
@@ -181,7 +192,13 @@ mod tests {
 
     #[test]
     fn unsupported_page_release_is_noop() {
-        assert!(!release_unused_pages_unsupported());
+        assert_eq!(
+            release_unused_pages_unsupported(),
+            PageReleaseResult {
+                strategy: "unsupported",
+                released: false,
+            }
+        );
     }
 
     #[test]
@@ -192,5 +209,16 @@ mod tests {
         };
         assert_eq!(snapshot.resident_bytes, Some(1024));
         assert_eq!(snapshot.phys_footprint_bytes, None);
+    }
+
+    #[test]
+    fn page_release_result_preserves_strategy_and_release_flag() {
+        let result = PageReleaseResult {
+            strategy: "mimalloc_collect",
+            released: true,
+        };
+
+        assert_eq!(result.strategy, "mimalloc_collect");
+        assert!(result.released);
     }
 }
