@@ -1,5 +1,39 @@
 use super::*;
 
+const DASHBOARD_RUNTIME_OVERVIEW_QUERY: &str = r#"
+    query RuntimeOverview($repoId: String!) {
+      runtimeSnapshot(repoId: $repoId) {
+        repoId
+        taskQueue {
+          queuedTasks
+          runningTasks
+          failedTasks
+          completedRecentTasks
+        }
+        currentStateConsumer {
+          pendingRuns
+          runningRuns
+          failedRuns
+          completedRecentRuns
+        }
+        workplane {
+          pendingJobs
+          runningJobs
+          failedJobs
+          completedRecentJobs
+        }
+        blockedMailboxes {
+          mailboxName
+          reason
+        }
+        embeddingsReadinessGate {
+          blocked
+          readiness
+        }
+      }
+    }
+"#;
+
 #[allow(dead_code)]
 fn write_current_repo_runtime_state(repo_root: &Path) {
     let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
@@ -1011,6 +1045,107 @@ fn devql_runtime_route_accepts_the_runtime_snapshot_query_used_by_init() {
                     payload.get("errors")
                 );
                 assert_eq!(payload["data"]["runtimeSnapshot"]["repoId"], repo_id);
+            });
+        },
+    );
+}
+
+#[test]
+fn devql_runtime_route_dashboard_overview_query_skips_current_init_session_progress() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let config_path = repo
+        .path()
+        .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let config_path_string = config_path.to_string_lossy().to_string();
+
+    crate::test_support::process_state::with_env_var(
+        crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+            runtime.block_on(async {
+                let app = build_dashboard_router(test_state(
+                    repo.path().to_path_buf(),
+                    ServeMode::HelloWorld,
+                    repo.path().to_path_buf(),
+                ));
+                let headers = runtime_binding_headers(repo.path());
+                let headers_ref = headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .collect::<Vec<_>>();
+
+                let (start_status, start_payload) =
+                    request_json_with_method_content_type_and_headers(
+                        app.clone(),
+                        Method::POST,
+                        "/devql/runtime",
+                        "application/json",
+                        &headers_ref,
+                        Body::from(
+                            json!({
+                                "query": "mutation StartInit($repoId: String!, $input: StartInitInput!) { startInit(repoId: $repoId, input: $input) { initSessionId } }",
+                                "variables": {
+                                    "repoId": repo_id,
+                                    "input": {
+                                        "runSync": false,
+                                        "runIngest": false,
+                                        "runCodeEmbeddings": false,
+                                        "runSummaries": false,
+                                        "runSummaryEmbeddings": false,
+                                        "ingestBackfill": serde_json::Value::Null,
+                                        "embeddingsBootstrap": serde_json::Value::Null,
+                                        "summariesBootstrap": serde_json::Value::Null,
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    )
+                    .await;
+
+                assert_eq!(start_status, StatusCode::OK);
+                assert!(
+                    start_payload.get("errors").is_none(),
+                    "startInit graphql errors: {:?}",
+                    start_payload.get("errors")
+                );
+
+                crate::daemon::reset_runtime_lane_progress_load_count();
+
+                let (status, payload) = request_json_with_method_content_type_and_headers(
+                    app,
+                    Method::POST,
+                    "/devql/runtime",
+                    "application/json",
+                    &headers_ref,
+                    Body::from(
+                        json!({
+                            "query": DASHBOARD_RUNTIME_OVERVIEW_QUERY,
+                            "variables": {
+                                "repoId": repo_id,
+                            }
+                        })
+                        .to_string(),
+                    ),
+                )
+                .await;
+
+                assert_eq!(status, StatusCode::OK);
+                assert!(
+                    payload.get("errors").is_none(),
+                    "runtime graphql errors: {:?}",
+                    payload.get("errors")
+                );
+                assert_eq!(payload["data"]["runtimeSnapshot"]["repoId"], repo_id);
+                assert_eq!(
+                    crate::daemon::runtime_lane_progress_load_count(),
+                    0,
+                    "dashboard overview runtimeSnapshot must not load init lane progress"
+                );
             });
         },
     );
