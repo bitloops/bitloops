@@ -222,7 +222,12 @@ pub(crate) async fn build_sqlite_current_vec_table_init_statements(
             "INSERT INTO {table_name} (embedding, repo_id, representation_kind, setup_fingerprint, artefact_id, path) \
              SELECT vec_f32(embedding), repo_id, representation_kind, setup_fingerprint, artefact_id, path \
              FROM symbol_embeddings_current \
+<<<<<<< Updated upstream
              WHERE dimension = {dimension}",
+=======
+             WHERE dimension = {dimension} \
+               AND NOT EXISTS (SELECT 1 FROM {table_name} LIMIT 1)",
+>>>>>>> Stashed changes
         ),
     ])
 }
@@ -752,10 +757,75 @@ mod tests {
         assert!(statements[1].contains("INSERT INTO semantic_embedding_current_vec_dim_3"));
         assert!(statements[1].contains("FROM symbol_embeddings_current"));
         assert!(statements[1].contains("WHERE dimension = 3"));
+<<<<<<< Updated upstream
+=======
+        assert!(statements[1].contains(
+            "AND NOT EXISTS (SELECT 1 FROM semantic_embedding_current_vec_dim_3 LIMIT 1)"
+        ));
+>>>>>>> Stashed changes
         assert!(statements[1].contains("vec_f32(embedding)"));
     }
 
     #[tokio::test]
+<<<<<<< Updated upstream
+=======
+    async fn sqlite_vec_table_init_backfill_stays_idempotent_when_two_batches_race() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp.path().join("semantic.sqlite");
+        let relational = RelationalStorage::local_only(sqlite_path.clone());
+        crate::host::devql::sqlite_exec_path_allow_create(
+            &sqlite_path,
+            "CREATE TABLE symbol_embeddings_current (
+                artefact_id TEXT NOT NULL,
+                repo_id TEXT NOT NULL,
+                representation_kind TEXT NOT NULL,
+                setup_fingerprint TEXT NOT NULL,
+                dimension INTEGER NOT NULL,
+                embedding TEXT NOT NULL,
+                path TEXT NOT NULL
+            );
+            INSERT INTO symbol_embeddings_current (
+                artefact_id, repo_id, representation_kind, setup_fingerprint, dimension, embedding, path
+            ) VALUES (
+                'artefact-1', 'repo-1', 'identity', 'setup-1', 3, '[0.1,0.2,0.3]', 'src/a.ts'
+            );",
+        )
+        .await
+        .expect("create sqlite embedding rows");
+
+        let statements_a = build_sqlite_current_vec_table_init_statements(&relational, 3)
+            .await
+            .expect("build first sqlite vec init batch");
+        let statements_b = build_sqlite_current_vec_table_init_statements(&relational, 3)
+            .await
+            .expect("build second sqlite vec init batch");
+
+        relational
+            .exec_serialized_batch_transactional(&statements_a)
+            .await
+            .expect("execute first sqlite vec init batch");
+        relational
+            .exec_serialized_batch_transactional(&statements_b)
+            .await
+            .expect("execute second sqlite vec init batch");
+
+        let rows = relational
+            .query_rows(
+                "SELECT artefact_id, repo_id, representation_kind, setup_fingerprint, path
+                 FROM semantic_embedding_current_vec_dim_3",
+            )
+            .await
+            .expect("query sqlite vec rows after duplicate init");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "second init batch should not duplicate backfill rows"
+        );
+    }
+
+    #[tokio::test]
+>>>>>>> Stashed changes
     async fn sqlite_vec_sync_and_clear_keep_dimension_tables_in_sync() {
         let temp = tempfile::tempdir().expect("create temp dir");
         let sqlite_path = temp.path().join("semantic.sqlite");
