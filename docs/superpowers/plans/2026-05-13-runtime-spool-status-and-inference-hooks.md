@@ -995,7 +995,7 @@ git commit -m "fix: make architecture roles status read-only"
 - Modify: `bitloops/src/host/inference/text_generation.rs`
 - Modify: `bitloops/src/host/inference/text_generation/tests.rs`
 
-- [ ] **Step 1: Add inference env propagation test**
+- [x] **Step 1: Add inference env propagation test**
 
 Add this test to `bitloops/src/host/inference/text_generation/tests.rs` near existing `codex_exec` tests:
 
@@ -1053,7 +1053,7 @@ done
 }
 ```
 
-- [ ] **Step 2: Add non-agent runtime guard test**
+- [x] **Step 2: Add non-agent runtime guard test**
 
 Add this test to `bitloops/src/host/inference/text_generation/tests.rs`:
 
@@ -1111,7 +1111,7 @@ done
 }
 ```
 
-- [ ] **Step 3: Add hook env contract**
+- [x] **Step 3: Add hook env contract**
 
 In `bitloops/src/host/hooks.rs`, add:
 
@@ -1132,7 +1132,7 @@ pub(crate) fn agent_hooks_suppressed_by_env() -> bool {
 }
 ```
 
-- [ ] **Step 4: Add hook env helper tests**
+- [x] **Step 4: Add hook env helper tests**
 
 Add these tests to `bitloops/src/host/hooks/dispatcher.rs` under the existing `#[cfg(test)]` test area or in a new `#[cfg(test)] mod tests` at the bottom:
 
@@ -1167,7 +1167,7 @@ mod tests {
 
 If `dispatcher.rs` already has a test module by the time this task runs, add these two tests to that module instead of creating a second one.
 
-- [ ] **Step 5: Honor suppression in agent hook dispatch**
+- [x] **Step 5: Honor suppression in agent hook dispatch**
 
 In `bitloops/src/host/hooks/dispatcher.rs`, add the early return after the git-hook split and before repo root resolution:
 
@@ -1190,7 +1190,7 @@ pub async fn run(args: HooksArgs, strategy_registry: &StrategyRegistry) -> Resul
 
 This ensures suppressed internal inference hooks do not resolve repo state, initialize logging, touch runtime DBs, read settings, or emit telemetry.
 
-- [ ] **Step 6: Set the env only for CLI-agent structured-generation runtimes**
+- [x] **Step 6: Set the env only for CLI-agent structured-generation runtimes**
 
 In `bitloops/src/host/inference/text_generation.rs`, update the imports:
 
@@ -1221,7 +1221,7 @@ if should_suppress_agent_hooks_for_driver(&config.driver) {
 
 The env is placed on `bitloops-inference`; provider child processes inherit it, including Codex.
 
-- [ ] **Step 7: Run focused hook and inference tests**
+- [x] **Step 7: Run focused hook and inference tests**
 
 Run:
 
@@ -1231,7 +1231,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features --li
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit this task**
+- [x] **Step 8: Commit this task**
 
 ```bash
 git add bitloops/src/host/hooks.rs bitloops/src/host/hooks/dispatcher.rs bitloops/src/host/inference/text_generation.rs bitloops/src/host/inference/text_generation/tests.rs

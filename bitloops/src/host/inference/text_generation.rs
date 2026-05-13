@@ -19,9 +19,10 @@ use sha2::{Digest, Sha256};
 use crate::config::InferenceRuntimeConfig;
 
 use super::{
-    BITLOOPS_PLATFORM_CHAT_DRIVER, DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY,
-    OPENAI_CHAT_COMPLETIONS_DRIVER, StructuredGenerationRequest, StructuredGenerationService,
-    TextGenerationOptions, TextGenerationService,
+    BITLOOPS_PLATFORM_CHAT_DRIVER, CLAUDE_CODE_PRINT_DRIVER, CODEX_EXEC_DRIVER,
+    DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY, OPENAI_CHAT_COMPLETIONS_DRIVER,
+    StructuredGenerationRequest, StructuredGenerationService, TextGenerationOptions,
+    TextGenerationService,
 };
 
 const SHARED_TEXT_GENERATION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -505,6 +506,10 @@ fn text_generation_session_pool_size(driver: &str) -> usize {
     }
 }
 
+fn should_suppress_agent_hooks_for_driver(driver: &str) -> bool {
+    matches!(driver.trim(), CODEX_EXEC_DRIVER | CLAUDE_CODE_PRINT_DRIVER)
+}
+
 #[cfg(test)]
 type PlatformRuntimeAuthEnvironmentHook = dyn Fn() -> Result<Vec<(String, String)>>;
 #[cfg(test)]
@@ -671,6 +676,10 @@ impl BitloopsInferenceSession {
         command.arg("--profile").arg(&config.profile_name);
         if config.driver == BITLOOPS_PLATFORM_CHAT_DRIVER {
             command.envs(platform_runtime_auth_environment());
+        }
+        command.env_remove(crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV);
+        if should_suppress_agent_hooks_for_driver(&config.driver) {
+            command.env(crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, "1");
         }
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());

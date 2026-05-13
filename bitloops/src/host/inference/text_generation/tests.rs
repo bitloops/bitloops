@@ -457,6 +457,175 @@ fn codex_exec_runtime_does_not_request_platform_auth_environment() {
 }
 
 #[test]
+fn codex_exec_runtime_launch_sets_agent_hook_suppression_env() {
+    let _guard = test_lock();
+    let repo = tempfile::TempDir::new().expect("tempdir");
+    let script_path = repo.path().join("fake-codex-runtime.sh");
+    let env_log = repo.path().join("env.log");
+    fs::write(
+        &script_path,
+        format!(
+            r#"printf '%s\n' "${{{env_name}:-}}" > {env_log:?}
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"architecture_fact_synthesis_codex","provider":{{"kind":"codex_exec","provider_name":"codex","model_name":"gpt-5.4-mini","endpoint":"codex","capabilities":{{"response_modes":["json_object"],"usage_reporting":false,"structured_output":["json_object","json_schema"]}}}}}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{{"type":"shutdown","request_id":"%s"}}\n' "$request_id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+            env_name = crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV,
+            env_log = env_log.display(),
+        ),
+    )
+    .expect("write fake runtime");
+
+    let runtime = InferenceRuntimeConfig {
+        command: "/bin/sh".to_string(),
+        args: vec![script_path.to_string_lossy().into_owned()],
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+    };
+    let service = BitloopsInferenceTextGenerationService::new(
+        "architecture_fact_synthesis_codex",
+        CODEX_EXEC_DRIVER,
+        &runtime,
+        &repo.path().join(".bitloops/config.toml"),
+        default_request_defaults(),
+    )
+    .expect("build codex_exec service");
+
+    assert_eq!(
+        crate::host::inference::TextGenerationService::descriptor(&service),
+        "codex:gpt-5.4-mini"
+    );
+    assert_eq!(
+        fs::read_to_string(env_log).expect("read env log").trim(),
+        "1",
+        "internal codex_exec launcher must suppress Bitloops agent hooks"
+    );
+}
+
+#[test]
+fn non_agent_runtime_launch_does_not_set_agent_hook_suppression_env() {
+    let _guard = test_lock();
+    let repo = tempfile::TempDir::new().expect("tempdir");
+    let script_path = repo.path().join("fake-ollama-runtime.sh");
+    let env_log = repo.path().join("env.log");
+    fs::write(
+        &script_path,
+        format!(
+            r#"printf '%s\n' "${{{env_name}:-}}" > {env_log:?}
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local","provider":{{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":{{"response_modes":["text"],"usage_reporting":true,"structured_output":[]}}}}}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{{"type":"shutdown","request_id":"%s"}}\n' "$request_id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+            env_name = crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV,
+            env_log = env_log.display(),
+        ),
+    )
+    .expect("write fake runtime");
+
+    let runtime = InferenceRuntimeConfig {
+        command: "/bin/sh".to_string(),
+        args: vec![script_path.to_string_lossy().into_owned()],
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+    };
+    let service = BitloopsInferenceTextGenerationService::new(
+        "summary_local",
+        "ollama_chat",
+        &runtime,
+        &repo.path().join(".bitloops/config.toml"),
+        default_request_defaults(),
+    )
+    .expect("build non-agent service");
+
+    assert_eq!(
+        crate::host::inference::TextGenerationService::descriptor(&service),
+        "ollama:ministral-3:3b"
+    );
+    assert_eq!(
+        fs::read_to_string(env_log).expect("read env log").trim(),
+        "",
+        "non-agent inference runtimes should not receive hook suppression"
+    );
+}
+
+#[test]
+fn non_agent_runtime_launch_removes_inherited_agent_hook_suppression_env() {
+    let _guard = test_lock();
+    let repo = tempfile::TempDir::new().expect("tempdir");
+    let script_path = repo.path().join("fake-ollama-runtime.sh");
+    let env_log = repo.path().join("env.log");
+    fs::write(
+        &script_path,
+        format!(
+            r#"printf '%s\n' "${{{env_name}:-}}" > {env_log:?}
+while IFS= read -r line; do
+  request_id=$(printf '%s' "$line" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"describe"'*)
+      printf '{{"type":"describe","request_id":"%s","protocol_version":1,"runtime_name":"bitloops-inference","runtime_version":"0.1.0","profile_name":"summary_local_parent_env","provider":{{"kind":"ollama_chat","provider_name":"ollama","model_name":"ministral-3:3b","endpoint":"http://127.0.0.1:11434","capabilities":{{"response_modes":["text"],"usage_reporting":true,"structured_output":[]}}}}}}\n' "$request_id"
+      ;;
+    *'"type":"shutdown"'*)
+      printf '{{"type":"shutdown","request_id":"%s"}}\n' "$request_id"
+      exit 0
+      ;;
+  esac
+done
+"#,
+            env_name = crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV,
+            env_log = env_log.display(),
+        ),
+    )
+    .expect("write fake runtime");
+
+    let runtime = InferenceRuntimeConfig {
+        command: "/bin/sh".to_string(),
+        args: vec![script_path.to_string_lossy().into_owned()],
+        startup_timeout_secs: 5,
+        request_timeout_secs: 5,
+    };
+    let _state_guard = enter_process_state(
+        None,
+        &[(crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, Some("1"))],
+    );
+    let service = BitloopsInferenceTextGenerationService::new(
+        "summary_local_parent_env",
+        "ollama_chat",
+        &runtime,
+        &repo.path().join(".bitloops/config.toml"),
+        default_request_defaults(),
+    )
+    .expect("build non-agent service");
+
+    assert_eq!(
+        crate::host::inference::TextGenerationService::descriptor(&service),
+        "ollama:ministral-3:3b"
+    );
+    assert_eq!(
+        fs::read_to_string(env_log).expect("read env log").trim(),
+        "",
+        "non-agent inference runtimes should not inherit hook suppression"
+    );
+}
+
+#[test]
 fn runtime_service_reuses_hot_runtime_across_service_instances() {
     let _guard = test_lock();
     let temp = TempDir::new().expect("temp dir");
