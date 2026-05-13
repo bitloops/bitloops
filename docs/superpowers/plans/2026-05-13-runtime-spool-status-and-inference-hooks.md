@@ -1246,7 +1246,7 @@ git commit -m "fix: suppress agent hooks for internal CLI inference"
 - No new source files.
 - Uses the files changed in Tasks 1 through 4.
 
-- [ ] **Step 1: Run the focused library regression set**
+- [x] **Step 1: Run the focused library regression set**
 
 Run:
 
@@ -1256,7 +1256,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features --li
 
 Expected: PASS.
 
-- [ ] **Step 2: Run the relevant repo alias lane**
+- [x] **Step 2: Run the relevant repo alias lane**
 
 Run:
 
@@ -1266,7 +1266,7 @@ cargo dev-test-lib
 
 Expected: PASS. This is the broad relevant lane because all changes are library-level behavior under CLI, runtime store, hooks, and inference modules. Do not run all tests unless explicitly requested.
 
-- [ ] **Step 3: Run formatting and compile checks**
+- [x] **Step 3: Run formatting and compile checks**
 
 Run:
 
@@ -1277,7 +1277,11 @@ cargo dev-check
 
 Expected: PASS for both commands.
 
-- [ ] **Step 4: Optional manual reproduction check in a fixture repo**
+- [x] **Step 4: Optional manual reproduction check in a fixture repo**
+
+Not run: no configured disposable architecture roles fixture with daemon-owned local `codex_exec`
+was available in this workspace. Automated focused regressions and `cargo dev-test-lib`
+covered the implemented runtime/status and hook-suppression boundaries.
 
 Use a disposable or existing architecture roles fixture where daemon and local `codex_exec` are configured. Run the same shape as the original flow:
 
@@ -1294,7 +1298,7 @@ Expected:
 - During the local `codex_exec` inference window, `ps` or daemon logs should not show nested `bitloops hooks codex session-start` or `bitloops hooks codex user-prompt-submit` processes spawned by daemon-owned inference.
 - If role adjudication still reports `llm_error` about an invalid strict OpenAI schema, treat that as the separate `llm_executor.rs` schema issue called out in the File Map.
 
-- [ ] **Step 5: Commit verification-only adjustments if any**
+- [x] **Step 5: Commit verification-only adjustments if any**
 
 If the verification steps require small test-name or import fixes, commit them with the relevant prior task's commit message style. If no code changed during verification, do not create an empty commit.
 

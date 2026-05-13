@@ -603,7 +603,10 @@ done
     };
     let _state_guard = enter_process_state(
         None,
-        &[(crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, Some("1"))],
+        &[(
+            crate::host::hooks::BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV,
+            Some("1"),
+        )],
     );
     let service = BitloopsInferenceTextGenerationService::new(
         "summary_local_parent_env",

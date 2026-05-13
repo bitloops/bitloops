@@ -965,9 +965,7 @@ fn read_stdin() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::host::hooks::{
-        BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, agent_hooks_suppressed_by_env,
-    };
+    use crate::host::hooks::{BITLOOPS_SUPPRESS_AGENT_HOOKS_ENV, agent_hooks_suppressed_by_env};
     use crate::test_support::process_state::enter_process_state;
 
     #[test]
