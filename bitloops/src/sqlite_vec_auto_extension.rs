@@ -1,8 +1,4 @@
 use anyhow::{Result, anyhow};
-<<<<<<< Updated upstream
-use std::sync::OnceLock;
-
-=======
 use std::ffi::{c_char, c_int};
 use std::sync::OnceLock;
 
@@ -14,8 +10,6 @@ unsafe extern "C" {
         api: *const rusqlite::ffi::sqlite3_api_routines,
     ) -> c_int;
 }
-
->>>>>>> Stashed changes
 pub(crate) fn register_sqlite_vec_auto_extension() -> Result<()> {
     static REGISTRATION: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
@@ -34,18 +28,8 @@ fn register_sqlite_vec_auto_extension_once() -> std::result::Result<(), String> 
 }
 
 fn raw_sqlite_vec_auto_extension() -> rusqlite::auto_extension::RawAutoExtension {
-<<<<<<< Updated upstream
-    // Safety: sqlite-vec exports the standard SQLite extension entrypoint, but the
-    // crate exposes it as an untyped extern symbol, so we cast it once here.
-    unsafe {
-        std::mem::transmute::<*const (), rusqlite::auto_extension::RawAutoExtension>(
-            sqlite_vec::sqlite3_vec_init as *const (),
-        )
-    }
-=======
     let _ = sqlite_vec::sqlite3_vec_init as *const ();
     sqlite3_vec_init_raw
->>>>>>> Stashed changes
 }
 
 #[cfg(test)]

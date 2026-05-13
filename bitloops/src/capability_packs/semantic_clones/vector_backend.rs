@@ -222,12 +222,8 @@ pub(crate) async fn build_sqlite_current_vec_table_init_statements(
             "INSERT INTO {table_name} (embedding, repo_id, representation_kind, setup_fingerprint, artefact_id, path) \
              SELECT vec_f32(embedding), repo_id, representation_kind, setup_fingerprint, artefact_id, path \
              FROM symbol_embeddings_current \
-<<<<<<< Updated upstream
-             WHERE dimension = {dimension}",
-=======
              WHERE dimension = {dimension} \
                AND NOT EXISTS (SELECT 1 FROM {table_name} LIMIT 1)",
->>>>>>> Stashed changes
         ),
     ])
 }
@@ -757,18 +753,13 @@ mod tests {
         assert!(statements[1].contains("INSERT INTO semantic_embedding_current_vec_dim_3"));
         assert!(statements[1].contains("FROM symbol_embeddings_current"));
         assert!(statements[1].contains("WHERE dimension = 3"));
-<<<<<<< Updated upstream
-=======
         assert!(statements[1].contains(
             "AND NOT EXISTS (SELECT 1 FROM semantic_embedding_current_vec_dim_3 LIMIT 1)"
         ));
->>>>>>> Stashed changes
         assert!(statements[1].contains("vec_f32(embedding)"));
     }
 
     #[tokio::test]
-<<<<<<< Updated upstream
-=======
     async fn sqlite_vec_table_init_backfill_stays_idempotent_when_two_batches_race() {
         let temp = tempfile::tempdir().expect("create temp dir");
         let sqlite_path = temp.path().join("semantic.sqlite");
@@ -825,7 +816,6 @@ mod tests {
     }
 
     #[tokio::test]
->>>>>>> Stashed changes
     async fn sqlite_vec_sync_and_clear_keep_dimension_tables_in_sync() {
         let temp = tempfile::tempdir().expect("create temp dir");
         let sqlite_path = temp.path().join("semantic.sqlite");

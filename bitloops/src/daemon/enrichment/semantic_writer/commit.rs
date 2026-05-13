@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use rusqlite::Connection;
 use std::fmt;
+use std::time::Duration;
 use std::time::Instant;
 
 use crate::config::resolve_store_backend_config_for_repo;
@@ -237,7 +238,7 @@ pub(super) fn execute_embedding_commit(
             .postgres_dsn
             .ok_or_else(|| anyhow!("semantic embedding remote commit requires Postgres DSN"))?;
         PostgresSyncConnection::connect(dsn)?
-            .with_client(|client| {
+            .with_client_timeout(Duration::from_secs(30), |client| {
                 let statements = request
                     .remote_embedding_statements
                     .iter()
