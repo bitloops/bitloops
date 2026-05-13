@@ -129,16 +129,23 @@ impl DevqlTaskCoordinator {
 
     fn schedule_pending_producer_spool_jobs(self: &Arc<Self>, config_root: &Path) -> Result<bool> {
         let state = self.load_state()?;
-        let running_task_repo_ids = state
+        let running_tasks = state
             .tasks
             .iter()
             .filter(|task| task.status == DevqlTaskStatus::Running)
-            .map(|task| task.repo_id.clone())
-            .collect();
+            .map(|task| {
+                crate::host::devql::ProducerSpoolRunningTask::new(
+                    task.repo_id.clone(),
+                    task.kind,
+                    task.source,
+                )
+            })
+            .collect::<Vec<_>>();
         let post_commit_derivation_guards = post_commit_derivation_claim_guards(&state);
         let jobs = crate::host::devql::claim_next_producer_spool_jobs_excluding(
             config_root,
-            &running_task_repo_ids,
+            &std::collections::HashSet::new(),
+            &running_tasks,
             &post_commit_derivation_guards,
         )?;
         if jobs.is_empty() {

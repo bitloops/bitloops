@@ -58,12 +58,12 @@ impl RuntimeQueryRoot {
             .await
             .map_err(map_runtime_api_error)?;
         crate::daemon::shared_init_runtime_coordinator()
-            .snapshot_for_repo(&cfg)
-            .map(Into::into)
+            .overview_snapshot_for_repo(&cfg)
+            .map(|snapshot| RuntimeSnapshotObject::from_overview(cfg, snapshot))
             .map_err(|err| {
                 graphql_error(
                     "internal",
-                    format!("failed to load runtime snapshot: {err:#}"),
+                    format!("failed to load runtime snapshot overview: {err:#}"),
                 )
             })
     }

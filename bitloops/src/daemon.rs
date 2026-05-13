@@ -93,9 +93,13 @@ pub use self::enrichment::EnrichmentJobTarget;
 pub use self::init_runtime::{InitRuntimeCoordinator, InitSessionHandle, RuntimeEventRecord};
 pub(crate) use self::init_runtime::{
     InitRuntimeLaneProgressView, InitRuntimeLaneQueueView, InitRuntimeLaneView,
-    InitRuntimeLaneWarningView, InitRuntimeSessionView, InitRuntimeSnapshot,
-    InitRuntimeWorkplaneMailboxSnapshot, InitRuntimeWorkplanePoolSnapshot,
+    InitRuntimeLaneWarningView, InitRuntimeOverviewSnapshot, InitRuntimeSessionView,
+    InitRuntimeSnapshot, InitRuntimeWorkplaneMailboxSnapshot, InitRuntimeWorkplanePoolSnapshot,
     InitRuntimeWorkplaneSnapshot, PersistedInitSessionState, PersistedSummaryBootstrapState,
+};
+#[cfg(test)]
+pub(crate) use self::init_runtime::{
+    reset_runtime_lane_progress_load_count, runtime_lane_progress_load_count,
 };
 pub use self::logger::{ProcessLogContext, daemon_log_file_path, init_process_logger};
 // Staged for the runtime schema watcher mutation added in CLI-1832 Task 2.

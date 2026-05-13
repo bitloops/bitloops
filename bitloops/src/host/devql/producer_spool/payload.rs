@@ -66,6 +66,25 @@ pub(super) fn prune_excluded_paths_from_payload(
                 })
             }
         }
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash,
+        } => {
+            let changed_files = changed_files
+                .into_iter()
+                .filter(|path| !matcher.excludes_repo_relative_path(path))
+                .collect::<Vec<_>>();
+            if changed_files.is_empty() {
+                None
+            } else {
+                Some(ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                    merge_head_sha,
+                    changed_files,
+                    is_squash,
+                })
+            }
+        }
         payload => Some(payload),
     }
 }
@@ -109,6 +128,28 @@ pub(super) fn merge_pending_payload(
                     mode: SyncTaskMode::Paths { paths },
                     post_commit_snapshot: None,
                 }),
+            }
+        }
+        (
+            ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                merge_head_sha,
+                changed_files: existing_paths,
+                is_squash: existing_is_squash,
+            },
+            ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                changed_files: incoming_paths,
+                is_squash: incoming_is_squash,
+                ..
+            },
+        ) => {
+            let mut changed_files = existing_paths;
+            changed_files.extend(incoming_paths);
+            changed_files.sort();
+            changed_files.dedup();
+            ProducerSpoolJobPayload::PostMergeSyncRefresh {
+                merge_head_sha,
+                changed_files,
+                is_squash: existing_is_squash || incoming_is_squash,
             }
         }
         (_, incoming) => incoming,
