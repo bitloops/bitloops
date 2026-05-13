@@ -42,8 +42,8 @@ use super::tasks::{
     summary_run_from_task_ref, summary_status_is_failed, task_status_is_failed,
 };
 use super::types::{
-    InitRuntimeLaneView, InitRuntimeSessionView, InitRuntimeSnapshot, InitSessionHandle,
-    RuntimeEventRecord,
+    InitRuntimeLaneView, InitRuntimeOverviewSnapshot, InitRuntimeSessionView, InitRuntimeSnapshot,
+    InitSessionHandle, RuntimeEventRecord,
 };
 use super::workplane::{repo_blocked_mailboxes, workplane_snapshot_from_mailboxes};
 
@@ -261,7 +261,10 @@ impl InitRuntimeCoordinator {
         Ok(())
     }
 
-    pub(crate) fn snapshot_for_repo(&self, cfg: &DevqlConfig) -> Result<InitRuntimeSnapshot> {
+    pub(crate) fn overview_snapshot_for_repo(
+        &self,
+        cfg: &DevqlConfig,
+    ) -> Result<InitRuntimeOverviewSnapshot> {
         let repo_store =
             RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
         let repo_id = cfg.repo.repo_id.clone();
@@ -290,9 +293,8 @@ impl InitRuntimeCoordinator {
                 vec![cfg.daemon_config_root.clone()],
             )?;
         let summaries_bootstrap = self.current_summary_bootstrap_run(&repo_id)?;
-        let current_session = self.current_session_view(cfg, &repo_store)?;
 
-        Ok(InitRuntimeSnapshot {
+        Ok(InitRuntimeOverviewSnapshot {
             repo_id,
             task_queue,
             current_state_consumer,
@@ -300,6 +302,30 @@ impl InitRuntimeCoordinator {
             blocked_mailboxes,
             embeddings_readiness_gate,
             summaries_bootstrap,
+        })
+    }
+
+    pub(crate) fn current_session_for_repo(
+        &self,
+        cfg: &DevqlConfig,
+    ) -> Result<Option<InitRuntimeSessionView>> {
+        let repo_store =
+            RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
+        self.current_session_view(cfg, &repo_store)
+    }
+
+    pub(crate) fn snapshot_for_repo(&self, cfg: &DevqlConfig) -> Result<InitRuntimeSnapshot> {
+        let overview = self.overview_snapshot_for_repo(cfg)?;
+        let current_session = self.current_session_for_repo(cfg)?;
+
+        Ok(InitRuntimeSnapshot {
+            repo_id: overview.repo_id,
+            task_queue: overview.task_queue,
+            current_state_consumer: overview.current_state_consumer,
+            workplane: overview.workplane,
+            blocked_mailboxes: overview.blocked_mailboxes,
+            embeddings_readiness_gate: overview.embeddings_readiness_gate,
+            summaries_bootstrap: overview.summaries_bootstrap,
             current_init_session: current_session,
         })
     }

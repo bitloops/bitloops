@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 
@@ -9,11 +11,26 @@ use crate::config::resolve_semantic_clones_config_for_repo;
 use crate::daemon::types::InitSessionRecord;
 use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 
-use super::embedding_freshness::load_embedding_freshness_state;
+use super::embedding_freshness::{
+    EmbeddingFreshnessCountSelection, load_embedding_freshness_counts, query_progress_count,
+};
 use super::stats::{RuntimeLaneProgressState, SessionWorkplaneStats, SummaryFreshnessState};
 use super::types::InitRuntimeLaneProgressView;
 
 const CURRENT_SUMMARY_SEMANTICS_TABLE: &str = "symbol_semantics_current";
+
+#[cfg(test)]
+static RUNTIME_LANE_PROGRESS_LOADS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+pub(crate) fn reset_runtime_lane_progress_load_count() {
+    RUNTIME_LANE_PROGRESS_LOADS.store(0, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn runtime_lane_progress_load_count() -> usize {
+    RUNTIME_LANE_PROGRESS_LOADS.load(Ordering::SeqCst)
+}
 
 pub(crate) fn load_runtime_lane_progress(
     repo_root: &Path,
@@ -22,27 +39,41 @@ pub(crate) fn load_runtime_lane_progress(
     _stats: &SessionWorkplaneStats,
     summary_in_memory_completed: u64,
 ) -> Result<RuntimeLaneProgressState> {
-    let relational =
-        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
-    let embedding_freshness = load_embedding_freshness_state(&relational, repo_id)?;
-    let total_eligible = embedding_freshness.eligible_artefact_ids.len() as u64;
-    let summaries_completed = count_current_model_backed_summary_artefacts(&relational, repo_id)?;
-    let semantic_clones = resolve_semantic_clones_config_for_repo(repo_root);
+    #[cfg(test)]
+    RUNTIME_LANE_PROGRESS_LOADS.fetch_add(1, Ordering::SeqCst);
 
+    let semantic_clones = resolve_semantic_clones_config_for_repo(repo_root);
     let code_embeddings_enabled =
         embedding_slot_for_representation(&semantic_clones, EmbeddingRepresentationKind::Code)
             .is_some();
     let summary_embeddings_enabled =
         embedding_slot_for_representation(&semantic_clones, EmbeddingRepresentationKind::Summary)
             .is_some();
-    let code_embeddings_total =
-        u64::from(session.selections.run_code_embeddings && code_embeddings_enabled)
-            * total_eligible;
-    let summary_embeddings_total =
-        u64::from(session.selections.run_summary_embeddings && summary_embeddings_enabled)
-            * total_eligible;
+    let needs_code_embeddings = session.selections.run_code_embeddings && code_embeddings_enabled;
+    let needs_summaries = session.selections.run_summaries;
+    let needs_summary_embeddings =
+        session.selections.run_summary_embeddings && summary_embeddings_enabled;
+
+    if !needs_code_embeddings && !needs_summaries && !needs_summary_embeddings {
+        return Ok(RuntimeLaneProgressState::default());
+    }
+
+    let relational =
+        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
+    let embedding_freshness = load_embedding_freshness_counts(
+        &relational,
+        repo_id,
+        EmbeddingFreshnessCountSelection {
+            code_lane: needs_code_embeddings,
+            summary_embeddings: needs_summary_embeddings,
+        },
+    )?;
+    let total_eligible = embedding_freshness.eligible;
+    let summaries_completed = count_current_model_backed_summary_artefacts(&relational, repo_id)?;
+    let code_embeddings_total = u64::from(needs_code_embeddings) * total_eligible;
+    let summary_embeddings_total = u64::from(needs_summary_embeddings) * total_eligible;
     let code_embeddings_completed = embedding_freshness
-        .code_lane_completed_count()
+        .code_lane_completed
         .min(code_embeddings_total);
     let summaries_total = if session.selections.run_summaries {
         total_eligible
@@ -51,35 +82,34 @@ pub(crate) fn load_runtime_lane_progress(
     };
     let summaries_completed = summaries_completed.min(summaries_total);
     let summary_embeddings_completed = embedding_freshness
-        .summary_embeddings_completed_count()
+        .fresh_summary
         .min(summary_embeddings_total);
     let summary_in_memory_completed =
         summary_in_memory_completed.min(summaries_total.saturating_sub(summaries_completed));
 
     Ok(RuntimeLaneProgressState {
-        code_embeddings: (session.selections.run_code_embeddings && code_embeddings_total > 0)
-            .then(|| InitRuntimeLaneProgressView {
+        code_embeddings: (needs_code_embeddings && code_embeddings_total > 0).then(|| {
+            InitRuntimeLaneProgressView {
                 completed: code_embeddings_completed,
                 in_memory_completed: 0,
                 total: code_embeddings_total,
                 remaining: code_embeddings_total.saturating_sub(code_embeddings_completed),
-            }),
-        summaries: (session.selections.run_summaries && summaries_total > 0).then(|| {
-            InitRuntimeLaneProgressView {
-                completed: summaries_completed,
-                in_memory_completed: summary_in_memory_completed,
-                total: summaries_total,
-                remaining: summaries_total.saturating_sub(summaries_completed),
             }
         }),
-        summary_embeddings: (session.selections.run_summary_embeddings
-            && summary_embeddings_total > 0)
-            .then(|| InitRuntimeLaneProgressView {
+        summaries: (needs_summaries && summaries_total > 0).then(|| InitRuntimeLaneProgressView {
+            completed: summaries_completed,
+            in_memory_completed: summary_in_memory_completed,
+            total: summaries_total,
+            remaining: summaries_total.saturating_sub(summaries_completed),
+        }),
+        summary_embeddings: (needs_summary_embeddings && summary_embeddings_total > 0).then(|| {
+            InitRuntimeLaneProgressView {
                 completed: summary_embeddings_completed,
                 in_memory_completed: 0,
                 total: summary_embeddings_total,
                 remaining: summary_embeddings_total.saturating_sub(summary_embeddings_completed),
-            }),
+            }
+        }),
     })
 }
 
@@ -169,17 +199,6 @@ fn fresh_model_backed_summary_artefacts_sql(repo_id: &str) -> String {
                 ) \
            )",
     )
-}
-
-fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {
-    let sqlite = relational.local_sqlite_pool()?;
-    let count =
-        sqlite.with_connection(|conn| Ok(conn.query_row(sql, [], |row| row.get::<_, i64>(0))?));
-    match count {
-        Ok(value) => Ok(u64::try_from(value).unwrap_or_default()),
-        Err(err) if missing_progress_table(&err) => Ok(0),
-        Err(err) => Err(err),
-    }
 }
 
 fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<BTreeSet<String>> {
