@@ -494,7 +494,7 @@ fn rank_semantic_candidates(
         .filter_map(|candidate| {
             let score =
                 normalized_cosine_similarity(query_embedding, candidate.embedding.as_slice())?;
-            (score >= min_score).then(|| RankedSemanticArtefact {
+            (score >= min_score).then_some(RankedSemanticArtefact {
                 artefact: candidate.artefact,
                 score,
             })

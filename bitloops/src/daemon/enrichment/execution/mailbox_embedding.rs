@@ -35,11 +35,11 @@ use crate::capability_packs::semantic_clones::{
     build_embedding_setup_persist_sql, build_postgres_current_symbol_embedding_persist_sql,
     build_postgres_symbol_embedding_persist_sql, build_sqlite_symbol_embedding_persist_sql,
     build_symbol_feature_persist_rows_sql, load_current_semantic_summary_map,
-    load_semantic_feature_inputs_for_current_paths,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
     DevqlConfig, RelationalPrimaryBackend, RelationalStorage, build_capability_host, esc_pg,
+    sql_string_list_pg,
 };
 use crate::host::runtime_store::{
     CapabilityWorkplaneJobInsert, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
@@ -256,23 +256,27 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let mut keep_current_artefact_ids_by_path_content =
         BTreeMap::<(String, String), Vec<String>>::new();
     if should_prune_stale_current_rows {
-        let touched_paths = current_by_artefact
-            .values()
-            .map(|input| input.path.clone())
-            .collect::<Vec<_>>();
-        for input in load_semantic_feature_inputs_for_current_paths(
-            &relational,
-            &batch.repo_root,
-            &batch.repo_id,
-            &touched_paths,
-        )
-        .await?
-        {
+        for input in current_by_artefact.values() {
             current_paths_by_content.insert((input.path.clone(), input.blob_sha.clone()));
             keep_current_artefact_ids_by_path_content
                 .entry((input.path.clone(), input.blob_sha.clone()))
                 .or_default()
                 .push(input.artefact_id.clone());
+        }
+        for (path, content_id) in &current_paths_by_content {
+            keep_current_artefact_ids_by_path_content
+                .entry((path.clone(), content_id.clone()))
+                .or_default()
+                .extend(
+                    load_existing_current_embedding_artefact_ids_for_path_content(
+                        &relational,
+                        &batch.repo_id,
+                        path,
+                        content_id,
+                        batch.representation_kind,
+                    )
+                    .await?,
+                );
         }
         for keep_artefact_ids in keep_current_artefact_ids_by_path_content.values_mut() {
             keep_artefact_ids.sort();
@@ -566,6 +570,47 @@ WHERE current.repo_id = '{}' \
   AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) <> 'import' \
 ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.start_byte, 0), current.artefact_id",
             esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row: Value| {
+            row.get("artefact_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+async fn load_existing_current_embedding_artefact_ids_for_path_content(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    path: &str,
+    content_id: &str,
+    representation_kind: EmbeddingRepresentationKind,
+) -> Result<Vec<String>> {
+    let representation_values = representation_kind
+        .storage_values()
+        .iter()
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>();
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT DISTINCT current.artefact_id AS artefact_id \
+FROM artefacts_current current \
+JOIN symbol_embeddings_current embedding \
+  ON embedding.repo_id = current.repo_id \
+ AND embedding.artefact_id = current.artefact_id \
+ AND embedding.content_id = current.content_id \
+WHERE current.repo_id = '{repo_id}' \
+  AND current.path = '{path}' \
+  AND current.content_id = '{content_id}' \
+  AND embedding.representation_kind IN ({representation_values}) \
+ORDER BY current.artefact_id",
+            repo_id = esc_pg(repo_id),
+            path = esc_pg(path),
+            content_id = esc_pg(content_id),
+            representation_values = sql_string_list_pg(&representation_values),
         ))
         .await?;
     Ok(rows
