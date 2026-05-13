@@ -2,12 +2,10 @@ use crate::daemon::{DevqlTaskKind, DevqlTaskSource, DevqlTaskSpec};
 
 use super::ProducerSpoolJobPayload;
 
-const SYNC_TASK_KINDS: &[DevqlTaskKind] = &[DevqlTaskKind::Sync];
-const SYNC_AND_INGEST_TASK_KINDS: &[DevqlTaskKind] = &[DevqlTaskKind::Sync, DevqlTaskKind::Ingest];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProducerSpoolAdmissionClass {
     PromoteVisibleTask { kind: DevqlTaskKind },
+    ExpandVisibleTask { kind: DevqlTaskKind },
     ExpandVisibleTasks { kinds: &'static [DevqlTaskKind] },
     InlineRepoExclusive,
 }
@@ -42,20 +40,20 @@ pub(crate) fn producer_spool_admission_class(
                 kind: task_kind_from_spec(spec),
             }
         }
-        ProducerSpoolJobPayload::PostCommitRefresh { .. } => {
-            ProducerSpoolAdmissionClass::ExpandVisibleTasks {
-                kinds: SYNC_TASK_KINDS,
+        ProducerSpoolJobPayload::PostCommitRefresh { .. }
+        | ProducerSpoolJobPayload::PostMergeSyncRefresh { .. } => {
+            ProducerSpoolAdmissionClass::ExpandVisibleTask {
+                kind: DevqlTaskKind::Sync,
+            }
+        }
+        ProducerSpoolJobPayload::PostMergeIngestBackfill { .. } => {
+            ProducerSpoolAdmissionClass::ExpandVisibleTask {
+                kind: DevqlTaskKind::Ingest,
             }
         }
         ProducerSpoolJobPayload::PostMergeRefresh { .. } => {
             ProducerSpoolAdmissionClass::ExpandVisibleTasks {
-                kinds: SYNC_AND_INGEST_TASK_KINDS,
-            }
-        }
-        ProducerSpoolJobPayload::PostMergeSyncRefresh { .. }
-        | ProducerSpoolJobPayload::PostMergeIngestBackfill { .. } => {
-            ProducerSpoolAdmissionClass::ExpandVisibleTasks {
-                kinds: SYNC_AND_INGEST_TASK_KINDS,
+                kinds: &[DevqlTaskKind::Sync, DevqlTaskKind::Ingest],
             }
         }
         ProducerSpoolJobPayload::PostCommitDerivation { .. }
@@ -80,7 +78,8 @@ pub(crate) fn producer_spool_payload_conflicts_with_running_task(
     }
 
     match producer_spool_admission_class(payload) {
-        ProducerSpoolAdmissionClass::PromoteVisibleTask { kind } => running_task.kind == kind,
+        ProducerSpoolAdmissionClass::PromoteVisibleTask { kind }
+        | ProducerSpoolAdmissionClass::ExpandVisibleTask { kind } => running_task.kind == kind,
         ProducerSpoolAdmissionClass::ExpandVisibleTasks { kinds } => {
             kinds.contains(&running_task.kind)
         }
@@ -140,6 +139,21 @@ mod tests {
         ProducerSpoolJobPayload::PostMergeRefresh {
             head_sha: "commit-b".to_string(),
             changed_files: vec!["src/lib.rs".to_string()],
+        }
+    }
+
+    fn post_merge_sync_payload() -> ProducerSpoolJobPayload {
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha: "merge-head".to_string(),
+            changed_files: vec!["src/lib.rs".to_string()],
+            is_squash: false,
+        }
+    }
+
+    fn post_merge_ingest_payload() -> ProducerSpoolJobPayload {
+        ProducerSpoolJobPayload::PostMergeIngestBackfill {
+            merge_head_sha: "merge-head".to_string(),
+            is_squash: false,
         }
     }
 
@@ -208,29 +222,52 @@ mod tests {
     }
 
     #[test]
-    fn producer_spool_admission_post_merge_refresh_conflicts_with_same_repo_running_sync() {
+    fn producer_spool_admission_post_merge_sync_conflicts_with_same_repo_running_sync() {
         assert!(producer_spool_payload_conflicts_with_running_task(
-            &post_merge_refresh_payload(),
+            &post_merge_sync_payload(),
             "repo-a",
             &running_task(DevqlTaskKind::Sync),
         ));
     }
 
     #[test]
-    fn producer_spool_admission_post_merge_refresh_conflicts_with_same_repo_running_ingest() {
-        assert!(producer_spool_payload_conflicts_with_running_task(
-            &post_merge_refresh_payload(),
+    fn producer_spool_admission_post_merge_sync_does_not_conflict_with_running_ingest() {
+        assert!(!producer_spool_payload_conflicts_with_running_task(
+            &post_merge_sync_payload(),
             "repo-a",
             &running_task(DevqlTaskKind::Ingest),
         ));
     }
 
     #[test]
-    fn producer_spool_admission_post_merge_refresh_does_not_conflict_with_other_same_repo_kind() {
+    fn producer_spool_admission_post_merge_ingest_conflicts_with_same_repo_running_ingest() {
+        assert!(producer_spool_payload_conflicts_with_running_task(
+            &post_merge_ingest_payload(),
+            "repo-a",
+            &running_task(DevqlTaskKind::Ingest),
+        ));
+    }
+
+    #[test]
+    fn producer_spool_admission_post_merge_ingest_does_not_conflict_with_running_sync() {
         assert!(!producer_spool_payload_conflicts_with_running_task(
+            &post_merge_ingest_payload(),
+            "repo-a",
+            &running_task(DevqlTaskKind::Sync),
+        ));
+    }
+
+    #[test]
+    fn producer_spool_admission_legacy_post_merge_refresh_stays_conservative() {
+        assert!(producer_spool_payload_conflicts_with_running_task(
             &post_merge_refresh_payload(),
             "repo-a",
-            &running_task(DevqlTaskKind::EmbeddingsBootstrap),
+            &running_task(DevqlTaskKind::Sync),
+        ));
+        assert!(producer_spool_payload_conflicts_with_running_task(
+            &post_merge_refresh_payload(),
+            "repo-a",
+            &running_task(DevqlTaskKind::Ingest),
         ));
     }
 
