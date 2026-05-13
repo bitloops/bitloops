@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **Architecture-graph current-state reconcile now uses substantially less memory on large repositories**: `architecture_graph` now streams current canonical artefacts and dependency edges from the relational gateway instead of loading both tables into full in-memory vectors, `CHANGE_UNIT -> IMPACTS` edges now keep only the matched target paths instead of duplicating the entire affected-path set on every edge, and graph replacement now writes nodes, edges, and run metadata through prepared SQLite statements inside one atomic serialized transaction instead of materializing one giant SQL-string batch. This reduces init-time memory spikes while preserving graph topology, current-table atomicity, and reconcile metrics.
+- **The daemon now proactively gives memory back after heavy full-reconcile work finishes**: `architecture_graph` now drops its large transient build buffers before persisting the graph, and once a repo's full-reconcile current-state queue becomes idle the daemon captures process memory, invokes a platform reclaim hook (`malloc_zone_pressure_relief` on macOS, `malloc_trim` on Linux), and logs before/after resident and physical-footprint values. This reduces the long-lived post-sync memory retention that could remain after `Applying codebase updates` completed, without changing public APIs or graph output.
 
 
 ## [0.0.25] - 2026-05-12

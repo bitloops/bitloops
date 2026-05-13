@@ -1,16 +1,24 @@
+use std::collections::VecDeque;
 use std::fs;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rusqlite::params;
 use tempfile::TempDir;
 
 use crate::daemon::capability_events::queue::sql_i64;
+use crate::daemon::memory::{MemoryMaintenance, ProcessMemorySnapshot};
 use crate::daemon::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 use crate::host::capability_host::{DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff};
 use crate::host::devql::{DevqlConfig, SyncSummary, resolve_repo_identity};
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 use crate::test_support::git_fixtures::{init_test_repo, write_test_daemon_config};
 
-use super::types::{CapabilityEventCoordinator, RunCompletion, SyncGenerationInput};
+use super::{
+    CapabilityEventCoordinator, IdleReclaimLogFields, RunCompletion, SyncGenerationInput,
+    build_idle_reclaim_log_fields, should_attempt_idle_reclaim,
+};
 
 fn test_runtime_store(dir: &TempDir) -> DaemonSqliteRuntimeStore {
     DaemonSqliteRuntimeStore::open_at(dir.path().join("runtime.sqlite"))
@@ -99,6 +107,42 @@ fn insert_run_row(store: &DaemonSqliteRuntimeStore, run: &CapabilityEventRunReco
 fn test_cfg(repo_root: &std::path::Path) -> DevqlConfig {
     let repo = resolve_repo_identity(repo_root).expect("resolve repo identity");
     DevqlConfig::from_env(repo_root.to_path_buf(), repo).expect("build devql config")
+}
+
+#[derive(Debug)]
+struct StubMemoryMaintenance {
+    snapshots: Mutex<VecDeque<Option<ProcessMemorySnapshot>>>,
+    release_calls: AtomicUsize,
+    release_result: bool,
+}
+
+impl StubMemoryMaintenance {
+    fn new(snapshots: Vec<Option<ProcessMemorySnapshot>>, release_result: bool) -> Self {
+        Self {
+            snapshots: Mutex::new(VecDeque::from(snapshots)),
+            release_calls: AtomicUsize::new(0),
+            release_result,
+        }
+    }
+
+    fn release_calls(&self) -> usize {
+        self.release_calls.load(Ordering::SeqCst)
+    }
+}
+
+impl MemoryMaintenance for StubMemoryMaintenance {
+    fn capture_process_memory(&self) -> Option<ProcessMemorySnapshot> {
+        self.snapshots
+            .lock()
+            .expect("lock snapshots")
+            .pop_front()
+            .unwrap_or(None)
+    }
+
+    fn release_unused_pages(&self) -> bool {
+        self.release_calls.fetch_add(1, Ordering::SeqCst);
+        self.release_result
+    }
 }
 
 #[test]
@@ -255,4 +299,120 @@ fn snapshot_uses_latest_run_status_and_timestamp() {
     let snapshot = coordinator.snapshot(None).expect("snapshot queue");
     assert_eq!(snapshot.state.last_action.as_deref(), Some("failed"));
     assert_eq!(snapshot.state.last_updated_unix, 42);
+}
+
+#[test]
+fn should_attempt_idle_reclaim_only_for_completed_full_reconcile_runs() {
+    let mut merged_delta = sample_run(CapabilityEventRunStatus::Completed);
+    merged_delta.reconcile_mode = "merged_delta".to_string();
+    let mut full_reconcile = sample_run(CapabilityEventRunStatus::Completed);
+    full_reconcile.reconcile_mode = "full_reconcile".to_string();
+
+    assert!(!should_attempt_idle_reclaim(
+        &RunCompletion::NoopCompleted {
+            run: merged_delta.clone(),
+        }
+    ));
+    assert!(!should_attempt_idle_reclaim(
+        &RunCompletion::RetryableFailure {
+            run: merged_delta.clone(),
+            error: "retry".to_string(),
+        }
+    ));
+    assert!(!should_attempt_idle_reclaim(&RunCompletion::Failed {
+        run: merged_delta.clone(),
+        error: "failed".to_string(),
+    }));
+    assert!(!should_attempt_idle_reclaim(&RunCompletion::Completed {
+        run: merged_delta,
+        applied_to_generation_seq: 5,
+    }));
+    assert!(should_attempt_idle_reclaim(&RunCompletion::Completed {
+        run: full_reconcile,
+        applied_to_generation_seq: 5,
+    }));
+}
+
+#[test]
+fn idle_reclaim_log_fields_tolerate_missing_snapshot_values() {
+    let fields = build_idle_reclaim_log_fields(
+        Some(ProcessMemorySnapshot {
+            resident_bytes: Some(1024),
+            phys_footprint_bytes: None,
+        }),
+        None,
+        false,
+    );
+
+    assert_eq!(
+        fields,
+        IdleReclaimLogFields {
+            resident_before_bytes: Some(1024),
+            resident_after_bytes: None,
+            phys_before_bytes: None,
+            phys_after_bytes: None,
+            release_called: false,
+        }
+    );
+}
+
+#[tokio::test]
+async fn maybe_reclaim_after_repo_idle_triggers_for_completed_full_reconcile() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let memory = Arc::new(StubMemoryMaintenance::new(
+        vec![
+            Some(ProcessMemorySnapshot {
+                resident_bytes: Some(8_000),
+                phys_footprint_bytes: Some(2_000),
+            }),
+            Some(ProcessMemorySnapshot {
+                resident_bytes: Some(3_000),
+                phys_footprint_bytes: Some(500),
+            }),
+        ],
+        true,
+    ));
+    let coordinator =
+        CapabilityEventCoordinator::new_shared_instance_with_memory(store, memory.clone());
+    let mut run = sample_run(CapabilityEventRunStatus::Completed);
+    run.reconcile_mode = "full_reconcile".to_string();
+
+    coordinator
+        .maybe_reclaim_after_repo_idle(&RunCompletion::Completed {
+            run,
+            applied_to_generation_seq: 5,
+        })
+        .await
+        .expect("reclaim should succeed");
+
+    assert_eq!(memory.release_calls(), 1);
+}
+
+#[tokio::test]
+async fn maybe_reclaim_after_repo_idle_skips_when_repo_still_has_current_work() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let memory = Arc::new(StubMemoryMaintenance::new(Vec::new(), true));
+    let coordinator =
+        CapabilityEventCoordinator::new_shared_instance_with_memory(store.clone(), memory.clone());
+
+    let mut queued = sample_run(CapabilityEventRunStatus::Queued);
+    queued.run_id = "queued-run".to_string();
+    queued.reconcile_mode = "merged_delta".to_string();
+    insert_run_row(&store, &queued);
+
+    let mut completed = sample_run(CapabilityEventRunStatus::Completed);
+    completed.run_id = "completed-run".to_string();
+    completed.reconcile_mode = "full_reconcile".to_string();
+
+    coordinator
+        .maybe_reclaim_after_repo_idle(&RunCompletion::Completed {
+            run: completed,
+            applied_to_generation_seq: 5,
+        })
+        .await
+        .expect("skip path should succeed");
+
+    assert_eq!(memory.release_calls(), 0);
 }

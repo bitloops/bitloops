@@ -31,6 +31,9 @@ pub(crate) use self::instance::test_shared_instance_at;
 #[cfg(test)]
 pub(super) use self::types::{MAX_RUN_ATTEMPTS, RunCompletion};
 #[cfg(test)]
-pub(super) use self::worker::terminal_or_retry;
+pub(super) use self::worker::{
+    IdleReclaimLogFields, build_idle_reclaim_log_fields, should_attempt_idle_reclaim,
+    terminal_or_retry,
+};
 #[cfg(test)]
 pub(super) use crate::daemon::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};

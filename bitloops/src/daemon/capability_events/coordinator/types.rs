@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 use tokio::time::Duration;
 
+use crate::daemon::memory::MemoryMaintenance;
 use crate::daemon::types::CapabilityEventRunRecord;
 use crate::graphql::SubscriptionHub;
 use crate::host::capability_host::{SyncArtefactDiff, SyncFileDiff};
@@ -31,6 +32,7 @@ pub struct CapabilityEventCoordinator {
     pub(crate) notify: Notify,
     pub(crate) worker_started: AtomicBool,
     pub(crate) subscription_hub: Mutex<Option<Arc<SubscriptionHub>>>,
+    pub(crate) memory_maintenance: Arc<dyn MemoryMaintenance>,
 }
 
 pub(crate) struct WorkerStartedGuard {
@@ -45,7 +47,7 @@ impl Drop for WorkerStartedGuard {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum RunCompletion {
     NoopCompleted {
         run: CapabilityEventRunRecord,

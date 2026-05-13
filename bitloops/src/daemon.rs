@@ -53,6 +53,8 @@ mod lifecycle;
 mod log_file;
 #[path = "daemon/logger.rs"]
 mod logger;
+#[path = "daemon/memory.rs"]
+mod memory;
 #[path = "daemon/process.rs"]
 mod process;
 #[path = "daemon/server_runtime.rs"]

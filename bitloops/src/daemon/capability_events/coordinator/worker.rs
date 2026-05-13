@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::FutureExt;
@@ -12,6 +13,7 @@ use crate::daemon::capability_events::plan::{
     build_execution_plan, find_current_state_consumer, validate_consumer_result,
 };
 use crate::daemon::capability_events::queue::{StoredRunRecord, load_runs, sql_i64};
+use crate::daemon::memory::ProcessMemorySnapshot;
 use crate::daemon::types::{
     CapabilityEventRunRecord, CapabilityEventRunStatus, unix_timestamp_now,
 };
@@ -24,6 +26,44 @@ use super::types::{
 };
 
 impl CapabilityEventCoordinator {
+    pub(super) async fn maybe_reclaim_after_repo_idle(
+        &self,
+        completion: &RunCompletion,
+    ) -> Result<()> {
+        if !should_attempt_idle_reclaim(completion) {
+            return Ok(());
+        }
+        let RunCompletion::Completed { run, .. } = completion else {
+            return Ok(());
+        };
+        if self
+            .snapshot(Some(&run.repo_id))?
+            .current_repo_run
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let before = self.memory_maintenance.capture_process_memory();
+        let release_called = self.memory_maintenance.release_unused_pages();
+        sleep(Duration::from_millis(250)).await;
+        let after = self.memory_maintenance.capture_process_memory();
+        let fields = build_idle_reclaim_log_fields(before, after, release_called);
+
+        log::info!(
+            "current-state consumer memory reclaim: repo_id={} capability_id={} consumer_id={} reclaim_trigger=post_full_reconcile_idle resident_before_bytes={} resident_after_bytes={} phys_before_bytes={} phys_after_bytes={} release_called={}",
+            run.repo_id,
+            run.capability_id,
+            run.consumer_id,
+            optional_u64_log_value(fields.resident_before_bytes),
+            optional_u64_log_value(fields.resident_after_bytes),
+            optional_u64_log_value(fields.phys_before_bytes),
+            optional_u64_log_value(fields.phys_after_bytes),
+            fields.release_called,
+        );
+        Ok(())
+    }
+
     pub(crate) fn activate_worker(self: &Arc<Self>) {
         if self.worker_started.swap(true, Ordering::SeqCst) {
             return;
@@ -134,8 +174,10 @@ impl CapabilityEventCoordinator {
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
             let completion = coordinator.execute_run(run).await;
-            if let Err(err) = coordinator.apply_completion(completion) {
+            if let Err(err) = coordinator.apply_completion(completion.clone()) {
                 log::warn!("failed to persist current-state consumer completion: {err:#}");
+            } else if let Err(err) = coordinator.maybe_reclaim_after_repo_idle(&completion).await {
+                log::warn!("failed to reclaim idle current-state consumer memory: {err:#}");
             }
             coordinator.notify.notify_waiters();
         });
@@ -221,6 +263,42 @@ impl CapabilityEventCoordinator {
             Err(_) => terminal_or_retry(plan.record, anyhow!("current-state consumer panicked")),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IdleReclaimLogFields {
+    pub(crate) resident_before_bytes: Option<u64>,
+    pub(crate) resident_after_bytes: Option<u64>,
+    pub(crate) phys_before_bytes: Option<u64>,
+    pub(crate) phys_after_bytes: Option<u64>,
+    pub(crate) release_called: bool,
+}
+
+pub(crate) fn should_attempt_idle_reclaim(completion: &RunCompletion) -> bool {
+    matches!(
+        completion,
+        RunCompletion::Completed { run, .. } if run.reconcile_mode == "full_reconcile"
+    )
+}
+
+pub(crate) fn build_idle_reclaim_log_fields(
+    before: Option<ProcessMemorySnapshot>,
+    after: Option<ProcessMemorySnapshot>,
+    release_called: bool,
+) -> IdleReclaimLogFields {
+    IdleReclaimLogFields {
+        resident_before_bytes: before.as_ref().and_then(|snapshot| snapshot.resident_bytes),
+        resident_after_bytes: after.as_ref().and_then(|snapshot| snapshot.resident_bytes),
+        phys_before_bytes: before.and_then(|snapshot| snapshot.phys_footprint_bytes),
+        phys_after_bytes: after.and_then(|snapshot| snapshot.phys_footprint_bytes),
+        release_called,
+    }
+}
+
+fn optional_u64_log_value(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_string())
 }
 
 fn reconcile_mode_for_log(mode: ReconcileMode) -> &'static str {
