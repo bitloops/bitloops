@@ -3,45 +3,46 @@ mod parsing;
 use super::*;
 use parsing::*;
 
-pub(super) fn group_entry_point_artefacts_by_path(
-    artefacts: &[CurrentCanonicalArtefactRecord],
-) -> BTreeMap<String, Vec<LanguageEntryPointArtefact>> {
-    let mut grouped: BTreeMap<String, Vec<LanguageEntryPointArtefact>> = BTreeMap::new();
-    for artefact in artefacts {
-        grouped
-            .entry(artefact.path.clone())
-            .or_default()
-            .push(LanguageEntryPointArtefact {
-                artefact_id: artefact.artefact_id.clone(),
-                symbol_id: artefact.symbol_id.clone(),
-                path: artefact.path.clone(),
-                name: artefact_name(artefact),
-                canonical_kind: artefact.canonical_kind.clone(),
-                language_kind: artefact.language_kind.clone(),
-                symbol_fqn: artefact.symbol_fqn.clone(),
-                signature: artefact.signature.clone(),
-                modifiers: parse_modifiers(&artefact.modifiers),
-                start_line: artefact.start_line,
-                end_line: artefact.end_line,
-            });
+pub(super) fn entry_point_artefact_from_current(
+    artefact: &CurrentCanonicalArtefactRecord,
+) -> LanguageEntryPointArtefact {
+    LanguageEntryPointArtefact {
+        artefact_id: artefact.artefact_id.clone(),
+        symbol_id: artefact.symbol_id.clone(),
+        path: artefact.path.clone(),
+        name: artefact_name(artefact),
+        canonical_kind: artefact.canonical_kind.clone(),
+        language_kind: artefact.language_kind.clone(),
+        symbol_fqn: artefact.symbol_fqn.clone(),
+        signature: artefact.signature.clone(),
+        modifiers: parse_modifiers(&artefact.modifiers),
+        start_line: artefact.start_line,
+        end_line: artefact.end_line,
     }
-    grouped
 }
 
+#[cfg(test)]
 pub(super) fn dependency_adjacency(
     edges: &[CurrentCanonicalEdgeRecord],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut adjacency = BTreeMap::new();
     for edge in edges {
-        let Some(to) = edge.to_artefact_id.as_ref() else {
-            continue;
-        };
-        adjacency
-            .entry(edge.from_artefact_id.clone())
-            .or_insert_with(BTreeSet::new)
-            .insert(to.clone());
+        insert_dependency_adjacency(&mut adjacency, edge);
     }
     adjacency
+}
+
+pub(super) fn insert_dependency_adjacency(
+    adjacency: &mut BTreeMap<String, BTreeSet<String>>,
+    edge: &CurrentCanonicalEdgeRecord,
+) {
+    let Some(to) = edge.to_artefact_id.as_ref() else {
+        return;
+    };
+    adjacency
+        .entry(edge.from_artefact_id.clone())
+        .or_default()
+        .insert(to.clone());
 }
 
 pub(super) fn infer_container_kind(candidate: &LanguageEntryPointCandidate) -> &'static str {

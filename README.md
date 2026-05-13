@@ -1,6 +1,6 @@
 <div align="center">
   <img src="assets/bitloops-logo_320x132.png" alt="Bitloops logo" width="360" height="148" />
-  <h1>Codebase truth maintenance for AI agents.</h1>
+  <h1>Stop giving your AI agents the same repo tour.</h1>
   <p>
     <strong>Bitloops builds and maintains a local, typed, queryable model of your codebase so AI agents, developers, and reviewers can work from shared system state instead of rediscovering the repository from raw text.</strong>
   </p>
@@ -24,15 +24,13 @@
 [![License](https://img.shields.io/github/license/bitloops/bitloops?style=flat-square&color=111827)](https://github.com/bitloops/bitloops/blob/main/LICENSE)
 [![Local First](https://img.shields.io/badge/Data-Local%20First-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
 [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
-
 </div>
 
-> [!WARNING]
-> **Project status: alpha / work in progress**
->
-> Bitloops is under active development in the open and is **not production-ready yet**.
-> Expect breaking changes, evolving documentation, rough onboarding edges, and uneven
-> support across environments while the system matures.
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=hb8EAWlRjt8">
+    <img src="assets/bitloops_getting_started.png" alt="Bitloops Getting Started" width="640" />
+  </a>
+</p>
 
 ## What Bitloops Gives You
 
@@ -48,6 +46,13 @@ Bitloops gives them a maintained operating picture instead.
 | Shared memory across agents | Claude Code, Codex, Cursor, Gemini, Copilot, and OpenCode can feed one repository-scoped model instead of creating isolated mental models. |
 | Fresher repository understanding | Current-state sync and historical ingest keep repository facts aligned with the worktree and Git history. |
 | A foundation for safer autonomy | Provenance, evidence, confidence, freshness, and lifecycle primitives are represented where available and are being expanded across the system. |
+
+> [!WARNING]
+> **Project status: alpha / work in progress**
+>
+> Bitloops is under active development in the open and is **not production-ready yet**.
+> Expect breaking changes, evolving documentation, rough onboarding edges, and uneven
+> support across environments while the system matures.
 
 ## Install
 
