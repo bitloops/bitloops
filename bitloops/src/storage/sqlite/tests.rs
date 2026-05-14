@@ -45,6 +45,30 @@ fn sqlite_connection_pool_execute_batch_waits_for_shared_write_lock() -> Result<
 }
 
 #[test]
+fn sqlite_connection_pool_with_connection_is_read_only() -> Result<()> {
+    let temp = TempDir::new().context("creating temp dir")?;
+    let sqlite_path = temp.path().join("runtime.sqlite");
+    let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
+    sqlite.execute_batch("CREATE TABLE sample (value INTEGER NOT NULL);")?;
+
+    let err = sqlite
+        .with_connection(|conn| {
+            conn.execute("INSERT INTO sample (value) VALUES (1)", [])
+                .map(|_| ())
+                .map_err(anyhow::Error::from)
+        })
+        .expect_err("read-only SQLite connection should reject writes");
+
+    let message = format!("{err:#}").to_ascii_lowercase();
+    assert!(
+        message.contains("readonly") || message.contains("read-only"),
+        "expected read-only SQLite error, got {err:#}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn sqlite_connection_pool_uses_wal_and_normal_synchronous() -> Result<()> {
     let temp = TempDir::new().context("creating temp dir")?;
     let sqlite_path = temp.path().join("runtime.sqlite");
@@ -196,7 +220,7 @@ fn workspace_revisions_table_supports_insert_and_dedup_query() -> Result<()> {
     let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
     sqlite.initialise_devql_schema()?;
 
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1')",
             [],
@@ -254,7 +278,7 @@ fn workspace_revisions_enforces_unique_tree_hash_per_repo() -> Result<()> {
     let sqlite = SqliteConnectionPool::connect(sqlite_path)?;
     sqlite.initialise_devql_schema()?;
 
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-1')",
             [],
@@ -361,7 +385,7 @@ INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-2')
         "legacy duplicate workspace_revisions rows should be deduplicated"
     );
 
-    let duplicate_insert_rejected = sqlite.with_connection(|conn| {
+    let duplicate_insert_rejected = sqlite.with_write_connection(|conn| {
         Ok(conn
             .execute(
                 "INSERT INTO workspace_revisions (repo_id, tree_hash) VALUES ('repo-a', 'hash-2')",
@@ -444,7 +468,7 @@ fn initialise_devql_schema_migrates_legacy_artefacts_current_missing_checkpoint_
 
     sqlite.initialise_devql_schema()?;
 
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO artefacts_current
                 (repo_id, symbol_id, artefact_id, commit_sha,
@@ -503,7 +527,7 @@ fn initialise_devql_schema_migrates_legacy_artefact_edges_current_missing_checkp
 
     sqlite.initialise_devql_schema()?;
 
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO artefact_edges_current
                 (edge_id, repo_id, commit_sha, revision_kind, revision_id,

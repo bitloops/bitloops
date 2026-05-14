@@ -264,7 +264,7 @@ fn capture_rewrites_stale_path_metadata_even_when_blob_is_unchanged() {
     ));
 
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
                  VALUES (?1, ?2, ?3, ?4, 'main') \

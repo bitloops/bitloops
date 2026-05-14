@@ -91,7 +91,7 @@ pub(super) fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connect
     crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
         .context("registering sqlite-vec auto-extension for SQLite open")?;
     let conn =
-        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
     configure_sqlite_read_connection(&conn)?;
     Ok(conn)

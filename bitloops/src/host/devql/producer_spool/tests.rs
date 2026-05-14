@@ -446,7 +446,7 @@ fn producer_spool_claim_skips_blocked_post_commit_derivation_until_unblocked() {
         .connect_repo_sqlite()
         .expect("open repo runtime sqlite");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             for (job_id, payload) in [
                 (
                     "producer-spool-job-a-derivation",
@@ -577,7 +577,7 @@ fn post_commit_refresh_claims_before_derivation_with_same_timestamp() {
         .connect_repo_sqlite()
         .expect("open repo runtime sqlite");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             for (job_id, payload) in [
                 (
                     "producer-spool-job-a-derivation",

@@ -481,7 +481,7 @@ mod tests {
         let (_dir, backend) = setup("repo-a");
         backend
             .sqlite()
-            .with_connection(|conn| {
+            .with_write_connection(|conn| {
                 conn.execute(
                     "INSERT INTO sessions (session_id, repo_id, phase) VALUES (?1, ?2, ?3)",
                     ("sess-legacy-phase", "repo-a", "active_committed"),
@@ -514,7 +514,7 @@ mod tests {
 
         backend_a
             .sqlite()
-            .with_connection(|conn| {
+            .with_write_connection(|conn| {
                 conn.execute(
                     "INSERT INTO sessions (session_id, repo_id, phase, files_touched) VALUES (?1, ?2, ?3, ?4)",
                     ("bad-json", "repo-a", "active", "{broken"),
@@ -533,7 +533,7 @@ mod tests {
         let (_dir, backend) = setup("repo-pre");
         backend
             .sqlite()
-            .with_connection(|conn| {
+            .with_write_connection(|conn| {
                 conn.execute(
                     "INSERT INTO pre_prompt_states (session_id, repo_id, data) VALUES (?1, ?2, ?3)",
                     (

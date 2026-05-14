@@ -570,7 +570,7 @@ fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
                 crate::storage::SqliteConnectionPool::connect(store.db_path().to_path_buf())
                     .expect("connect runtime sqlite");
             sqlite
-                .with_connection(|conn| {
+                .with_write_connection(|conn| {
                     conn.execute(
                         "INSERT INTO runtime_documents (document_kind, payload, updated_at)
                          VALUES (?1, ?2, datetime('now'))
@@ -785,7 +785,7 @@ CREATE TABLE repo_watcher_registrations (
         )
         .expect("create legacy watcher registration table");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO repo_watcher_registrations (
                     repo_id, repo_root, pid, restart_token, created_at, updated_at

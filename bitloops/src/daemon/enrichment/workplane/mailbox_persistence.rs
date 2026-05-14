@@ -423,7 +423,7 @@ mod tests {
         let repo_root = PathBuf::from("/tmp/repo");
         let config_root = PathBuf::from("/tmp/config");
         store
-            .with_connection(|conn| {
+            .with_write_connection(|conn| {
                 conn.execute(
                     "INSERT INTO semantic_summary_mailbox_items (
                          item_id, repo_id, repo_root, config_root, init_session_id, item_kind,
@@ -523,7 +523,7 @@ mod tests {
         let repo_root = PathBuf::from("/tmp/repo");
         let config_root = PathBuf::from("/tmp/config");
         store
-            .with_connection(|conn| {
+            .with_write_connection(|conn| {
                 conn.execute(
                     "INSERT INTO semantic_embedding_mailbox_items (
                          item_id, repo_id, repo_root, config_root, init_session_id,
