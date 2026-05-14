@@ -36,7 +36,7 @@ pub(crate) fn subtract_files_by_name(
 ) -> Vec<String> {
     files_touched
         .iter()
-        .filter(|f| !committed_files.contains(f.as_str()))
+        .filter(|f| !paths::is_infrastructure_path(f) && !committed_files.contains(f.as_str()))
         .cloned()
         .collect()
 }
@@ -355,6 +355,9 @@ pub(crate) fn files_with_remaining_agent_changes_from_tree(
 
     let mut remaining = Vec::new();
     for file_path in files_touched {
+        if paths::is_infrastructure_path(file_path) {
+            continue;
+        }
         if !committed_files.contains(file_path) {
             remaining.push(file_path.clone());
             continue;
@@ -401,6 +404,9 @@ pub(crate) fn files_with_remaining_agent_changes(
 
     let mut remaining = Vec::new();
     for file_path in files_touched {
+        if paths::is_infrastructure_path(file_path) {
+            continue;
+        }
         if !committed_files.contains(file_path) {
             remaining.push(file_path.clone());
             continue;
