@@ -1,6 +1,9 @@
 [env]
 # Fast local default for hosts with official DuckDB prebuilts (including Apple silicon macOS).
 DUCKDB_DOWNLOAD_LIB = { value = "1", force = false }
+# sqlite-vec 0.1.10-alpha.3 omits these optional implementation files from the
+# published crate package; disable the optional C blocks until the crate ships them.
+CFLAGS = { value = "-DSQLITE_VEC_ENABLE_DISKANN=0 -DSQLITE_VEC_ENABLE_RESCORE=0", force = false }
 
 [alias]
 # Cargo-first local developer surface from repository root.

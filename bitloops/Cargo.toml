@@ -1,6 +1,6 @@
 [package]
 name = "bitloops"
-version = "0.0.25"
+version = "0.0.26"
 edition = "2024"
 autotests = false
 
@@ -175,6 +175,7 @@ tree-sitter-rust = "0.24.1"
 tree-sitter-go = "0.25"
 tree-sitter-java = "0.23"
 tree-sitter-c-sharp = "0.23"
+tree-sitter-php = "0.23"
 sha2 = "0.11"
 sha1 = "0.11"
 hex = "0.4"
@@ -184,7 +185,7 @@ terminal_size = "0.4.4"
 tokio-postgres = "0.7"
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json", "blocking"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
-sqlite-vec = "0.1.9"
+sqlite-vec = "=0.1.10-alpha.3"
 semver = "1"
 tar = "0.4"
 xz2 = "0.1"

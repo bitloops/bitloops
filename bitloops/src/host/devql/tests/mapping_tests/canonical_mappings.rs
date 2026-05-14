@@ -761,6 +761,172 @@ class Greeter extends Base implements Runner {
 }
 
 #[test]
+fn php_canonical_mapping_covers_supported_kind_table() {
+    let expected = [
+        (
+            LanguageKind::php(PhpKind::NamespaceDefinition),
+            true,
+            Some("namespace"),
+        ),
+        (
+            LanguageKind::php(PhpKind::NamespaceUseDeclaration),
+            true,
+            Some("import"),
+        ),
+        (
+            LanguageKind::php(PhpKind::ClassDeclaration),
+            true,
+            Some("type"),
+        ),
+        (
+            LanguageKind::php(PhpKind::InterfaceDeclaration),
+            true,
+            Some("interface"),
+        ),
+        (LanguageKind::php(PhpKind::TraitDeclaration), true, None),
+        (
+            LanguageKind::php(PhpKind::EnumDeclaration),
+            true,
+            Some("enum"),
+        ),
+        (
+            LanguageKind::php(PhpKind::FunctionDefinition),
+            true,
+            Some("function"),
+        ),
+        (
+            LanguageKind::php(PhpKind::MethodDeclaration),
+            true,
+            Some("method"),
+        ),
+        (
+            LanguageKind::php(PhpKind::PropertyDeclaration),
+            true,
+            Some("variable"),
+        ),
+        (
+            LanguageKind::php(PhpKind::ConstDeclaration),
+            true,
+            Some("variable"),
+        ),
+    ];
+
+    for (language_kind, supported, canonical_kind) in expected {
+        assert_eq!(
+            is_supported_language_kind(PHP_SUPPORTED_LANGUAGE_KINDS, language_kind),
+            supported
+        );
+        assert_eq!(
+            resolve_canonical_kind(PHP_CANONICAL_MAPPINGS, language_kind, false)
+                .map(CanonicalKindProjection::as_str),
+            canonical_kind
+        );
+    }
+}
+
+#[test]
+fn php_canonical_mapping_preserves_php_specific_structure() {
+    let content = r#"<?php
+namespace App\Services;
+use App\Contracts\Runner;
+
+interface Runner {
+    public function run(): void;
+}
+
+trait LogsActivity {
+    public function log(): void {}
+}
+
+enum UserStatus: string {
+    case Active = 'active';
+}
+
+class UserService implements Runner {
+    public const VERSION = "1.0";
+    private string $name;
+
+    public function run(): void {
+        helper();
+    }
+}
+
+function helper(): void {}
+"#;
+
+    let artefacts = extract_php_artefacts(content, "src/UserService.php").unwrap();
+
+    let namespace = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::NamespaceDefinition),
+        "App\\Services",
+    );
+    assert_eq!(canonical_kind(namespace), Some("namespace"));
+
+    let import = artefact_by_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::NamespaceUseDeclaration),
+    );
+    assert_eq!(canonical_kind(import), Some("import"));
+
+    let interface = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::InterfaceDeclaration),
+        "Runner",
+    );
+    assert_eq!(canonical_kind(interface), Some("interface"));
+
+    let trait_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::TraitDeclaration),
+        "LogsActivity",
+    );
+    assert_eq!(canonical_kind(trait_item), None);
+
+    let enum_item = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::EnumDeclaration),
+        "UserStatus",
+    );
+    assert_eq!(canonical_kind(enum_item), Some("enum"));
+
+    let class = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::ClassDeclaration),
+        "UserService",
+    );
+    assert_eq!(canonical_kind(class), Some("type"));
+
+    let method = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::MethodDeclaration),
+        "run",
+    );
+    assert_eq!(canonical_kind(method), Some("method"));
+
+    let property = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::PropertyDeclaration),
+        "$name",
+    );
+    assert_eq!(canonical_kind(property), Some("variable"));
+
+    let constant = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::ConstDeclaration),
+        "VERSION",
+    );
+    assert_eq!(canonical_kind(constant), Some("variable"));
+
+    let function = artefact_by_name_and_language_kind(
+        &artefacts,
+        LanguageKind::php(PhpKind::FunctionDefinition),
+        "helper",
+    );
+    assert_eq!(canonical_kind(function), Some("function"));
+}
+
+#[test]
 fn csharp_canonical_mapping_covers_supported_kind_table() {
     let expected = [
         (
@@ -821,13 +987,13 @@ fn csharp_canonical_mapping_covers_supported_kind_table() {
             LanguageKind::csharp(CSharpKind::Namespace),
             false,
             true,
-            None,
+            Some("namespace"),
         ),
         (
             LanguageKind::csharp(CSharpKind::FileScopedNamespace),
             false,
             true,
-            None,
+            Some("namespace"),
         ),
         (
             LanguageKind::csharp(CSharpKind::Method),
@@ -889,6 +1055,12 @@ public enum UserRole
 
     let import = artefact_by_language_kind(&artefacts, LanguageKind::csharp(CSharpKind::Using));
     assert_eq!(canonical_kind(import), Some("import"));
+
+    let namespace = artefact_by_language_kind(
+        &artefacts,
+        LanguageKind::csharp(CSharpKind::FileScopedNamespace),
+    );
+    assert_eq!(canonical_kind(namespace), Some("namespace"));
 
     let interface = artefact_by_name_and_language_kind(
         &artefacts,

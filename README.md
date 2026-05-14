@@ -256,6 +256,7 @@ Built-in language adapters:
 - [x] Go
 - [x] Java
 - [x] C#
+- [x] PHP
 
 ## Technical Documentation
 
