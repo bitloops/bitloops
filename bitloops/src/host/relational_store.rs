@@ -7,8 +7,11 @@ use crate::config::{
     RelationalBackendConfig, resolve_bound_store_backend_config_for_repo,
     resolve_store_backend_config_for_repo,
 };
-use crate::host::devql::{DevqlConfig, RelationalDialect, RelationalStorage};
-use crate::storage::SqliteConnectionPool;
+use crate::host::devql::{
+    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalStorage,
+    sqlite_value_to_json,
+};
+use crate::storage::{PostgresSyncConnection, SqliteConnectionPool};
 
 pub trait RelationalStore: Send + Sync {
     fn sqlite_path(&self) -> &Path;
@@ -86,6 +89,13 @@ impl DefaultRelationalStore {
         Self::open_local_for_backend_config(repo_root, &backends.relational)
     }
 
+    pub fn open_primary_for_repo_root_preferring_bound_config(repo_root: &Path) -> Result<Self> {
+        let backends = resolve_bound_store_backend_config_for_repo(repo_root)
+            .or_else(|_| resolve_store_backend_config_for_repo(repo_root))
+            .context("resolving backend config for relational store")?;
+        Self::open_primary_for_backend_config(repo_root, &backends.relational)
+    }
+
     pub fn open_local_for_backend_config(
         repo_root: &Path,
         relational: &RelationalBackendConfig,
@@ -94,6 +104,19 @@ impl DefaultRelationalStore {
             .resolve_sqlite_db_path_for_repo(repo_root)
             .context("resolving sqlite path for relational store")?;
         Ok(Self::local_only(path))
+    }
+
+    pub fn open_primary_for_backend_config(
+        repo_root: &Path,
+        relational: &RelationalBackendConfig,
+    ) -> Result<Self> {
+        let path = relational
+            .resolve_sqlite_db_path_for_repo(repo_root)
+            .context("resolving sqlite path for relational store")?;
+        Ok(Self::from_inner(RelationalStorage::configured_primary(
+            path,
+            relational.postgres_dsn.clone(),
+        )))
     }
 
     pub fn open_local_for_roots(config_root: &Path, repo_root: &Path) -> Result<Self> {
@@ -128,6 +151,24 @@ impl DefaultRelationalStore {
                 self.inner.local.path.display()
             )
         })
+    }
+
+    pub fn query_rows_primary_blocking(&self, sql: &str) -> Result<Vec<Value>> {
+        match self.inner.primary_backend() {
+            RelationalPrimaryBackend::Sqlite => query_local_sqlite_rows_blocking(
+                self.sqlite_path(),
+                sql,
+                "querying primary relational SQLite rows",
+            ),
+            RelationalPrimaryBackend::Postgres => {
+                let dsn = self.inner.remote_dsn().ok_or_else(|| {
+                    anyhow::anyhow!("remote Postgres primary backend is configured without a DSN")
+                })?;
+                PostgresSyncConnection::connect(dsn)?
+                    .query_rows(sql)
+                    .context("querying primary relational Postgres rows")
+            }
+        }
     }
 
     pub fn initialise_local_devql_schema(&self) -> Result<()> {
@@ -180,6 +221,45 @@ fn missing_current_embedding_table(err: &anyhow::Error) -> bool {
 
 fn escape_sql_string(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+fn query_local_sqlite_rows_blocking(
+    path: &Path,
+    sql: &str,
+    context_label: &str,
+) -> Result<Vec<Value>> {
+    let sqlite = SqliteConnectionPool::connect_existing(path.to_path_buf())
+        .with_context(|| format!("opening relational sqlite at {}", path.display()))?;
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(sql).with_context(|| context_label.to_string())?;
+        let column_names = stmt
+            .column_names()
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        let mut rows = stmt
+            .query([])
+            .with_context(|| format!("{context_label}: executing query"))?;
+        let mut out = Vec::new();
+
+        while let Some(row) = rows
+            .next()
+            .with_context(|| format!("{context_label}: iterating rows"))?
+        {
+            let mut object = serde_json::Map::new();
+            for (index, column_name) in column_names.iter().enumerate() {
+                let value = row.get_ref(index).with_context(|| {
+                    format!(
+                        "{context_label}: reading SQLite value for column index {index} (`{column_name}`)"
+                    )
+                })?;
+                object.insert(column_name.clone(), sqlite_value_to_json(value));
+            }
+            out.push(Value::Object(object));
+        }
+
+        Ok(out)
+    })
 }
 
 impl RelationalStore for DefaultRelationalStore {

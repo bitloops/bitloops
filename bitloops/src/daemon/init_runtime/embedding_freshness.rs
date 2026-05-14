@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
-use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
+use crate::host::relational_store::DefaultRelationalStore;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct EmbeddingFreshnessState {
@@ -234,29 +234,34 @@ fn representation_kind_sql_predicate(
 }
 
 fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<BTreeSet<String>> {
-    let sqlite = relational.local_sqlite_pool()?;
-    let values = sqlite.with_connection(|conn| {
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut ids = BTreeSet::new();
-        for row in rows {
-            ids.insert(row?);
-        }
-        Ok(ids)
-    });
-    match values {
-        Ok(ids) => Ok(ids),
+    match relational.query_rows_primary_blocking(sql) {
+        Ok(rows) => Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                row.as_object()
+                    .and_then(|object| object.values().next())
+                    .cloned()
+            })
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect()),
         Err(err) if missing_progress_table(&err) => Ok(BTreeSet::new()),
         Err(err) => Err(err),
     }
 }
 
 pub(crate) fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {
-    let sqlite = relational.local_sqlite_pool()?;
-    let count =
-        sqlite.with_connection(|conn| Ok(conn.query_row(sql, [], |row| row.get::<_, i64>(0))?));
-    match count {
-        Ok(value) => Ok(u64::try_from(value).unwrap_or_default()),
+    match relational.query_rows_primary_blocking(sql) {
+        Ok(rows) => Ok(rows
+            .first()
+            .and_then(|row| row.as_object())
+            .and_then(|object| object.values().next())
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_i64().and_then(|value| u64::try_from(value).ok()))
+                    .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+            })
+            .unwrap_or_default()),
         Err(err) if missing_progress_table(&err) => Ok(0),
         Err(err) => Err(err),
     }
@@ -286,6 +291,11 @@ fn escape_sql_string(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
+    use crate::host::devql::{RelationalPrimaryBackend, RelationalStorage};
+    use crate::host::relational_store::DefaultRelationalStore;
+
     use super::*;
 
     #[test]
@@ -305,5 +315,27 @@ mod tests {
 
         assert!(sql.contains("identity_rows.artefact_id = code_rows.artefact_id"));
         assert!(sql.contains("SELECT COUNT(*) AS total"));
+    }
+
+    #[test]
+    fn query_progress_count_uses_primary_backend_when_postgres_is_configured() {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("relational.sqlite");
+        rusqlite::Connection::open(&db_path).expect("create sqlite file");
+        let relational = DefaultRelationalStore::from_inner(
+            RelationalStorage::primary_backend_with_dsn_for_tests(
+                db_path,
+                RelationalPrimaryBackend::Postgres,
+                Some("postgres://not a valid dsn".to_string()),
+            ),
+        );
+
+        let err = query_progress_count(&relational, "SELECT 7 AS total")
+            .expect_err("configured Postgres primary backend should be queried");
+
+        assert!(
+            err.to_string()
+                .contains("querying primary relational Postgres rows")
+        );
     }
 }

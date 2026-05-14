@@ -9,7 +9,7 @@ use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentatio
 use crate::capability_packs::semantic_clones::runtime_config::embedding_slot_for_representation;
 use crate::config::resolve_semantic_clones_config_for_repo;
 use crate::daemon::types::InitSessionRecord;
-use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
+use crate::host::relational_store::DefaultRelationalStore;
 
 use super::embedding_freshness::{
     EmbeddingFreshnessCountSelection, load_embedding_freshness_counts, query_progress_count,
@@ -59,7 +59,7 @@ pub(crate) fn load_runtime_lane_progress(
     }
 
     let relational =
-        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
+        DefaultRelationalStore::open_primary_for_repo_root_preferring_bound_config(repo_root)?;
     let embedding_freshness = load_embedding_freshness_counts(
         &relational,
         repo_id,
@@ -206,18 +206,16 @@ fn fresh_model_backed_summary_artefacts_sql(repo_id: &str) -> String {
 }
 
 fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<BTreeSet<String>> {
-    let sqlite = relational.local_sqlite_pool()?;
-    let values = sqlite.with_connection(|conn| {
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        let mut ids = BTreeSet::new();
-        for row in rows {
-            ids.insert(row?);
-        }
-        Ok(ids)
-    });
-    match values {
-        Ok(ids) => Ok(ids),
+    match relational.query_rows_primary_blocking(sql) {
+        Ok(rows) => Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                row.as_object()
+                    .and_then(|object| object.values().next())
+                    .cloned()
+            })
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect()),
         Err(err) if missing_progress_table(&err) => Ok(BTreeSet::new()),
         Err(err) => Err(err),
     }
@@ -244,6 +242,7 @@ mod tests {
     use super::*;
     use crate::config::resolve_store_backend_config_for_repo;
     use crate::daemon::{InitSessionRecord, StartInitSessionSelections};
+    use crate::host::devql::{RelationalPrimaryBackend, RelationalStorage};
 
     #[test]
     fn code_embeddings_only_progress_does_not_query_summary_counts() {
@@ -387,5 +386,32 @@ code_embeddings = "local_code"
             ",
         )
         .expect("initialise progress tables");
+    }
+
+    #[test]
+    fn query_progress_ids_uses_primary_backend_when_postgres_is_configured() {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("relational.sqlite");
+        let conn = Connection::open(&db_path).expect("create sqlite file");
+        conn.execute_batch(
+            "CREATE TABLE progress_rows (artefact_id TEXT);
+             INSERT INTO progress_rows (artefact_id) VALUES ('artefact-1');",
+        )
+        .expect("seed sqlite progress rows");
+        let relational = DefaultRelationalStore::from_inner(
+            RelationalStorage::primary_backend_with_dsn_for_tests(
+                db_path,
+                RelationalPrimaryBackend::Postgres,
+                Some("postgres://not a valid dsn".to_string()),
+            ),
+        );
+
+        let err = query_progress_ids(&relational, "SELECT artefact_id FROM progress_rows")
+            .expect_err("configured Postgres primary backend should be queried");
+
+        assert!(
+            err.to_string()
+                .contains("querying primary relational Postgres rows")
+        );
     }
 }

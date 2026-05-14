@@ -506,8 +506,8 @@ ON artefact_edges_current (
 
 pub(crate) fn test_links_upgrade_sql() -> &'static str {
     r#"
-ALTER TABLE test_links ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0.6;
-ALTER TABLE test_links ADD COLUMN IF NOT EXISTS linkage_status TEXT NOT NULL DEFAULT 'resolved';
+ALTER TABLE IF EXISTS test_links ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION NOT NULL DEFAULT 0.6;
+ALTER TABLE IF EXISTS test_links ADD COLUMN IF NOT EXISTS linkage_status TEXT NOT NULL DEFAULT 'resolved';
 "#
 }
 
@@ -542,7 +542,7 @@ END
 WHERE metadata IS NOT NULL;
 
 UPDATE artefact_edges
-SET metadata = jsonb_set(metadata, '{import_form}', '\"binding\"'::jsonb)
+SET metadata = jsonb_set(metadata, '{import_form}', '"binding"'::jsonb)
 WHERE metadata ->> 'import_form' IN ('module', 'use');
 "#
 }
@@ -621,11 +621,43 @@ mod tests {
     }
 
     #[test]
+    fn edge_model_cleanup_postgres_sql_uses_valid_jsonb_string_literal() {
+        let sql = edge_model_cleanup_postgres_sql();
+        assert!(
+            sql.contains(
+                "SET metadata = jsonb_set(metadata, '{import_form}', '\"binding\"'::jsonb)"
+            ),
+            "cleanup should write a valid Postgres JSONB string literal without raw backslashes"
+        );
+        assert!(
+            !sql.contains(
+                r#"SET metadata = jsonb_set(metadata, '{import_form}', '\"binding\"'::jsonb)"#
+            ),
+            "cleanup should not keep backslashes inside the raw SQL string"
+        );
+    }
+
+    #[test]
     fn edge_model_cleanup_sqlite_sql_does_not_mutate_current_state_table() {
         let sql = edge_model_cleanup_sqlite_sql();
         assert!(
             !sql.contains("UPDATE artefact_edges_current"),
             "cleanup should not write to artefact_edges_current"
+        );
+    }
+
+    #[test]
+    fn test_links_upgrade_sql_skips_missing_legacy_table() {
+        let sql = test_links_upgrade_sql();
+        assert!(
+            sql.contains("ALTER TABLE IF EXISTS test_links ADD COLUMN IF NOT EXISTS confidence"),
+            "legacy test_links upgrade should not fail when the table is absent"
+        );
+        assert!(
+            sql.contains(
+                "ALTER TABLE IF EXISTS test_links ADD COLUMN IF NOT EXISTS linkage_status"
+            ),
+            "legacy test_links linkage upgrade should not fail when the table is absent"
         );
     }
 

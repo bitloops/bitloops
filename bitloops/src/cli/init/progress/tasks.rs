@@ -123,7 +123,7 @@ async fn current_code_embedding_progress(
     repo_id: &str,
 ) -> Result<CoverageProgress> {
     let relational =
-        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
+        DefaultRelationalStore::open_primary_for_repo_root_preferring_bound_config(repo_root)?;
     let total = count_eligible_current_artefacts(&relational, repo_id).await?;
     let completed = count_current_code_embedding_artefacts(&relational, repo_id).await?;
     Ok(CoverageProgress {
@@ -137,7 +137,7 @@ async fn current_summary_progress(
     repo_id: &str,
 ) -> Result<CoverageProgress> {
     let relational =
-        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
+        DefaultRelationalStore::open_primary_for_repo_root_preferring_bound_config(repo_root)?;
     let total = count_eligible_current_artefacts(&relational, repo_id).await?;
     let completed = count_current_model_backed_summary_artefacts(&relational, repo_id).await?;
     Ok(CoverageProgress {
@@ -211,7 +211,7 @@ fn current_summary_progress_sql(repo_id: &str) -> String {
 }
 
 async fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {
-    let rows = match relational.query_rows(sql).await {
+    let rows = match relational.query_rows_primary_blocking(sql) {
         Ok(rows) => rows,
         Err(err) if missing_progress_table(&err) => return Ok(0),
         Err(err) => return Err(err),

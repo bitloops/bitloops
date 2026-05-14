@@ -513,7 +513,7 @@ fn load_summary_freshness_state_for_repo(
     repo_id: &str,
 ) -> Result<SummaryFreshnessState> {
     let relational =
-        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
+        DefaultRelationalStore::open_primary_for_repo_root_preferring_bound_config(repo_root)?;
     load_summary_freshness_state(&relational, repo_id)
 }
 
@@ -522,7 +522,7 @@ fn load_embedding_freshness_state_for_repo(
     repo_id: &str,
 ) -> Result<EmbeddingFreshnessState> {
     let relational =
-        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
+        DefaultRelationalStore::open_primary_for_repo_root_preferring_bound_config(repo_root)?;
     load_embedding_freshness_state(&relational, repo_id)
 }
 

@@ -105,6 +105,7 @@ pub struct PostgresStorage {
 pub struct RelationalStorage {
     pub local: SqliteStorage,
     pub remote: Option<PostgresStorage>,
+    remote_dsn: Option<String>,
     primary_backend: RelationalPrimaryBackend,
 }
 
@@ -133,6 +134,7 @@ impl RelationalStorage {
         Ok(Self {
             local: SqliteStorage { path: sqlite_path },
             remote,
+            remote_dsn: remote_dsn.map(ToOwned::to_owned),
             primary_backend: if remote_dsn.is_some() {
                 RelationalPrimaryBackend::Postgres
             } else {
@@ -145,7 +147,26 @@ impl RelationalStorage {
         Self {
             local: SqliteStorage { path },
             remote: None,
+            remote_dsn: None,
             primary_backend: RelationalPrimaryBackend::Sqlite,
+        }
+    }
+
+    pub fn configured_primary(path: PathBuf, postgres_dsn: Option<String>) -> Self {
+        let remote_dsn = postgres_dsn
+            .map(|dsn| dsn.trim().to_string())
+            .filter(|dsn| !dsn.is_empty());
+        let primary_backend = if remote_dsn.is_some() {
+            RelationalPrimaryBackend::Postgres
+        } else {
+            RelationalPrimaryBackend::Sqlite
+        };
+
+        Self {
+            local: SqliteStorage { path },
+            remote: None,
+            remote_dsn,
+            primary_backend,
         }
     }
 
@@ -153,6 +174,7 @@ impl RelationalStorage {
         Self {
             local: SqliteStorage { path },
             remote: Some(PostgresStorage { client }),
+            remote_dsn: None,
             primary_backend: RelationalPrimaryBackend::Postgres,
         }
     }
@@ -171,6 +193,10 @@ impl RelationalStorage {
 
     pub fn remote_client(&self) -> Option<&tokio_postgres::Client> {
         self.remote.as_ref().map(|remote| &remote.client)
+    }
+
+    pub fn remote_dsn(&self) -> Option<&str> {
+        self.remote_dsn.as_deref()
     }
 
     pub async fn exec(&self, sql: &str) -> Result<()> {
@@ -254,6 +280,21 @@ impl RelationalStorage {
         Self {
             local: SqliteStorage { path },
             remote: None,
+            remote_dsn: None,
+            primary_backend,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn primary_backend_with_dsn_for_tests(
+        path: PathBuf,
+        primary_backend: RelationalPrimaryBackend,
+        remote_dsn: Option<String>,
+    ) -> Self {
+        Self {
+            local: SqliteStorage { path },
+            remote: None,
+            remote_dsn,
             primary_backend,
         }
     }
