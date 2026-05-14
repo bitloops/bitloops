@@ -36,7 +36,7 @@ impl SqliteConnectionPool {
 
         self.execute_batch(crate::host::devql::checkpoint_runtime_schema_sql_sqlite())
             .context("initialising SQLite runtime checkpoint schema")?;
-        self.with_connection(|conn| {
+        self.with_write_connection(|conn| {
             match conn.execute_batch("ALTER TABLE sessions ADD COLUMN ended_at TEXT;") {
                 Ok(()) => Ok(()),
                 Err(err) if err.to_string().contains("duplicate column name: ended_at") => Ok(()),
@@ -44,7 +44,7 @@ impl SqliteConnectionPool {
             }
         })
         .context("migrating SQLite checkpoint schema for sessions.ended_at")?;
-        self.with_connection(|conn| {
+        self.with_write_connection(|conn| {
             if !sqlite_table_exists(conn, "repo_watcher_registrations")?
                 || sqlite_table_has_column(conn, "repo_watcher_registrations", "state")?
             {
@@ -136,7 +136,7 @@ impl SqliteConnectionPool {
                 "ALTER TABLE artefact_edges_current ADD COLUMN temp_checkpoint_id INTEGER;",
             ),
         ];
-        self.with_connection(|conn| {
+        self.with_write_connection(|conn| {
             for (table, column, sql) in migrations {
                 if !sqlite_table_exists(conn, table)? {
                     continue;
@@ -169,7 +169,7 @@ impl SqliteConnectionPool {
     }
 
     fn migrate_workspace_revisions_uniqueness(&self) -> Result<()> {
-        self.with_connection(|conn| {
+        self.with_write_connection(|conn| {
             if !sqlite_table_exists(conn, "workspace_revisions")? {
                 return Ok(());
             }
@@ -192,7 +192,7 @@ ON workspace_revisions (repo_id, tree_hash);
     }
 
     fn migrate_devql_branch_scope_current_tables(&self) -> Result<()> {
-        self.with_connection(|conn| {
+        self.with_write_connection(|conn| {
             migrate_artefacts_current_branch_scope(conn)?;
             migrate_artefact_edges_current_branch_scope(conn)?;
             Ok(())

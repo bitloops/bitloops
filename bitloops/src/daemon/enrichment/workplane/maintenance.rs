@@ -12,7 +12,7 @@ use super::sql::sql_i64;
 pub(crate) fn compact_and_prune_workplane_jobs(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<()> {
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         prune_terminal_workplane_jobs(conn)?;
         Ok(())
     })
@@ -67,7 +67,7 @@ pub(crate) fn recover_expired_semantic_inbox_leases(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<u64> {
     let now = unix_timestamp_now();
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         let summary = conn.execute(
             "UPDATE semantic_summary_mailbox_items
              SET status = ?1,
@@ -110,7 +110,7 @@ pub(crate) fn requeue_leased_semantic_inbox_items(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<u64> {
     let now = unix_timestamp_now();
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         let summary = conn.execute(
             "UPDATE semantic_summary_mailbox_items
              SET status = ?1,
@@ -149,7 +149,7 @@ pub(crate) fn prune_failed_semantic_inbox_items(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<()> {
     let cutoff = unix_timestamp_now().saturating_sub(WORKPLANE_TERMINAL_RETENTION_SECS);
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         conn.execute(
             "DELETE FROM semantic_summary_mailbox_items
              WHERE status = ?1
@@ -170,7 +170,7 @@ pub(crate) fn retry_failed_semantic_inbox_items(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<u64> {
     let now = unix_timestamp_now();
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         let summary = conn.execute(
             "UPDATE semantic_summary_mailbox_items
              SET status = ?1,
@@ -208,7 +208,7 @@ pub(crate) fn retry_failed_semantic_inbox_items(
 pub(crate) fn retry_failed_workplane_jobs(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<u64> {
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         conn.execute(
             "UPDATE capability_workplane_jobs
                  SET status = ?1,

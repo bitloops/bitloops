@@ -16,7 +16,7 @@ pub(super) fn insert_commit_checkpoint_mapping(
         .expect("initialise checkpoint schema");
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
                  VALUES (?1, ?2, ?3)",
@@ -538,7 +538,7 @@ pub(super) fn seed_checkpoint_storage_for_dashboard(
         .unwrap_or(("session-0", "codex", "2026-01-01T00:00:00Z"));
 
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO checkpoints (
                     checkpoint_id, repo_id, strategy, branch, cli_version,

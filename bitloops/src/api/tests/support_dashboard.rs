@@ -653,7 +653,7 @@ fn seed_dashboard_commit_row(repo_root: &Path, commit_sha: &str) {
         .expect("initialise devql schema for commit row");
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO commits (
                     commit_sha, repo_id, author_name, author_email, commit_message, committed_at

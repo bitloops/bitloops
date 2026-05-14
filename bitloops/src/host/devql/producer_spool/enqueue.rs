@@ -196,7 +196,7 @@ fn enqueue_job(
     job: ProducerSpoolJobInsert,
 ) -> Result<ProducerSpoolEnqueueResult> {
     let sqlite = store.connect_repo_sqlite()?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting DevQL producer spool enqueue transaction")?;
         let result = (|| {

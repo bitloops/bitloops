@@ -24,6 +24,7 @@ pub(crate) use self::current_edges::{
     load_current_edges_for_local_reconciliation_with_connection,
     load_current_source_facts_for_paths_with_connection,
     load_current_targets_for_paths_for_local_resolution_with_connection,
+    reconcile_current_local_edges_for_paths_with_write_lock,
 };
 pub(crate) use self::current_state::{persist_prepared_materialisation_tx, remove_paths_tx};
 pub(crate) use self::local_resolution::resolve_prepared_local_edges_with_connection;

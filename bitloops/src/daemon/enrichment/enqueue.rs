@@ -110,7 +110,7 @@ SELECT DISTINCT artefact_id FROM artefacts_current WHERE repo_id = '{repo_id_sql
             .collect::<HashSet<_>>();
 
         let _guard = self.lock.lock().await;
-        let deleted = self.workplane_store.with_connection(|conn| {
+        let deleted = self.workplane_store.with_write_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT job_id, payload FROM capability_workplane_jobs WHERE repo_id = ?1 AND status = ?2",
             )?;

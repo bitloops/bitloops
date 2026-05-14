@@ -44,7 +44,7 @@ impl RepoSqliteRuntimeStore {
                     ),
                     &payload,
                 )?;
-            sqlite.with_connection(|conn| {
+            sqlite.with_write_connection(|conn| {
                 conn.execute(
                     "INSERT INTO session_metadata_snapshots (
                         snapshot_id, session_id, repo_id, turn_id, transcript_identifier,

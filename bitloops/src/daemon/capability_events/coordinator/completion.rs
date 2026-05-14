@@ -30,7 +30,7 @@ impl CapabilityEventCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
-        self.runtime_store.with_connection(|conn| {
+        self.runtime_store.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
                 .context("starting current-state consumer completion transaction")?;
             let result = (|| {

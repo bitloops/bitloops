@@ -32,7 +32,7 @@ impl CapabilityEventCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
-        let run = self.runtime_store.with_connection(|conn| {
+        let run = self.runtime_store.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
                 .context("starting forced current-state consumer transaction")?;
             let request = ConsumerRunRequest {
@@ -66,7 +66,7 @@ impl CapabilityEventCoordinator {
             .lock
             .lock()
             .map_err(|_| anyhow!("current-state consumer lock poisoned"))?;
-        let deleted = self.runtime_store.with_connection(|conn| {
+        let deleted = self.runtime_store.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM capability_workplane_cursor_runs WHERE repo_id = ?1 AND status = ?2",
                 params![repo_id, CapabilityEventRunStatus::Queued.to_string()],

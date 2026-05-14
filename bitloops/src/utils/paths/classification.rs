@@ -2,9 +2,17 @@ use std::path::Path;
 
 use super::constants::BITLOOPS_TEST_STATE_DIR;
 
+const BITLOOPS_REPO_STORES_DIR: &str = ".bitloops/stores";
+
 pub fn is_infrastructure_path(path: &str) -> bool {
-    let normalized = path.replace('\\', "/");
-    is_dir_or_descendant(&normalized, BITLOOPS_TEST_STATE_DIR)
+    let normalized = path
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string();
+    [BITLOOPS_TEST_STATE_DIR, BITLOOPS_REPO_STORES_DIR]
+        .iter()
+        .any(|dir| is_dir_or_descendant(&normalized, dir))
 }
 
 pub fn is_protected_path(path: &str) -> bool {

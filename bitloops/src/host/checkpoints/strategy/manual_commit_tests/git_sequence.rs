@@ -230,6 +230,36 @@ pub(crate) fn files_with_remaining_agent_changes_fully_committed() {
 }
 
 #[test]
+pub(crate) fn files_with_remaining_agent_changes_ignores_bitloops_store_sidecars() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo_with_checkpoint_backends(&dir);
+
+    let shadow_branch = "bitloops-shadow-store-sidecars";
+    create_shadow_branch_with_content(dir.path(), shadow_branch, &[("test.txt", "content")]);
+
+    fs::write(dir.path().join("test.txt"), "content").unwrap();
+    git_ok(dir.path(), &["add", "test.txt"]);
+    git_ok(dir.path(), &["commit", "-m", "add test"]);
+    let head = git_ok(dir.path(), &["rev-parse", "HEAD"]);
+
+    let files_touched = vec![
+        "test.txt".to_string(),
+        ".bitloops/stores/relational/relational.db-wal".to_string(),
+        ".bitloops/stores/relational/relational.db-shm".to_string(),
+        ".bitloops/stores/relational/relational.db-write-lock".to_string(),
+    ];
+    let committed_files = std::collections::HashSet::from(["test.txt".to_string()]);
+    let remaining = files_with_remaining_agent_changes(
+        dir.path(),
+        shadow_branch,
+        &head,
+        &files_touched,
+        &committed_files,
+    );
+    assert!(remaining.is_empty());
+}
+
+#[test]
 pub(crate) fn files_with_remaining_agent_changes_partial_commit() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo_with_checkpoint_backends(&dir);

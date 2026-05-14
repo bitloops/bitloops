@@ -17,7 +17,7 @@ use super::{
 
 pub(crate) fn recover_running_producer_spool_jobs(config_root: &Path) -> Result<u64> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting DevQL producer spool recovery transaction")?;
         let result = (|| {
@@ -85,7 +85,7 @@ pub(crate) fn claim_next_producer_spool_jobs_excluding(
     post_commit_derivation_guards: &PostCommitDerivationClaimGuards,
 ) -> Result<Vec<ProducerSpoolJobRecord>> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting DevQL producer spool claim transaction")?;
         let result = (|| {
@@ -300,7 +300,7 @@ fn producer_spool_payload_priority(payload: &ProducerSpoolJobPayload) -> u8 {
 
 pub(crate) fn delete_producer_spool_job(config_root: &Path, job_id: &str) -> Result<()> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "DELETE FROM devql_producer_spool_jobs WHERE job_id = ?1",
             params![job_id],
@@ -316,7 +316,7 @@ pub(crate) fn requeue_producer_spool_job(
     err: &anyhow::Error,
 ) -> Result<()> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         let now = unix_timestamp_now();
         conn.execute(
             "UPDATE devql_producer_spool_jobs

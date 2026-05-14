@@ -30,7 +30,7 @@ impl RepoSqliteRuntimeStore {
         sqlite
             .initialise_runtime_checkpoint_schema()
             .context("initialising runtime schema for watcher registration save")?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             upsert_watcher_registration(
                 conn,
                 self.repo_id.as_str(),
@@ -53,7 +53,7 @@ impl RepoSqliteRuntimeStore {
         sqlite
             .initialise_runtime_checkpoint_schema()
             .context("initialising runtime schema for watcher registration pending claim")?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             with_immediate_transaction(conn, || {
                 let existing = load_watcher_registration_record(conn, self.repo_id.as_str())?;
                 match existing {
@@ -102,7 +102,7 @@ impl RepoSqliteRuntimeStore {
         sqlite
             .initialise_runtime_checkpoint_schema()
             .context("initialising runtime schema for watcher registration ready promote")?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             with_immediate_transaction(conn, || {
                 match load_watcher_registration_record(conn, self.repo_id.as_str())? {
                     Some(record)
@@ -138,7 +138,7 @@ impl RepoSqliteRuntimeStore {
         sqlite
             .initialise_runtime_checkpoint_schema()
             .context("initialising runtime schema for watcher registration delete")?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM repo_watcher_registrations WHERE repo_id = ?1",
                 rusqlite::params![self.repo_id.as_str()],
@@ -157,7 +157,7 @@ impl RepoSqliteRuntimeStore {
         sqlite
             .initialise_runtime_checkpoint_schema()
             .context("initialising runtime schema for watcher registration conditional delete")?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM repo_watcher_registrations
                  WHERE repo_id = ?1 AND pid = ?2 AND restart_token = ?3",
@@ -177,7 +177,7 @@ impl RepoSqliteRuntimeStore {
         sqlite
             .initialise_runtime_checkpoint_schema()
             .context("initialising runtime schema for pending watcher registration delete")?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             let deleted = conn
                 .execute(
                     "DELETE FROM repo_watcher_registrations

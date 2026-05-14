@@ -11,6 +11,7 @@ use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 use crate::test_support::git_fixtures::{init_test_repo, write_test_daemon_config};
 
 use super::types::{CapabilityEventCoordinator, RunCompletion, SyncGenerationInput};
+use super::worker::load_claimable_runs;
 
 fn test_runtime_store(dir: &TempDir) -> DaemonSqliteRuntimeStore {
     DaemonSqliteRuntimeStore::open_at(dir.path().join("runtime.sqlite"))
@@ -51,7 +52,7 @@ fn insert_consumer_row(
     updated_at_unix: u64,
 ) {
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_mailboxes (repo_id, capability_id, mailbox_name, last_applied_generation_seq, last_error, updated_at_unix) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
@@ -70,7 +71,7 @@ fn insert_consumer_row(
 
 fn insert_run_row(store: &DaemonSqliteRuntimeStore, run: &CapabilityEventRunRecord) {
     store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_cursor_runs (run_id, repo_id, repo_root, mailbox_name, capability_id, from_generation_seq, to_generation_seq, reconcile_mode, status, attempts, submitted_at_unix, started_at_unix, updated_at_unix, completed_at_unix, error) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
@@ -255,4 +256,49 @@ fn snapshot_uses_latest_run_status_and_timestamp() {
     let snapshot = coordinator.snapshot(None).expect("snapshot queue");
     assert_eq!(snapshot.state.last_action.as_deref(), Some("failed"));
     assert_eq!(snapshot.state.last_updated_unix, 42);
+}
+
+#[test]
+fn load_claimable_runs_claims_one_current_state_run_at_a_time() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let mut first = sample_run(CapabilityEventRunStatus::Queued);
+    first.run_id = "run-first".to_string();
+    first.consumer_id = "test_harness.current_state".to_string();
+    first.lane_key = "repo-1:test_harness.current_state".to_string();
+    first.submitted_at_unix = 10;
+    let mut second = sample_run(CapabilityEventRunStatus::Queued);
+    second.run_id = "run-second".to_string();
+    second.consumer_id = "architecture_graph.snapshot".to_string();
+    second.lane_key = "repo-1:architecture_graph.snapshot".to_string();
+    second.submitted_at_unix = 11;
+    insert_run_row(&store, &first);
+    insert_run_row(&store, &second);
+
+    let claimed = store
+        .with_connection(load_claimable_runs)
+        .expect("load claimable runs");
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].record.run_id, "run-first");
+}
+
+#[test]
+fn load_claimable_runs_waits_when_current_state_run_is_active() {
+    let temp = TempDir::new().expect("tempdir");
+    let store = test_runtime_store(&temp);
+    let active = sample_run(CapabilityEventRunStatus::Running);
+    let mut queued = sample_run(CapabilityEventRunStatus::Queued);
+    queued.run_id = "run-queued".to_string();
+    queued.consumer_id = "architecture_graph.snapshot".to_string();
+    queued.lane_key = "repo-1:architecture_graph.snapshot".to_string();
+    queued.submitted_at_unix = 11;
+    insert_run_row(&store, &active);
+    insert_run_row(&store, &queued);
+
+    let claimed = store
+        .with_connection(load_claimable_runs)
+        .expect("load claimable runs");
+
+    assert!(claimed.is_empty());
 }

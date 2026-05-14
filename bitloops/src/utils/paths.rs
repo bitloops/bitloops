@@ -88,7 +88,11 @@ mod tests {
                 ".bitloops-test-state/daemon/repos/hash/tmp/pre-prompt.json",
                 true,
             ),
+            (".bitloops/stores/relational/relational.db-wal", true),
+            ("./.bitloops/stores/relational/relational.db-shm", true),
+            (".bitloops/stores/relational/relational.db-write-lock", true),
             ("src/main.rs", false),
+            (".bitloops.local.toml", false),
         ];
 
         for (path, want) in tests {
