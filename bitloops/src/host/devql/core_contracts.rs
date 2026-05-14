@@ -55,6 +55,7 @@ impl CoreCanonicalArtefactKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalKindProjection {
     File,
+    Namespace,
     Module,
     Import,
     Type,
@@ -69,6 +70,7 @@ impl CanonicalKindProjection {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
+            Self::Namespace => "namespace",
             Self::Module => "module",
             Self::Import => "import",
             Self::Type => "type",
@@ -83,6 +85,7 @@ impl CanonicalKindProjection {
     pub(crate) fn from_str(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "file" => Some(Self::File),
+            "namespace" => Some(Self::Namespace),
             "module" => Some(Self::Module),
             "import" => Some(Self::Import),
             "type" => Some(Self::Type),
@@ -99,6 +102,7 @@ impl CanonicalKindProjection {
     pub(super) fn core_kind(self) -> CoreCanonicalArtefactKind {
         match self {
             Self::File => CoreCanonicalArtefactKind::File,
+            Self::Namespace => CoreCanonicalArtefactKind::Namespace,
             Self::Module => CoreCanonicalArtefactKind::Module,
             Self::Import => CoreCanonicalArtefactKind::Import,
             Self::Type | Self::Interface | Self::Enum => CoreCanonicalArtefactKind::Type,

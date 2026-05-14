@@ -4,7 +4,7 @@ use crate::host::language_adapter::{CanonicalMapping, LanguageKind, MappingCondi
 pub(crate) static PHP_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
     CanonicalMapping {
         language_kind: LanguageKind::php(PhpKind::NamespaceDefinition),
-        projection: CanonicalKindProjection::Module,
+        projection: CanonicalKindProjection::Namespace,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
@@ -19,17 +19,12 @@ pub(crate) static PHP_CANONICAL_MAPPINGS: &[CanonicalMapping] = &[
     },
     CanonicalMapping {
         language_kind: LanguageKind::php(PhpKind::InterfaceDeclaration),
-        projection: CanonicalKindProjection::Type,
-        condition: MappingCondition::Always,
-    },
-    CanonicalMapping {
-        language_kind: LanguageKind::php(PhpKind::TraitDeclaration),
-        projection: CanonicalKindProjection::Type,
+        projection: CanonicalKindProjection::Interface,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {
         language_kind: LanguageKind::php(PhpKind::EnumDeclaration),
-        projection: CanonicalKindProjection::Type,
+        projection: CanonicalKindProjection::Enum,
         condition: MappingCondition::Always,
     },
     CanonicalMapping {

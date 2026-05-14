@@ -198,7 +198,9 @@ fn collect_php_nodes_recursive(
                 if child.kind() != "const_element" {
                     continue;
                 }
-                if let Some(name_node) = child.child_by_field_name("name")
+                if let Some(name_node) = child
+                    .child_by_field_name("name")
+                    .or_else(|| child.named_child(0))
                     && let Ok(name) = name_node.utf8_text(content.as_bytes())
                 {
                     let clean = name.trim();
@@ -294,22 +296,38 @@ fn push_php_artefact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::language_adapter::{LanguageKind, PhpKind};
 
     #[test]
-    fn extract_php_artefacts_captures_core_symbols() {
+    fn extract_php_artefacts_captures_one_symbol_per_supported_kind() {
         let content = r#"<?php
 namespace App\Services;
 use App\Core\Helper;
 
-class UserService {
-    public function run() {
-        return helper();
-    }
-
-    private string $name;
+interface Runner {
+    public function run(): void;
 }
 
-const VERSION = "1.0";
+trait LogsActivity {
+    public function log(): void {}
+}
+
+enum UserStatus: string {
+    case Active = 'active';
+}
+
+class UserService implements Runner {
+    use LogsActivity;
+
+    public const VERSION = "1.0";
+    private string $name;
+
+    public function run(): void {
+        return helper();
+    }
+}
+
+const GLOBAL_VERSION = "1.0";
 
 function helper() {
     return 1;
@@ -317,11 +335,62 @@ function helper() {
 "#;
         let artefacts =
             extract_php_artefacts(content, "src/UserService.php").expect("extract php artefacts");
-        assert!(artefacts.iter().any(|a| a.name == "App\\Services"));
-        assert!(artefacts.iter().any(|a| a.name == "UserService"));
-        assert!(artefacts.iter().any(|a| a.name == "run"));
-        assert!(artefacts.iter().any(|a| a.name == "$name"));
-        assert!(artefacts.iter().any(|a| a.name == "helper"));
+
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::NamespaceDefinition,
+            "App\\Services",
+            Some("namespace"),
+        );
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::NamespaceUseDeclaration,
+            "import@3",
+            Some("import"),
+        );
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::InterfaceDeclaration,
+            "Runner",
+            Some("interface"),
+        );
+        assert_php_artefact(&artefacts, PhpKind::TraitDeclaration, "LogsActivity", None);
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::EnumDeclaration,
+            "UserStatus",
+            Some("enum"),
+        );
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::ClassDeclaration,
+            "UserService",
+            Some("type"),
+        );
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::MethodDeclaration,
+            "run",
+            Some("method"),
+        );
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::PropertyDeclaration,
+            "$name",
+            Some("variable"),
+        );
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::ConstDeclaration,
+            "GLOBAL_VERSION",
+            Some("variable"),
+        );
+        assert_php_artefact(
+            &artefacts,
+            PhpKind::FunctionDefinition,
+            "helper",
+            Some("function"),
+        );
     }
 
     #[test]
@@ -329,5 +398,21 @@ function helper() {
         let content = "/** file docs */\n<?php\nfunction x() {}\n";
         let doc = extract_php_file_docstring(content).expect("phpdoc");
         assert!(doc.contains("file docs"));
+    }
+
+    fn assert_php_artefact(
+        artefacts: &[LanguageArtefact],
+        kind: PhpKind,
+        name: &str,
+        canonical_kind: Option<&str>,
+    ) {
+        assert!(
+            artefacts.iter().any(|artefact| {
+                artefact.language_kind == LanguageKind::php(kind)
+                    && artefact.name == name
+                    && artefact.canonical_kind.as_deref() == canonical_kind
+            }),
+            "missing php artefact {kind:?} {name} with canonical kind {canonical_kind:?}"
+        );
     }
 }

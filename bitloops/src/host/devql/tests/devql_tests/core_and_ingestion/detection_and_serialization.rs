@@ -251,7 +251,8 @@ public class Helper
     };
 
     assert!(artefacts.iter().any(|(symbol_fqn, canonical_kind)| {
-        symbol_fqn == "src/UserService.cs::ns::MyApp.Services" && canonical_kind.is_none()
+        symbol_fqn == "src/UserService.cs::ns::MyApp.Services"
+            && canonical_kind.as_deref() == Some("namespace")
     }));
     assert!(artefacts.iter().any(|(symbol_fqn, canonical_kind)| {
         symbol_fqn == "src/UserService.cs::IRepository"
