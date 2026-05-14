@@ -629,3 +629,52 @@ fn terminate_active_worker_children_kills_tracked_workers_and_clears_map() {
         "sleep child should be terminated"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn terminate_active_worker_children_continues_after_individual_failures() {
+    let temp = TempDir::new().expect("tempdir");
+    let coordinator = CapabilityEventCoordinator::new_shared_instance(test_runtime_store(&temp));
+    let child = std::process::Command::new("sh")
+        .args(["-c", "sleep 30"])
+        .spawn()
+        .expect("spawn sleeper");
+    let pid = child.id();
+    // The coordinator terminates and reaps this worker by PID, so the handle can be dropped.
+    drop(child);
+
+    let mut active = coordinator
+        .active_worker_children
+        .lock()
+        .expect("lock active worker map");
+    active.insert(
+        "run-a-fail".to_string(),
+        super::types::ActiveWorkerChild { pid: 1 },
+    );
+    active.insert(
+        "run-z-sleep".to_string(),
+        super::types::ActiveWorkerChild { pid },
+    );
+    drop(active);
+
+    let err = coordinator
+        .terminate_active_worker_children()
+        .expect_err("termination should surface the failed pid");
+
+    assert!(
+        err.to_string().contains("run-a-fail"),
+        "error should mention the failing run: {err:#}"
+    );
+    assert!(
+        coordinator
+            .active_worker_children
+            .lock()
+            .expect("lock active worker map")
+            .is_empty(),
+        "tracked worker map should be cleared"
+    );
+    assert!(
+        !crate::daemon::process_is_running(pid).expect("check worker process liveness"),
+        "later worker should still be terminated after an earlier failure"
+    );
+}

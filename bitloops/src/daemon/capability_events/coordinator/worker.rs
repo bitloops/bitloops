@@ -318,18 +318,39 @@ impl CapabilityEventCoordinator {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             std::mem::take(&mut *active)
         };
+        let mut failures = Vec::new();
         for (run_id, child) in active {
             log::info!(
                 "current-state worker termination requested: run_id={} pid={}",
                 run_id,
                 child.pid,
             );
-            terminate_current_state_worker_process(child.pid).with_context(|| {
+            let result = terminate_current_state_worker_process(child.pid).with_context(|| {
                 format!(
                     "terminating tracked current-state worker for run `{}` (pid {})",
                     run_id, child.pid
                 )
-            })?;
+            });
+            if let Err(err) = result {
+                log::warn!(
+                    "current-state worker termination failed: run_id={} pid={} error={:#}",
+                    run_id,
+                    child.pid,
+                    err,
+                );
+                failures.push(err);
+            }
+        }
+        if !failures.is_empty() {
+            return Err(anyhow!(
+                "failed to terminate {} current-state worker child(ren): {}",
+                failures.len(),
+                failures
+                    .iter()
+                    .map(|err| format!("{err:#}"))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            ));
         }
         Ok(())
     }
