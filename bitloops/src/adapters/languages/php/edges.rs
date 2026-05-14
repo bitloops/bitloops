@@ -193,7 +193,9 @@ fn collect_php_call_edge(node: tree_sitter::Node, ctx: &mut PhpTraversalCtx<'_>)
 
 fn collect_php_extends_edges(node: tree_sitter::Node, ctx: &mut PhpTraversalCtx<'_>) {
     let line_no = node.start_position().row as i32 + 1;
-    let Some(owner) = smallest_enclosing_type(line_no, ctx.artefacts) else {
+    let Some(owner_symbol_fqn) =
+        smallest_enclosing_type(line_no, ctx.artefacts).map(|owner| owner.symbol_fqn.clone())
+    else {
         return;
     };
     let mut cursor = node.walk();
@@ -203,20 +205,19 @@ fn collect_php_extends_edges(node: tree_sitter::Node, ctx: &mut PhpTraversalCtx<
         };
         push_php_relationship_edge(
             EdgeKind::Extends,
-            &owner.symbol_fqn,
+            &owner_symbol_fqn,
             &target_name,
             child.start_position().row as i32 + 1,
-            ctx.type_targets,
-            ctx.imported_type_refs,
-            ctx.seen_extends,
-            ctx.out,
+            ctx,
         );
     }
 }
 
 fn collect_php_implements_edges(node: tree_sitter::Node, ctx: &mut PhpTraversalCtx<'_>) {
     let line_no = node.start_position().row as i32 + 1;
-    let Some(owner) = smallest_enclosing_type(line_no, ctx.artefacts) else {
+    let Some(owner_symbol_fqn) =
+        smallest_enclosing_type(line_no, ctx.artefacts).map(|owner| owner.symbol_fqn.clone())
+    else {
         return;
     };
     let mut cursor = node.walk();
@@ -226,13 +227,10 @@ fn collect_php_implements_edges(node: tree_sitter::Node, ctx: &mut PhpTraversalC
         };
         push_php_relationship_edge(
             EdgeKind::Implements,
-            &owner.symbol_fqn,
+            &owner_symbol_fqn,
             &target_name,
             child.start_position().row as i32 + 1,
-            ctx.type_targets,
-            ctx.imported_type_refs,
-            ctx.seen_implements,
-            ctx.out,
+            ctx,
         );
     }
 }
@@ -412,21 +410,17 @@ fn push_php_relationship_edge(
     from_symbol_fqn: &str,
     target_name: &str,
     line_no: i32,
-    type_targets: &HashMap<String, String>,
-    imported_type_refs: &HashMap<String, String>,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<DependencyEdge>,
+    ctx: &mut PhpTraversalCtx<'_>,
 ) {
     let (to_target_symbol_fqn, to_symbol_ref, resolution) =
-        resolve_php_type_target(target_name, type_targets, imported_type_refs).unwrap_or_else(
-            || {
+        resolve_php_type_target(target_name, ctx.type_targets, ctx.imported_type_refs)
+            .unwrap_or_else(|| {
                 (
                     None,
                     Some(target_name.trim_start_matches('\\').to_string()),
                     Resolution::Unresolved,
                 )
-            },
-        );
+            });
     let key = format!(
         "{}|{}|{}|{}|{}|{}",
         edge_kind.as_str(),
@@ -436,10 +430,15 @@ fn push_php_relationship_edge(
         line_no,
         resolution.as_str()
     );
-    if !seen.insert(key) {
+    let inserted = match edge_kind {
+        EdgeKind::Extends => ctx.seen_extends.insert(key),
+        EdgeKind::Implements => ctx.seen_implements.insert(key),
+        _ => unreachable!("php relationship edge kind must be extends or implements"),
+    };
+    if !inserted {
         return;
     }
-    out.push(DependencyEdge {
+    ctx.out.push(DependencyEdge {
         edge_kind,
         from_symbol_fqn: from_symbol_fqn.to_string(),
         to_target_symbol_fqn,
