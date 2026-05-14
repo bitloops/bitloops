@@ -9,3 +9,4 @@ resolver = "2"
 
 [patch.crates-io]
 libduckdb-sys = { path = "third_party/libduckdb-sys" }
+sqlite-vec = { path = "third_party/sqlite-vec" }

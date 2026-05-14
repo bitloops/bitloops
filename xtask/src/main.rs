@@ -122,8 +122,8 @@ fn run_dev_install() -> Result<(), String> {
 
     run_command(
         &workspace_root,
-        "cargo install --path bitloops --force",
-        &["install", "--path", "bitloops", "--force"],
+        "cargo install --path bitloops --force --locked",
+        &["install", "--path", "bitloops", "--force", "--locked"],
     )?;
 
     let binary_path = installed_binary_path("bitloops")?;
@@ -1426,15 +1426,22 @@ fn binary_has_rpath(binary_path: &Path, rpath: &str) -> Result<bool, String> {
 }
 
 fn resolve_workspace_duckdb_dylib(workspace_root: &Path) -> Result<PathBuf, String> {
-    let mut candidates = vec![
-        workspace_root.join("target/release/deps/libduckdb.dylib"),
-        workspace_root.join("target/debug/deps/libduckdb.dylib"),
-    ];
-    if let Ok(entries) = fs::read_dir(workspace_root.join("target/duckdb-download")) {
-        for arch_entry in entries.flatten() {
-            if let Ok(versions) = fs::read_dir(arch_entry.path()) {
-                for version_entry in versions.flatten() {
-                    candidates.push(version_entry.path().join("libduckdb.dylib"));
+    let mut target_roots = Vec::new();
+    if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
+        target_roots.push(PathBuf::from(target_dir));
+    }
+    target_roots.push(workspace_root.join("target"));
+
+    let mut candidates = Vec::new();
+    for target_root in target_roots {
+        candidates.push(target_root.join("release/deps/libduckdb.dylib"));
+        candidates.push(target_root.join("debug/deps/libduckdb.dylib"));
+        if let Ok(entries) = fs::read_dir(target_root.join("duckdb-download")) {
+            for arch_entry in entries.flatten() {
+                if let Ok(versions) = fs::read_dir(arch_entry.path()) {
+                    for version_entry in versions.flatten() {
+                        candidates.push(version_entry.path().join("libduckdb.dylib"));
+                    }
                 }
             }
         }
