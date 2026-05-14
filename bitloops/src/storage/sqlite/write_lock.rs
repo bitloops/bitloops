@@ -26,7 +26,10 @@ pub(crate) fn with_sqlite_write_lock_map<T, E>(
     map_lock_error: impl Fn(anyhow::Error) -> E,
     operation: impl FnOnce() -> std::result::Result<T, E>,
 ) -> std::result::Result<T, E> {
-    let canonical_db_path = canonical_sqlite_db_path(db_path);
+    let canonical_db_path = match canonical_sqlite_db_path(db_path) {
+        Ok(path) => path,
+        Err(err) => return Err(map_lock_error(err)),
+    };
     if sqlite_write_lock_is_held(&canonical_db_path) {
         return operation();
     }
@@ -102,17 +105,12 @@ fn sqlite_process_write_lock_for(db_path: &Path) -> Arc<Mutex<()>> {
         .clone()
 }
 
-fn canonical_sqlite_db_path(db_path: &Path) -> PathBuf {
+fn canonical_sqlite_db_path(db_path: &Path) -> Result<PathBuf> {
     // Keep the lock key stable even while the database or parent directory is being created.
     // Filesystem canonicalization can change once those paths appear.
-    let absolute = if db_path.is_absolute() {
-        db_path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(db_path)
-    };
-    normalize_sqlite_lock_path(&absolute)
+    let absolute = std::path::absolute(db_path)
+        .with_context(|| format!("resolving absolute SQLite path {}", db_path.display()))?;
+    Ok(normalize_sqlite_lock_path(&absolute))
 }
 
 fn normalize_sqlite_lock_path(path: &Path) -> PathBuf {
@@ -183,6 +181,65 @@ impl Drop for SqliteWriteFileGuard {
     }
 }
 
+#[cfg(test)]
+pub(crate) struct HeldSqliteWriteLock {
+    release_tx: Option<std::sync::mpsc::Sender<()>>,
+    join: Option<std::thread::JoinHandle<Result<()>>>,
+}
+
+#[cfg(test)]
+impl HeldSqliteWriteLock {
+    pub(crate) fn release(mut self) -> Result<()> {
+        self.release_inner()
+    }
+
+    fn release_inner(&mut self) -> Result<()> {
+        if let Some(release_tx) = self.release_tx.take() {
+            release_tx
+                .send(())
+                .map_err(|_| anyhow::anyhow!("releasing held SQLite write lock"))?;
+        }
+        if let Some(join) = self.join.take() {
+            join.join()
+                .map_err(|_| anyhow::anyhow!("joining held SQLite write lock thread"))??;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Drop for HeldSqliteWriteLock {
+    fn drop(&mut self) {
+        let _ = self.release_inner();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn hold_sqlite_write_lock_until_release(
+    db_path: PathBuf,
+) -> Result<HeldSqliteWriteLock> {
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let join = std::thread::spawn(move || {
+        with_sqlite_write_lock(&db_path, || {
+            locked_tx
+                .send(())
+                .map_err(|_| anyhow::anyhow!("signalling held SQLite write lock"))?;
+            release_rx
+                .recv()
+                .map_err(|_| anyhow::anyhow!("waiting for SQLite write lock release"))?;
+            Ok(())
+        })
+    });
+    locked_rx
+        .recv()
+        .context("waiting for held SQLite write lock")?;
+    Ok(HeldSqliteWriteLock {
+        release_tx: Some(release_tx),
+        join: Some(join),
+    })
+}
+
 fn log_sqlite_write_lock_timing(db_path: &Path, waited: Duration, held: Duration) {
     if waited >= WRITE_LOCK_WAIT_WARN_THRESHOLD {
         log::warn!(
@@ -226,9 +283,9 @@ mod tests {
         std::fs::create_dir_all(&anchor)?;
         let db_path = anchor.join("..").join("missing").join("runtime.sqlite");
 
-        let before_parent_exists = canonical_sqlite_db_path(&db_path);
+        let before_parent_exists = canonical_sqlite_db_path(&db_path)?;
         std::fs::create_dir_all(temp.path().join("missing"))?;
-        let after_parent_exists = canonical_sqlite_db_path(&db_path);
+        let after_parent_exists = canonical_sqlite_db_path(&db_path)?;
 
         assert_eq!(before_parent_exists, after_parent_exists);
         assert!(before_parent_exists.is_absolute());
@@ -236,10 +293,17 @@ mod tests {
     }
 
     #[test]
+    fn canonical_sqlite_db_path_makes_relative_paths_absolute() -> Result<()> {
+        let path = canonical_sqlite_db_path(Path::new("runtime.sqlite"))?;
+        assert!(path.is_absolute());
+        Ok(())
+    }
+
+    #[test]
     fn sqlite_write_lock_recovers_from_poisoned_process_mutex() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("runtime.sqlite");
-        let lock_key = canonical_sqlite_db_path(&db_path);
+        let lock_key = canonical_sqlite_db_path(&db_path)?;
         let process_lock = sqlite_process_write_lock_for(&lock_key);
         let lock_for_thread = Arc::clone(&process_lock);
 

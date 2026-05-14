@@ -669,7 +669,7 @@ mod tests {
     use super::*;
     use anyhow::Context;
     use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     #[test]
     fn sqlite_exec_batch_transactional_path_rolls_back_on_failure() -> Result<()> {
@@ -756,37 +756,37 @@ mod tests {
             .context("creating sample table")?;
         drop(conn);
 
-        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
-        let sqlite_path_for_blocker = sqlite_path.clone();
-        let blocker = std::thread::spawn(move || -> Result<()> {
-            crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path_for_blocker, || {
-                locked_tx.send(()).expect("signal lock held");
-                std::thread::sleep(Duration::from_millis(150));
-                Ok(())
-            })
-        });
-        locked_rx.recv().context("waiting for blocker lock")?;
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .context("creating tokio runtime")?;
-        let started = Instant::now();
-        runtime
-            .block_on(sqlite_exec_batch_transactional_path(
-                &sqlite_path,
-                &["INSERT INTO sample (id, value) VALUES (1, 'ok');".to_string()],
-            ))
-            .context("executing transactional batch")?;
-        let elapsed = started.elapsed();
-
-        blocker
-            .join()
-            .map_err(|_| anyhow!("joining blocker thread"))??;
+        let held_lock =
+            crate::storage::sqlite::hold_sqlite_write_lock_until_release(sqlite_path.clone())?;
+        let sqlite_path_for_writer = sqlite_path.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal batch started");
+            done_tx
+                .send(runtime.block_on(sqlite_exec_batch_transactional_path(
+                    &sqlite_path_for_writer,
+                    &["INSERT INTO sample (id, value) VALUES (1, 'ok');".to_string()],
+                )))
+                .expect("send batch result");
+        });
+        started_rx.recv().context("waiting for batch start")?;
         assert!(
-            elapsed >= Duration::from_millis(100),
-            "transactional SQLite batches should wait for the shared write lock; elapsed={elapsed:?}"
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "transactional SQLite batch should not complete while the shared write lock is held"
         );
+        held_lock.release()?;
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .context("waiting for batch result")?
+            .context("executing transactional batch")?;
+        writer
+            .join()
+            .map_err(|_| anyhow!("joining batch writer thread"))?;
 
         let conn = rusqlite::Connection::open(&sqlite_path).context("re-opening test sqlite")?;
         let count: i64 = conn

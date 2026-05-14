@@ -1,5 +1,5 @@
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::*;
 use crate::host::devql::file_symbol_id;
@@ -95,27 +95,31 @@ fn capture_workspace_revision_persist_waits_for_shared_sqlite_write_lock() {
         .expect("build devql config");
     let db_path = devql_sqlite_path(dir.path());
 
-    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
-    let db_path_for_blocker = db_path.clone();
-    let blocker = std::thread::spawn(move || {
-        crate::storage::sqlite::with_sqlite_write_lock(&db_path_for_blocker, || {
-            locked_tx.send(()).expect("signal lock held");
-            std::thread::sleep(Duration::from_millis(150));
-            Ok(())
-        })
-        .expect("hold sqlite write lock");
+    let held_lock =
+        crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path).expect("hold lock");
+    let cfg_for_persist = cfg.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal persist started");
+        done_tx
+            .send(persist_workspace_revision(
+                &cfg_for_persist,
+                "tree-hash-under-lock",
+            ))
+            .expect("send persist result");
     });
-    locked_rx.recv().expect("wait for sqlite lock");
-
-    let started = Instant::now();
-    persist_workspace_revision(&cfg, "tree-hash-under-lock").expect("persist workspace revision");
-    let elapsed = started.elapsed();
-
-    blocker.join().expect("join sqlite lock blocker");
+    started_rx.recv().expect("wait for persist start");
     assert!(
-        elapsed >= Duration::from_millis(100),
-        "workspace revision persistence should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "workspace revision persistence should not complete while the shared SQLite write lock is held"
     );
+    held_lock.release().expect("release sqlite write lock");
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for persist result")
+        .expect("persist workspace revision");
+    worker.join().expect("join persist worker");
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -37,22 +37,6 @@ fn seed_store() -> (
     (dir, repo_root, repo, store)
 }
 
-fn block_sqlite_writer_for(
-    db_path: PathBuf,
-    hold_for: Duration,
-) -> (std::sync::mpsc::Receiver<()>, std::thread::JoinHandle<()>) {
-    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
-    let blocker = std::thread::spawn(move || {
-        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
-            locked_tx.send(()).expect("signal lock held");
-            std::thread::sleep(hold_for);
-            Ok(())
-        })
-        .expect("hold sqlite write lock");
-    });
-    (locked_rx, blocker)
-}
-
 #[test]
 fn producer_spool_enqueue_waits_for_shared_runtime_sqlite_write_lock() {
     let (_dir, repo_root, repo, store) = seed_store();
@@ -63,24 +47,33 @@ fn producer_spool_enqueue_waits_for_shared_runtime_sqlite_write_lock() {
     )
     .expect("build devql config");
 
-    let (locked_rx, blocker) =
-        block_sqlite_writer_for(store.db_path().to_path_buf(), Duration::from_millis(150));
-    locked_rx.recv().expect("wait for sqlite lock");
-
-    let started = Instant::now();
-    enqueue_spooled_sync_task(
-        &cfg,
-        DevqlTaskSource::Watcher,
-        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
-    )
-    .expect("enqueue watcher sync");
-    let elapsed = started.elapsed();
-
-    blocker.join().expect("join sqlite lock blocker");
+    let held_lock =
+        crate::storage::sqlite::hold_sqlite_write_lock_until_release(store.db_path().to_path_buf())
+            .expect("hold sqlite write lock");
+    let cfg_for_enqueue = cfg.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal enqueue started");
+        done_tx
+            .send(enqueue_spooled_sync_task(
+                &cfg_for_enqueue,
+                DevqlTaskSource::Watcher,
+                crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+            ))
+            .expect("send enqueue result");
+    });
+    started_rx.recv().expect("wait for enqueue start");
     assert!(
-        elapsed >= Duration::from_millis(100),
-        "producer spool enqueue should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "producer spool enqueue should not complete while the shared SQLite write lock is held"
     );
+    held_lock.release().expect("release sqlite write lock");
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for enqueue result")
+        .expect("enqueue watcher sync");
+    worker.join().expect("join enqueue worker");
 }
 
 #[test]
@@ -99,21 +92,30 @@ fn producer_spool_claim_waits_for_shared_runtime_sqlite_write_lock() {
     )
     .expect("enqueue watcher sync");
 
-    let (locked_rx, blocker) =
-        block_sqlite_writer_for(store.db_path().to_path_buf(), Duration::from_millis(150));
-    locked_rx.recv().expect("wait for sqlite lock");
-
-    let started = Instant::now();
-    let claimed =
-        claim_next_producer_spool_jobs(&store.config_root).expect("claim producer spool jobs");
-    let elapsed = started.elapsed();
-
-    blocker.join().expect("join sqlite lock blocker");
-    assert_eq!(claimed.len(), 1);
+    let held_lock =
+        crate::storage::sqlite::hold_sqlite_write_lock_until_release(store.db_path().to_path_buf())
+            .expect("hold sqlite write lock");
+    let config_root = store.config_root.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal claim started");
+        done_tx
+            .send(claim_next_producer_spool_jobs(&config_root))
+            .expect("send claim result");
+    });
+    started_rx.recv().expect("wait for claim start");
     assert!(
-        elapsed >= Duration::from_millis(100),
-        "producer spool claim should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "producer spool claim should not complete while the shared SQLite write lock is held"
     );
+    held_lock.release().expect("release sqlite write lock");
+    let claimed = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for claim result")
+        .expect("claim producer spool jobs");
+    worker.join().expect("join claim worker");
+    assert_eq!(claimed.len(), 1);
 }
 
 #[test]

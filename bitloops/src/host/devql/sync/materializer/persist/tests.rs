@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -118,11 +118,12 @@ fn current_edge_reconciliation_waits_for_write_lock_before_reading_state() {
     setup_artefacts_table(&connection);
 
     let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
     let sqlite_path_for_blocker = sqlite_path.clone();
     let blocker = std::thread::spawn(move || {
         crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path_for_blocker, || {
             locked_tx.send(()).expect("signal lock held");
-            std::thread::sleep(Duration::from_millis(75));
+            release_rx.recv().expect("wait for release signal");
             let connection =
                 Connection::open(&sqlite_path_for_blocker).expect("open sqlite in blocker");
             insert_edge(
@@ -141,28 +142,37 @@ fn current_edge_reconciliation_waits_for_write_lock_before_reading_state() {
                 "typescript",
                 "function_declaration",
             );
-            std::thread::sleep(Duration::from_millis(75));
             Ok(())
         })
         .expect("hold sqlite write lock");
     });
     locked_rx.recv().expect("wait for sqlite lock");
 
-    let started = Instant::now();
-    let affected_rows = reconcile_current_local_edges_for_paths_with_write_lock(
-        &mut connection,
-        &sqlite_path,
-        "repo",
-        &["src/utils.ts".to_string()],
-    )
-    .expect("reconcile current local edges");
-    let elapsed = started.elapsed();
-
-    blocker.join().expect("join sqlite lock blocker");
+    let sqlite_path_for_reconcile = sqlite_path.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal reconcile started");
+        let result = reconcile_current_local_edges_for_paths_with_write_lock(
+            &mut connection,
+            &sqlite_path_for_reconcile,
+            "repo",
+            &["src/utils.ts".to_string()],
+        );
+        done_tx.send(result).expect("send reconcile result");
+    });
+    started_rx.recv().expect("wait for reconcile start");
     assert!(
-        elapsed >= Duration::from_millis(100),
-        "current edge reconciliation should wait before reading state; elapsed={elapsed:?}"
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "current edge reconciliation should not complete before the held write lock is released"
     );
+    release_tx.send(()).expect("release sqlite write lock");
+    let affected_rows = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for reconcile result")
+        .expect("reconcile current local edges");
+    worker.join().expect("join reconcile worker");
+    blocker.join().expect("join sqlite lock blocker");
     assert!(
         affected_rows > 0,
         "reconciliation should see rows inserted while the write lock was held"

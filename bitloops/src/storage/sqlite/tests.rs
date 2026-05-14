@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tempfile::TempDir;
 
 use super::SqliteConnectionPool;
@@ -12,28 +12,28 @@ fn sqlite_connection_pool_execute_batch_waits_for_shared_write_lock() -> Result<
     let sqlite = SqliteConnectionPool::connect(sqlite_path.clone())?;
     sqlite.execute_batch("CREATE TABLE sample (value INTEGER NOT NULL);")?;
 
-    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
-    let sqlite_path_for_blocker = sqlite_path.clone();
-    let blocker = std::thread::spawn(move || -> Result<()> {
-        super::with_sqlite_write_lock(&sqlite_path_for_blocker, || {
-            locked_tx.send(()).expect("signal lock held");
-            std::thread::sleep(Duration::from_millis(150));
-            Ok(())
-        })
+    let held_lock = super::hold_sqlite_write_lock_until_release(sqlite_path.clone())?;
+    let sqlite_for_writer = sqlite.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal writer started");
+        done_tx
+            .send(sqlite_for_writer.execute_batch("INSERT INTO sample (value) VALUES (1);"))
+            .expect("send writer result");
     });
-    locked_rx.recv().context("waiting for blocker lock")?;
-
-    let started = Instant::now();
-    sqlite.execute_batch("INSERT INTO sample (value) VALUES (1);")?;
-    let elapsed = started.elapsed();
-
-    blocker
-        .join()
-        .map_err(|_| anyhow::anyhow!("joining blocker thread"))??;
+    started_rx.recv().context("waiting for writer start")?;
     assert!(
-        elapsed >= Duration::from_millis(100),
-        "SQLite execute_batch writes should wait for the shared write lock; elapsed={elapsed:?}"
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "SQLite execute_batch should not complete while the shared write lock is held"
     );
+    held_lock.release()?;
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .context("waiting for writer result")??;
+    writer
+        .join()
+        .map_err(|_| anyhow::anyhow!("joining writer thread"))?;
 
     let count: i64 = sqlite.with_connection(|conn| {
         conn.query_row("SELECT COUNT(*) FROM sample", [], |row| row.get(0))

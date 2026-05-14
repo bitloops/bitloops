@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
@@ -434,30 +434,33 @@ fn daemon_runtime_store_mutations_wait_for_shared_sqlite_write_lock() {
         || {
             let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
             let db_path = store.db_path().to_path_buf();
-            let (locked_tx, locked_rx) = std::sync::mpsc::channel();
-            let blocker = std::thread::spawn(move || {
-                crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
-                    locked_tx.send(()).expect("signal lock held");
-                    std::thread::sleep(Duration::from_millis(150));
-                    Ok(())
-                })
+            let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path)
+                .expect("hold sqlite write lock");
+            let store_for_mutation = store.clone();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                started_tx.send(()).expect("signal mutation started");
+                done_tx
+                    .send(
+                        store_for_mutation.mutate_capability_event_queue_state(|state| {
+                            state.version = 9;
+                            Ok(())
+                        }),
+                    )
+                    .expect("send mutation result");
             });
-            locked_rx.recv().expect("wait for blocker lock");
-
-            let started = Instant::now();
-            store
-                .mutate_capability_event_queue_state(|state| {
-                    state.version = 9;
-                    Ok(())
-                })
-                .expect("mutate capability event queue state");
-            let elapsed = started.elapsed();
-
-            blocker.join().expect("join blocker").expect("blocker ok");
+            started_rx.recv().expect("wait for mutation start");
             assert!(
-                elapsed >= Duration::from_millis(100),
-                "runtime-store writes should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+                done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+                "runtime-store mutation should not complete while the shared SQLite write lock is held"
             );
+            held_lock.release().expect("release sqlite write lock");
+            done_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("wait for mutation result")
+                .expect("mutate capability event queue state");
+            worker.join().expect("join mutation worker");
         },
     );
 }
