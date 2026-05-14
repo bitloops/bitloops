@@ -2,6 +2,7 @@ pub mod adjudication_selector;
 pub mod assignment_applier;
 pub mod classifier;
 pub mod contracts;
+pub mod current_state_consumer;
 pub mod evidence_packet_builder;
 pub mod fact_extraction;
 pub mod llm_adjudication;
@@ -28,6 +29,7 @@ pub use contracts::{
     RoleAssignmentWriter, RoleFactsBundle, RoleFactsReader, RoleQueueEnqueueResult,
     RoleQueueJobStatus, RoleTaxonomyReader, RuleSignalFact,
 };
+pub use current_state_consumer::ArchitectureGraphRoleCurrentStateConsumer;
 pub use evidence_packet_builder::{
     EvidencePacketLimits, RoleEvidencePacket, RoleEvidencePacketBuilder,
 };
@@ -71,6 +73,7 @@ mod tests {
             "fact_extraction",
             "rules",
             "classifier",
+            "current_state_consumer",
             "llm_adjudication",
             "llm_executor",
             "migrations",
@@ -78,6 +81,6 @@ mod tests {
             "queue_store",
             "response_validator",
         ];
-        assert_eq!(submodules.len(), 14);
+        assert_eq!(submodules.len(), 15);
     }
 }

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 pub const ARCHITECTURE_GRAPH_CAPABILITY_ID: &str = "architecture_graph";
 pub const ARCHITECTURE_GRAPH_CONSUMER_ID: &str = "architecture_graph.snapshot";
+pub const ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID: &str =
+    "architecture_graph.roles.current_state";
 pub const ARCHITECTURE_GRAPH_ASSERT_INGESTER_ID: &str = "architecture_graph.assert";
 pub const ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID: &str = "architecture_graph.revoke";
 pub const ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID: &str =

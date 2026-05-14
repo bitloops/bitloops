@@ -12,11 +12,12 @@ use super::ingesters::{
     build_assert_ingester, build_revoke_ingester, build_role_adjudication_ingester,
 };
 use super::query_examples::ARCHITECTURE_GRAPH_QUERY_EXAMPLES;
+use super::roles::ArchitectureGraphRoleCurrentStateConsumer;
 use super::schema::ARCHITECTURE_GRAPH_SCHEMA_MODULE;
 use super::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID,
     ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
-    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
+    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT, ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
 };
 
 pub fn register_architecture_graph_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
@@ -28,6 +29,14 @@ pub fn register_architecture_graph_pack(registrar: &mut dyn CapabilityRegistrar)
         ARCHITECTURE_GRAPH_CONSUMER_ID,
         CapabilityMailboxPolicy::Cursor,
         CapabilityMailboxHandler::CurrentStateConsumer(ARCHITECTURE_GRAPH_CONSUMER_ID),
+    ))?;
+    registrar.register_mailbox(CapabilityMailboxRegistration::new(
+        ARCHITECTURE_GRAPH_CAPABILITY_ID,
+        ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+        CapabilityMailboxPolicy::Cursor,
+        CapabilityMailboxHandler::CurrentStateConsumer(
+            ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+        ),
     ))?;
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
@@ -46,6 +55,11 @@ pub fn register_architecture_graph_pack(registrar: &mut dyn CapabilityRegistrar)
         ARCHITECTURE_GRAPH_CONSUMER_ID,
         Arc::new(ArchitectureGraphCurrentStateConsumer),
     ))?;
+    registrar.register_current_state_consumer(CurrentStateConsumerRegistration::new(
+        ARCHITECTURE_GRAPH_CAPABILITY_ID,
+        ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+        Arc::new(ArchitectureGraphRoleCurrentStateConsumer),
+    ))?;
     registrar.register_schema_module(ARCHITECTURE_GRAPH_SCHEMA_MODULE)?;
     registrar.register_query_examples(ARCHITECTURE_GRAPH_QUERY_EXAMPLES)?;
     Ok(())
@@ -57,6 +71,7 @@ mod tests {
         ARCHITECTURE_GRAPH_ASSERT_INGESTER_ID, ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID,
         ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID,
         ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+        ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
     };
     use super::*;
     use crate::host::capability_host::{
@@ -136,10 +151,16 @@ mod tests {
         );
         assert_eq!(
             registrar.current_state_consumers,
-            vec![(
-                ARCHITECTURE_GRAPH_CAPABILITY_ID,
-                ARCHITECTURE_GRAPH_CONSUMER_ID
-            )]
+            vec![
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_CONSUMER_ID
+                ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+                ),
+            ]
         );
         assert_eq!(
             registrar
@@ -154,6 +175,10 @@ mod tests {
                 ),
                 (
                     ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+                ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
                     ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX
                 ),
             ]
@@ -165,6 +190,17 @@ mod tests {
             .expect("architecture graph snapshot mailbox to be registered");
         assert_eq!(
             snapshot_mailbox.init_policy,
+            CapabilityMailboxInitPolicy::Background
+        );
+        let role_current_state_mailbox = registrar
+            .mailboxes
+            .iter()
+            .find(|mailbox| {
+                mailbox.mailbox_name == ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+            })
+            .expect("architecture role current-state mailbox to be registered");
+        assert_eq!(
+            role_current_state_mailbox.init_policy,
             CapabilityMailboxInitPolicy::Background
         );
         let adjudication_mailbox = registrar

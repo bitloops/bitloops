@@ -19,15 +19,17 @@ pub fn register_semantic_clones_pack(registrar: &mut dyn CapabilityRegistrar) ->
     registrar.register_ingester(build_semantic_features_refresh_ingester())?;
     registrar.register_ingester(build_symbol_embeddings_refresh_ingester())?;
     registrar.register_ingester(build_symbol_clone_edges_rebuild_ingester())?;
-    registrar.register_mailbox(CapabilityMailboxRegistration::new(
-        super::types::SEMANTIC_CLONES_CAPABILITY_ID,
-        super::types::SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
-        CapabilityMailboxPolicy::Cursor,
-        CapabilityMailboxHandler::CurrentStateConsumer(
-            super::types::SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
-        ),
-    )
-    .blocks_init_completion())?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            super::types::SEMANTIC_CLONES_CAPABILITY_ID,
+            super::types::SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
+            CapabilityMailboxPolicy::Cursor,
+            CapabilityMailboxHandler::CurrentStateConsumer(
+                super::types::SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
+            ),
+        )
+        .blocks_init_completion(),
+    )?;
     registrar.register_mailbox(
         CapabilityMailboxRegistration::new(
             super::types::SEMANTIC_CLONES_CAPABILITY_ID,

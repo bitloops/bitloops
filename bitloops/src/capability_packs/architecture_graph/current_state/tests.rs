@@ -1,4 +1,5 @@
 use super::*;
+use crate::capability_packs::architecture_graph::roles::ArchitectureGraphRoleCurrentStateConsumer;
 
 fn file(path: &str, language: &str) -> CurrentCanonicalFileRecord {
     CurrentCanonicalFileRecord {
@@ -468,7 +469,7 @@ async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
         init_session_id: None,
     };
 
-    let result = ArchitectureGraphCurrentStateConsumer
+    let result = ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&request, &context)
         .await?;
 
@@ -516,7 +517,7 @@ async fn current_state_reconcile_enqueues_low_confidence_role_adjudication_job()
         artefact_removals: Vec::new(),
     };
 
-    let result = ArchitectureGraphCurrentStateConsumer
+    let result = ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&request, &test.context)
         .await?;
 
@@ -574,6 +575,54 @@ async fn current_state_reconcile_enqueues_low_confidence_role_adjudication_job()
 }
 
 #[tokio::test]
+async fn graph_snapshot_reconcile_does_not_enqueue_role_adjudication_jobs() -> anyhow::Result<()> {
+    let repo_id = "repo-graph-snapshot-no-role-jobs";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    upsert_test_role(test.storage.as_ref(), repo_id, "role-api-low-review", "api").await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-api-low-review",
+        "rule-api-low-review",
+        "api.rs",
+        0.6,
+    )
+    .await?;
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: repo_id.to_string(),
+        repo_root: test._temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 29,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: vec!["src/api.rs".to_string()],
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let result = ArchitectureGraphCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    assert!(test.workplane.jobs().is_empty());
+    assert!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("roles"))
+            .is_none(),
+        "graph snapshot metrics should not include role classification metrics"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn current_state_reconcile_enqueues_conflict_role_adjudication_job() -> anyhow::Result<()> {
     let repo_id = "repo-conflict-current-state";
     let test = architecture_consumer_test_context(repo_id).await?;
@@ -621,7 +670,7 @@ async fn current_state_reconcile_enqueues_conflict_role_adjudication_job() -> an
         artefact_removals: Vec::new(),
     };
 
-    let result = ArchitectureGraphCurrentStateConsumer
+    let result = ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&request, &test.context)
         .await?;
 
@@ -679,7 +728,7 @@ async fn current_state_reconcile_enqueues_high_impact_role_adjudication_job() ->
         artefact_removals: Vec::new(),
     };
 
-    let result = ArchitectureGraphCurrentStateConsumer
+    let result = ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&request, &test.context)
         .await?;
 
@@ -744,7 +793,7 @@ async fn current_state_reconcile_warns_when_role_adjudication_enqueue_fails() ->
         artefact_removals: Vec::new(),
     };
 
-    let result = ArchitectureGraphCurrentStateConsumer
+    let result = ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&request, &context)
         .await?;
 
@@ -795,7 +844,7 @@ async fn current_state_reconcile_skips_unchanged_role_paths() -> anyhow::Result<
         crate::host::capability_host::ReconcileMode::FullReconcile,
         Vec::new(),
     );
-    ArchitectureGraphCurrentStateConsumer
+    ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&initial, &test.context)
         .await?;
 
@@ -806,7 +855,7 @@ async fn current_state_reconcile_skips_unchanged_role_paths() -> anyhow::Result<
         crate::host::capability_host::ReconcileMode::MergedDelta,
         vec!["src/changed.rs".to_string()],
     );
-    ArchitectureGraphCurrentStateConsumer
+    ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&delta, &test.context)
         .await?;
 
@@ -851,7 +900,7 @@ async fn current_state_reconcile_full_refreshes_all_role_paths() -> anyhow::Resu
         crate::host::capability_host::ReconcileMode::FullReconcile,
         Vec::new(),
     );
-    ArchitectureGraphCurrentStateConsumer
+    ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&initial, &test.context)
         .await?;
 
@@ -862,7 +911,7 @@ async fn current_state_reconcile_full_refreshes_all_role_paths() -> anyhow::Resu
         crate::host::capability_host::ReconcileMode::FullReconcile,
         vec!["src/changed.rs".to_string()],
     );
-    ArchitectureGraphCurrentStateConsumer
+    ArchitectureGraphRoleCurrentStateConsumer
         .reconcile(&full, &test.context)
         .await?;
 
@@ -1577,8 +1626,8 @@ async fn reconcile_streams_current_state_and_persists_metrics() -> Result<()> {
     assert_eq!(metrics["affected_paths"], json!(1));
     assert_eq!(metrics["impacted_nodes"], json!(1));
     assert!(
-        metrics.get("roles").is_some(),
-        "role metrics should be present when the streaming role classifier runs"
+        metrics.get("roles").is_none(),
+        "graph snapshot metrics should not include role classification metrics"
     );
 
     let node_count = storage

@@ -487,7 +487,7 @@ git commit -m "fix: scope init sessions to blocking cursor runs"
 - Modify: `bitloops/src/capability_packs/architecture_graph/current_state/consumer.rs`
 - Modify: `bitloops/src/capability_packs/architecture_graph/current_state/tests.rs`
 
-- [ ] **Step 1: Write failing registration expectations for the new role cursor**
+- [x] **Step 1: Write failing registration expectations for the new role cursor**
 
 In `bitloops/src/capability_packs/architecture_graph/types.rs`, the test will need this constant:
 
@@ -543,7 +543,7 @@ assert_eq!(
 );
 ```
 
-- [ ] **Step 2: Run the focused failing registration test**
+- [x] **Step 2: Run the focused failing registration test**
 
 Run:
 
@@ -553,7 +553,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: FAIL because the new constant/consumer/mailbox do not exist yet.
 
-- [ ] **Step 3: Register the new background role current-state cursor**
+- [x] **Step 3: Register the new background role current-state cursor**
 
 In `bitloops/src/capability_packs/architecture_graph/types.rs`, add:
 
@@ -599,7 +599,7 @@ registrar.register_current_state_consumer(CurrentStateConsumerRegistration::new(
 
 Do not call `.blocks_init_completion()` for this cursor.
 
-- [ ] **Step 4: Add the role current-state consumer implementation**
+- [x] **Step 4: Add the role current-state consumer implementation**
 
 Create `bitloops/src/capability_packs/architecture_graph/roles/current_state_consumer.rs`:
 
@@ -696,7 +696,7 @@ fn role_current_state_metrics(
 }
 ```
 
-- [ ] **Step 5: Expose the new module**
+- [x] **Step 5: Expose the new module**
 
 In `bitloops/src/capability_packs/architecture_graph/roles.rs`, add:
 
@@ -712,7 +712,7 @@ pub use current_state_consumer::ArchitectureGraphRoleCurrentStateConsumer;
 
 Update the facade test module list to include `"current_state_consumer"` and update the expected length from `14` to `15`.
 
-- [ ] **Step 6: Remove role classification from the graph snapshot consumer**
+- [x] **Step 6: Remove role classification from the graph snapshot consumer**
 
 In `bitloops/src/capability_packs/architecture_graph/current_state/consumer.rs`, remove these imports:
 
@@ -749,7 +749,7 @@ Ok(CurrentStateConsumerResult {
 })
 ```
 
-- [ ] **Step 7: Add/update current-state consumer tests**
+- [x] **Step 7: Add/update current-state consumer tests**
 
 In `bitloops/src/capability_packs/architecture_graph/current_state/tests.rs`, update role-related tests so they call `ArchitectureGraphRoleCurrentStateConsumer` instead of `ArchitectureGraphCurrentStateConsumer`.
 
@@ -819,7 +819,7 @@ Add imports:
 use crate::capability_packs::architecture_graph::roles::ArchitectureGraphRoleCurrentStateConsumer;
 ```
 
-- [ ] **Step 8: Run focused architecture tests**
+- [x] **Step 8: Run focused architecture tests**
 
 Run:
 
@@ -829,7 +829,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add \
