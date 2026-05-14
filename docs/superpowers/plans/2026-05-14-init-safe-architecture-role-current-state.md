@@ -850,7 +850,7 @@ git commit -m "fix: run architecture role classification as background current-s
 - Modify: `bitloops/src/daemon/capability_events/coordinator/tests.rs`
 - Modify: `bitloops/src/daemon/init_runtime/tests.rs`
 
-- [ ] **Step 1: Add a current-state scheduling regression assertion**
+- [x] **Step 1: Add a current-state scheduling regression assertion**
 
 Extend `record_sync_generation_attaches_init_session_only_to_blocking_cursor_mailboxes` with this assertion after loading rows:
 
@@ -885,7 +885,7 @@ use crate::capability_packs::architecture_graph::types::{
 };
 ```
 
-- [ ] **Step 2: Add an init-lane regression test**
+- [x] **Step 2: Add an init-lane regression test**
 
 In `bitloops/src/daemon/init_runtime/tests.rs`, add a focused lane-level test near `code_embeddings_lane_waits_for_codebase_updates_after_sync_task_completion`:
 
@@ -918,7 +918,7 @@ fn code_embeddings_lane_completes_when_no_init_blocking_current_state_remains() 
 
 This test does not simulate background cursor rows directly. The scheduling test proves background cursors do not get the init session, and this lane test proves semantic completion depends only on the `current_state` aggregate passed to init.
 
-- [ ] **Step 3: Run focused init and scheduling tests**
+- [x] **Step 3: Run focused init and scheduling tests**
 
 Run:
 
@@ -928,7 +928,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add bitloops/src/daemon/capability_events/coordinator/tests.rs bitloops/src/daemon/init_runtime/tests.rs

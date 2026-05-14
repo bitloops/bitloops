@@ -1041,6 +1041,31 @@ fn code_embeddings_lane_waits_for_codebase_updates_after_sync_task_completion() 
 }
 
 #[test]
+fn code_embeddings_lane_completes_when_no_init_blocking_current_state_remains() {
+    let session = embeddings_only_session();
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let stats = SessionWorkplaneStats::default();
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        None,
+        StatusCounts::default(),
+        &stats,
+        Some(InitRuntimeLaneProgressView {
+            completed: 2243,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 0,
+        }),
+    );
+
+    assert_eq!(lane.status, "completed");
+    assert_eq!(lane.waiting_reason, None);
+}
+
+#[test]
 fn code_embeddings_lane_waits_for_follow_up_sync_after_late_embeddings_bootstrap() {
     let session = InitSessionRecord {
         init_session_id: "init-session-1".to_string(),

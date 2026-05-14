@@ -3,7 +3,9 @@ use std::fs;
 use rusqlite::params;
 use tempfile::TempDir;
 
-use crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_CONSUMER_ID;
+use crate::capability_packs::architecture_graph::types::{
+    ARCHITECTURE_GRAPH_CONSUMER_ID, ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+};
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_INBOUND_CURRENT_STATE_MAILBOX,
 };
@@ -226,6 +228,19 @@ fn record_sync_generation_attaches_init_session_only_to_blocking_cursor_mailboxe
         .find(|(_, mailbox_name, _)| mailbox_name == ARCHITECTURE_GRAPH_CONSUMER_ID)
         .expect("architecture graph snapshot run");
     assert_eq!(architecture.2, None);
+    assert!(
+        rows.iter().any(|(_, mailbox_name, init_session_id)| {
+            mailbox_name == ARCHITECTURE_GRAPH_CONSUMER_ID && init_session_id.is_none()
+        }),
+        "architecture graph snapshot must be scheduled as background current-state work"
+    );
+    assert!(
+        rows.iter().any(|(_, mailbox_name, init_session_id)| {
+            mailbox_name == ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+                && init_session_id.is_none()
+        }),
+        "architecture role current-state work must be scheduled as background work"
+    );
 }
 
 #[test]
