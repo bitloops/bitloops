@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.26] - 2026-05-14
+
 ### Added
 
 - **PHP language support in the host-managed language adapter runtime**: added a built-in `php-language-pack` with extension-host profile resolution (`.php`, `.phtml`, `.php5`, `.php7`, `.php8`), typed `PhpKind` language kinds, canonical mappings, PHP artefact extraction, baseline dependency-edge extraction, and source-level PHP `LanguageTestSupport` discovery. PHP now participates in built-in language adapter registration, readiness/registry reporting, DevQL language detection, and current-state materialization cached-kind parsing alongside existing Rust/TS-JS/Python/Go/Java/C# support.
