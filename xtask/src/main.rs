@@ -1427,10 +1427,13 @@ fn binary_has_rpath(binary_path: &Path, rpath: &str) -> Result<bool, String> {
 
 fn resolve_workspace_duckdb_dylib(workspace_root: &Path) -> Result<PathBuf, String> {
     let mut target_roots = Vec::new();
-    if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
-        target_roots.push(PathBuf::from(target_dir));
+    if let Some(target_dir) = cargo_metadata_target_dir(workspace_root) {
+        push_unique_path(&mut target_roots, target_dir);
     }
-    target_roots.push(workspace_root.join("target"));
+    if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
+        push_unique_path(&mut target_roots, PathBuf::from(target_dir));
+    }
+    push_unique_path(&mut target_roots, workspace_root.join("target"));
 
     let mut candidates = Vec::new();
     for target_root in target_roots {
@@ -1453,6 +1456,28 @@ fn resolve_workspace_duckdb_dylib(workspace_root: &Path) -> Result<PathBuf, Stri
         .ok_or_else(|| {
             "could not locate libduckdb.dylib under workspace target directories".to_string()
         })
+}
+
+fn cargo_metadata_target_dir(workspace_root: &Path) -> Option<PathBuf> {
+    let output = Command::new("cargo")
+        .current_dir(workspace_root)
+        .args(["metadata", "--format-version", "1", "--no-deps", "--locked"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let metadata: Value = serde_json::from_slice(&output.stdout).ok()?;
+    metadata
+        .get("target_directory")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
