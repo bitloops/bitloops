@@ -146,6 +146,7 @@ pub(crate) fn telemetry_action_for_command(
         crate::cli::Commands::DevqlWatcher(_) => None,
         crate::cli::Commands::DaemonProcess(_) => None,
         crate::cli::Commands::DaemonSupervisor(_) => None,
+        crate::cli::Commands::CurrentStateWorker(_) => None,
         crate::cli::Commands::Doctor(args) => Some(doctor_action(args)),
         crate::cli::Commands::SendAnalytics(_) => None,
         crate::cli::Commands::Completion(_) => None,

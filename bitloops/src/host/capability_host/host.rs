@@ -245,13 +245,26 @@ impl DevqlCapabilityHost {
         &self,
         capability_id: &str,
     ) -> Result<CurrentStateConsumerContext> {
-        self.build_current_state_consumer_context_with_session(capability_id, None)
+        self.build_current_state_consumer_context_with_session_and_parent(capability_id, None, None)
     }
 
     pub fn build_current_state_consumer_context_with_session(
         &self,
         capability_id: &str,
         init_session_id: Option<String>,
+    ) -> Result<CurrentStateConsumerContext> {
+        self.build_current_state_consumer_context_with_session_and_parent(
+            capability_id,
+            init_session_id,
+            None,
+        )
+    }
+
+    pub fn build_current_state_consumer_context_with_session_and_parent(
+        &self,
+        capability_id: &str,
+        init_session_id: Option<String>,
+        parent_pid: Option<u32>,
     ) -> Result<CurrentStateConsumerContext> {
         let relational_store = DefaultRelationalStore::open_local_for_backend_config(
             self.repo_root(),
@@ -293,6 +306,7 @@ impl DevqlCapabilityHost {
             .map(std::sync::Mutex::new)
             .map(Arc::new),
             init_session_id,
+            parent_pid,
         })
     }
 

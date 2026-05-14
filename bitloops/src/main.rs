@@ -44,6 +44,11 @@ fn daemon_log_context(command: Option<&cli::Commands>) -> Option<daemon::Process
                 }),
         )),
         cli::Commands::DaemonSupervisor(_) => Some(daemon::ProcessLogContext::supervisor()),
+        cli::Commands::CurrentStateWorker(args) => Some(daemon::ProcessLogContext::daemon(
+            "current_state_worker",
+            Some(args.config_path.clone()),
+            None,
+        )),
         cli::Commands::Start(args) => Some(daemon::ProcessLogContext::daemon_cli(
             if args.until_stopped {
                 "start_service"
@@ -103,7 +108,8 @@ fn command_requires_persistent_daemon_logging(command: Option<&cli::Commands>) -
     match command {
         Some(cli::Commands::DevqlWatcher(_))
         | Some(cli::Commands::DaemonProcess(_))
-        | Some(cli::Commands::DaemonSupervisor(_)) => true,
+        | Some(cli::Commands::DaemonSupervisor(_))
+        | Some(cli::Commands::CurrentStateWorker(_)) => true,
         Some(cli::Commands::Start(args)) => args.detached || args.until_stopped,
         Some(cli::Commands::Daemon(args)) => matches!(
             args.command.as_ref(),

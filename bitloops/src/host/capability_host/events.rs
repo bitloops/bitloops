@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -52,14 +52,14 @@ pub struct SyncFileDiff {
     pub removed: Vec<RemovedFile>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedFile {
     pub path: String,
     pub language: String,
     pub content_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemovedFile {
     pub path: String,
 }
@@ -71,7 +71,7 @@ pub struct SyncArtefactDiff {
     pub removed: Vec<RemovedArtefact>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangedArtefact {
     pub artefact_id: String,
     pub symbol_id: String,
@@ -80,7 +80,7 @@ pub struct ChangedArtefact {
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemovedArtefact {
     pub artefact_id: String,
     pub symbol_id: String,
@@ -99,6 +99,21 @@ pub struct CurrentStateConsumerContext {
     pub workplane: Arc<dyn CapabilityWorkplaneGateway>,
     pub test_harness: Option<Arc<std::sync::Mutex<BitloopsTestHarnessRepository>>>,
     pub init_session_id: Option<String>,
+    pub parent_pid: Option<u32>,
+}
+
+impl CurrentStateConsumerContext {
+    pub fn ensure_parent_process_alive(&self, stage: &str) -> Result<()> {
+        let Some(parent_pid) = self.parent_pid else {
+            return Ok(());
+        };
+
+        if parent_process_is_running(parent_pid) {
+            return Ok(());
+        }
+
+        bail!("current-state worker parent process {parent_pid} is not running while {stage}");
+    }
 }
 
 pub type EventHandlerContext = CurrentStateConsumerContext;
@@ -113,7 +128,7 @@ pub enum ReconcileMode {
     FullReconcile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CurrentStateConsumerRequest {
     pub run_id: Option<String>,
     pub repo_id: String,
@@ -128,6 +143,55 @@ pub struct CurrentStateConsumerRequest {
     pub affected_paths: Vec<String>,
     pub artefact_upserts: Vec<ChangedArtefact>,
     pub artefact_removals: Vec<RemovedArtefact>,
+}
+
+fn parent_process_is_running(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args([
+                "/C",
+                &format!("tasklist /FI \"PID eq {pid}\" | findstr {pid}"),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(windows))]
+    {
+        if pid > i32::MAX as u32 {
+            return false;
+        }
+
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if result != 0
+            && !matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EPERM)
+            )
+        {
+            return false;
+        }
+
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .output();
+        let Ok(output) = output else {
+            return true;
+        };
+        if !output.status.success() {
+            return true;
+        }
+
+        !String::from_utf8_lossy(&output.stdout)
+            .trim_start()
+            .starts_with('Z')
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

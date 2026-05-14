@@ -120,6 +120,7 @@ fn TestRootCommand_SubcommandWiring() {
         "debug",
         "devql",
         "doctor",
+        "__current-state-worker",
         "__send_analytics",
         "completion",
         "curl-bash-post-install",
@@ -141,6 +142,7 @@ fn TestRootCommand_HiddenVisibilityForInternalCommands() {
         "debug",
         "__daemon-process",
         "__daemon-supervisor",
+        "__current-state-worker",
         "__send_analytics",
         "completion",
         "curl-bash-post-install",
@@ -237,6 +239,38 @@ fn TestRootCommand_ParseConnectionStatusFlag() {
         parsed.command.is_none(),
         "--connection-status should work without subcommands"
     );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn TestRootCommand_ParseCurrentStateWorkerCommand() {
+    let parsed = Cli::try_parse_from([
+        "bitloops",
+        "__current-state-worker",
+        "--config-path",
+        "/tmp/bitloops.toml",
+        "--capability-id",
+        "architecture_graph",
+        "--consumer-id",
+        "architecture_graph.snapshot",
+        "--init-session-id",
+        "init-123",
+        "--parent-pid",
+        "4321",
+    ])
+    .expect("current-state worker command should parse");
+
+    let Some(Commands::CurrentStateWorker(args)) = parsed.command else {
+        panic!("expected current-state worker command");
+    };
+    assert_eq!(
+        args.config_path,
+        std::path::PathBuf::from("/tmp/bitloops.toml")
+    );
+    assert_eq!(args.capability_id, "architecture_graph");
+    assert_eq!(args.consumer_id, "architecture_graph.snapshot");
+    assert_eq!(args.init_session_id.as_deref(), Some("init-123"));
+    assert_eq!(args.parent_pid, Some(4321));
 }
 
 #[test]

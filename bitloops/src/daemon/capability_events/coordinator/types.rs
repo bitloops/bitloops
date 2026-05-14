@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -24,13 +25,19 @@ pub(crate) struct SyncGenerationInput<'a> {
     pub(crate) init_session_id: Option<&'a str>,
 }
 
-#[derive(Debug)]
 pub struct CapabilityEventCoordinator {
     pub(crate) runtime_store: DaemonSqliteRuntimeStore,
     pub(crate) lock: Mutex<()>,
     pub(crate) notify: Notify,
     pub(crate) worker_started: AtomicBool,
     pub(crate) subscription_hub: Mutex<Option<Arc<SubscriptionHub>>>,
+    pub(crate) current_state_worker_runner: Arc<dyn crate::daemon::CurrentStateWorkerRunner>,
+    pub(crate) active_worker_children: Mutex<BTreeMap<String, ActiveWorkerChild>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActiveWorkerChild {
+    pub(crate) pid: u32,
 }
 
 pub(crate) struct WorkerStartedGuard {
@@ -45,7 +52,7 @@ impl Drop for WorkerStartedGuard {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum RunCompletion {
     NoopCompleted {
         run: CapabilityEventRunRecord,

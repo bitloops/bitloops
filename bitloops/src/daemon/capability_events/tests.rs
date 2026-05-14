@@ -6,6 +6,7 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
 };
 use crate::daemon::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};
+use crate::daemon::{CurrentStateExecutionRoute, current_state_execution_route};
 use crate::host::capability_host::{ChangedFile, ReconcileMode, RemovedArtefact, RemovedFile};
 
 use super::plan::{
@@ -116,6 +117,36 @@ fn determine_reconcile_mode_promotes_full_reconcile_for_first_run_and_thresholds
     assert_eq!(
         determine_reconcile_mode(Some(0), &generations, 1, 5_001),
         ReconcileMode::FullReconcile
+    );
+}
+
+#[test]
+fn current_state_worker_routing_is_limited_to_architecture_graph_full_reconcile() {
+    assert_eq!(
+        current_state_execution_route(
+            "architecture_graph",
+            "architecture_graph.snapshot",
+            ReconcileMode::FullReconcile,
+        ),
+        CurrentStateExecutionRoute::Subprocess {
+            reason: "architecture_graph_full_reconcile",
+        }
+    );
+    assert_eq!(
+        current_state_execution_route(
+            "architecture_graph",
+            "architecture_graph.snapshot",
+            ReconcileMode::MergedDelta,
+        ),
+        CurrentStateExecutionRoute::Inline
+    );
+    assert_eq!(
+        current_state_execution_route(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
+            ReconcileMode::FullReconcile,
+        ),
+        CurrentStateExecutionRoute::Inline
     );
 }
 

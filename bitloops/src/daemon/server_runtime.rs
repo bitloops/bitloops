@@ -116,6 +116,11 @@ pub(super) async fn run_server(
         Ok(())
     });
     let on_shutdown = std::sync::Arc::new(move || {
+        if let Err(err) =
+            crate::daemon::shared_capability_event_coordinator().terminate_active_worker_children()
+        {
+            log::warn!("failed to terminate current-state worker children on shutdown: {err:#}");
+        }
         stop_bound_repo_watchers_for_daemon_shutdown(&on_shutdown_config);
     });
 

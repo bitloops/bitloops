@@ -39,6 +39,8 @@ mod auth;
 mod capability_events;
 #[path = "daemon/config.rs"]
 mod config;
+#[path = "daemon/current_state_worker.rs"]
+mod current_state_worker;
 #[path = "daemon/embeddings_bootstrap.rs"]
 mod embeddings_bootstrap;
 #[path = "daemon/enrichment.rs"]
@@ -86,6 +88,12 @@ pub use self::auth::{
 };
 pub(crate) use self::capability_events::SyncGenerationInput;
 pub use self::capability_events::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
+pub(crate) use self::current_state_worker::{
+    CurrentStateExecutionRoute, CurrentStateWorkerInvocation, CurrentStateWorkerRunner,
+    SubprocessCurrentStateWorkerRunner, current_state_execution_route,
+    terminate_current_state_worker_process,
+};
+pub use self::current_state_worker::{CurrentStateWorkerArgs, run_current_state_worker};
 pub use self::enrichment::EnrichmentControlResult;
 pub(crate) use self::enrichment::EnrichmentControlState as PersistedEnrichmentQueueState;
 pub use self::enrichment::EnrichmentCoordinator;

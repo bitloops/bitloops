@@ -9,11 +9,15 @@ use rusqlite::params;
 use tokio::time::sleep;
 
 use crate::daemon::capability_events::plan::{
-    build_execution_plan, find_current_state_consumer, validate_consumer_result,
+    ExecutionPlan, build_execution_plan, find_current_state_consumer, validate_consumer_result,
 };
 use crate::daemon::capability_events::queue::{StoredRunRecord, load_runs, sql_i64};
 use crate::daemon::types::{
     CapabilityEventRunRecord, CapabilityEventRunStatus, unix_timestamp_now,
+};
+use crate::daemon::{
+    CurrentStateExecutionRoute, CurrentStateWorkerInvocation, current_state_execution_route,
+    terminate_current_state_worker_process,
 };
 use crate::host::capability_host::{DevqlCapabilityHost, ReconcileMode};
 use crate::host::devql::resolve_repo_identity;
@@ -133,7 +137,7 @@ impl CapabilityEventCoordinator {
     fn spawn_execution_task(self: &Arc<Self>, run: StoredRunRecord) {
         let coordinator = Arc::clone(self);
         tokio::spawn(async move {
-            let completion = coordinator.execute_run(run).await;
+            let completion = Arc::clone(&coordinator).execute_run(run).await;
             if let Err(err) = coordinator.apply_completion(completion) {
                 log::warn!("failed to persist current-state consumer completion: {err:#}");
             }
@@ -141,7 +145,7 @@ impl CapabilityEventCoordinator {
         });
     }
 
-    async fn execute_run(&self, run: StoredRunRecord) -> RunCompletion {
+    pub(super) async fn execute_run(self: Arc<Self>, run: StoredRunRecord) -> RunCompletion {
         let plan = match self
             .runtime_store
             .with_connection(|conn| build_execution_plan(conn, &run.record, &run.repo_root))
@@ -152,6 +156,15 @@ impl CapabilityEventCoordinator {
                 return terminal_or_retry(run.record, err);
             }
         };
+
+        let route = current_state_execution_route(
+            &plan.record.capability_id,
+            &plan.record.consumer_id,
+            plan.request.reconcile_mode,
+        );
+        if matches!(route, CurrentStateExecutionRoute::Subprocess { .. }) {
+            return self.execute_run_in_worker(plan, route).await;
+        }
 
         let repo = match resolve_repo_identity(&plan.repo_root) {
             Ok(repo) => repo,
@@ -194,32 +207,211 @@ impl CapabilityEventCoordinator {
             .catch_unwind()
             .await;
         match outcome {
-            Ok(Ok(result)) => match validate_consumer_result(&plan.request, &result) {
-                Ok(()) => {
-                    log::info!(
-                        "current-state consumer completed: repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} metrics={}",
-                        plan.record.repo_id,
-                        plan.record.capability_id,
-                        plan.record.consumer_id,
-                        reconcile_mode_for_log(plan.request.reconcile_mode),
-                        plan.request.from_generation_seq_exclusive,
-                        result.applied_to_generation_seq,
-                        result
-                            .metrics
-                            .as_ref()
-                            .map(serde_json::Value::to_string)
-                            .unwrap_or_else(|| "{}".to_string()),
-                    );
-                    RunCompletion::Completed {
-                        run: plan.record,
-                        applied_to_generation_seq: result.applied_to_generation_seq,
-                    }
-                }
-                Err(err) => terminal_or_retry(plan.record, err),
-            },
+            Ok(Ok(result)) => completed_run_completion(plan, result),
             Ok(Err(err)) => terminal_or_retry(plan.record, err),
             Err(_) => terminal_or_retry(plan.record, anyhow!("current-state consumer panicked")),
         }
+    }
+
+    async fn execute_run_in_worker(
+        self: Arc<Self>,
+        plan: ExecutionPlan,
+        route: CurrentStateExecutionRoute,
+    ) -> RunCompletion {
+        let CurrentStateExecutionRoute::Subprocess { reason } = route else {
+            return terminal_or_retry(plan.record, anyhow!("worker route must be subprocess"));
+        };
+
+        let config_path =
+            match crate::config::resolve_preferred_daemon_config_path_for_repo(&plan.repo_root) {
+                Ok(config_path) => config_path,
+                Err(err) => {
+                    return terminal_or_retry(
+                        plan.record,
+                        err.context("resolving daemon config path for current-state worker"),
+                    );
+                }
+            };
+
+        let invocation = CurrentStateWorkerInvocation {
+            config_path,
+            capability_id: plan.record.capability_id.clone(),
+            consumer_id: plan.record.consumer_id.clone(),
+            init_session_id: plan.record.init_session_id.clone(),
+            parent_pid: Some(std::process::id()),
+            request: plan.request.clone(),
+        };
+
+        let handle = match self.current_state_worker_runner.spawn(invocation) {
+            Ok(handle) => handle,
+            Err(err) => {
+                return terminal_or_retry(
+                    plan.record,
+                    err.context("spawning current-state worker subprocess"),
+                );
+            }
+        };
+        let pid = handle.pid();
+        let mut worker_guard =
+            ActiveWorkerRunGuard::register(Arc::clone(&self), plan.record.run_id.clone(), pid);
+        log::info!(
+            "current-state worker spawned: run_id={} repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} pid={} init_session_id={} route_reason={}",
+            plan.record.run_id,
+            plan.record.repo_id,
+            plan.record.capability_id,
+            plan.record.consumer_id,
+            reconcile_mode_for_log(plan.request.reconcile_mode),
+            plan.request.from_generation_seq_exclusive,
+            plan.request.to_generation_seq_inclusive,
+            pid,
+            plan.record.init_session_id.as_deref().unwrap_or("<none>"),
+            reason,
+        );
+
+        let result = handle.wait().await;
+        worker_guard.mark_child_exited();
+
+        match result {
+            Ok(result) => {
+                log::info!(
+                    "current-state worker exited successfully: run_id={} repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} pid={} applied_to_generation_seq={} route_reason={}",
+                    plan.record.run_id,
+                    plan.record.repo_id,
+                    plan.record.capability_id,
+                    plan.record.consumer_id,
+                    reconcile_mode_for_log(plan.request.reconcile_mode),
+                    plan.request.from_generation_seq_exclusive,
+                    plan.request.to_generation_seq_inclusive,
+                    pid,
+                    result.applied_to_generation_seq,
+                    reason,
+                );
+                completed_run_completion(plan, result)
+            }
+            Err(err) => {
+                log::warn!(
+                    "current-state worker exited with failure: run_id={} repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} pid={} route_reason={} error={:#}",
+                    plan.record.run_id,
+                    plan.record.repo_id,
+                    plan.record.capability_id,
+                    plan.record.consumer_id,
+                    reconcile_mode_for_log(plan.request.reconcile_mode),
+                    plan.request.from_generation_seq_exclusive,
+                    plan.request.to_generation_seq_inclusive,
+                    pid,
+                    reason,
+                    err,
+                );
+                terminal_or_retry(
+                    plan.record,
+                    err.context("waiting for current-state worker subprocess"),
+                )
+            }
+        }
+    }
+
+    pub(crate) fn terminate_active_worker_children(&self) -> Result<()> {
+        let active = {
+            let mut active = self
+                .active_worker_children
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            std::mem::take(&mut *active)
+        };
+        for (run_id, child) in active {
+            log::info!(
+                "current-state worker termination requested: run_id={} pid={}",
+                run_id,
+                child.pid,
+            );
+            terminate_current_state_worker_process(child.pid).with_context(|| {
+                format!(
+                    "terminating tracked current-state worker for run `{}` (pid {})",
+                    run_id, child.pid
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    fn register_active_worker(self: &Arc<Self>, run_id: &str, pid: u32) {
+        self.active_worker_children
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(run_id.to_string(), super::types::ActiveWorkerChild { pid });
+    }
+
+    fn unregister_active_worker(&self, run_id: &str) {
+        self.active_worker_children
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(run_id);
+    }
+}
+
+struct ActiveWorkerRunGuard {
+    coordinator: Arc<CapabilityEventCoordinator>,
+    run_id: String,
+    pid: u32,
+    child_exited: bool,
+}
+
+impl ActiveWorkerRunGuard {
+    fn register(
+        coordinator: Arc<CapabilityEventCoordinator>,
+        run_id: String,
+        pid: u32,
+    ) -> ActiveWorkerRunGuard {
+        coordinator.register_active_worker(&run_id, pid);
+        ActiveWorkerRunGuard {
+            coordinator,
+            run_id,
+            pid,
+            child_exited: false,
+        }
+    }
+
+    fn mark_child_exited(&mut self) {
+        self.child_exited = true;
+        self.coordinator.unregister_active_worker(&self.run_id);
+    }
+}
+
+impl Drop for ActiveWorkerRunGuard {
+    fn drop(&mut self) {
+        self.coordinator.unregister_active_worker(&self.run_id);
+        if !self.child_exited {
+            let _ = terminate_current_state_worker_process(self.pid);
+        }
+    }
+}
+
+fn completed_run_completion(
+    plan: ExecutionPlan,
+    result: crate::host::capability_host::CurrentStateConsumerResult,
+) -> RunCompletion {
+    match validate_consumer_result(&plan.request, &result) {
+        Ok(()) => {
+            log::info!(
+                "current-state consumer completed: repo_id={} capability_id={} consumer_id={} reconcile_mode={} from_generation_seq={} to_generation_seq={} metrics={}",
+                plan.record.repo_id,
+                plan.record.capability_id,
+                plan.record.consumer_id,
+                reconcile_mode_for_log(plan.request.reconcile_mode),
+                plan.request.from_generation_seq_exclusive,
+                result.applied_to_generation_seq,
+                result
+                    .metrics
+                    .as_ref()
+                    .map(serde_json::Value::to_string)
+                    .unwrap_or_else(|| "{}".to_string()),
+            );
+            RunCompletion::Completed {
+                run: plan.record,
+                applied_to_generation_seq: result.applied_to_generation_seq,
+            }
+        }
+        Err(err) => terminal_or_retry(plan.record, err),
     }
 }
 

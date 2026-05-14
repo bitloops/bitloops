@@ -25,6 +25,10 @@ pub(crate) fn write_completion(w: &mut dyn Write, shell: CompletionShell) -> Res
         sub.name("daemon-supervisor-internal")
             .bin_name(format!("{ROOT_NAME} daemon-supervisor-internal"))
     });
+    cmd = cmd.mut_subcommand("__current-state-worker", |sub| {
+        sub.name("current-state-worker-internal")
+            .bin_name(format!("{ROOT_NAME} current-state-worker-internal"))
+    });
     cmd = cmd.mut_subcommand("__send_analytics", |sub| {
         sub.name("send-analytics-internal")
             .bin_name(format!("{ROOT_NAME} send-analytics-internal"))

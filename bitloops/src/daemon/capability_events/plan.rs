@@ -357,7 +357,7 @@ pub(super) fn find_current_state_consumer<'a>(
         .map(|registration| &registration.handler)
 }
 
-pub(super) fn validate_consumer_result(
+pub(crate) fn validate_consumer_result(
     request: &CurrentStateConsumerRequest,
     result: &CurrentStateConsumerResult,
 ) -> Result<()> {

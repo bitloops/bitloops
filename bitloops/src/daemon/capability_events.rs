@@ -13,3 +13,4 @@ pub(crate) use self::coordinator::SyncGenerationInput;
 #[allow(unused_imports)]
 pub(crate) use self::coordinator::test_shared_instance_at;
 pub use self::coordinator::{CapabilityEventCoordinator, CapabilityEventEnqueueResult};
+pub(crate) use self::plan::validate_consumer_result;

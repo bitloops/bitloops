@@ -762,6 +762,7 @@ async fn reconcile_streams_current_state_and_persists_metrics() -> Result<()> {
         workplane: std::sync::Arc::new(NoopArchitectureWorkplaneGateway),
         test_harness: None,
         init_session_id: None,
+        parent_pid: None,
     };
 
     let result = ArchitectureGraphCurrentStateConsumer
@@ -800,6 +801,65 @@ async fn reconcile_streams_current_state_and_persists_metrics() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn reconcile_rejects_persistence_when_worker_parent_is_gone() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let db_path = temp.path().join("runtime.sqlite");
+    crate::storage::init::init_database(&db_path, false, "seed-commit")
+        .expect("init sqlite database");
+    let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
+    conn.execute_batch(
+        crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql(),
+    )
+    .expect("create architecture graph schema");
+    let storage = std::sync::Arc::new(crate::host::devql::RelationalStorage::local_only(db_path));
+
+    let mut request = synthesis_request();
+    request.repo_root = temp.path().to_path_buf();
+
+    let context = CurrentStateConsumerContext {
+        config_root: json!({}),
+        storage: storage.clone(),
+        relational: std::sync::Arc::new(StreamingOnlyRelationalGateway {
+            files: vec![file("src/lib.rs", "rust")],
+            artefacts: vec![current_artefact("src/lib.rs", "main")],
+            edges: Vec::new(),
+        }),
+        language_services: std::sync::Arc::new(
+            crate::host::capability_host::gateways::EmptyLanguageServicesGateway,
+        ),
+        git_history: std::sync::Arc::new(
+            crate::host::capability_host::gateways::EmptyGitHistoryGateway,
+        ),
+        inference: std::sync::Arc::new(crate::host::inference::EmptyInferenceGateway),
+        host_services: std::sync::Arc::new(
+            crate::host::capability_host::gateways::DefaultHostServicesGateway::new("repo"),
+        ),
+        workplane: std::sync::Arc::new(NoopArchitectureWorkplaneGateway),
+        test_harness: None,
+        init_session_id: None,
+        parent_pid: Some(u32::MAX),
+    };
+
+    let err = ArchitectureGraphCurrentStateConsumer
+        .reconcile(&request, &context)
+        .await
+        .expect_err("missing parent should prevent persistence");
+
+    assert!(
+        err.to_string().contains("parent process"),
+        "unexpected error: {err:#}"
+    );
+
+    let node_count = storage
+        .query_rows(
+            "SELECT COUNT(*) AS count FROM architecture_graph_nodes_current WHERE repo_id = 'repo'",
+        )
+        .await
+        .expect("query persisted nodes");
+    assert_eq!(node_count[0]["count"], json!(0));
 }
 
 fn group_artefacts_for_test(
