@@ -161,6 +161,10 @@ pub(super) fn process_is_running(pid: u32) -> Result<bool> {
             return Ok(false);
         }
 
+        if let Some(exited_child) = unix_child_has_exited_without_reap(pid) {
+            return Ok(!exited_child);
+        }
+
         Ok(!unix_process_is_zombie(pid))
     }
 }
@@ -247,6 +251,35 @@ fn unix_kill_zero_indicates_running(result: i32, raw_os_error: Option<i32>) -> b
     }
 
     matches!(raw_os_error, Some(libc::EPERM))
+}
+
+#[cfg(not(windows))]
+fn unix_child_has_exited_without_reap(pid: u32) -> Option<bool> {
+    let mut siginfo: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    loop {
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                &mut siginfo,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            let child_pid = unsafe { siginfo.si_pid() };
+            return if child_pid == 0 {
+                Some(false)
+            } else {
+                Some(true)
+            };
+        }
+
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ECHILD) => return None,
+            Some(libc::EINTR) => continue,
+            _ => return None,
+        }
+    }
 }
 
 #[cfg(not(windows))]

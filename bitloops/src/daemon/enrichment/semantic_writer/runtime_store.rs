@@ -27,6 +27,8 @@ pub(super) fn open_semantic_writer_connection(
             relational_db_path.display()
         );
     }
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for semantic writer connection")?;
     let conn = Connection::open_with_flags(relational_db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| {
         format!(

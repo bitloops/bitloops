@@ -11,7 +11,7 @@ use crate::host::runtime_store::{
 
 use super::job_completion::{
     WORKPLANE_TRANSIENT_EMBEDDING_RETRY_LIMIT, WorkplaneJobCompletionDisposition,
-    transient_embedding_retry_backoff_secs,
+    is_retryable_embedding_failure, transient_embedding_retry_backoff_secs,
 };
 use super::mailbox_claim::{ClaimedEmbeddingMailboxBatch, ClaimedSummaryMailboxBatch};
 use super::sql::{parse_u64, sql_i64, sql_string_list};
@@ -73,7 +73,7 @@ pub(crate) fn persist_embedding_mailbox_batch_failure(
         .max()
         .unwrap_or(0);
     let disposition = if attempts < WORKPLANE_TRANSIENT_EMBEDDING_RETRY_LIMIT
-        && error.contains("timed out after")
+        && is_retryable_embedding_failure(error)
     {
         let retry_in_secs = transient_embedding_retry_backoff_secs(attempts);
         WorkplaneJobCompletionDisposition::RetryScheduled {
@@ -381,7 +381,9 @@ fn map_embedding_mailbox_item_row(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::runtime_store::SemanticSummaryMailboxItemRecord;
+    use crate::host::runtime_store::{
+        SemanticEmbeddingMailboxItemRecord, SemanticSummaryMailboxItemRecord,
+    };
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -503,6 +505,116 @@ mod tests {
             item.last_error.as_deref(),
             Some(
                 "committing semantic summary batch for repo `repo-1`: deleting acknowledged semantic summary mailbox items: database is locked"
+            )
+        );
+        assert_eq!(
+            item.available_at_unix.saturating_sub(item.updated_at_unix),
+            5
+        );
+    }
+
+    #[test]
+    fn cancelled_embedding_mailbox_batch_is_requeued_with_backoff() {
+        let temp = TempDir::new().expect("temp dir");
+        let store = DaemonSqliteRuntimeStore::open_at(temp.path().join("runtime.sqlite"))
+            .expect("open runtime store");
+        let lease_token = "semantic-embedding-lease-test";
+        let item_id = "embedding-item-1";
+        let repo_root = PathBuf::from("/tmp/repo");
+        let config_root = PathBuf::from("/tmp/config");
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "INSERT INTO semantic_embedding_mailbox_items (
+                         item_id, repo_id, repo_root, config_root, init_session_id,
+                         representation_kind, item_kind, artefact_id, payload_json, dedupe_key,
+                         status, attempts, available_at_unix, submitted_at_unix, leased_at_unix,
+                         lease_expires_at_unix, lease_token, updated_at_unix, last_error
+                     ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, NULL)",
+                    params![
+                        item_id,
+                        "repo-1",
+                        repo_root.to_string_lossy().to_string(),
+                        config_root.to_string_lossy().to_string(),
+                        "summary",
+                        SemanticMailboxItemKind::Artefact.as_str(),
+                        "artefact-1",
+                        "semantic_clones.summary_embedding:artefact-1",
+                        SemanticMailboxItemStatus::Leased.as_str(),
+                        1_u32,
+                        sql_i64(10)?,
+                        sql_i64(10)?,
+                        sql_i64(10)?,
+                        sql_i64(20)?,
+                        lease_token,
+                        sql_i64(10)?,
+                    ],
+                )?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .expect("insert leased embedding mailbox row");
+
+        let batch = ClaimedEmbeddingMailboxBatch {
+            repo_id: "repo-1".to_string(),
+            repo_root: repo_root.clone(),
+            config_root: config_root.clone(),
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+            lease_token: lease_token.to_string(),
+            items: vec![SemanticEmbeddingMailboxItemRecord {
+                item_id: item_id.to_string(),
+                repo_id: "repo-1".to_string(),
+                repo_root,
+                config_root,
+                init_session_id: None,
+                representation_kind: "summary".to_string(),
+                item_kind: SemanticMailboxItemKind::Artefact,
+                artefact_id: Some("artefact-1".to_string()),
+                payload_json: None,
+                dedupe_key: Some("semantic_clones.summary_embedding:artefact-1".to_string()),
+                status: SemanticMailboxItemStatus::Leased,
+                attempts: 1,
+                available_at_unix: 10,
+                submitted_at_unix: 10,
+                leased_at_unix: Some(10),
+                lease_expires_at_unix: Some(20),
+                lease_token: Some(lease_token.to_string()),
+                updated_at_unix: 10,
+                last_error: None,
+            }],
+        };
+
+        let disposition = persist_embedding_mailbox_batch_failure(
+            &store,
+            &batch,
+            "loading current semantic inputs for embeddings: joining SQLite query task: task 13272 was cancelled",
+        )
+        .expect("persist cancelled embedding batch failure");
+
+        match disposition {
+            WorkplaneJobCompletionDisposition::RetryScheduled { retry_in_secs, .. } => {
+                assert_eq!(retry_in_secs, 5);
+            }
+            other => panic!("expected retry disposition, got {other:?}"),
+        }
+
+        let pending = store
+            .with_connection(|conn| {
+                load_embedding_mailbox_items_by_status(conn, SemanticMailboxItemStatus::Pending)
+            })
+            .expect("load pending embedding mailbox items");
+        assert_eq!(pending.len(), 1);
+        let item = &pending[0];
+        assert_eq!(item.item_id, item_id);
+        assert_eq!(item.status, SemanticMailboxItemStatus::Pending);
+        assert_eq!(item.attempts, 1);
+        assert!(item.leased_at_unix.is_none());
+        assert!(item.lease_expires_at_unix.is_none());
+        assert!(item.lease_token.is_none());
+        assert_eq!(
+            item.last_error.as_deref(),
+            Some(
+                "loading current semantic inputs for embeddings: joining SQLite query task: task 13272 was cancelled"
             )
         );
         assert_eq!(

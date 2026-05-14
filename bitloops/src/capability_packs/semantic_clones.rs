@@ -15,24 +15,28 @@ pub mod schema_module;
 pub mod scoring;
 pub mod stages;
 pub mod types;
+pub(crate) mod vector_backend;
 pub(crate) mod workplane;
 
-mod stage_embeddings;
+pub(crate) mod stage_embeddings;
 mod stage_search_documents;
 mod stage_semantic_features;
 
 #[allow(unused_imports)]
 pub(crate) use stage_embeddings::{
     RepoEmbeddingSyncAction, build_active_embedding_setup_persist_sql,
-    build_current_symbol_embedding_persist_sql, build_embedding_setup_persist_sql,
-    build_sqlite_symbol_embedding_persist_sql, clear_current_symbol_embedding_rows_for_path,
-    clear_current_symbol_embedding_rows_for_paths, clear_repo_active_embedding_setup,
-    clear_repo_active_embedding_setup_for_representation, clear_repo_symbol_embedding_rows,
-    clear_repo_symbol_embedding_rows_for_representation, determine_repo_embedding_sync_action,
-    ensure_semantic_embeddings_schema, init_postgres_semantic_embeddings_schema,
-    init_sqlite_semantic_embeddings_schema, load_active_embedding_setup,
-    load_current_repo_embedding_states, load_current_semantic_summary_map,
-    load_current_symbol_embedding_index_state, load_semantic_summary_map,
+    build_current_symbol_embedding_persist_sql,
+    build_delete_stale_current_symbol_embedding_rows_for_path_sql,
+    build_embedding_setup_persist_sql, build_postgres_current_symbol_embedding_persist_sql,
+    build_postgres_symbol_embedding_persist_sql, build_sqlite_symbol_embedding_persist_sql,
+    clear_current_symbol_embedding_rows_for_path, clear_current_symbol_embedding_rows_for_paths,
+    clear_repo_active_embedding_setup, clear_repo_active_embedding_setup_for_representation,
+    clear_repo_symbol_embedding_rows, clear_repo_symbol_embedding_rows_for_representation,
+    determine_repo_embedding_sync_action, ensure_semantic_embeddings_schema,
+    init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,
+    load_active_embedding_setup, load_current_repo_embedding_states,
+    load_current_semantic_summary_map, load_current_symbol_embedding_index_state,
+    load_current_symbol_embedding_index_states, load_semantic_summary_map,
     load_symbol_embedding_index_state, load_symbol_embedding_index_states,
     persist_active_embedding_setup, refresh_current_repo_symbol_embeddings_and_clone_edges,
     semantic_embeddings_sqlite_schema_sql, upsert_current_symbol_embedding_rows,

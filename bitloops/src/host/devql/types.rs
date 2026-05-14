@@ -85,6 +85,12 @@ pub enum RelationalDialect {
     Sqlite,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationalPrimaryBackend {
+    Postgres,
+    Sqlite,
+}
+
 #[derive(Debug)]
 pub struct SqliteStorage {
     pub path: PathBuf,
@@ -99,6 +105,7 @@ pub struct PostgresStorage {
 pub struct RelationalStorage {
     pub local: SqliteStorage,
     pub remote: Option<PostgresStorage>,
+    primary_backend: RelationalPrimaryBackend,
 }
 
 impl RelationalStorage {
@@ -126,6 +133,11 @@ impl RelationalStorage {
         Ok(Self {
             local: SqliteStorage { path: sqlite_path },
             remote,
+            primary_backend: if remote_dsn.is_some() {
+                RelationalPrimaryBackend::Postgres
+            } else {
+                RelationalPrimaryBackend::Sqlite
+            },
         })
     }
 
@@ -133,6 +145,7 @@ impl RelationalStorage {
         Self {
             local: SqliteStorage { path },
             remote: None,
+            primary_backend: RelationalPrimaryBackend::Sqlite,
         }
     }
 
@@ -140,11 +153,16 @@ impl RelationalStorage {
         Self {
             local: SqliteStorage { path },
             remote: Some(PostgresStorage { client }),
+            primary_backend: RelationalPrimaryBackend::Postgres,
         }
     }
 
     pub fn dialect(&self) -> RelationalDialect {
         RelationalDialect::Sqlite
+    }
+
+    pub fn primary_backend(&self) -> RelationalPrimaryBackend {
+        self.primary_backend
     }
 
     pub fn sqlite_path(&self) -> &Path {
@@ -201,6 +219,15 @@ impl RelationalStorage {
         bail!("remote Postgres storage is not configured")
     }
 
+    pub async fn exec_primary_batch_transactional(&self, statements: &[String]) -> Result<()> {
+        match self.primary_backend() {
+            RelationalPrimaryBackend::Sqlite => self.exec_batch_transactional(statements).await,
+            RelationalPrimaryBackend::Postgres => {
+                self.exec_remote_batch_transactional(statements).await
+            }
+        }
+    }
+
     pub async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
         sqlite_query_rows_path(self.sqlite_path(), sql).await
     }
@@ -210,6 +237,25 @@ impl RelationalStorage {
             return pg_query_rows(remote_client, sql).await;
         }
         bail!("remote Postgres storage is not configured")
+    }
+
+    pub async fn query_rows_primary(&self, sql: &str) -> Result<Vec<Value>> {
+        match self.primary_backend() {
+            RelationalPrimaryBackend::Sqlite => self.query_rows(sql).await,
+            RelationalPrimaryBackend::Postgres => self.query_rows_remote(sql).await,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn primary_backend_for_tests(
+        path: PathBuf,
+        primary_backend: RelationalPrimaryBackend,
+    ) -> Self {
+        Self {
+            local: SqliteStorage { path },
+            remote: None,
+            primary_backend,
+        }
     }
 }
 
@@ -253,6 +299,10 @@ mod tests {
         assert_eq!(relational.sqlite_path(), sqlite_path.as_path());
         assert!(relational.remote.is_none());
         assert_eq!(relational.dialect(), RelationalDialect::Sqlite);
+        assert_eq!(
+            relational.primary_backend(),
+            RelationalPrimaryBackend::Sqlite
+        );
     }
 
     #[tokio::test]
@@ -273,5 +323,20 @@ mod tests {
                 || err.to_string().contains("connecting to Postgres"),
             "expected DSN connection setup to fail, got: {err:#}"
         );
+    }
+
+    #[test]
+    fn primary_backend_for_tests_can_represent_postgres_without_mutating_local_dialect() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let relational = RelationalStorage::primary_backend_for_tests(
+            temp.path().join("stores").join("relational.sqlite"),
+            RelationalPrimaryBackend::Postgres,
+        );
+
+        assert_eq!(
+            relational.primary_backend(),
+            RelationalPrimaryBackend::Postgres
+        );
+        assert_eq!(relational.dialect(), RelationalDialect::Sqlite);
     }
 }

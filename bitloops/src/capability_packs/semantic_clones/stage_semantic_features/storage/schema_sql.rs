@@ -234,6 +234,9 @@ pub(crate) async fn upgrade_sqlite_semantic_features_schema(sqlite_path: &Path) 
     let db_path = sqlite_path.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<()> {
         crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension().context(
+                "registering sqlite-vec auto-extension for semantic feature schema upgrade",
+            )?;
             let conn = rusqlite::Connection::open(&db_path)
                 .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
             conn.busy_timeout(std::time::Duration::from_secs(30))

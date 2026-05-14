@@ -321,6 +321,8 @@ pub(super) async fn sqlite_exec_path_inner(
             );
         }
         crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+                .context("registering sqlite-vec auto-extension for SQLite execute path")?;
             let conn = if allow_create {
                 rusqlite::Connection::open(&db_path)
             } else {
@@ -355,6 +357,9 @@ pub(super) async fn sqlite_exec_batch_transactional_path(
         }
 
         crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension().context(
+                "registering sqlite-vec auto-extension for SQLite transactional batch",
+            )?;
             let mut conn = rusqlite::Connection::open_with_flags(
                 &db_path,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
@@ -438,6 +443,8 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
                 db_path.display()
             );
         }
+        crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+            .context("registering sqlite-vec auto-extension for SQLite query")?;
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,

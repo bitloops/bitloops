@@ -122,7 +122,9 @@ pub(crate) use self::producer_spool::{
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;
 pub use self::sync::types::SyncMode;
-pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
+pub use self::types::{
+    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalStorage, RepoIdentity,
+};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
 
@@ -158,6 +160,8 @@ const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
 const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 #[cfg(test)]
 const CSHARP_LANGUAGE_PACK_ID: &str = "csharp-language-pack";
+#[cfg(test)]
+const PHP_LANGUAGE_PACK_ID: &str = "php-language-pack";
 #[allow(dead_code)]
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";

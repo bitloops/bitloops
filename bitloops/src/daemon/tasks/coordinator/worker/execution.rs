@@ -374,10 +374,14 @@ impl DevqlTaskCoordinator {
         .await?;
 
         match final_result {
-            Ok(result) => self.finish_summary_bootstrap_task_completed(
-                &task.task_id,
-                summary_result_from_cli(&result),
-            )?,
+            Ok(result) => {
+                self.finish_summary_bootstrap_task_completed(
+                    &task.task_id,
+                    summary_result_from_cli(&result),
+                )?;
+                let enrichment = crate::daemon::shared_enrichment_coordinator();
+                refresh_enrichment_capacity_after_summary_bootstrap(&enrichment);
+            }
             Err(err) => self.finish_task_failed(&task.task_id, err)?,
         }
 
@@ -461,6 +465,12 @@ fn normalize_explicit_ingest_commits(commits: Vec<String>) -> Vec<String> {
     normalized
 }
 
+fn refresh_enrichment_capacity_after_summary_bootstrap(
+    enrichment: &Arc<crate::daemon::EnrichmentCoordinator>,
+) {
+    enrichment.ensure_started();
+}
+
 fn summary_progress_from_cli(progress: SummarySetupProgress) -> SummaryBootstrapProgress {
     SummaryBootstrapProgress {
         phase: match progress.phase {
@@ -500,5 +510,122 @@ fn summary_result_from_cli(result: &SummarySetupExecutionResult) -> SummaryBoots
             SummarySetupOutcome::Configured { model_name } => Some(model_name.clone()),
         },
         message: result.message.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+
+    use tempfile::TempDir;
+    use tokio::sync::{Mutex, Notify};
+
+    use crate::daemon::EnrichmentCoordinator;
+    use crate::host::runtime_store::{DaemonSqliteRuntimeStore, RepoSqliteRuntimeStore};
+
+    fn test_enrichment_coordinator(
+        temp: &TempDir,
+    ) -> (Arc<EnrichmentCoordinator>, PathBuf, PathBuf, PathBuf) {
+        let config_root = temp.path().join("config");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&config_root).expect("create test config root");
+        fs::create_dir_all(&repo_root).expect("create test repo root");
+        crate::test_support::git_fixtures::init_test_repo(
+            &repo_root,
+            "main",
+            "Bitloops Test",
+            "bitloops@example.com",
+        );
+
+        let config_path = crate::test_support::git_fixtures::write_test_daemon_config(&config_root);
+        crate::config::settings::write_repo_daemon_binding(
+            &repo_root.join(crate::config::REPO_POLICY_LOCAL_FILE_NAME),
+            &config_path,
+        )
+        .expect("bind repo root to daemon config");
+
+        let repo_store = RepoSqliteRuntimeStore::open_for_roots(&config_root, &repo_root)
+            .expect("open repo runtime store");
+        let runtime_db_path = repo_store.db_path().to_path_buf();
+
+        (
+            Arc::new(EnrichmentCoordinator {
+                runtime_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path.clone())
+                    .expect("open test daemon runtime store"),
+                workplane_store: DaemonSqliteRuntimeStore::open_at(runtime_db_path)
+                    .expect("open test workplane store"),
+                daemon_config_root: config_root.clone(),
+                lock: Mutex::new(()),
+                notify: Notify::new(),
+                state_initialised: AtomicBool::new(false),
+                maintenance_started: AtomicBool::new(false),
+                started_worker_counts: std::sync::Mutex::new(
+                    crate::daemon::enrichment::worker_count::EnrichmentWorkerBudgets::default(),
+                ),
+                subscription_hub: std::sync::Mutex::new(None),
+            }),
+            config_root,
+            repo_root,
+            config_path,
+        )
+    }
+
+    fn append_cloud_summary_profile(config_path: &std::path::Path) {
+        let mut config = fs::read_to_string(config_path).expect("read daemon config");
+        config.push_str(
+            r#"
+[semantic_clones.inference]
+summary_generation = "summary_llm"
+
+[inference.profiles.summary_llm]
+task = "text_generation"
+runtime = "bitloops_inference"
+driver = "bitloops_platform_chat"
+model = "ministral-3-3b-instruct"
+api_key = "${BITLOOPS_PLATFORM_GATEWAY_TOKEN}"
+"#,
+        );
+        fs::write(config_path, config).expect("write cloud summary config");
+    }
+
+    #[test]
+    fn refresh_enrichment_capacity_after_summary_bootstrap_promotes_cloud_summary_workers() {
+        let temp = TempDir::new().expect("temp dir");
+        let (enrichment, _config_root, _repo_root, config_path) =
+            test_enrichment_coordinator(&temp);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build test runtime");
+
+        runtime.block_on(async {
+            enrichment.ensure_worker_capacity();
+            assert_eq!(
+                enrichment
+                    .started_worker_counts
+                    .lock()
+                    .expect("lock worker counts")
+                    .summary_refresh,
+                1,
+                "test should begin with the default local summary worker budget",
+            );
+
+            append_cloud_summary_profile(&config_path);
+            refresh_enrichment_capacity_after_summary_bootstrap(&enrichment);
+
+            assert_eq!(
+                enrichment
+                    .started_worker_counts
+                    .lock()
+                    .expect("lock worker counts")
+                    .summary_refresh,
+                crate::host::inference::DEFAULT_REMOTE_TEXT_GENERATION_CONCURRENCY,
+                "cloud summary configuration should promote the summary worker budget",
+            );
+        });
     }
 }

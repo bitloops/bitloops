@@ -758,6 +758,8 @@ fn open_sync_sqlite_connection(path: &PathBuf) -> Result<Connection> {
             path.display()
         );
     }
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for sync SQLite writer")?;
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("opening SQLite database at {}", path.display()))?;
     connection
