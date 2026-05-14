@@ -79,6 +79,15 @@ pub struct SemanticCloneProgressObservation {
     pub parallel_progress_observed: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ArchitectureRoleAssignmentSnapshot {
+    pub path: String,
+    pub role: String,
+    pub assignment_id: String,
+    pub status: String,
+    pub source: String,
+}
+
 #[derive(Debug, Default, cucumber::World)]
 pub struct QatWorld {
     pub scenario_name: Option<String>,
@@ -121,6 +130,13 @@ pub struct QatWorld {
     pub last_task_id: Option<String>,
     pub agent_name: Option<String>,
     pub watcher_autostart_enabled: bool,
+    pub architecture_role_id_snapshots: HashMap<String, String>,
+    pub architecture_role_assignment_id_snapshots: HashMap<String, String>,
+    pub architecture_role_assignment_set_snapshots:
+        HashMap<String, Vec<ArchitectureRoleAssignmentSnapshot>>,
+    pub architecture_role_fact_generation_snapshots: HashMap<String, u64>,
+    pub last_architecture_role_proposal_id: Option<String>,
+    pub last_architecture_role_rule_edit_proposal_id: Option<String>,
 }
 
 pub struct ScenarioDaemonProcess {
@@ -180,6 +196,12 @@ impl QatWorld {
         self.last_task_id = None;
         self.agent_name = None;
         self.watcher_autostart_enabled = false;
+        self.architecture_role_id_snapshots = HashMap::new();
+        self.architecture_role_assignment_id_snapshots = HashMap::new();
+        self.architecture_role_assignment_set_snapshots = HashMap::new();
+        self.architecture_role_fact_generation_snapshots = HashMap::new();
+        self.last_architecture_role_proposal_id = None;
+        self.last_architecture_role_rule_edit_proposal_id = None;
     }
 
     pub fn prepare(

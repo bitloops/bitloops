@@ -1041,6 +1041,31 @@ fn code_embeddings_lane_waits_for_codebase_updates_after_sync_task_completion() 
 }
 
 #[test]
+fn code_embeddings_lane_completes_when_no_init_blocking_current_state_remains() {
+    let session = embeddings_only_session();
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let stats = SessionWorkplaneStats::default();
+
+    let lane = derive_code_embeddings_lane(
+        &session,
+        Some(&initial_sync),
+        None,
+        None,
+        StatusCounts::default(),
+        &stats,
+        Some(InitRuntimeLaneProgressView {
+            completed: 2243,
+            in_memory_completed: 0,
+            total: 2243,
+            remaining: 0,
+        }),
+    );
+
+    assert_eq!(lane.status, "completed");
+    assert_eq!(lane.waiting_reason, None);
+}
+
+#[test]
 fn code_embeddings_lane_waits_for_follow_up_sync_after_late_embeddings_bootstrap() {
     let session = InitSessionRecord {
         init_session_id: "init-session-1".to_string(),
@@ -1215,6 +1240,7 @@ fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embedding
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: None,
@@ -1248,6 +1274,7 @@ fn summaries_lane_reports_summary_mailbox_blockage_without_waiting_for_embedding
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),
@@ -1316,6 +1343,7 @@ fn semantic_bootstrap_waiting_reason_distinguishes_embeddings_only() {
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: None,
@@ -1381,6 +1409,7 @@ fn semantic_bootstrap_waiting_reason_distinguishes_embeddings_only() {
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),
@@ -1424,6 +1453,7 @@ fn summaries_lane_waits_for_follow_up_sync_after_summary_bootstrap_finishes_late
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
@@ -1458,6 +1488,7 @@ fn summaries_lane_waits_for_follow_up_sync_after_summary_bootstrap_finishes_late
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),
@@ -1516,6 +1547,7 @@ fn summaries_lane_becomes_warning_after_failed_jobs_drain() {
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
@@ -1550,6 +1582,7 @@ fn summaries_lane_becomes_warning_after_failed_jobs_drain() {
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),
@@ -1624,6 +1657,7 @@ fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
@@ -1658,6 +1692,7 @@ fn summaries_lane_warns_when_progress_remains_after_summary_jobs_drain() {
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),
@@ -1714,6 +1749,7 @@ fn selected_lane_warning_statuses_count_as_session_warnings() {
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
@@ -1748,6 +1784,7 @@ fn selected_lane_warning_statuses_count_as_session_warnings() {
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),
@@ -1810,6 +1847,7 @@ fn summary_follow_up_can_start_before_embeddings_bootstrap_finishes() {
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
@@ -1876,6 +1914,7 @@ fn summary_follow_up_can_start_before_embeddings_bootstrap_finishes() {
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),
@@ -2064,6 +2103,7 @@ fn embeddings_can_trigger_a_second_follow_up_after_summary_follow_up_completes()
                 message: None,
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }),
         },
         initial_sync_task_id: Some("sync-task-1".to_string()),
@@ -2131,6 +2171,7 @@ fn embeddings_can_trigger_a_second_follow_up_after_summary_follow_up_completes()
             message: None,
             model_name: None,
             gateway_url_override: None,
+            api_key_env: None,
         },
         status: SummaryBootstrapStatus::Completed,
         progress: SummaryBootstrapProgress::default(),

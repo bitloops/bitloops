@@ -1,6 +1,4 @@
-use clap::ValueEnum;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum TextGenerationRuntime {
     #[default]
     Local,
@@ -85,6 +83,7 @@ pub(crate) enum PreparedSummarySetupAction {
     },
     ConfigureCloud {
         gateway_url_override: Option<String>,
+        api_key_env: Option<String>,
     },
 }
 

@@ -6,6 +6,7 @@ pub mod migrations;
 pub mod pack;
 pub mod query_examples;
 pub mod register;
+pub mod roles;
 pub mod schema;
 pub mod storage;
 pub mod types;

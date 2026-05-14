@@ -434,6 +434,7 @@ fn build_capability_config_root_exposes_architecture_inference_binding() {
     let architecture = crate::config::ArchitectureConfig {
         inference: crate::config::ArchitectureInferenceBindings {
             fact_synthesis: Some("local_agent".to_string()),
+            role_adjudication: Some("role_adjudicator".to_string()),
         },
     };
     let root = build_capability_config_root(
@@ -448,6 +449,10 @@ fn build_capability_config_root_exposes_architecture_inference_binding() {
     assert_eq!(
         root["architecture_graph"]["inference"]["fact_synthesis"],
         json!("local_agent")
+    );
+    assert_eq!(
+        root["architecture_graph"]["inference"]["role_adjudication"],
+        json!("role_adjudicator")
     );
 }
 

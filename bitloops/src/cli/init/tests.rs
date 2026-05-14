@@ -24,6 +24,7 @@ use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
     ensure_daemon_config_exists,
 };
+use crate::test_support::git_fixtures::init_test_repo;
 use crate::test_support::process_state::{with_env_vars, with_process_state};
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
 
@@ -35,11 +36,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 fn setup_git_repo(dir: &TempDir) {
-    std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .status()
-        .expect("git init");
+    init_test_repo(dir.path(), "main", "Bitloops Test", "bitloops@example.com");
 }
 
 fn write_repo_policy(dir: &TempDir, file_name: &str, content: &str) {

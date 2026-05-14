@@ -6,7 +6,7 @@ use crate::daemon::capability_events::queue::{
     next_generation_seq, prune_terminal_runs, sql_i64, upsert_consumer_row,
 };
 use crate::daemon::types::unix_timestamp_now;
-use crate::host::capability_host::DevqlCapabilityHost;
+use crate::host::capability_host::{CapabilityMailboxInitPolicy, DevqlCapabilityHost};
 use crate::host::devql::{DevqlConfig, SyncSummary};
 
 use super::types::{CapabilityEventCoordinator, CapabilityEventEnqueueResult, SyncGenerationInput};
@@ -78,6 +78,13 @@ impl CapabilityEventCoordinator {
                         registration.mailbox_name,
                         now,
                     )?;
+                    let run_init_session_id = if registration.init_policy
+                        == CapabilityMailboxInitPolicy::BlocksInitCompletion
+                    {
+                        input.init_session_id
+                    } else {
+                        None
+                    };
                     if let Some(run) = ensure_consumer_run(
                         conn,
                         ConsumerRunRequest {
@@ -86,7 +93,7 @@ impl CapabilityEventCoordinator {
                             capability_id: registration.capability_id,
                             mailbox_name: registration.mailbox_name,
                             handler_id,
-                            init_session_id: input.init_session_id,
+                            init_session_id: run_init_session_id,
                             now,
                         },
                     )? {

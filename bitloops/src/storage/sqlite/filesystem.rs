@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::SqliteConnectionPool;
+use super::{ReadOnlySqliteConnectionPool, SqliteConnectionPool};
 
 impl SqliteConnectionPool {
     pub fn connect(db_path: std::path::PathBuf) -> Result<Self> {
@@ -43,6 +43,23 @@ impl SqliteConnectionPool {
             let conn = open_sqlite_write_connection(&self.db_path)?;
             operation(&conn)
         })
+    }
+}
+
+impl ReadOnlySqliteConnectionPool {
+    pub fn connect_existing(db_path: std::path::PathBuf) -> Result<Self> {
+        ensure_sqlite_file_exists(&db_path)?;
+        let pool = Self { db_path };
+        pool.with_connection(|_| Ok(()))?;
+        Ok(pool)
+    }
+
+    pub fn with_connection<T>(
+        &self,
+        operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+    ) -> Result<T> {
+        let conn = open_read_only_sqlite_connection(&self.db_path)?;
+        operation(&conn)
     }
 }
 
@@ -97,6 +114,19 @@ pub(super) fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connect
     Ok(conn)
 }
 
+pub(super) fn open_read_only_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+    ensure_sqlite_file_exists(db_path)?;
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for SQLite read-only open")?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| {
+                format!("opening SQLite database read-only at {}", db_path.display())
+            })?;
+    configure_read_only_sqlite_connection(&conn)?;
+    Ok(conn)
+}
+
 fn open_sqlite_write_connection(db_path: &Path) -> Result<rusqlite::Connection> {
     ensure_sqlite_file_exists(db_path)?;
     crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
@@ -120,5 +150,12 @@ fn configure_sqlite_write_connection(conn: &rusqlite::Connection) -> Result<()> 
     configure_sqlite_read_connection(conn)?;
     conn.execute_batch("PRAGMA journal_mode = WAL;")
         .context("configuring SQLite journal mode")?;
+    Ok(())
+}
+
+fn configure_read_only_sqlite_connection(conn: &rusqlite::Connection) -> Result<()> {
+    configure_sqlite_read_connection(conn)?;
+    conn.execute_batch("PRAGMA query_only = ON;")
+        .context("configuring read-only SQLite pragmas")?;
     Ok(())
 }

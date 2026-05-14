@@ -1,4 +1,5 @@
 mod architecture_graph;
+mod architecture_roles;
 mod bootstrap;
 mod commit_checkpoints;
 mod enrichment;
@@ -28,6 +29,11 @@ use super::loaders::LoaderMetrics;
 use super::scope::SelectedRepository;
 use super::subscriptions::SubscriptionHub;
 
+#[allow(unused_imports)]
+pub(crate) use architecture_graph::ArchitectureGraphTargetOverview;
+pub(crate) use architecture_roles::{
+    ArchitectureRoleOverviewAssignment, ArchitectureRoleTargetOverview,
+};
 #[allow(unused_imports)]
 pub(crate) use historical_context::HistoricalContextSelectionInput;
 

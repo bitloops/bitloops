@@ -15,13 +15,13 @@ use crate::host::devql::{
     use_raw_graphql_mode,
 };
 
+mod architecture;
 mod args;
 pub(crate) mod graphql;
 mod knowledge;
 mod navigation_context;
 mod test_harness;
 
-use navigation_context::run_with_scope_discovery;
 #[cfg(test)]
 use navigation_context::{
     format_navigation_context_materialisation, format_navigation_context_status, minify_schema_sdl,
@@ -32,7 +32,18 @@ mod tests;
 
 pub use crate::host::devql::run_connection_status;
 pub use args::{
-    DevqlAnalyticsArgs, DevqlAnalyticsCommand, DevqlAnalyticsSqlArgs, DevqlArgs,
+    DevqlAnalyticsArgs, DevqlAnalyticsCommand, DevqlAnalyticsSqlArgs, DevqlArchitectureArgs,
+    DevqlArchitectureCommand, DevqlArchitectureRolesAliasArgs, DevqlArchitectureRolesAliasCommand,
+    DevqlArchitectureRolesAliasCreateArgs, DevqlArchitectureRolesArgs,
+    DevqlArchitectureRolesBootstrapArgs, DevqlArchitectureRolesClassifyArgs,
+    DevqlArchitectureRolesCommand, DevqlArchitectureRolesDeprecateArgs,
+    DevqlArchitectureRolesMergeArgs, DevqlArchitectureRolesProposalArgs,
+    DevqlArchitectureRolesProposalCommand, DevqlArchitectureRolesProposalRefArgs,
+    DevqlArchitectureRolesRemoveArgs, DevqlArchitectureRolesRenameArgs,
+    DevqlArchitectureRolesRulesArgs, DevqlArchitectureRolesRulesCommand,
+    DevqlArchitectureRolesRulesDraftArgs, DevqlArchitectureRolesRulesEditArgs,
+    DevqlArchitectureRolesRulesRefArgs, DevqlArchitectureRolesSeedArgs,
+    DevqlArchitectureRolesSplitArgs, DevqlArchitectureRolesStatusArgs, DevqlArgs,
     DevqlCheckpointFileSnapshotsArgs, DevqlCommand, DevqlConnectionStatusArgs, DevqlInitArgs,
     DevqlKnowledgeAddArgs, DevqlKnowledgeArgs, DevqlKnowledgeAssociateArgs, DevqlKnowledgeCommand,
     DevqlKnowledgeRefArgs, DevqlNavigationContextAcceptArgs, DevqlNavigationContextArgs,
@@ -47,7 +58,7 @@ pub use args::{
     DevqlTestHarnessIngestTestsArgs,
 };
 
-pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql analytics sql`, `bitloops devql tasks enqueue`, `bitloops devql tasks watch`, `bitloops devql tasks status`, `bitloops devql tasks list`, `bitloops devql tasks pause`, `bitloops devql tasks resume`, `bitloops devql tasks cancel`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql navigation-context status`, `bitloops devql navigation-context materialise`, `bitloops devql navigation-context accept`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
+pub(crate) const MISSING_SUBCOMMAND_MESSAGE: &str = "missing subcommand. Use one of: `bitloops devql init`, `bitloops devql analytics sql`, `bitloops devql tasks enqueue`, `bitloops devql tasks watch`, `bitloops devql tasks status`, `bitloops devql tasks list`, `bitloops devql tasks pause`, `bitloops devql tasks resume`, `bitloops devql tasks cancel`, `bitloops devql projection checkpoint-file-snapshots`, `bitloops devql schema`, `bitloops devql query`, `bitloops devql connection-status`, `bitloops devql packs`, `bitloops devql architecture roles seed`, `bitloops devql architecture roles bootstrap`, `bitloops devql architecture roles classify`, `bitloops devql architecture roles status`, `bitloops devql architecture roles rename`, `bitloops devql architecture roles rules draft`, `bitloops devql architecture roles proposal show`, `bitloops devql knowledge add`, `bitloops devql knowledge associate`, `bitloops devql knowledge refresh`, `bitloops devql knowledge versions`, `bitloops devql navigation-context status`, `bitloops devql navigation-context materialise`, `bitloops devql navigation-context accept`, `bitloops devql test-harness ingest-tests`, `bitloops devql test-harness ingest-coverage`, `bitloops devql test-harness ingest-coverage-batch`, `bitloops devql test-harness ingest-results`";
 const SCHEMA_SCOPE_REQUIRED_MESSAGE: &str = "`bitloops devql schema` requires a Git repository scope. Run it from within a repository or use `bitloops devql schema --global`.";
 
 async fn run_tasks_command(scope: &SlimCliRepoScope, args: DevqlTasksArgs) -> Result<()> {
@@ -177,6 +188,34 @@ pub async fn run(args: DevqlArgs) -> Result<()> {
 
     let mut writer = std::io::stdout();
     run_with_scope_discovery(args, &mut writer, || discover_slim_cli_repo_scope(None)).await
+}
+
+async fn run_with_scope_discovery<F, W>(
+    args: DevqlArgs,
+    schema_writer: &mut W,
+    discover_scope: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<SlimCliRepoScope>,
+    W: Write,
+{
+    if matches!(args.command.as_ref(), Some(DevqlCommand::Architecture(_))) {
+        return run_architecture_with_scope_discovery(args, discover_scope).await;
+    }
+
+    navigation_context::run_with_scope_discovery(args, schema_writer, discover_scope).await
+}
+
+async fn run_architecture_with_scope_discovery<F>(args: DevqlArgs, discover_scope: F) -> Result<()>
+where
+    F: FnOnce() -> Result<SlimCliRepoScope>,
+{
+    let Some(DevqlCommand::Architecture(args)) = args.command else {
+        unreachable!("run_architecture_with_scope_discovery only handles architecture commands");
+    };
+
+    let scope = discover_scope()?;
+    architecture::run_architecture_command(&scope, args).await
 }
 
 pub(crate) fn format_task_queue_submission(

@@ -16,11 +16,8 @@ pub struct InferenceArgs {
 #[derive(Subcommand, Debug, Clone)]
 pub enum InferenceCommand {
     /// Install or update the managed standalone inference runtime.
-    Install(InferenceInstallArgs),
+    Install,
 }
-
-#[derive(Args, Debug, Clone, Default)]
-pub struct InferenceInstallArgs {}
 
 pub fn run(args: InferenceArgs) -> Result<()> {
     let Some(command) = args.command else {
@@ -28,7 +25,7 @@ pub fn run(args: InferenceArgs) -> Result<()> {
     };
 
     match command {
-        InferenceCommand::Install(_args) => {
+        InferenceCommand::Install => {
             let repo_root = current_repo_root()?;
             for line in install_or_bootstrap_inference(&repo_root)? {
                 println!("{line}");

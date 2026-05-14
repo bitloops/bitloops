@@ -10,11 +10,14 @@ use crate::config::{
 };
 
 use super::embeddings::BitloopsEmbeddingsIpcService;
-use super::text_generation::BitloopsInferenceTextGenerationService;
+use super::text_generation::{
+    BitloopsInferenceTextGenerationService, TextGenerationRequestDefaults,
+};
 use super::{
     BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_PLATFORM_CHAT_DRIVER,
-    BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, EmbeddingService, InferenceGateway,
-    ResolvedInferenceSlot, StructuredGenerationService, TextGenerationService,
+    BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID, CLAUDE_CODE_PRINT_DRIVER, CODEX_EXEC_DRIVER,
+    EmbeddingService, InferenceGateway, ResolvedInferenceSlot, StructuredGenerationService,
+    TextGenerationService,
 };
 
 pub struct EmptyInferenceGateway;
@@ -189,16 +192,7 @@ impl LocalInferenceGateway {
             .model
             .as_deref()
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires a model"))?;
-        let temperature = profile
-            .temperature
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
-        let max_output_tokens = profile
-            .max_output_tokens
-            .filter(|value| *value > 0)
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+        let request_defaults = request_defaults_for_profile(profile_name, profile)?;
         if profile.driver != BITLOOPS_PLATFORM_CHAT_DRIVER
             && profile
                 .base_url
@@ -213,11 +207,12 @@ impl LocalInferenceGateway {
             &profile.driver,
             runtime,
             &config_path,
+            request_defaults,
         )
         .with_context(|| {
             format!("building text-generation service for profile `{profile_name}`")
         })?;
-        let _ = (model, temperature, max_output_tokens);
+        let _ = model;
         Ok(Arc::new(service))
     }
 
@@ -226,36 +221,24 @@ impl LocalInferenceGateway {
         profile_name: &str,
         profile: &InferenceProfileConfig,
     ) -> Result<Arc<dyn StructuredGenerationService>> {
-        let runtime_name = profile
-            .runtime
-            .as_deref()
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
-        let runtime = self.configured_runtime(profile_name, runtime_name)?;
+        let runtime = self.structured_generation_runtime_config(profile_name, profile)?;
         let model = profile
             .model
             .as_deref()
             .ok_or_else(|| anyhow!("profile `{profile_name}` requires a model"))?;
-        let temperature = profile
-            .temperature
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
-        let max_output_tokens = profile
-            .max_output_tokens
-            .filter(|value| *value > 0)
-            .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+        let request_defaults = request_defaults_for_profile(profile_name, profile)?;
         let config_path = self.resolve_runtime_config_path()?;
         let service = BitloopsInferenceTextGenerationService::new(
             profile_name,
             &profile.driver,
-            runtime,
+            &runtime,
             &config_path,
+            request_defaults,
         )
         .with_context(|| {
             format!("building structured-generation service for profile `{profile_name}`")
         })?;
-        let _ = (model, temperature, max_output_tokens);
+        let _ = model;
         Ok(Arc::new(service))
     }
 
@@ -277,10 +260,99 @@ impl LocalInferenceGateway {
         Ok(runtime)
     }
 
+    fn bitloops_inference_launcher_runtime(
+        &self,
+        profile_name: &str,
+    ) -> Result<&InferenceRuntimeConfig> {
+        self.configured_runtime(profile_name, super::BITLOOPS_INFERENCE_RUNTIME_ID)
+            .with_context(|| {
+                format!(
+                    "profile `{profile_name}` uses a CLI-agent structured-generation driver and requires runtime `{}` to launch `bitloops-inference`",
+                    super::BITLOOPS_INFERENCE_RUNTIME_ID
+                )
+            })
+    }
+
+    fn validate_cli_agent_provider_runtime(
+        &self,
+        profile_name: &str,
+        profile: &InferenceProfileConfig,
+    ) -> Result<&InferenceRuntimeConfig> {
+        if !is_cli_agent_structured_driver(&profile.driver) {
+            bail!("profile `{profile_name}` does not use a CLI-agent structured-generation driver");
+        }
+        let provider_runtime_name = profile
+            .runtime
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a provider runtime"))?;
+        let provider_runtime = self.configured_runtime(profile_name, provider_runtime_name)?;
+        if provider_runtime.command.trim().is_empty() {
+            bail!(
+                "provider runtime `{provider_runtime_name}` for profile `{profile_name}` has no command configured"
+            );
+        }
+        Ok(provider_runtime)
+    }
+
+    fn structured_generation_runtime_config(
+        &self,
+        profile_name: &str,
+        profile: &InferenceProfileConfig,
+    ) -> Result<InferenceRuntimeConfig> {
+        let runtime_name = profile
+            .runtime
+            .as_deref()
+            .ok_or_else(|| anyhow!("profile `{profile_name}` requires a runtime"))?;
+        if !is_cli_agent_structured_driver(&profile.driver) {
+            return Ok(self.configured_runtime(profile_name, runtime_name)?.clone());
+        }
+
+        let provider_runtime = self.validate_cli_agent_provider_runtime(profile_name, profile)?;
+        let mut launcher_runtime = self
+            .bitloops_inference_launcher_runtime(profile_name)?
+            .clone();
+        launcher_runtime.request_timeout_secs = launcher_runtime
+            .request_timeout_secs
+            .max(provider_runtime.request_timeout_secs);
+        Ok(launcher_runtime)
+    }
+
     fn resolve_runtime_config_path(&self) -> Result<PathBuf> {
         resolve_preferred_daemon_config_path_for_repo(&self.repo_root)
             .or_else(|_| Ok(self.repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH)))
     }
+}
+
+fn is_cli_agent_structured_driver(driver: &str) -> bool {
+    matches!(driver.trim(), CODEX_EXEC_DRIVER | CLAUDE_CODE_PRINT_DRIVER)
+}
+
+fn request_defaults_for_profile(
+    profile_name: &str,
+    profile: &InferenceProfileConfig,
+) -> Result<TextGenerationRequestDefaults> {
+    let temperature_text = profile
+        .temperature
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("profile `{profile_name}` requires a temperature"))?;
+    let temperature = temperature_text.parse::<f32>().with_context(|| {
+        format!("profile `{profile_name}` has invalid temperature `{temperature_text}`")
+    })?;
+    if !temperature.is_finite() {
+        bail!("profile `{profile_name}` has non-finite temperature `{temperature_text}`");
+    }
+    let max_output_tokens = profile
+        .max_output_tokens
+        .filter(|value| *value > 0)
+        .ok_or_else(|| anyhow!("profile `{profile_name}` requires max_output_tokens"))?;
+    Ok(TextGenerationRequestDefaults {
+        temperature,
+        max_output_tokens,
+    })
 }
 
 impl InferenceGateway for LocalInferenceGateway {

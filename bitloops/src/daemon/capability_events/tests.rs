@@ -120,8 +120,7 @@ fn determine_reconcile_mode_promotes_full_reconcile_for_first_run_and_thresholds
 }
 
 #[test]
-fn build_execution_plan_fast_paths_forced_full_reconcile_with_affected_paths() -> anyhow::Result<()>
-{
+fn full_reconcile_plan_normalizes_role_scope() -> anyhow::Result<()> {
     let conn = rusqlite::Connection::open_in_memory()?;
     conn.execute_batch(
         "CREATE TABLE capability_workplane_cursor_generations (
@@ -254,5 +253,11 @@ fn build_execution_plan_fast_paths_forced_full_reconcile_with_affected_paths() -
         plan.request.affected_paths,
         vec!["src/a.rs".to_string(), "src/b.rs".to_string()]
     );
+    let role_scope =
+        crate::capability_packs::architecture_graph::roles::classifier::role_classification_scope_from_request(
+            &plan.request,
+        );
+    assert!(role_scope.full_reconcile);
+    assert!(role_scope.affected_paths.is_empty());
     Ok(())
 }

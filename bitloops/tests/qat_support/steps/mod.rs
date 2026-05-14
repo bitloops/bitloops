@@ -274,6 +274,166 @@ pub fn collection() -> Collection<QatWorld> {
         )
         .given(
             None,
+            regex(r"^I create architecture role intelligence fixture modules in (\S+)$"),
+            step_fn(given_create_architecture_role_intelligence_fixture_modules),
+        )
+        .given(
+            None,
+            regex(r"^I configure deterministic architecture role inference in (\S+)$"),
+            step_fn(given_configure_deterministic_architecture_role_inference),
+        )
+        .given(
+            None,
+            regex(r"^seeded active architecture role rules classified (\S+)$"),
+            step_fn(given_seeded_active_architecture_role_rules_classified),
+        )
+        .given(
+            None,
+            regex(r"^I run architecture role seed in (\S+)$"),
+            step_fn(given_run_architecture_role_seed),
+        )
+        .when(
+            None,
+            regex(r"^I run architecture role seed in (\S+)$"),
+            step_fn(given_run_architecture_role_seed),
+        )
+        .given(
+            None,
+            regex(r"^I bootstrap architecture roles in (\S+)$"),
+            step_fn(given_bootstrap_architecture_roles),
+        )
+        .when(
+            None,
+            regex(r"^I bootstrap architecture roles in (\S+)$"),
+            step_fn(given_bootstrap_architecture_roles),
+        )
+        .given(
+            None,
+            regex(r"^I bootstrap architecture roles using existing seed rules in (\S+)$"),
+            step_fn(given_bootstrap_architecture_roles_skip_seed),
+        )
+        .when(
+            None,
+            regex(r"^I bootstrap architecture roles using existing seed rules in (\S+)$"),
+            step_fn(given_bootstrap_architecture_roles_skip_seed),
+        )
+        .given(
+            None,
+            regex(r"^I activate seeded architecture role rules in (\S+)$"),
+            step_fn(given_activate_seeded_architecture_role_rules),
+        )
+        .when(
+            None,
+            regex(r"^I activate seeded architecture role rules in (\S+)$"),
+            step_fn(given_activate_seeded_architecture_role_rules),
+        )
+        .given(
+            None,
+            regex(r"^I run architecture role classification with full refresh in (\S+)$"),
+            step_fn(given_run_architecture_role_classification_full_refresh),
+        )
+        .when(
+            None,
+            regex(r"^I run architecture role classification with full refresh in (\S+)$"),
+            step_fn(given_run_architecture_role_classification_full_refresh),
+        )
+        .given(
+            None,
+            regex(r#"^I snapshot architecture role id for canonical key \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_architecture_role_id),
+        )
+        .given(
+            None,
+            regex(r#"^I snapshot architecture role assignment id for role \"([^\"]+)\" and path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_architecture_role_assignment_id),
+        )
+        .when(
+            None,
+            regex(r#"^I rename architecture role \"([^\"]+)\" to \"([^\"]+)\" and apply the proposal in (\S+)$"#),
+            step_fn(given_rename_architecture_role_and_apply_proposal),
+        )
+        .when(
+            None,
+            regex(r#"^I rename architecture role \"([^\"]+)\" to \"([^\"]+)\" and show the proposal in (\S+)$"#),
+            step_fn(given_rename_architecture_role_and_show_proposal),
+        )
+        .when(
+            None,
+            regex(r#"^I deprecate architecture role \"([^\"]+)\" without replacement and apply the proposal in (\S+)$"#),
+            step_fn(given_deprecate_architecture_role_without_replacement_and_apply_proposal),
+        )
+        .when(
+            None,
+            regex(r#"^I deprecate architecture role \"([^\"]+)\" without replacement and show the proposal in (\S+)$"#),
+            step_fn(given_deprecate_architecture_role_without_replacement_and_show_proposal),
+        )
+        .when(
+            None,
+            regex(r"^I show the latest architecture role proposal in (\S+)$"),
+            step_fn(given_show_latest_architecture_role_proposal),
+        )
+        .when(
+            None,
+            regex(r"^I apply the latest architecture role proposal in (\S+)$"),
+            step_fn(given_apply_latest_architecture_role_proposal),
+        )
+        .given(
+            None,
+            regex(r#"^I snapshot architecture role assignments for role \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_architecture_role_assignments_for_role),
+        )
+        .when(
+            None,
+            regex(r#"^I preview an architecture role rule edit for role \"([^\"]+)\" that removes path \"([^\"]+)\" and adds path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_preview_architecture_role_rule_edit),
+        )
+        .given(
+            None,
+            regex(r#"^I create ambiguous architecture role fixture path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_create_ambiguous_architecture_role_fixture_path),
+        )
+        .when(
+            None,
+            regex(r#"^I process the ArchitectureGraph role adjudication job for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_process_architecture_role_adjudication_job_for_path),
+        )
+        .given(
+            None,
+            regex(r#"^I snapshot architecture role fact generation for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_architecture_role_fact_generation),
+        )
+        .given(
+            None,
+            regex(r#"^I snapshot architecture role rule assignment ids except path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_snapshot_architecture_role_assignment_ids_except_path),
+        )
+        .when(
+            None,
+            regex(r"^I run architecture role status as JSON in (\S+)$"),
+            step_fn(given_run_architecture_roles_status_json),
+        )
+        .when(
+            None,
+            regex(r#"^I run architecture role classification for paths \"([^\"]+)\" as JSON in (\S+)$"#),
+            step_fn(given_run_architecture_role_classification_paths_json),
+        )
+        .when(
+            None,
+            regex(r#"^I run architecture role classification for paths \"([^\"]+)\" with adjudication disabled as JSON in (\S+)$"#),
+            step_fn(given_run_architecture_role_classification_paths_json_with_adjudication_disabled),
+        )
+        .when(
+            None,
+            regex(r"^I run architecture role classification repair-stale as JSON in (\S+)$"),
+            step_fn(given_run_architecture_role_classification_repair_stale_json),
+        )
+        .when(
+            None,
+            regex(r#"^I remove source file \"([^\"]+)\" in (\S+)$"#),
+            step_fn(given_remove_source_file_at_path),
+        )
+        .given(
+            None,
             regex(r"^I run (?:TestHarness|TestLens) ingest-tests for latest commit in (\S+)$"),
             step_fn(given_testlens_ingest_tests),
         )
@@ -394,7 +554,17 @@ pub fn collection() -> Collection<QatWorld> {
             regex(r#"^I enqueue DevQL sync task with paths \"([^\"]+)\" and status in (\S+)$"#),
             step_fn(given_enqueue_devql_sync_task_with_paths_and_status),
         )
+        .when(
+            None,
+            regex(r#"^I enqueue DevQL sync task with paths \"([^\"]+)\" and status in (\S+)$"#),
+            step_fn(given_enqueue_devql_sync_task_with_paths_and_status),
+        )
         .given(
+            None,
+            regex(r"^I enqueue DevQL full sync task with status in (\S+)$"),
+            step_fn(given_enqueue_devql_full_sync_task_with_status),
+        )
+        .when(
             None,
             regex(r"^I enqueue DevQL full sync task with status in (\S+)$"),
             step_fn(given_enqueue_devql_full_sync_task_with_status),
@@ -535,6 +705,11 @@ pub fn collection() -> Collection<QatWorld> {
             step_fn(given_delete_test_file),
         )
         .given(
+            None,
+            regex(r"^I commit changes without hooks in (\S+)$"),
+            step_fn(given_commit_without_hooks),
+        )
+        .when(
             None,
             regex(r"^I commit changes without hooks in (\S+)$"),
             step_fn(given_commit_without_hooks),
@@ -733,6 +908,171 @@ pub fn collection() -> Collection<QatWorld> {
             None,
             regex(r"^git timeline and contents are correct in (\S+)$"),
             step_fn(then_git_timeline_is_correct),
+        )
+        .then(
+            None,
+            regex(r#"^architecture roles include canonical keys \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_roles_include_canonical_keys),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role facts include path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_facts_include_path),
+        )
+        .given(
+            None,
+            regex(r#"^architecture role facts include path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_facts_include_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role facts do not include path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_facts_do_not_include_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role facts for path \"([^\"]+)\" have a newer generation than the snapshot in (\S+)$"#),
+            step_fn(then_architecture_role_facts_newer_than_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role rule signals include role \"([^\"]+)\" for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_rule_signal_for_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role assignment for role \"([^\"]+)\" and path \"([^\"]+)\" is active with source \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_assignment_active_with_source),
+        )
+        .given(
+            None,
+            regex(r#"^architecture role assignment for role \"([^\"]+)\" and path \"([^\"]+)\" is active with source \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_assignment_active_with_source),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role assignment for role \"([^\"]+)\" and path \"([^\"]+)\" has status \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_assignment_status),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role classification output wrote at least ([0-9]+) role assignments in (\S+)$"#),
+            step_fn(then_architecture_role_classification_output_wrote_at_least_role_assignments),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role adjudication queue has no job for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_adjudication_queue_has_no_job_for_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role adjudication job is queued for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_adjudication_job_exists_for_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role assignment for role \"([^\"]+)\" and path \"([^\"]+)\" includes LLM adjudication evidence in (\S+)$"#),
+            step_fn(then_architecture_role_assignment_includes_llm_evidence),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role canonical key \"([^\"]+)\" has display name \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_display_name),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role canonical key \"([^\"]+)\" still has the snapshotted role id in (\S+)$"#),
+            step_fn(then_architecture_role_id_matches_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role assignment for role \"([^\"]+)\" and path \"([^\"]+)\" still has the snapshotted assignment id in (\S+)$"#),
+            step_fn(then_architecture_role_assignment_id_matches_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role canonical key \"([^\"]+)\" has lifecycle \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_lifecycle),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role rule edit preview shows removed match path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_rule_edit_preview_removed_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role rule edit preview shows added match path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_rule_edit_preview_added_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role assignments for role \"([^\"]+)\" still match the snapshot in (\S+)$"#),
+            step_fn(then_architecture_role_assignments_for_role_match_snapshot),
+        )
+        .then(
+            None,
+            regex(r"^daemon capability-event status shows ArchitectureGraph sync handler completed in (\S+)$"),
+            step_fn(then_architecture_graph_sync_handler_completed),
+        )
+        .then(
+            None,
+            regex(r"^architecture role classification metrics for latest ArchitectureGraph sync show full reconcile in (\S+)$"),
+            step_fn(then_latest_architecture_role_metrics_full_reconcile),
+        )
+        .then(
+            None,
+            regex(r"^architecture role classification metrics for latest ArchitectureGraph sync show at least 1 refreshed path in (\S+)$"),
+            step_fn(then_latest_architecture_role_metrics_refreshed_at_least_one_path),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role rule assignment ids except path \"([^\"]+)\" still match the snapshot in (\S+)$"#),
+            step_fn(then_architecture_role_assignment_ids_except_path_match_snapshot),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role assignment history records status \"([^\"]+)\" for role \"([^\"]+)\" and path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_assignment_history_status),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role proposal output includes text \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_proposal_output_includes_text),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role status JSON includes a review item with status \"([^\"]+)\" for role \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_status_json_review_item_status_for_role),
+        )
+        .then(
+            None,
+            regex(r#"^architecture role status JSON includes a queue item for path \"([^\"]+)\" in (\S+)$"#),
+            step_fn(then_architecture_role_status_json_queue_item_for_path),
+        )
+        .then(
+            None,
+            regex(r"^architecture role classification JSON reports at least ([0-9]+) adjudication candidates? in (\S+)$"),
+            step_fn(then_architecture_role_classification_json_adjudication_candidates_at_least),
+        )
+        .then(
+            None,
+            regex(r"^architecture role classification JSON reports ([0-9]+) enqueued adjudication jobs in (\S+)$"),
+            step_fn(then_architecture_role_classification_json_enqueued_adjudication_jobs),
+        )
+        .then(
+            None,
+            regex(r"^architecture role classification JSON reports full_reconcile (true|false) in (\S+)$"),
+            step_fn(then_architecture_role_classification_json_full_reconcile),
+        )
+        .then(
+            None,
+            regex(r"^architecture role classification JSON reports affected path count ([0-9]+) in (\S+)$"),
+            step_fn(then_architecture_role_classification_json_affected_path_count),
+        )
+        .then(
+            None,
+            regex(r"^architecture role classification JSON includes stale assignment metric in (\S+)$"),
+            step_fn(then_architecture_role_classification_json_includes_stale_assignment_metric),
         )
         .then(
             None,

@@ -12,8 +12,15 @@ pub(crate) use execution::{
     execute_prepared_summary_setup_with_progress, prepare_cloud_summary_generation_plan,
     prepare_local_summary_generation_plan,
 };
+
+#[cfg(test)]
+pub(crate) use execution::{
+    configure_cloud_bitloops_inference, configure_local_bitloops_inference,
+};
 #[cfg(test)]
 pub(crate) use ollama::with_ollama_probe_hook;
+#[cfg(test)]
+pub(crate) use profiles::bitloops_inference_generation_configured;
 #[cfg(test)]
 pub(crate) use profiles::with_context_guidance_generation_configured_hook;
 #[cfg(test)]

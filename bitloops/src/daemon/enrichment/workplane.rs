@@ -53,12 +53,14 @@ pub(crate) use mailbox_persistence::{
 pub(crate) use maintenance::{
     compact_and_prune_workplane_jobs, prune_failed_semantic_inbox_items,
     recover_expired_semantic_inbox_leases, requeue_leased_semantic_inbox_items,
-    retry_failed_semantic_inbox_items, retry_failed_workplane_jobs,
+    requeue_running_workplane_jobs, retry_failed_semantic_inbox_items, retry_failed_workplane_jobs,
 };
 pub(crate) use readiness::current_workplane_mailbox_blocked_statuses;
 pub(crate) use readiness::current_workplane_mailbox_blocked_statuses_for_repo;
 pub(crate) use setup::{default_state, migrate_legacy_semantic_workplane_rows};
-pub(crate) use sql::{repo_identity_from_runtime_metadata, sql_i64};
+pub(crate) use sql::repo_identity_from_runtime_metadata;
+#[cfg(test)]
+pub(crate) use sql::sql_i64;
 pub(crate) use status::{
     iter_workplane_job_config_roots, last_failed_embedding_job_from_workplane,
     project_workplane_status,

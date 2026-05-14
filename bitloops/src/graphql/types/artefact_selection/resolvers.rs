@@ -10,14 +10,18 @@ use super::super::{
     TestHarnessTestsResult,
 };
 use super::stages::{
-    CheckpointStageData, CloneStageData, ContextGuidanceCategory, ContextGuidanceItem,
-    ContextGuidanceStageData, ContextGuidanceStageResult, DependencyStageData,
+    ArchitectureGraphContextStageResult, ArchitectureOverviewStageData,
+    ArchitectureRoleStageResult, CheckpointStageData, CloneStageData, ContextGuidanceCategory,
+    ContextGuidanceItem, ContextGuidanceStageData, ContextGuidanceStageResult, DependencyStageData,
     HistoricalContextStageData, TestsStageData,
 };
 use super::support::{
+    ARCHITECTURE_GRAPH_CONTEXT_STAGE_SCHEMA, ARCHITECTURE_ROLE_STAGE_SCHEMA,
     CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA, CONTEXT_GUIDANCE_STAGE_SCHEMA,
     DEPENDENCY_STAGE_SCHEMA, HISTORICAL_CONTEXT_STAGE_SCHEMA, SelectionSummaryStages,
-    TESTS_STAGE_SCHEMA, build_checkpoint_summary, build_clone_expand_hint, build_clone_summary,
+    TESTS_STAGE_SCHEMA, architecture_overview_expand_hint, architecture_role_assignment_item,
+    build_architecture_graph_context_summary, build_architecture_overview_stage,
+    build_checkpoint_summary, build_clone_expand_hint, build_clone_summary,
     build_dependency_expand_hint, build_dependency_summary, build_historical_context_summary,
     build_selection_summary, build_tests_stage_args, build_tests_summary, decode_stage_rows,
     dedup_dependency_edges, selection_stage_row_from_artefact,
@@ -46,6 +50,7 @@ impl ArtefactSelection {
             .resolve_context_guidance_stage_data(ctx, None, None, None, None, None)
             .await?;
         let http = self.resolve_http_context_stage_data(ctx, 10).await?;
+        let architecture = self.resolve_architecture_overview_stage_data(ctx).await?;
 
         Ok(async_graphql::types::Json(build_selection_summary(
             self.artefacts.len(),
@@ -57,6 +62,7 @@ impl ArtefactSelection {
                 historical_context: &historical_context,
                 context_guidance: &context_guidance,
                 http: &http.overview.0,
+                architecture: &architecture,
             },
         )))
     }
@@ -212,6 +218,94 @@ impl ArtefactSelection {
     ) -> Result<HttpContextResult> {
         self.ensure_artefact_selection("httpContext")?;
         self.resolve_http_context_stage_data(ctx, first).await
+    }
+
+    #[graphql(name = "architectureRoles")]
+    async fn architecture_roles(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 20)] first: i32,
+    ) -> Result<ArchitectureRoleStageResult> {
+        self.ensure_artefact_selection("architectureRoles")?;
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let artefact_ids = self.artefact_ids();
+        let symbol_ids = self.symbol_ids();
+        let paths = self.paths();
+        let graph_context_available = context
+            .architecture_graph_context_available_for_targets(
+                &self.scope,
+                &artefact_ids,
+                &symbol_ids,
+                &paths,
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected architecture graph availability: {err:#}"
+                ))
+            })?;
+        let overview = context
+            .architecture_role_overview_for_targets(&self.scope, &artefact_ids, &symbol_ids, &paths)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected architecture roles: {err:#}"
+                ))
+            })?;
+        let items = overview
+            .assignments
+            .iter()
+            .map(architecture_role_assignment_item)
+            .collect::<Vec<_>>();
+        let items = super::support::take_stage_items(&items, first)?;
+        let schema = (!items.is_empty()).then(|| ARCHITECTURE_ROLE_STAGE_SCHEMA.to_string());
+
+        Ok(ArchitectureRoleStageResult {
+            summary: async_graphql::types::Json(
+                build_architecture_overview_stage(overview, graph_context_available).summary,
+            ),
+            expand_hint: Some(async_graphql::types::Json(
+                architecture_overview_expand_hint(),
+            )),
+            schema,
+            items,
+        })
+    }
+
+    #[graphql(name = "architectureGraphContext")]
+    async fn architecture_graph_context(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "nodeFirst", default = 20)] node_first: i32,
+        #[graphql(name = "edgeFirst", default = 20)] edge_first: i32,
+    ) -> Result<ArchitectureGraphContextStageResult> {
+        self.ensure_artefact_selection("architectureGraphContext")?;
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let overview = context
+            .architecture_overview_for_targets(
+                &self.scope,
+                &self.artefact_ids(),
+                &self.symbol_ids(),
+                &self.paths(),
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected architecture graph context: {err:#}"
+                ))
+            })?;
+
+        let schema = overview
+            .available
+            .then(|| ARCHITECTURE_GRAPH_CONTEXT_STAGE_SCHEMA.to_string());
+        Ok(ArchitectureGraphContextStageResult {
+            summary: async_graphql::types::Json(build_architecture_graph_context_summary(
+                &overview,
+            )),
+            schema,
+            nodes: super::support::take_stage_items(&overview.nodes, node_first)?,
+            edges: super::support::take_stage_items(&overview.edges, edge_first)?,
+        })
     }
 }
 
@@ -527,6 +621,50 @@ impl ArtefactSelection {
                     "failed to resolve selected HTTP context from search terms: {err:#}"
                 ))
             })
+    }
+
+    async fn resolve_architecture_overview_stage_data(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<ArchitectureOverviewStageData> {
+        if self.artefacts.is_empty() {
+            return Ok(ArchitectureOverviewStageData::unavailable(
+                0,
+                "empty_selection",
+                false,
+            ));
+        }
+
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let artefact_ids = self.artefact_ids();
+        let symbol_ids = self.symbol_ids();
+        let paths = self.paths();
+        let graph_context_available = context
+            .architecture_graph_context_available_for_targets(
+                &self.scope,
+                &artefact_ids,
+                &symbol_ids,
+                &paths,
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected architecture graph availability: {err:#}"
+                ))
+            })?;
+        let overview = context
+            .architecture_role_overview_for_targets(&self.scope, &artefact_ids, &symbol_ids, &paths)
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected architecture role overview: {err:#}"
+                ))
+            })?;
+
+        Ok(build_architecture_overview_stage(
+            overview,
+            graph_context_available,
+        ))
     }
 
     fn http_search_terms(&self) -> Vec<String> {

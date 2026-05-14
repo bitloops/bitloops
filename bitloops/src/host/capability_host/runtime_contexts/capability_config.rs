@@ -48,6 +48,7 @@ pub(super) fn build_capability_config_root(
         "architecture_graph": {
             "inference": {
                 "fact_synthesis": architecture.inference.fact_synthesis,
+                "role_adjudication": architecture.inference.role_adjudication,
             },
         },
         "inference": {

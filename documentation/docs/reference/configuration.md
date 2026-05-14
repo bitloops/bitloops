@@ -165,6 +165,10 @@ Notes:
 - Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it, and writes `base_url = "http://127.0.0.1:11434/api/chat"`.
 - Local context guidance setup uses the same Ollama chat profile shape and writes `max_output_tokens = 4096`.
 
+### Structured-Generation Profiles
+
+Architecture inference uses `task = "structured_generation"` profiles. For local CLI agents, Bitloops launches the managed `bitloops_inference` runtime, and `bitloops-inference` launches the selected agent runtime from the profile. Configure these profiles manually when you need architecture inference backed by a local CLI agent.
+
 ### Telemetry Consent
 
 Telemetry consent is stored in the global daemon config.

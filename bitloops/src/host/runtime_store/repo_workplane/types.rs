@@ -279,6 +279,14 @@ pub struct WorkplaneJobRecord {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkplaneJobQuery {
+    pub capability_id: Option<String>,
+    pub mailbox_name: Option<String>,
+    pub statuses: Vec<WorkplaneJobStatus>,
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CapabilityWorkplaneMailboxStatus {
     pub pending_jobs: u64,
     pub running_jobs: u64,

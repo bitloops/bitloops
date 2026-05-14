@@ -36,15 +36,29 @@ pub struct SqliteInteractionSpool {
     pub(super) repo_id: String,
 }
 
+pub(crate) fn initialise_interaction_spool_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
+    sqlite
+        .with_write_connection(schema::initialise_schema)
+        .context("initialising interaction spool schema")
+}
+
+pub(crate) fn rebuild_interaction_search_projections(
+    sqlite: &SqliteConnectionPool,
+    repo_id: &str,
+) -> Result<()> {
+    sqlite
+        .with_write_connection(|conn| projections::rebuild_all_projections(conn, repo_id))
+        .context("rebuilding interaction search projections")
+}
+
 impl SqliteInteractionSpool {
     pub fn new(sqlite: SqliteConnectionPool, repo_id: String) -> Result<Self> {
-        sqlite
-            .with_write_connection(schema::initialise_schema)
-            .context("initialising interaction spool schema")?;
-        sqlite
-            .with_write_connection(|conn| projections::rebuild_all_projections(conn, &repo_id))
-            .context("rebuilding interaction search projections")?;
+        initialise_interaction_spool_schema(&sqlite)?;
         Ok(Self { sqlite, repo_id })
+    }
+
+    pub fn rebuild_search_projections(&self) -> Result<()> {
+        rebuild_interaction_search_projections(&self.sqlite, &self.repo_id)
     }
 
     pub fn repo_id(&self) -> &str {

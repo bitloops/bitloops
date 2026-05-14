@@ -1,4 +1,6 @@
-use crate::capability_packs::architecture_graph::types::ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT;
+use crate::capability_packs::architecture_graph::types::{
+    ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
+};
 use crate::config::InferenceTask;
 use crate::host::capability_host::{
     CapabilityHealthCheck, CapabilityHealthContext, CapabilityHealthResult,
@@ -30,38 +32,65 @@ pub fn check_architecture_graph_storage(
 pub fn check_architecture_graph_inference(
     ctx: &dyn CapabilityHealthContext,
 ) -> CapabilityHealthResult {
-    let slot_name = ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT;
-    if !ctx.inference().has_slot(slot_name) {
-        return CapabilityHealthResult::ok("architecture graph fact_synthesis not configured");
-    }
-    let Some(slot) = ctx.inference().describe(slot_name) else {
-        return CapabilityHealthResult::failed(
-            "architecture_graph.inference",
-            "fact_synthesis slot is unresolved",
-        );
-    };
-    if slot.task != Some(InferenceTask::StructuredGeneration) {
-        return CapabilityHealthResult::failed(
-            "architecture_graph.inference",
-            format!(
-                "fact_synthesis slot points to profile `{}` with task `{}` instead of `structured_generation`",
-                slot.profile_name,
-                slot.task
-                    .map(|task| task.to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string())
-            ),
-        );
-    }
+    for (slot_name, label) in [
+        (ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT, "fact_synthesis"),
+        (
+            ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
+            "role_adjudication",
+        ),
+    ] {
+        if !ctx.inference().has_slot(slot_name) {
+            continue;
+        }
+        let Some(slot) = ctx.inference().describe(slot_name) else {
+            return CapabilityHealthResult::failed(
+                "architecture_graph.inference",
+                format!("{label} slot is unresolved"),
+            );
+        };
+        if slot.task != Some(InferenceTask::StructuredGeneration) {
+            return CapabilityHealthResult::failed(
+                "architecture_graph.inference",
+                format!(
+                    "{label} slot points to profile `{}` with task `{}` instead of `structured_generation`",
+                    slot.profile_name,
+                    slot.task
+                        .map(|task| task.to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string())
+                ),
+            );
+        }
 
-    match ctx.inference().structured_generation(slot_name) {
-        Ok(service) => CapabilityHealthResult::ok(format!(
-            "architecture graph fact_synthesis ready ({})",
-            service.descriptor()
-        )),
-        Err(err) => {
-            CapabilityHealthResult::failed("architecture_graph.inference", format!("{err:#}"))
+        if let Err(err) = ctx.inference().structured_generation(slot_name) {
+            return CapabilityHealthResult::failed(
+                "architecture_graph.inference",
+                format!("{label} slot failed: {err:#}"),
+            );
         }
     }
+    if !ctx
+        .inference()
+        .has_slot(ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT)
+        && !ctx
+            .inference()
+            .has_slot(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT)
+    {
+        return CapabilityHealthResult::ok("architecture graph inference slots not configured");
+    }
+
+    let descriptor = ctx
+        .inference()
+        .structured_generation(ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT)
+        .or_else(|_| {
+            ctx.inference()
+                .structured_generation(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT)
+        })
+        .map(|service| service.descriptor())
+        .unwrap_or_else(|_| "structured_generation".to_string());
+
+    CapabilityHealthResult::ok(format!(
+        "architecture graph inference slots ready ({descriptor})"
+    ))
 }
 
 pub static ARCHITECTURE_GRAPH_HEALTH_CHECKS: &[CapabilityHealthCheck] = &[
@@ -202,7 +231,7 @@ mod tests {
                 ResolvedInferenceSlot {
                     capability_id: "architecture_graph".to_string(),
                     slot_name: ARCHITECTURE_GRAPH_FACT_SYNTHESIS_SLOT.to_string(),
-                    profile_name: "local_agent".to_string(),
+                    profile_name: "architecture_fact_synthesis_codex".to_string(),
                     task,
                     driver: Some("codex_exec".to_string()),
                     runtime: Some("codex".to_string()),
@@ -290,6 +319,9 @@ mod tests {
         let result = check_architecture_graph_inference(&ctx);
 
         assert!(result.healthy);
-        assert!(result.message.contains("ready"));
+        assert_eq!(
+            result.message,
+            "architecture graph inference slots ready (codex:gpt-5.4-mini)"
+        );
     }
 }

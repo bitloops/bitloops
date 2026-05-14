@@ -655,6 +655,14 @@ where
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
                 .filter(|value| !matches!(value.to_ascii_lowercase().as_str(), "off" | "disabled")),
+            role_adjudication: inference_root
+                .and_then(|map| read_any_string(map, &["role_adjudication"]))
+                .or_else(|| {
+                    read_non_empty_env(&env_lookup, "BITLOOPS_ARCHITECTURE_ROLE_ADJUDICATION")
+                })
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .filter(|value| !matches!(value.to_ascii_lowercase().as_str(), "off" | "disabled")),
         },
     }
 }

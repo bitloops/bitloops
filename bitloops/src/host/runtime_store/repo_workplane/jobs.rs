@@ -1,12 +1,13 @@
 //! Enqueue and dedupe of capability workplane jobs.
 
 use anyhow::{Context, Result};
-use rusqlite::params;
+use rusqlite::{params, params_from_iter, types::Value as SqlValue};
 use uuid::Uuid;
 
 use super::dedupe::load_deduped_job;
 use super::types::{
-    CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneJobInsert, WorkplaneJobStatus,
+    CapabilityWorkplaneEnqueueResult, CapabilityWorkplaneJobInsert, WorkplaneJobQuery,
+    WorkplaneJobRecord, WorkplaneJobStatus,
 };
 use super::util::{sql_i64, unix_timestamp_now};
 use crate::host::runtime_store::types::RepoSqliteRuntimeStore;
@@ -117,4 +118,102 @@ impl RepoSqliteRuntimeStore {
             }
         })
     }
+
+    pub fn list_capability_workplane_jobs(
+        &self,
+        query: WorkplaneJobQuery,
+    ) -> Result<Vec<WorkplaneJobRecord>> {
+        let sqlite = self.connect_repo_sqlite()?;
+        sqlite.with_connection(|conn| {
+            list_capability_workplane_jobs_on_connection(conn, &self.repo_id, query)
+        })
+    }
+}
+
+pub(super) fn list_capability_workplane_jobs_on_connection(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+    query: WorkplaneJobQuery,
+) -> Result<Vec<WorkplaneJobRecord>> {
+    let mut sql = String::from(
+        "SELECT job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
+                init_session_id, dedupe_key, payload, status, attempts, available_at_unix, submitted_at_unix,
+                started_at_unix, updated_at_unix, completed_at_unix, lease_owner,
+                lease_expires_at_unix, last_error
+         FROM capability_workplane_jobs
+         WHERE repo_id = ?1",
+    );
+    let mut params = vec![SqlValue::Text(repo_id.to_string())];
+    let mut bind_index = 2usize;
+
+    if let Some(capability_id) = query.capability_id {
+        sql.push_str(&format!(" AND capability_id = ?{bind_index}"));
+        params.push(SqlValue::Text(capability_id));
+        bind_index += 1;
+    }
+    if let Some(mailbox_name) = query.mailbox_name {
+        sql.push_str(&format!(" AND mailbox_name = ?{bind_index}"));
+        params.push(SqlValue::Text(mailbox_name));
+        bind_index += 1;
+    }
+    if !query.statuses.is_empty() {
+        let placeholders = std::iter::repeat_n("?", query.statuses.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(" AND status IN ({placeholders})"));
+        for status in &query.statuses {
+            params.push(SqlValue::Text(status.as_str().to_string()));
+            bind_index += 1;
+        }
+    }
+    sql.push_str(" ORDER BY updated_at_unix DESC, submitted_at_unix DESC");
+    if let Some(limit) = query.limit {
+        sql.push_str(&format!(" LIMIT ?{bind_index}"));
+        let limit_i64 =
+            i64::try_from(limit).context("converting workplane job query limit to sqlite i64")?;
+        params.push(SqlValue::Integer(limit_i64));
+    }
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .context("preparing capability workplane jobs query")?;
+    let rows = stmt
+        .query_map(params_from_iter(params.iter()), |row| {
+            let payload_raw = row.get::<_, String>(8)?;
+            let payload = serde_json::from_str(&payload_raw).unwrap_or(serde_json::Value::Null);
+            Ok(WorkplaneJobRecord {
+                job_id: row.get(0)?,
+                repo_id: row.get(1)?,
+                repo_root: std::path::PathBuf::from(row.get::<_, String>(2)?),
+                config_root: std::path::PathBuf::from(row.get::<_, String>(3)?),
+                capability_id: row.get(4)?,
+                mailbox_name: row.get(5)?,
+                init_session_id: row.get(6)?,
+                dedupe_key: row.get(7)?,
+                payload,
+                status: WorkplaneJobStatus::parse(&row.get::<_, String>(9)?),
+                attempts: row.get(10)?,
+                available_at_unix: u64::try_from(row.get::<_, i64>(11)?).unwrap_or_default(),
+                submitted_at_unix: u64::try_from(row.get::<_, i64>(12)?).unwrap_or_default(),
+                started_at_unix: row
+                    .get::<_, Option<i64>>(13)?
+                    .map(|value| u64::try_from(value).unwrap_or_default()),
+                updated_at_unix: u64::try_from(row.get::<_, i64>(14)?).unwrap_or_default(),
+                completed_at_unix: row
+                    .get::<_, Option<i64>>(15)?
+                    .map(|value| u64::try_from(value).unwrap_or_default()),
+                lease_owner: row.get(16)?,
+                lease_expires_at_unix: row
+                    .get::<_, Option<i64>>(17)?
+                    .map(|value| u64::try_from(value).unwrap_or_default()),
+                last_error: row.get(18)?,
+            })
+        })
+        .context("querying capability workplane jobs")?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        results.push(row?);
+    }
+    Ok(results)
 }

@@ -774,6 +774,7 @@ fn runtime_summary_bootstrap_request_from_plan(
                 message: Some(message.clone()),
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }
         }
         PreparedSummarySetupAction::InstallRuntimeOnlyPendingProbe { message } => {
@@ -782,6 +783,7 @@ fn runtime_summary_bootstrap_request_from_plan(
                 message: Some(message.clone()),
                 model_name: None,
                 gateway_url_override: None,
+                api_key_env: None,
             }
         }
         PreparedSummarySetupAction::ConfigureLocal { model_name } => {
@@ -790,15 +792,18 @@ fn runtime_summary_bootstrap_request_from_plan(
                 message: None,
                 model_name: Some(model_name.clone()),
                 gateway_url_override: None,
+                api_key_env: None,
             }
         }
         PreparedSummarySetupAction::ConfigureCloud {
             gateway_url_override,
+            api_key_env: _,
         } => crate::cli::devql::graphql::RuntimeSummaryBootstrapRequestInput {
             action: "configure_cloud".to_string(),
             message: None,
             model_name: None,
             gateway_url_override: gateway_url_override.clone(),
+            api_key_env: None,
         },
     }
 }

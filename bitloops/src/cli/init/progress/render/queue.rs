@@ -268,7 +268,7 @@ pub(super) fn format_summary_status_line(
     match state {
         SummaryProgressState::Running(progress) => {
             let mut line = format!(
-                "Semantic summaries · {}",
+                "Bitloops inference · {}",
                 humanise_summary_setup_phase(progress.phase)
             );
             if let Some(total) = progress.bytes_total
@@ -370,7 +370,7 @@ pub(super) fn format_summary_status_line(
         }
         SummaryProgressState::Failed { error, .. } => {
             let fitted = fit_init_status_text(
-                format!("Semantic summary setup failed · {error}").as_str(),
+                format!("Bitloops inference setup failed · {error}").as_str(),
                 terminal_width.map(|width| width.saturating_sub(2)),
             );
             format!("✖ {fitted}")

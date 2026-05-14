@@ -2,29 +2,63 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::host::capability_host::{
-    CapabilityMailboxHandler, CapabilityMailboxPolicy, CapabilityMailboxRegistration,
-    CapabilityRegistrar, CurrentStateConsumerRegistration,
+    CapabilityMailboxBacklogPolicy, CapabilityMailboxHandler, CapabilityMailboxPolicy,
+    CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration, CapabilityRegistrar,
+    CurrentStateConsumerRegistration,
 };
 
 use super::current_state::ArchitectureGraphCurrentStateConsumer;
-use super::ingesters::{build_assert_ingester, build_revoke_ingester};
+use super::ingesters::{
+    build_assert_ingester, build_revoke_ingester, build_role_adjudication_ingester,
+};
 use super::query_examples::ARCHITECTURE_GRAPH_QUERY_EXAMPLES;
+use super::roles::ArchitectureGraphRoleCurrentStateConsumer;
 use super::schema::ARCHITECTURE_GRAPH_SCHEMA_MODULE;
-use super::types::{ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID};
+use super::types::{
+    ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID,
+    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT, ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+};
 
 pub fn register_architecture_graph_pack(registrar: &mut dyn CapabilityRegistrar) -> Result<()> {
     registrar.register_ingester(build_assert_ingester())?;
     registrar.register_ingester(build_revoke_ingester())?;
+    registrar.register_ingester(build_role_adjudication_ingester())?;
     registrar.register_mailbox(CapabilityMailboxRegistration::new(
         ARCHITECTURE_GRAPH_CAPABILITY_ID,
         ARCHITECTURE_GRAPH_CONSUMER_ID,
         CapabilityMailboxPolicy::Cursor,
         CapabilityMailboxHandler::CurrentStateConsumer(ARCHITECTURE_GRAPH_CONSUMER_ID),
     ))?;
+    registrar.register_mailbox(CapabilityMailboxRegistration::new(
+        ARCHITECTURE_GRAPH_CAPABILITY_ID,
+        ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+        CapabilityMailboxPolicy::Cursor,
+        CapabilityMailboxHandler::CurrentStateConsumer(
+            ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+        ),
+    ))?;
+    registrar.register_mailbox(
+        CapabilityMailboxRegistration::new(
+            ARCHITECTURE_GRAPH_CAPABILITY_ID,
+            ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+            CapabilityMailboxPolicy::Job,
+            CapabilityMailboxHandler::Ingester(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID),
+        )
+        .readiness_policy(CapabilityMailboxReadinessPolicy::StructuredGenerationSlot(
+            ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT,
+        ))
+        .backlog_policy(CapabilityMailboxBacklogPolicy::ArtefactCompaction),
+    )?;
     registrar.register_current_state_consumer(CurrentStateConsumerRegistration::new(
         ARCHITECTURE_GRAPH_CAPABILITY_ID,
         ARCHITECTURE_GRAPH_CONSUMER_ID,
         Arc::new(ArchitectureGraphCurrentStateConsumer),
+    ))?;
+    registrar.register_current_state_consumer(CurrentStateConsumerRegistration::new(
+        ARCHITECTURE_GRAPH_CAPABILITY_ID,
+        ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
+        Arc::new(ArchitectureGraphRoleCurrentStateConsumer),
     ))?;
     registrar.register_schema_module(ARCHITECTURE_GRAPH_SCHEMA_MODULE)?;
     registrar.register_query_examples(ARCHITECTURE_GRAPH_QUERY_EXAMPLES)?;
@@ -35,11 +69,14 @@ pub fn register_architecture_graph_pack(registrar: &mut dyn CapabilityRegistrar)
 mod tests {
     use super::super::types::{
         ARCHITECTURE_GRAPH_ASSERT_INGESTER_ID, ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID,
+        ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID,
+        ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
+        ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
     };
     use super::*;
     use crate::host::capability_host::{
-        CurrentStateConsumerRegistration, IngesterRegistration, QueryExample, SchemaModule,
-        StageRegistration,
+        CapabilityMailboxInitPolicy, CurrentStateConsumerRegistration, IngesterRegistration,
+        QueryExample, SchemaModule, StageRegistration,
     };
 
     #[derive(Default)]
@@ -47,7 +84,7 @@ mod tests {
         stages: Vec<(&'static str, &'static str)>,
         ingesters: Vec<(&'static str, &'static str)>,
         current_state_consumers: Vec<(&'static str, &'static str)>,
-        mailboxes: Vec<(&'static str, &'static str)>,
+        mailboxes: Vec<CapabilityMailboxRegistration>,
         schema_modules: Vec<SchemaModule>,
         query_examples: Vec<QueryExample>,
     }
@@ -74,8 +111,7 @@ mod tests {
         }
 
         fn register_mailbox(&mut self, registration: CapabilityMailboxRegistration) -> Result<()> {
-            self.mailboxes
-                .push((registration.capability_id, registration.mailbox_name));
+            self.mailboxes.push(registration);
             Ok(())
         }
 
@@ -107,21 +143,76 @@ mod tests {
                     ARCHITECTURE_GRAPH_CAPABILITY_ID,
                     ARCHITECTURE_GRAPH_REVOKE_INGESTER_ID
                 ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_INGESTER_ID
+                ),
             ]
         );
         assert_eq!(
             registrar.current_state_consumers,
-            vec![(
-                ARCHITECTURE_GRAPH_CAPABILITY_ID,
-                ARCHITECTURE_GRAPH_CONSUMER_ID
-            )]
+            vec![
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_CONSUMER_ID
+                ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+                ),
+            ]
         );
         assert_eq!(
-            registrar.mailboxes,
-            vec![(
-                ARCHITECTURE_GRAPH_CAPABILITY_ID,
-                ARCHITECTURE_GRAPH_CONSUMER_ID
-            )]
+            registrar
+                .mailboxes
+                .iter()
+                .map(|mailbox| (mailbox.capability_id, mailbox.mailbox_name))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_CONSUMER_ID
+                ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+                ),
+                (
+                    ARCHITECTURE_GRAPH_CAPABILITY_ID,
+                    ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX
+                ),
+            ]
+        );
+        let snapshot_mailbox = registrar
+            .mailboxes
+            .iter()
+            .find(|mailbox| mailbox.mailbox_name == ARCHITECTURE_GRAPH_CONSUMER_ID)
+            .expect("architecture graph snapshot mailbox to be registered");
+        assert_eq!(
+            snapshot_mailbox.init_policy,
+            CapabilityMailboxInitPolicy::Background
+        );
+        let role_current_state_mailbox = registrar
+            .mailboxes
+            .iter()
+            .find(|mailbox| {
+                mailbox.mailbox_name == ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID
+            })
+            .expect("architecture role current-state mailbox to be registered");
+        assert_eq!(
+            role_current_state_mailbox.init_policy,
+            CapabilityMailboxInitPolicy::Background
+        );
+        let adjudication_mailbox = registrar
+            .mailboxes
+            .iter()
+            .find(|mailbox| mailbox.mailbox_name == ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX)
+            .expect("role adjudication mailbox to be registered");
+        assert_eq!(
+            adjudication_mailbox.readiness_policy,
+            CapabilityMailboxReadinessPolicy::StructuredGenerationSlot(
+                ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT
+            )
         );
         assert_eq!(
             registrar.schema_modules,

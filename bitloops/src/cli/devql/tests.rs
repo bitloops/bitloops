@@ -466,6 +466,25 @@ fn write_current_runtime_state(repo_root: &Path) {
     fs::write(&runtime_path, bytes).expect("write runtime state");
 }
 
+fn assert_cli_parses(argv: &[&str]) -> Cli {
+    Cli::try_parse_from(argv.iter().copied())
+        .unwrap_or_else(|err| panic!("expected `{}` to parse: {err}", argv.join(" ")))
+}
+
+fn parse_architecture_roles_command(argv: &[&str]) -> DevqlArchitectureRolesCommand {
+    let parsed = assert_cli_parses(argv);
+
+    let Some(Commands::Devql(args)) = parsed.command else {
+        panic!("expected devql command");
+    };
+    let Some(DevqlCommand::Architecture(architecture)) = args.command else {
+        panic!("expected devql architecture command");
+    };
+    let DevqlArchitectureCommand::Roles(roles) = architecture.command;
+
+    roles.command
+}
+
 #[test]
 fn devql_cli_parses_ingest_enqueue_defaults() {
     let parsed = Cli::try_parse_from(["bitloops", "devql", "tasks", "enqueue", "--kind", "ingest"])
@@ -653,6 +672,94 @@ fn devql_cli_parses_sync_enqueue_require_daemon_flag() {
         panic!("expected devql tasks enqueue command");
     };
     assert!(sync.require_daemon);
+}
+
+#[test]
+fn devql_cli_parses_architecture_roles_classify_command() {
+    let classify_full = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "classify",
+        "--full",
+    ]);
+    let DevqlArchitectureRolesCommand::Classify(classify_full) = classify_full else {
+        panic!("expected architecture roles classify command");
+    };
+    assert!(classify_full.full);
+
+    let classify_paths = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "classify",
+        "--paths",
+        "src/main.rs,src/lib.rs",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Classify(classify_paths) = classify_paths else {
+        panic!("expected architecture roles classify command");
+    };
+    assert_eq!(
+        classify_paths.paths,
+        Some(vec!["src/main.rs".to_string(), "src/lib.rs".to_string()])
+    );
+    assert!(classify_paths.json);
+}
+
+#[test]
+fn architecture_roles_manual_chain_commands_parse() {
+    assert!(matches!(
+        parse_architecture_roles_command(&["bitloops", "devql", "architecture", "roles", "seed"]),
+        DevqlArchitectureRolesCommand::Seed(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "rules",
+            "activate",
+            "rule-1",
+        ]),
+        DevqlArchitectureRolesCommand::Rules(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "proposal",
+            "apply",
+            "proposal-1",
+        ]),
+        DevqlArchitectureRolesCommand::Proposal(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "classify",
+            "--full",
+        ]),
+        DevqlArchitectureRolesCommand::Classify(_)
+    ));
+    assert!(matches!(
+        parse_architecture_roles_command(&[
+            "bitloops",
+            "devql",
+            "architecture",
+            "roles",
+            "bootstrap",
+        ]),
+        DevqlArchitectureRolesCommand::Bootstrap(_)
+    ));
 }
 
 #[test]
@@ -1420,12 +1527,310 @@ fn devql_cli_rejects_knowledge_associate_without_to() {
 }
 
 #[test]
+fn devql_cli_parses_architecture_roles_role_mutation_commands() {
+    let seed =
+        parse_architecture_roles_command(&["bitloops", "devql", "architecture", "roles", "seed"]);
+    assert!(matches!(seed, DevqlArchitectureRolesCommand::Seed(_)));
+
+    let seed_auto = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "seed",
+        "--activate-rules",
+        "--classify",
+        "--enqueue-adjudication=false",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Seed(seed_auto) = seed_auto else {
+        panic!("expected architecture roles seed command");
+    };
+    assert!(seed_auto.activate_rules);
+    assert!(seed_auto.classify);
+    assert!(!seed_auto.enqueue_adjudication);
+    assert!(seed_auto.json);
+
+    let status = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "status",
+        "--limit",
+        "25",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Status(status) = status else {
+        panic!("expected architecture roles status command");
+    };
+    assert_eq!(status.limit, 25);
+    assert!(status.json);
+
+    let rename = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "rename",
+        "role:frontend",
+        "--display-name",
+        "Frontend",
+    ]);
+    let DevqlArchitectureRolesCommand::Rename(rename) = rename else {
+        panic!("expected architecture roles rename command");
+    };
+    assert_eq!(rename.role_ref, "role:frontend");
+    assert_eq!(rename.display_name, "Frontend");
+
+    let deprecate = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "deprecate",
+        "role:frontend",
+        "--replacement",
+        "role:web-ui",
+    ]);
+    let DevqlArchitectureRolesCommand::Deprecate(deprecate) = deprecate else {
+        panic!("expected architecture roles deprecate command");
+    };
+    assert_eq!(deprecate.role_ref, "role:frontend");
+    assert_eq!(deprecate.replacement.as_deref(), Some("role:web-ui"));
+
+    let remove = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "remove",
+        "role:frontend",
+        "--replacement",
+        "role:web-ui",
+    ]);
+    let DevqlArchitectureRolesCommand::Remove(remove) = remove else {
+        panic!("expected architecture roles remove command");
+    };
+    assert_eq!(remove.role_ref, "role:frontend");
+    assert_eq!(remove.replacement.as_deref(), Some("role:web-ui"));
+
+    let merge = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "merge",
+        "role:frontend",
+        "--into",
+        "role:web-ui",
+    ]);
+    let DevqlArchitectureRolesCommand::Merge(merge) = merge else {
+        panic!("expected architecture roles merge command");
+    };
+    assert_eq!(merge.source_role_ref, "role:frontend");
+    assert_eq!(merge.target_role_ref, "role:web-ui");
+
+    let split = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "split",
+        "role:frontend",
+        "--spec",
+        "roles/frontend-split.json",
+    ]);
+    let DevqlArchitectureRolesCommand::Split(split) = split else {
+        panic!("expected architecture roles split command");
+    };
+    assert_eq!(split.role_ref, "role:frontend");
+    assert_eq!(split.spec, PathBuf::from("roles/frontend-split.json"));
+}
+
+#[test]
+fn devql_cli_parses_architecture_roles_bootstrap_command() {
+    let bootstrap = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "bootstrap",
+        "--enqueue-adjudication=false",
+        "--json",
+    ]);
+    let DevqlArchitectureRolesCommand::Bootstrap(bootstrap) = bootstrap else {
+        panic!("expected architecture roles bootstrap command");
+    };
+
+    assert!(!bootstrap.enqueue_adjudication);
+    assert!(bootstrap.json);
+}
+
+#[test]
+fn parses_architecture_roles_bootstrap_skip_seed() {
+    let command = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "bootstrap",
+        "--skip-seed",
+        "--json",
+    ]);
+
+    let DevqlArchitectureRolesCommand::Bootstrap(args) = command else {
+        panic!("expected architecture roles bootstrap command");
+    };
+    assert!(args.skip_seed);
+    assert!(args.json);
+}
+
+#[test]
+fn devql_cli_parses_architecture_roles_alias_create_command() {
+    let command = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "alias",
+        "create",
+        "ui-shell",
+        "--role",
+        "role:frontend",
+    ]);
+    let DevqlArchitectureRolesCommand::Alias(alias) = command else {
+        panic!("expected architecture roles alias command");
+    };
+    let DevqlArchitectureRolesAliasCommand::Create(create) = alias.command;
+
+    assert_eq!(create.alias_key, "ui-shell");
+    assert_eq!(create.role_ref, "role:frontend");
+}
+
+#[test]
+fn devql_cli_parses_architecture_roles_rules_commands() {
+    let draft = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "rules",
+        "draft",
+        "--spec",
+        "roles/rules-draft.json",
+    ]);
+    let DevqlArchitectureRolesCommand::Rules(draft) = draft else {
+        panic!("expected architecture roles rules command");
+    };
+    let DevqlArchitectureRolesRulesCommand::Draft(draft) = draft.command else {
+        panic!("expected architecture roles rules draft command");
+    };
+    assert_eq!(draft.spec, PathBuf::from("roles/rules-draft.json"));
+
+    let edit = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "rules",
+        "edit",
+        "rule:layering",
+        "--spec",
+        "roles/rules-edit.json",
+    ]);
+    let DevqlArchitectureRolesCommand::Rules(edit) = edit else {
+        panic!("expected architecture roles rules command");
+    };
+    let DevqlArchitectureRolesRulesCommand::Edit(edit) = edit.command else {
+        panic!("expected architecture roles rules edit command");
+    };
+    assert_eq!(edit.rule_ref, "rule:layering");
+    assert_eq!(edit.spec, PathBuf::from("roles/rules-edit.json"));
+
+    let activate = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "rules",
+        "activate",
+        "rule:layering",
+    ]);
+    let DevqlArchitectureRolesCommand::Rules(activate) = activate else {
+        panic!("expected architecture roles rules command");
+    };
+    let DevqlArchitectureRolesRulesCommand::Activate(activate) = activate.command else {
+        panic!("expected architecture roles rules activate command");
+    };
+    assert_eq!(activate.rule_ref, "rule:layering");
+
+    let disable = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "rules",
+        "disable",
+        "rule:layering",
+    ]);
+    let DevqlArchitectureRolesCommand::Rules(disable) = disable else {
+        panic!("expected architecture roles rules command");
+    };
+    let DevqlArchitectureRolesRulesCommand::Disable(disable) = disable.command else {
+        panic!("expected architecture roles rules disable command");
+    };
+    assert_eq!(disable.rule_ref, "rule:layering");
+}
+
+#[test]
+fn devql_cli_parses_architecture_roles_proposal_commands() {
+    let show = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "proposal",
+        "show",
+        "proposal:42",
+    ]);
+    let DevqlArchitectureRolesCommand::Proposal(show) = show else {
+        panic!("expected architecture roles proposal command");
+    };
+    let DevqlArchitectureRolesProposalCommand::Show(show) = show.command else {
+        panic!("expected architecture roles proposal show command");
+    };
+    assert_eq!(show.proposal_id, "proposal:42");
+
+    let apply = parse_architecture_roles_command(&[
+        "bitloops",
+        "devql",
+        "architecture",
+        "roles",
+        "proposal",
+        "apply",
+        "proposal:42",
+    ]);
+    let DevqlArchitectureRolesCommand::Proposal(apply) = apply else {
+        panic!("expected architecture roles proposal command");
+    };
+    let DevqlArchitectureRolesProposalCommand::Apply(apply) = apply.command else {
+        panic!("expected architecture roles proposal apply command");
+    };
+    assert_eq!(apply.proposal_id, "proposal:42");
+}
+
+#[test]
 fn devql_run_requires_subcommand() {
     let err = test_runtime()
         .block_on(run(DevqlArgs::default()))
         .expect_err("missing subcommand should error");
 
     assert!(err.to_string().contains(MISSING_SUBCOMMAND_MESSAGE));
+    assert!(
+        err.to_string()
+            .contains("bitloops devql architecture roles seed")
+    );
 }
 
 #[test]

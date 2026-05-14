@@ -9,6 +9,15 @@ use crate::config::{
 };
 use crate::host::inference::{BITLOOPS_INFERENCE_RUNTIME_ID, BITLOOPS_PLATFORM_CHAT_DRIVER};
 
+#[cfg(test)]
+use super::constants::{
+    DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS,
+    DEFAULT_ARCHITECTURE_ROLE_ADJUDICATION_MAX_OUTPUT_TOKENS,
+    DEFAULT_LOCAL_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
+    DEFAULT_LOCAL_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
+    DEFAULT_PLATFORM_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
+    DEFAULT_PLATFORM_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME, STRUCTURED_GENERATION_TASK,
+};
 use super::constants::{
     DEFAULT_CONTEXT_GUIDANCE_MAX_OUTPUT_TOKENS, DEFAULT_CONTEXT_GUIDANCE_PROFILE_NAME,
     DEFAULT_OLLAMA_CHAT_BASE_URL, DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV,
@@ -91,9 +100,67 @@ pub(crate) fn context_guidance_generation_configured(repo_root: &Path) -> bool {
     text_generation_profile_configured(&capability, profile_name)
 }
 
+#[cfg(test)]
+pub(crate) fn bitloops_inference_generation_configured(repo_root: &Path) -> bool {
+    summary_generation_configured(repo_root) && {
+        let capability = resolve_inference_capability_config_for_repo(repo_root);
+        let guidance_configured = capability
+            .context_guidance
+            .inference
+            .guidance_generation
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|profile_name| {
+                text_generation_profile_configured(&capability, profile_name)
+            });
+        let fact_synthesis_configured = capability
+            .architecture
+            .inference
+            .fact_synthesis
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|profile_name| {
+                structured_generation_profile_configured(&capability, profile_name)
+            });
+        let role_adjudication_configured = capability
+            .architecture
+            .inference
+            .role_adjudication
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|profile_name| {
+                structured_generation_profile_configured(&capability, profile_name)
+            });
+        guidance_configured && fact_synthesis_configured && role_adjudication_configured
+    }
+}
+
 fn text_generation_profile_configured(
     capability: &crate::config::InferenceCapabilityConfig,
     profile_name: &str,
+) -> bool {
+    generation_profile_configured(capability, profile_name, InferenceTask::TextGeneration)
+}
+
+#[cfg(test)]
+fn structured_generation_profile_configured(
+    capability: &crate::config::InferenceCapabilityConfig,
+    profile_name: &str,
+) -> bool {
+    generation_profile_configured(
+        capability,
+        profile_name,
+        InferenceTask::StructuredGeneration,
+    )
+}
+
+fn generation_profile_configured(
+    capability: &crate::config::InferenceCapabilityConfig,
+    profile_name: &str,
+    task: InferenceTask,
 ) -> bool {
     let Some(profile) = capability.inference.profiles.get(profile_name) else {
         return false;
@@ -112,7 +179,7 @@ fn text_generation_profile_configured(
 
     let driver = profile.driver.trim();
 
-    profile.task == InferenceTask::TextGeneration
+    profile.task == task
         && profile
             .model
             .as_deref()
@@ -228,6 +295,18 @@ pub(super) fn write_platform_summary_profile(
     repo_root: &Path,
     gateway_url_override: Option<&str>,
 ) -> Result<()> {
+    write_platform_summary_profile_with_api_key(
+        repo_root,
+        gateway_url_override,
+        DEFAULT_PLATFORM_SUMMARY_API_KEY,
+    )
+}
+
+fn write_platform_summary_profile_with_api_key(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+    api_key: &str,
+) -> Result<()> {
     let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
     let mut doc = read_daemon_config_document(&config_path)?;
 
@@ -249,7 +328,7 @@ pub(super) fn write_platform_summary_profile(
         profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
         profile["driver"] = Item::Value(BITLOOPS_PLATFORM_CHAT_DRIVER.into());
         profile["model"] = Item::Value(DEFAULT_PLATFORM_SUMMARY_MODEL.into());
-        profile["api_key"] = Item::Value(DEFAULT_PLATFORM_SUMMARY_API_KEY.into());
+        profile["api_key"] = Item::Value(api_key.into());
         if let Some(gateway_url_override) = gateway_url_override {
             profile["base_url"] = Item::Value(gateway_url_override.into());
         } else {
@@ -313,6 +392,158 @@ pub(super) fn write_platform_context_guidance_profile(
     write_daemon_config_document(&config_path, &doc)
 }
 
+#[cfg(test)]
+pub(super) fn write_local_bitloops_inference_profiles(
+    repo_root: &Path,
+    model_name: &str,
+) -> Result<()> {
+    write_summary_profile(repo_root, model_name)?;
+    write_context_guidance_profile(repo_root, model_name)?;
+    write_local_architecture_profiles(repo_root, model_name)
+}
+
+#[cfg(test)]
+pub(super) fn write_platform_bitloops_inference_profiles(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+    api_key_env: &str,
+) -> Result<()> {
+    let api_key_env = api_key_env.trim();
+    if api_key_env.is_empty() {
+        bail!("Bitloops inference platform API key environment variable cannot be empty");
+    }
+    let api_key = env_placeholder(api_key_env);
+    write_platform_summary_profile_with_api_key(repo_root, gateway_url_override, &api_key)?;
+    write_platform_context_guidance_profile(repo_root, gateway_url_override, api_key_env)?;
+    write_platform_architecture_profiles(repo_root, gateway_url_override, api_key_env)
+}
+
+#[cfg(test)]
+fn write_local_architecture_profiles(repo_root: &Path, model_name: &str) -> Result<()> {
+    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
+    let mut doc = read_daemon_config_document(&config_path)?;
+    let fact_profile_name = write_local_architecture_profile(
+        &mut doc,
+        DEFAULT_LOCAL_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
+        model_name,
+        DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS,
+    );
+    let adjudication_profile_name = write_local_architecture_profile(
+        &mut doc,
+        DEFAULT_LOCAL_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
+        model_name,
+        DEFAULT_ARCHITECTURE_ROLE_ADJUDICATION_MAX_OUTPUT_TOKENS,
+    );
+    update_architecture_generation_binding(&mut doc, "fact_synthesis", &fact_profile_name);
+    update_architecture_generation_binding(
+        &mut doc,
+        "role_adjudication",
+        &adjudication_profile_name,
+    );
+    write_daemon_config_document(&config_path, &doc)
+}
+
+#[cfg(test)]
+fn write_platform_architecture_profiles(
+    repo_root: &Path,
+    gateway_url_override: Option<&str>,
+    api_key_env: &str,
+) -> Result<()> {
+    let config_path = resolve_preferred_daemon_config_path_for_repo(repo_root)?;
+    let mut doc = read_daemon_config_document(&config_path)?;
+    let api_key = env_placeholder(api_key_env);
+    let fact_profile_name = write_platform_architecture_profile(
+        &mut doc,
+        DEFAULT_PLATFORM_ARCHITECTURE_FACT_SYNTHESIS_PROFILE_NAME,
+        gateway_url_override,
+        &api_key,
+        DEFAULT_ARCHITECTURE_FACT_SYNTHESIS_MAX_OUTPUT_TOKENS,
+    );
+    let adjudication_profile_name = write_platform_architecture_profile(
+        &mut doc,
+        DEFAULT_PLATFORM_ARCHITECTURE_ROLE_ADJUDICATION_PROFILE_NAME,
+        gateway_url_override,
+        &api_key,
+        DEFAULT_ARCHITECTURE_ROLE_ADJUDICATION_MAX_OUTPUT_TOKENS,
+    );
+    update_architecture_generation_binding(&mut doc, "fact_synthesis", &fact_profile_name);
+    update_architecture_generation_binding(
+        &mut doc,
+        "role_adjudication",
+        &adjudication_profile_name,
+    );
+    write_daemon_config_document(&config_path, &doc)
+}
+
+#[cfg(test)]
+fn write_local_architecture_profile(
+    doc: &mut DocumentMut,
+    default_profile_name: &str,
+    model_name: &str,
+    max_output_tokens: i64,
+) -> String {
+    let profile_name = {
+        let inference = ensure_table(doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        select_profile_name(
+            profiles,
+            default_profile_name,
+            is_managed_local_architecture_profile,
+        )
+    };
+
+    let inference = ensure_table(doc, "inference");
+    let profiles = ensure_child_table(inference, "profiles");
+    let profile = ensure_child_table(profiles, &profile_name);
+    profile["task"] = Item::Value(STRUCTURED_GENERATION_TASK.into());
+    profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
+    profile["driver"] = Item::Value(OLLAMA_CHAT_DRIVER.into());
+    profile["model"] = Item::Value(model_name.into());
+    profile["base_url"] = Item::Value(DEFAULT_OLLAMA_CHAT_BASE_URL.into());
+    profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
+    profile["max_output_tokens"] = Item::Value(max_output_tokens.into());
+    profile.remove("api_key");
+    profile.remove("cache_dir");
+    profile_name
+}
+
+#[cfg(test)]
+fn write_platform_architecture_profile(
+    doc: &mut DocumentMut,
+    default_profile_name: &str,
+    gateway_url_override: Option<&str>,
+    api_key: &str,
+    max_output_tokens: i64,
+) -> String {
+    let profile_name = {
+        let inference = ensure_table(doc, "inference");
+        let profiles = ensure_child_table(inference, "profiles");
+        select_profile_name(
+            profiles,
+            default_profile_name,
+            is_managed_platform_architecture_profile,
+        )
+    };
+
+    let inference = ensure_table(doc, "inference");
+    let profiles = ensure_child_table(inference, "profiles");
+    let profile = ensure_child_table(profiles, &profile_name);
+    profile["task"] = Item::Value(STRUCTURED_GENERATION_TASK.into());
+    profile["runtime"] = Item::Value(BITLOOPS_INFERENCE_RUNTIME_ID.into());
+    profile["driver"] = Item::Value(BITLOOPS_PLATFORM_CHAT_DRIVER.into());
+    profile["model"] = Item::Value(DEFAULT_PLATFORM_CONTEXT_GUIDANCE_MODEL.into());
+    profile["api_key"] = Item::Value(api_key.into());
+    if let Some(gateway_url_override) = gateway_url_override {
+        profile["base_url"] = Item::Value(gateway_url_override.into());
+    } else {
+        profile.remove("base_url");
+    }
+    profile["temperature"] = Item::Value(DEFAULT_SUMMARY_TEMPERATURE.into());
+    profile["max_output_tokens"] = Item::Value(max_output_tokens.into());
+    profile.remove("cache_dir");
+    profile_name
+}
+
 fn read_daemon_config_document(config_path: &Path) -> Result<DocumentMut> {
     let contents = match std::fs::read_to_string(config_path) {
         Ok(contents) => contents,
@@ -367,6 +598,15 @@ fn update_summary_generation_binding(doc: &mut DocumentMut, profile_name: &str) 
 
 fn update_context_guidance_generation_binding(doc: &mut DocumentMut, profile_name: &str) {
     update_text_generation_binding(doc, "context_guidance", "guidance_generation", profile_name);
+}
+
+#[cfg(test)]
+fn update_architecture_generation_binding(
+    doc: &mut DocumentMut,
+    inference_key: &str,
+    profile_name: &str,
+) {
+    update_text_generation_binding(doc, "architecture", inference_key, profile_name);
 }
 
 fn update_text_generation_binding(
@@ -490,6 +730,50 @@ fn is_managed_platform_context_guidance_profile(profile: &Table) -> bool {
             .is_none_or(|api_key| {
                 api_key == env_placeholder(DEFAULT_PLATFORM_CONTEXT_GUIDANCE_API_KEY_ENV).as_str()
             })
+}
+
+#[cfg(test)]
+fn is_managed_local_architecture_profile(profile: &Table) -> bool {
+    profile
+        .get("task")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        == Some(STRUCTURED_GENERATION_TASK)
+        && profile
+            .get("runtime")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some(BITLOOPS_INFERENCE_RUNTIME_ID)
+        && profile
+            .get("driver")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some(OLLAMA_CHAT_DRIVER)
+}
+
+#[cfg(test)]
+fn is_managed_platform_architecture_profile(profile: &Table) -> bool {
+    profile
+        .get("task")
+        .and_then(Item::as_value)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        == Some(STRUCTURED_GENERATION_TASK)
+        && profile
+            .get("runtime")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some(BITLOOPS_INFERENCE_RUNTIME_ID)
+        && profile
+            .get("driver")
+            .and_then(Item::as_value)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            == Some(BITLOOPS_PLATFORM_CHAT_DRIVER)
 }
 
 fn env_placeholder(env_name: &str) -> String {

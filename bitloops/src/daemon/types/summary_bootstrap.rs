@@ -89,6 +89,7 @@ pub struct SummaryBootstrapRequest {
     pub message: Option<String>,
     pub model_name: Option<String>,
     pub gateway_url_override: Option<String>,
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
