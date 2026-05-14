@@ -55,7 +55,7 @@ impl SqliteCodeCityRepository {
     }
 
     fn rebuild_legacy_architecture_diagnostics_tables_if_needed(&self) -> Result<()> {
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             for table in [
                 "codecity_dependency_evidence_current",
                 "codecity_file_dependency_arcs_current",
@@ -83,7 +83,7 @@ impl SqliteCodeCityRepository {
     ) -> Result<CodeCitySnapshotStatus> {
         let snapshot_key = snapshot_key_for(project_path);
         let now = chrono::Utc::now().to_rfc3339();
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO codecity_snapshots_current (
                     repo_id, snapshot_key, project_path, config_fingerprint,
@@ -120,7 +120,7 @@ impl SqliteCodeCityRepository {
         source_generation_seq: u64,
     ) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "UPDATE codecity_snapshots_current
                  SET state = ?1, source_generation_seq = ?2, run_id = ?3,
@@ -152,7 +152,7 @@ impl SqliteCodeCityRepository {
         error: &str,
     ) -> Result<()> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "UPDATE codecity_snapshots_current
                  SET state = ?1, source_generation_seq = ?2,
@@ -185,7 +185,7 @@ impl SqliteCodeCityRepository {
         let now = chrono::Utc::now().to_rfc3339();
         let world_json = serde_json::to_string(world)?;
         let run_id = status_run_id.unwrap_or(snapshot.run_id.as_str());
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO codecity_snapshots_current (
                     repo_id, snapshot_key, project_path, config_fingerprint,
@@ -461,7 +461,7 @@ impl SqliteCodeCityRepository {
             .clone()
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
         let commit_sha = world.commit_sha.as_deref();
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM codecity_floor_health_current WHERE repo_id = ?1",
                 params![world.repo_id],

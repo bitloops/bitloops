@@ -1,6 +1,6 @@
 [package]
 name = "bitloops"
-version = "0.0.25"
+version = "0.0.26"
 edition = "2024"
 autotests = false
 
@@ -175,6 +175,7 @@ tree-sitter-rust = "0.24.1"
 tree-sitter-go = "0.25"
 tree-sitter-java = "0.23"
 tree-sitter-c-sharp = "0.23"
+tree-sitter-php = "0.23"
 sha2 = "0.11"
 sha1 = "0.11"
 hex = "0.4"
@@ -184,12 +185,13 @@ terminal_size = "0.4.4"
 tokio-postgres = "0.7"
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json", "blocking"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+sqlite-vec = "=0.1.10-alpha.3"
 semver = "1"
 tar = "0.4"
 xz2 = "0.1"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 zstd = "0.13"
-duckdb = { version = "1", default-features = false }
+duckdb = { version = "=1.10501.0", default-features = false }
 object_store = { version = "0.13.2", features = ["aws", "gcp"] }
 walkdir = "2.5"
 chrono = { version = "0.4", default-features = true, features = ["clock"] }
@@ -202,6 +204,7 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 dirs = "6"
 futures-util = "0.3"
+fs2 = "0.4"
 libc = "0.2"
 hnsw_rs = "0.3.4"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "vendored"] }

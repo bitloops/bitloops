@@ -28,7 +28,7 @@ impl CapabilityMigrationContext for MigrationTestContext {
         &self,
         operation: &mut dyn FnMut(&rusqlite::Connection) -> Result<()>,
     ) -> Result<()> {
-        self.sqlite.with_connection(|conn| operation(conn))
+        self.sqlite.with_write_connection(|conn| operation(conn))
     }
 }
 

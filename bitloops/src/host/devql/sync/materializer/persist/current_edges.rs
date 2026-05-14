@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 
 use super::local_resolution::load_current_targets_for_resolution_with_connection;
 use super::reconcile::{
@@ -22,8 +22,9 @@ pub(crate) async fn reconcile_current_local_edges_for_paths(
 
     tokio::task::spawn_blocking(move || -> Result<usize> {
         let mut connection = open_current_state_reconciliation_connection(&sqlite_path)?;
-        reconcile_current_local_edges_for_paths_with_connection(
+        reconcile_current_local_edges_for_paths_with_write_lock(
             &mut connection,
+            &sqlite_path,
             &repo_id,
             &touched_paths,
         )
@@ -32,7 +33,26 @@ pub(crate) async fn reconcile_current_local_edges_for_paths(
     .context("joining current local edge reconciliation task")?
 }
 
+pub(crate) fn reconcile_current_local_edges_for_paths_with_write_lock(
+    connection: &mut Connection,
+    sqlite_path: &Path,
+    repo_id: &str,
+    touched_paths: &[String],
+) -> Result<usize> {
+    crate::storage::sqlite::with_sqlite_write_lock(sqlite_path, || {
+        reconcile_current_local_edges_for_paths_inner(connection, repo_id, touched_paths)
+    })
+}
+
 pub(super) fn reconcile_current_local_edges_for_paths_with_connection(
+    connection: &mut Connection,
+    repo_id: &str,
+    touched_paths: &[String],
+) -> Result<usize> {
+    reconcile_current_local_edges_for_paths_inner(connection, repo_id, touched_paths)
+}
+
+fn reconcile_current_local_edges_for_paths_inner(
     connection: &mut Connection,
     repo_id: &str,
     touched_paths: &[String],
@@ -83,21 +103,34 @@ pub(super) fn reconcile_current_local_edges_for_paths_with_connection(
         return Ok(0);
     }
 
+    apply_current_edge_replacements(connection, repo_id, &replacements)
+}
+
+fn apply_current_edge_replacements(
+    connection: &mut Connection,
+    repo_id: &str,
+    replacements: &[CurrentEdgeReplacement],
+) -> Result<usize> {
     let tx = connection
-        .transaction()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("starting current local edge reconciliation transaction")?;
-    let affected_rows = apply_current_edge_replacements_tx(&tx, repo_id, &replacements)?;
+    let affected_rows = apply_current_edge_replacements_tx(&tx, repo_id, replacements)?;
     tx.commit()
         .context("committing current local edge reconciliation transaction")?;
     Ok(affected_rows)
 }
 
 fn open_current_state_reconciliation_connection(path: &Path) -> Result<Connection> {
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for current edge reconciliation")?;
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("opening SQLite database at {}", path.display()))?;
     connection
         .busy_timeout(Duration::from_secs(30))
         .context("setting SQLite busy timeout for current edge reconciliation")?;
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+        .context("configuring SQLite current edge reconciliation connection")?;
     Ok(connection)
 }
 

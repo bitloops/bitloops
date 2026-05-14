@@ -10,12 +10,14 @@ use super::storage::{
 };
 use super::{
     CLAIM_BATCH_LIMIT, PostCommitDerivationClaimGuards, ProducerSpoolJobCounts,
-    ProducerSpoolJobPayload, ProducerSpoolJobRecord, ProducerSpoolJobStatus, REQUEUE_BACKOFF_SECS,
+    ProducerSpoolJobPayload, ProducerSpoolJobRecord, ProducerSpoolJobStatus,
+    ProducerSpoolRunningTask, REQUEUE_BACKOFF_SECS,
+    producer_spool_payload_conflicts_with_running_task,
 };
 
 pub(crate) fn recover_running_producer_spool_jobs(config_root: &Path) -> Result<u64> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting DevQL producer spool recovery transaction")?;
         let result = (|| {
@@ -58,6 +60,7 @@ pub(crate) fn claim_next_producer_spool_jobs(
     claim_next_producer_spool_jobs_excluding(
         config_root,
         &HashSet::new(),
+        &[],
         &PostCommitDerivationClaimGuards::default(),
     )
 }
@@ -70,6 +73,7 @@ pub(crate) fn claim_next_producer_spool_jobs_excluding_repo_ids(
     claim_next_producer_spool_jobs_excluding(
         config_root,
         blocked_repo_ids,
+        &[],
         &PostCommitDerivationClaimGuards::default(),
     )
 }
@@ -77,10 +81,11 @@ pub(crate) fn claim_next_producer_spool_jobs_excluding_repo_ids(
 pub(crate) fn claim_next_producer_spool_jobs_excluding(
     config_root: &Path,
     blocked_repo_ids: &HashSet<String>,
+    running_tasks: &[ProducerSpoolRunningTask],
     post_commit_derivation_guards: &PostCommitDerivationClaimGuards,
 ) -> Result<Vec<ProducerSpoolJobRecord>> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting DevQL producer spool claim transaction")?;
         let result = (|| {
@@ -106,6 +111,15 @@ pub(crate) fn claim_next_producer_spool_jobs_excluding(
             let mut abandoned_job_ids = Vec::new();
             for mut job in pending {
                 if blocked_repo_ids.contains(&job.repo_id) {
+                    continue;
+                }
+                if running_tasks.iter().any(|task| {
+                    producer_spool_payload_conflicts_with_running_task(
+                        &job.payload,
+                        &job.repo_id,
+                        task,
+                    )
+                }) {
                     continue;
                 }
                 if post_commit_derivation_is_abandoned(&job, post_commit_derivation_guards) {
@@ -286,7 +300,7 @@ fn producer_spool_payload_priority(payload: &ProducerSpoolJobPayload) -> u8 {
 
 pub(crate) fn delete_producer_spool_job(config_root: &Path, job_id: &str) -> Result<()> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "DELETE FROM devql_producer_spool_jobs WHERE job_id = ?1",
             params![job_id],
@@ -302,7 +316,7 @@ pub(crate) fn requeue_producer_spool_job(
     err: &anyhow::Error,
 ) -> Result<()> {
     let sqlite = open_repo_runtime_sqlite_for_config_root(config_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         let now = unix_timestamp_now();
         conn.execute(
             "UPDATE devql_producer_spool_jobs

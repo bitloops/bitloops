@@ -320,19 +320,23 @@ pub(super) async fn sqlite_exec_path_inner(
                 db_path.display()
             );
         }
-        let conn = if allow_create {
-            rusqlite::Connection::open(&db_path)
-        } else {
-            rusqlite::Connection::open_with_flags(
-                &db_path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
-            )
-        }
-        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-        configure_sqlite_connection(&conn, "executing SQLite statements")?;
-        conn.execute_batch(&statement)
-            .context("executing SQLite statements")?;
-        Ok(())
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+                .context("registering sqlite-vec auto-extension for SQLite execute path")?;
+            let conn = if allow_create {
+                rusqlite::Connection::open(&db_path)
+            } else {
+                rusqlite::Connection::open_with_flags(
+                    &db_path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+                )
+            }
+            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+            configure_sqlite_connection(&conn, "executing SQLite statements")?;
+            conn.execute_batch(&statement)
+                .context("executing SQLite statements")?;
+            Ok(())
+        })
     })
     .await
     .context("joining SQLite execute task")?
@@ -352,32 +356,37 @@ pub(super) async fn sqlite_exec_batch_transactional_path(
             );
         }
 
-        let mut conn = rusqlite::Connection::open_with_flags(
-            &db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
-        )
-        .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-        configure_sqlite_connection(&conn, "executing SQLite transactional batch")?;
-        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
-            .context("configuring SQLite WAL transaction settings")?;
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension().context(
+                "registering sqlite-vec auto-extension for SQLite transactional batch",
+            )?;
+            let mut conn = rusqlite::Connection::open_with_flags(
+                &db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
+            )
+            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+            configure_sqlite_connection(&conn, "executing SQLite transactional batch")?;
+            conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+                .context("configuring SQLite WAL transaction settings")?;
 
-        let tx = conn
-            .transaction()
-            .context("starting SQLite transactional batch execution")?;
-        for (index, statement) in statements.iter().enumerate() {
-            if statement.trim().is_empty() {
-                continue;
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .context("starting SQLite transactional batch execution")?;
+            for (index, statement) in statements.iter().enumerate() {
+                if statement.trim().is_empty() {
+                    continue;
+                }
+                tx.execute_batch(statement).with_context(|| {
+                    format!(
+                        "executing SQLite transactional statement {}",
+                        index.saturating_add(1)
+                    )
+                })?;
             }
-            tx.execute_batch(statement).with_context(|| {
-                format!(
-                    "executing SQLite transactional statement {}",
-                    index.saturating_add(1)
-                )
-            })?;
-        }
-        tx.commit()
-            .context("committing SQLite transactional batch execution")?;
-        Ok(())
+            tx.commit()
+                .context("committing SQLite transactional batch execution")?;
+            Ok(())
+        })
     })
     .await
     .context("joining SQLite transactional batch task")?
@@ -434,6 +443,8 @@ pub(crate) async fn sqlite_query_rows_path(path: &Path, sql: &str) -> Result<Vec
                 db_path.display()
             );
         }
+        crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+            .context("registering sqlite-vec auto-extension for SQLite query")?;
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -658,6 +669,7 @@ mod tests {
     use super::*;
     use anyhow::Context;
     use std::path::{Path, PathBuf};
+    use std::time::Duration;
 
     #[test]
     fn sqlite_exec_batch_transactional_path_rolls_back_on_failure() -> Result<()> {
@@ -731,6 +743,56 @@ mod tests {
             "wal",
             "transactional batch execution should enable WAL mode"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_exec_batch_transactional_path_waits_for_shared_write_lock() -> Result<()> {
+        let tmp = tempfile::TempDir::new().context("creating temp dir")?;
+        let sqlite_path = tmp.path().join("devql.sqlite");
+        let conn = rusqlite::Connection::open(&sqlite_path).context("opening test sqlite")?;
+        conn.execute_batch("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT);")
+            .context("creating sample table")?;
+        drop(conn);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("creating tokio runtime")?;
+        let held_lock =
+            crate::storage::sqlite::hold_sqlite_write_lock_until_release(sqlite_path.clone())?;
+        let sqlite_path_for_writer = sqlite_path.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).expect("signal batch started");
+            done_tx
+                .send(runtime.block_on(sqlite_exec_batch_transactional_path(
+                    &sqlite_path_for_writer,
+                    &["INSERT INTO sample (id, value) VALUES (1, 'ok');".to_string()],
+                )))
+                .expect("send batch result");
+        });
+        started_rx.recv().context("waiting for batch start")?;
+        assert!(
+            done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+            "transactional SQLite batch should not complete while the shared write lock is held"
+        );
+        held_lock.release()?;
+        done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .context("waiting for batch result")?
+            .context("executing transactional batch")?;
+        writer
+            .join()
+            .map_err(|_| anyhow!("joining batch writer thread"))?;
+
+        let conn = rusqlite::Connection::open(&sqlite_path).context("re-opening test sqlite")?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sample", [], |row| row.get(0))
+            .context("counting sample rows")?;
+        assert_eq!(count, 1);
 
         Ok(())
     }

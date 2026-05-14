@@ -27,6 +27,8 @@ pub(super) fn open_semantic_writer_connection(
             relational_db_path.display()
         );
     }
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for semantic writer connection")?;
     let conn = Connection::open_with_flags(relational_db_path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| {
         format!(
@@ -36,10 +38,8 @@ pub(super) fn open_semantic_writer_connection(
     })?;
     conn.busy_timeout(Duration::from_secs(30))
         .context("setting semantic writer busy timeout")?;
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
-    )
-    .context("configuring semantic writer connection")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+        .context("configuring semantic writer connection")?;
     conn.execute(
         "ATTACH DATABASE ?1 AS runtime_store",
         [runtime_db_path.to_string_lossy().to_string()],

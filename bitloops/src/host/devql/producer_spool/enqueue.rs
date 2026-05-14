@@ -111,15 +111,35 @@ pub(crate) fn enqueue_spooled_post_merge_refresh(
     repo_root: &Path,
     head_sha: &str,
     changed_files: &[String],
+    is_squash: bool,
 ) -> Result<ProducerSpoolEnqueueResult> {
-    enqueue_hook_job(
+    let merge_head_sha = head_sha.trim().to_string();
+    let changed_files = normalize_paths(changed_files);
+    let sync_result = enqueue_hook_job(
         repo_root,
-        Some(format!("post_merge:{}", head_sha.trim())),
-        ProducerSpoolJobPayload::PostMergeRefresh {
-            head_sha: head_sha.trim().to_string(),
-            changed_files: normalize_paths(changed_files),
+        Some(format!("post_merge_sync:{merge_head_sha}")),
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha: merge_head_sha.clone(),
+            changed_files,
+            is_squash,
         },
-    )
+    )?;
+    if is_squash {
+        return Ok(sync_result);
+    }
+
+    let ingest_result = enqueue_hook_job(
+        repo_root,
+        Some(format!("post_merge_ingest:{merge_head_sha}")),
+        ProducerSpoolJobPayload::PostMergeIngestBackfill {
+            merge_head_sha,
+            is_squash,
+        },
+    )?;
+    Ok(ProducerSpoolEnqueueResult {
+        inserted_jobs: sync_result.inserted_jobs + ingest_result.inserted_jobs,
+        updated_jobs: sync_result.updated_jobs + ingest_result.updated_jobs,
+    })
 }
 
 pub(crate) fn enqueue_spooled_pre_push_sync(
@@ -176,7 +196,7 @@ fn enqueue_job(
     job: ProducerSpoolJobInsert,
 ) -> Result<ProducerSpoolEnqueueResult> {
     let sqlite = store.connect_repo_sqlite()?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting DevQL producer spool enqueue transaction")?;
         let result = (|| {

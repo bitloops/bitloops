@@ -1,10 +1,11 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::time::Instant;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_graphql::Result as GraphqlResult;
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::artefact_query_planner::plan_graphql_artefact_query;
 use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
@@ -12,10 +13,12 @@ use crate::capability_packs::semantic_clones::embeddings::{
     EmbeddingRepresentationKind as SemanticEmbeddingRepresentationKind, EmbeddingSetup,
     resolve_embedding_setup,
 };
-use crate::capability_packs::semantic_clones::load_active_embedding_setup;
 use crate::capability_packs::semantic_clones::runtime_config::{
     EmbeddingProviderMode, embeddings_enabled, resolve_embedding_provider,
     resolve_semantic_clones_config,
+};
+use crate::capability_packs::semantic_clones::vector_backend::{
+    SemanticVectorBackend, SemanticVectorQuery,
 };
 use crate::graphql::types::{
     Artefact, CanonicalKind, DateTimeScalar,
@@ -23,10 +26,9 @@ use crate::graphql::types::{
 };
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
-use crate::host::devql::esc_pg;
+use crate::host::devql::{RelationalStorage, esc_pg, sql_string_list_pg};
 use crate::host::inference::EmbeddingInputType;
-use crate::host::relational_store::DefaultRelationalStore;
-use crate::vector_search::{HnswLikeIndex, VectorSearchMode, normalized_cosine_similarity};
+use crate::vector_search::{VectorSearchMode, normalized_cosine_similarity};
 
 const DEFAULT_MIN_SEMANTIC_SCORE: f32 = 0.72;
 const DEFAULT_RESULT_LIMIT: usize = 5;
@@ -35,9 +37,7 @@ const ANN_PREFILTER_MIN_LIMIT: usize = 32;
 #[derive(Debug, Clone)]
 struct SemanticArtefactCandidate {
     artefact: Artefact,
-    representation_kind: SemanticEmbeddingRepresentationKind,
     embedding: Vec<f32>,
-    setup: EmbeddingSetup,
 }
 
 pub(crate) async fn select_semantic_artefacts_for_representation(
@@ -87,28 +87,25 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
     let inference = host.inference_for_capability(SEMANTIC_CLONES_CAPABILITY_ID);
     let representation_kinds = dedup_representation_kinds(representation_kinds);
 
-    let repo_root = context.repo_root_for_scope(scope).map_err(|err| {
-        backend_error(format!(
-            "failed to resolve repository root for search selection: {err:#}"
-        ))
-    })?;
-    let relational_store =
-        DefaultRelationalStore::open_local_for_repo_root(&repo_root).map_err(|err| {
-            backend_error(format!(
-                "failed to open relational store for search selection: {err:#}"
-            ))
-        })?;
-    let relational = relational_store.to_local_inner();
-
-    let candidates = load_semantic_candidates(context, scope, &repo_id, &representation_kinds)
+    let open_relational_started = Instant::now();
+    let relational = context
+        .open_relational_storage("semantic search selection")
         .await
         .map_err(|err| {
             backend_error(format!(
-                "failed to load candidate artefacts for search selection: {err:#}"
+                "failed to open relational storage for search selection: {err:#}"
             ))
         })?;
-    let mut candidates_by_representation_setup =
-        group_semantic_candidates_by_representation_setup(candidates);
+    crate::devql_timing::record_current_stage(
+        "search.semantic.open_relational_storage",
+        open_relational_started.elapsed(),
+        json!({
+            "representationKinds": representation_kinds
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        }),
+    );
 
     let mut hits_by_representation = representation_kinds
         .iter()
@@ -116,6 +113,7 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
         .map(|representation_kind| (representation_kind, Vec::new()))
         .collect::<HashMap<_, _>>();
     let mut query_embeddings_by_setup = HashMap::<String, Vec<f32>>::new();
+    let vector_backend = SemanticVectorBackend::resolve(&relational);
 
     for representation_kind in representation_kinds {
         let selection = resolve_embedding_provider(
@@ -137,24 +135,29 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
                 "failed to resolve {representation_kind} embedding setup for search: {err:#}"
             ))
         })?;
-        let active_setup =
-            load_active_embedding_setup(&relational, &repo_id, representation_kind)
-                .await
-                .map_err(|err| {
-                    backend_error(format!(
-                        "failed to load active {representation_kind} embedding setup for search: {err:#}"
-                    ))
-                })?;
+        let load_active_setup_started = Instant::now();
+        let active_setup = load_primary_active_embedding_setup(
+            &relational,
+            &repo_id,
+            representation_kind,
+        )
+        .await
+        .map_err(|err| {
+            backend_error(format!(
+                "failed to load active {representation_kind} embedding setup for search: {err:#}"
+            ))
+        })?;
+        crate::devql_timing::record_current_stage(
+            "search.semantic.load_active_setup",
+            load_active_setup_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "hasActiveSetup": active_setup.is_some(),
+            }),
+        );
         if let Some(active_setup) = active_setup
             && active_setup.setup != query_setup
         {
-            continue;
-        }
-
-        let compatible_candidates = candidates_by_representation_setup
-            .remove(&(representation_kind, query_setup.clone()))
-            .unwrap_or_default();
-        if compatible_candidates.is_empty() {
             continue;
         }
 
@@ -167,6 +170,7 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
             if let Some(query_embedding) = query_embeddings_by_setup.get(&embedding_cache_key) {
                 query_embedding.clone()
             } else {
+                let embed_query_started = Instant::now();
                 let query_embedding = provider
                     .embed(trimmed_query, EmbeddingInputType::Query)
                     .map_err(|err| {
@@ -174,6 +178,15 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
                             "failed to embed search query for {representation_kind}: {err:#}"
                         ))
                     })?;
+                crate::devql_timing::record_current_stage(
+                    "search.semantic.embed_query",
+                    embed_query_started.elapsed(),
+                    json!({
+                        "representationKind": representation_kind.to_string(),
+                        "dimension": query_embedding.len(),
+                        "setupFingerprint": query_setup.setup_fingerprint.as_str(),
+                    }),
+                );
                 query_embeddings_by_setup.insert(embedding_cache_key, query_embedding.clone());
                 query_embedding
             };
@@ -186,12 +199,83 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
             continue;
         }
 
+        let vector_lookup_started = Instant::now();
+        let candidate_ids = vector_backend
+            .nearest_current_candidates(SemanticVectorQuery {
+                repo_id: &repo_id,
+                representation_kind,
+                setup_fingerprint: &query_setup.setup_fingerprint,
+                dimension: query_setup.dimension,
+                query_embedding: &query_embedding,
+                limit: semantic_candidate_prefilter_limit(DEFAULT_RESULT_LIMIT),
+            })
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to retrieve semantic vector candidates for {representation_kind}: {err:#}"
+                ))
+            })?
+            .into_iter()
+            .map(|candidate| candidate.artefact_id)
+            .collect::<Vec<_>>();
+        crate::devql_timing::record_current_stage(
+            "search.semantic.vector_lookup",
+            vector_lookup_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "candidateCount": candidate_ids.len(),
+                "dimension": query_setup.dimension,
+                "setupFingerprint": query_setup.setup_fingerprint.as_str(),
+            }),
+        );
+        if candidate_ids.is_empty() {
+            continue;
+        }
+
+        let hydrate_candidates_started = Instant::now();
+        let hydrated_candidates = load_semantic_candidates_for_artefact_ids(
+            context,
+            scope,
+            &relational,
+            &repo_id,
+            representation_kind,
+            &query_setup,
+            &candidate_ids,
+        )
+        .await
+        .map_err(|err| {
+            backend_error(format!(
+                "failed to hydrate semantic candidates for {representation_kind}: {err:#}"
+            ))
+        })?;
+        crate::devql_timing::record_current_stage(
+            "search.semantic.hydrate_candidates",
+            hydrate_candidates_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "candidateCount": candidate_ids.len(),
+                "hydratedCount": hydrated_candidates.len(),
+            }),
+        );
+        if hydrated_candidates.is_empty() {
+            continue;
+        }
+
+        let rank_candidates_started = Instant::now();
         let hits = rank_semantic_candidates(
             &query_embedding,
-            compatible_candidates,
+            hydrated_candidates,
             VectorSearchMode::Auto,
             DEFAULT_MIN_SEMANTIC_SCORE,
             DEFAULT_RESULT_LIMIT,
+        );
+        crate::devql_timing::record_current_stage(
+            "search.semantic.rank_candidates",
+            rank_candidates_started.elapsed(),
+            json!({
+                "representationKind": representation_kind.to_string(),
+                "hitCount": hits.len(),
+            }),
         );
         hits_by_representation.insert(representation_kind, hits);
     }
@@ -199,12 +283,99 @@ pub(crate) async fn select_semantic_artefacts_by_representation(
     Ok(hits_by_representation)
 }
 
-async fn load_semantic_candidates(
+async fn load_primary_active_embedding_setup(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    representation_kind: SemanticEmbeddingRepresentationKind,
+) -> Result<
+    Option<
+        crate::capability_packs::semantic_clones::embeddings::ActiveEmbeddingRepresentationState,
+    >,
+> {
+    let rows = relational
+        .query_rows_primary(&format!(
+            "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
+             FROM semantic_clone_embedding_setup_state \
+             WHERE repo_id = '{repo_id}' AND {representation_predicate}",
+            repo_id = esc_pg(repo_id),
+            representation_predicate = match representation_kind {
+                SemanticEmbeddingRepresentationKind::Code => {
+                    "representation_kind IN ('code', 'baseline', 'enriched')".to_string()
+                }
+                SemanticEmbeddingRepresentationKind::Summary => {
+                    "representation_kind IN ('summary')".to_string()
+                }
+                SemanticEmbeddingRepresentationKind::Identity => {
+                    "representation_kind IN ('identity', 'locator')".to_string()
+                }
+            },
+        ))
+        .await?;
+    Ok(rows.into_iter().find_map(|row| {
+        let provider = row.get("provider").and_then(Value::as_str)?.to_string();
+        let model = row.get("model").and_then(Value::as_str)?.to_string();
+        let dimension = row
+            .get("dimension")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                row.get("dimension")
+                    .and_then(Value::as_i64)
+                    .map(|value| value.max(0) as u64)
+            })
+            .and_then(|value| usize::try_from(value).ok())
+            .filter(|value| *value > 0)?;
+        let setup_fingerprint = row
+            .get("setup_fingerprint")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                EmbeddingSetup::new(provider.as_str(), model.as_str(), dimension).setup_fingerprint
+            });
+        Some(
+            crate::capability_packs::semantic_clones::embeddings::ActiveEmbeddingRepresentationState::new(
+                match representation_kind {
+                    SemanticEmbeddingRepresentationKind::Code => {
+                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    }
+                    SemanticEmbeddingRepresentationKind::Summary => {
+                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
+                    }
+                    SemanticEmbeddingRepresentationKind::Identity => {
+                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Identity
+                    }
+                },
+                EmbeddingSetup {
+                    provider,
+                    model,
+                    dimension,
+                    setup_fingerprint,
+                },
+            ),
+        )
+    }))
+}
+
+fn semantic_candidate_prefilter_limit(result_limit: usize) -> usize {
+    result_limit
+        .saturating_mul(ANN_PREFILTER_MULTIPLIER)
+        .max(result_limit)
+        .max(ANN_PREFILTER_MIN_LIMIT)
+}
+
+async fn load_semantic_candidates_for_artefact_ids(
     context: &DevqlGraphqlContext,
     scope: &ResolverScope,
+    relational: &RelationalStorage,
     repo_id: &str,
-    representation_kinds: &[SemanticEmbeddingRepresentationKind],
+    representation_kind: SemanticEmbeddingRepresentationKind,
+    query_setup: &EmbeddingSetup,
+    artefact_ids: &[String],
 ) -> Result<Vec<SemanticArtefactCandidate>> {
+    if artefact_ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let spec = plan_graphql_artefact_query(
         repo_id,
         &context.current_branch_name(scope),
@@ -214,14 +385,6 @@ async fn load_semantic_candidates(
         None,
     );
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
-    let representation_clause = representation_kinds
-        .iter()
-        .flat_map(|kind| kind.storage_values().iter().copied())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .map(|value| format!("'{}'", esc_pg(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
     let sql = format!(
         "{filtered_cte} \
          SELECT filtered.symbol_id, filtered.artefact_id, filtered.path, filtered.language, \
@@ -239,29 +402,28 @@ async fn load_semantic_candidates(
              ON se.repo_id = '{repo_id}' \
             AND se.artefact_id = filtered.artefact_id \
             AND se.content_id = filtered.blob_sha \
-          WHERE se.representation_kind IN ({representation_clause}) \
+          WHERE se.artefact_id IN ({artefact_ids}) \
+            AND se.representation_kind IN ({representation_clause}) \
+            AND se.setup_fingerprint = '{setup_fingerprint}' \
+            AND se.dimension = {dimension} \
        ORDER BY filtered.path, COALESCE(filtered.symbol_fqn, ''), filtered.artefact_id",
         filtered_cte = filtered_cte,
         repo_id = esc_pg(repo_id),
-        representation_clause = representation_clause,
+        artefact_ids = sql_string_list_pg(artefact_ids),
+        representation_clause = representation_kind
+            .storage_values()
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|value| format!("'{}'", esc_pg(value)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        setup_fingerprint = esc_pg(&query_setup.setup_fingerprint),
+        dimension = query_setup.dimension,
     );
-    let rows = context.query_devql_sqlite_rows(&sql).await?;
+    let rows = relational.query_rows_primary(&sql).await?;
     rows.into_iter().map(candidate_from_row).collect()
-}
-
-#[cfg(test)]
-fn compatible_candidates_for_representation_setup(
-    candidates: &[SemanticArtefactCandidate],
-    representation_kind: SemanticEmbeddingRepresentationKind,
-    query_setup: &EmbeddingSetup,
-) -> Vec<SemanticArtefactCandidate> {
-    candidates
-        .iter()
-        .filter(|candidate| {
-            candidate.representation_kind == representation_kind && candidate.setup == *query_setup
-        })
-        .cloned()
-        .collect()
 }
 
 fn dedup_representation_kinds(
@@ -274,20 +436,6 @@ fn dedup_representation_kinds(
         }
     }
     deduped
-}
-
-fn group_semantic_candidates_by_representation_setup(
-    candidates: Vec<SemanticArtefactCandidate>,
-) -> HashMap<(SemanticEmbeddingRepresentationKind, EmbeddingSetup), Vec<SemanticArtefactCandidate>>
-{
-    let mut grouped = HashMap::new();
-    for candidate in candidates {
-        grouped
-            .entry((candidate.representation_kind, candidate.setup.clone()))
-            .or_insert_with(Vec::new)
-            .push(candidate);
-    }
-    grouped
 }
 
 #[cfg(test)]
@@ -333,7 +481,7 @@ fn compare_scored_artefacts(left: &Artefact, right: &Artefact) -> Ordering {
 fn rank_semantic_candidates(
     query_embedding: &[f32],
     candidates: Vec<SemanticArtefactCandidate>,
-    search_mode: VectorSearchMode,
+    _search_mode: VectorSearchMode,
     min_score: f32,
     result_limit: usize,
 ) -> Vec<Artefact> {
@@ -341,31 +489,13 @@ fn rank_semantic_candidates(
         return Vec::new();
     }
 
-    let vectors = candidates
-        .iter()
-        .map(|candidate| candidate.embedding.clone())
-        .collect::<Vec<_>>();
-    let index = HnswLikeIndex::build(&vectors);
-    let prefiltered_limit = if matches!(search_mode, VectorSearchMode::Exact) {
-        candidates.len()
-    } else {
-        result_limit
-            .saturating_mul(ANN_PREFILTER_MULTIPLIER)
-            .max(result_limit)
-            .max(ANN_PREFILTER_MIN_LIMIT)
-            .min(candidates.len())
-    };
-    let candidate_indices =
-        index.nearest_to_vector_with_mode(query_embedding, prefiltered_limit, search_mode);
-
-    let mut ranked = candidate_indices
+    let mut ranked = candidates
         .into_iter()
-        .filter_map(|candidate_idx| {
-            let candidate = candidates.get(candidate_idx)?;
+        .filter_map(|candidate| {
             let score =
                 normalized_cosine_similarity(query_embedding, candidate.embedding.as_slice())?;
-            (score >= min_score).then(|| RankedSemanticArtefact {
-                artefact: candidate.artefact.clone(),
+            (score >= min_score).then_some(RankedSemanticArtefact {
+                artefact: candidate.artefact,
                 score,
             })
         })
@@ -403,37 +533,21 @@ struct RankedSemanticArtefact {
 
 fn candidate_from_row(row: Value) -> Result<SemanticArtefactCandidate> {
     let artefact = artefact_from_value(&row)?;
-    let representation_kind = representation_kind_from_row(&row)?;
-    let setup = embedding_setup_from_row(&row)?;
     let embedding = embedding_from_row(&row)?;
-    if embedding.len() != setup.dimension {
+    let dimension = positive_usize_field(&row, "embedding_dimension")?;
+    if embedding.len() != dimension {
         return Err(anyhow!(
             "embedding dimension {} for artefact `{}` did not match stored dimension {}",
             embedding.len(),
             artefact.id.as_str(),
-            setup.dimension
+            dimension
         ));
     }
 
     Ok(SemanticArtefactCandidate {
         artefact,
-        representation_kind,
         embedding,
-        setup,
     })
-}
-
-fn representation_kind_from_row(row: &Value) -> Result<SemanticEmbeddingRepresentationKind> {
-    match string_field(row, "representation_kind")?
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "code" | "baseline" | "enriched" => Ok(SemanticEmbeddingRepresentationKind::Code),
-        "summary" => Ok(SemanticEmbeddingRepresentationKind::Summary),
-        "identity" | "locator" => Ok(SemanticEmbeddingRepresentationKind::Identity),
-        other => Err(anyhow!("unknown representation kind `{other}`")),
-    }
 }
 
 fn artefact_from_value(row: &Value) -> Result<Artefact> {
@@ -465,17 +579,6 @@ fn artefact_from_value(row: &Value) -> Result<Artefact> {
         search_score: None,
         scope: ResolverScope::default(),
     })
-}
-
-fn embedding_setup_from_row(row: &Value) -> Result<EmbeddingSetup> {
-    let provider = string_field(row, "embedding_provider")?;
-    let model = string_field(row, "embedding_model")?;
-    let dimension = positive_usize_field(row, "embedding_dimension")?;
-    let mut setup = EmbeddingSetup::new(provider, model, dimension);
-    if let Some(setup_fingerprint) = optional_string_field(row, "setup_fingerprint") {
-        setup.setup_fingerprint = setup_fingerprint;
-    }
-    Ok(setup)
 }
 
 fn embedding_from_row(row: &Value) -> Result<Vec<f32>> {
@@ -614,6 +717,27 @@ mod tests {
     use super::*;
     use crate::graphql::ResolverScope;
 
+    #[derive(Debug, Clone)]
+    struct SemanticArtefactCandidateFixture {
+        representation_kind: SemanticEmbeddingRepresentationKind,
+        setup: EmbeddingSetup,
+    }
+
+    fn compatible_candidates_for_representation_setup(
+        candidates: &[SemanticArtefactCandidateFixture],
+        representation_kind: SemanticEmbeddingRepresentationKind,
+        query_setup: &EmbeddingSetup,
+    ) -> Vec<SemanticArtefactCandidateFixture> {
+        candidates
+            .iter()
+            .filter(|candidate| {
+                candidate.representation_kind == representation_kind
+                    && candidate.setup == *query_setup
+            })
+            .cloned()
+            .collect()
+    }
+
     fn sample_artefact(id: &str, path: &str, symbol_fqn: &str) -> Artefact {
         Artefact {
             id: async_graphql::ID::from(id),
@@ -651,8 +775,13 @@ mod tests {
     ) -> SemanticArtefactCandidate {
         SemanticArtefactCandidate {
             artefact: sample_artefact(id, path, symbol_fqn),
-            representation_kind: SemanticEmbeddingRepresentationKind::Identity,
             embedding,
+        }
+    }
+
+    fn sample_candidate_fixture() -> SemanticArtefactCandidateFixture {
+        SemanticArtefactCandidateFixture {
+            representation_kind: SemanticEmbeddingRepresentationKind::Identity,
             setup: EmbeddingSetup::new("bitloops_embeddings_ipc", "semantic-query-test-model", 3),
         }
     }
@@ -711,12 +840,7 @@ mod tests {
     #[test]
     fn semantic_candidate_filter_skips_setup_mismatches() {
         let query_setup = EmbeddingSetup::new("provider-a", "model-a", 3);
-        let mismatched = sample_candidate(
-            "caller",
-            "src/caller.ts",
-            "src/caller.ts::caller",
-            vec![1.0, 0.0, 0.0],
-        );
+        let mismatched = sample_candidate_fixture();
 
         let compatible = compatible_candidates_for_representation_setup(
             &[mismatched],

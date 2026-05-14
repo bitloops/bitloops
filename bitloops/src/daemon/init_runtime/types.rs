@@ -128,6 +128,17 @@ pub struct InitRuntimeSessionView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct InitRuntimeOverviewSnapshot {
+    pub repo_id: String,
+    pub task_queue: DevqlTaskQueueStatus,
+    pub current_state_consumer: CapabilityEventQueueStatus,
+    pub workplane: InitRuntimeWorkplaneSnapshot,
+    pub blocked_mailboxes: Vec<BlockedMailboxStatus>,
+    pub embeddings_readiness_gate: Option<EmbeddingsBootstrapGateStatus>,
+    pub summaries_bootstrap: Option<SummaryBootstrapRunRecord>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct InitRuntimeSnapshot {
     pub repo_id: String,
     pub task_queue: DevqlTaskQueueStatus,

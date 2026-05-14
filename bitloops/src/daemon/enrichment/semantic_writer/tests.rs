@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use std::path::Path;
+use std::time::Duration;
 
 use super::commit::execute_summary_commit;
 use super::runtime_store::open_semantic_writer_connection;
@@ -127,6 +128,46 @@ fn execute_summary_commit_reports_delete_failure_after_runtime_store_write() {
     assert!(
         format!("{:#}", failure).contains("deleting acknowledged semantic summary mailbox items")
     );
+}
+
+#[test]
+fn semantic_writer_sqlite_locks_wait_for_runtime_db_lock() {
+    let temp = TempDir::new().expect("temp dir");
+    let runtime_db_path = temp.path().join("runtime.sqlite");
+    let relational_db_path = temp.path().join("relational.sqlite");
+    create_relational_db(&relational_db_path);
+    create_runtime_db(&runtime_db_path, false, true);
+
+    let held_lock =
+        crate::storage::sqlite::hold_sqlite_write_lock_until_release(runtime_db_path.clone())
+            .expect("hold runtime DB write lock");
+    let runtime_db_path_for_writer = runtime_db_path.clone();
+    let relational_db_path_for_writer = relational_db_path.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx
+            .send(())
+            .expect("signal semantic writer lock started");
+        done_tx
+            .send(super::actor::with_semantic_writer_sqlite_locks(
+                &runtime_db_path_for_writer,
+                &relational_db_path_for_writer,
+                || Ok(()),
+            ))
+            .expect("send semantic writer lock result");
+    });
+    started_rx.recv().expect("wait for semantic writer start");
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "semantic writer should not acquire locks while the runtime DB write lock is held"
+    );
+    held_lock.release().expect("release runtime DB write lock");
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for semantic writer lock result")
+        .expect("acquire semantic writer locks");
+    worker.join().expect("join semantic writer lock worker");
 }
 
 fn create_relational_db(path: &Path) {

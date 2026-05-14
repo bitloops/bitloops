@@ -70,6 +70,7 @@ pub(crate) use self::classification::{
 pub use self::commands_ingest::run_ingest;
 pub(crate) use self::commands_ingest::{
     execute_ingest_with_backfill_window, execute_ingest_with_commits, execute_ingest_with_observer,
+    select_ingest_backfill_commits_for_head,
 };
 #[cfg(test)]
 pub(crate) use self::commands_projection::execute_checkpoint_file_snapshot_backfill_with_relational;
@@ -111,8 +112,8 @@ pub(crate) use self::producer_spool::enqueue_spooled_ingest_task_for_repo_root;
 pub(crate) use self::producer_spool::enqueue_spooled_post_commit_derivation;
 pub(crate) use self::producer_spool::{
     PostCommitDerivationClaimGuards, ProducerSpoolJobCounts, ProducerSpoolJobPayload,
-    ProducerSpoolJobRecord, claim_next_producer_spool_jobs_excluding, count_producer_spool_jobs,
-    delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
+    ProducerSpoolJobRecord, ProducerSpoolRunningTask, claim_next_producer_spool_jobs_excluding,
+    count_producer_spool_jobs, delete_producer_spool_job, enqueue_spooled_post_commit_refresh,
     enqueue_spooled_post_merge_refresh, enqueue_spooled_pre_push_sync, enqueue_spooled_sync_task,
     enqueue_spooled_sync_task_for_repo_root, list_recent_producer_spool_jobs,
     producer_spool_schema_sql_sqlite, recover_running_producer_spool_jobs,
@@ -121,7 +122,9 @@ pub(crate) use self::producer_spool::{
 pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;
 pub use self::sync::types::SyncMode;
-pub use self::types::{DevqlConfig, RelationalDialect, RelationalStorage, RepoIdentity};
+pub use self::types::{
+    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalStorage, RepoIdentity,
+};
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;
 
@@ -157,6 +160,8 @@ const GO_LANGUAGE_PACK_ID: &str = "go-language-pack";
 const JAVA_LANGUAGE_PACK_ID: &str = "java-language-pack";
 #[cfg(test)]
 const CSHARP_LANGUAGE_PACK_ID: &str = "csharp-language-pack";
+#[cfg(test)]
+const PHP_LANGUAGE_PACK_ID: &str = "php-language-pack";
 #[allow(dead_code)]
 const KNOWLEDGE_CAPABILITY_INGESTER_ID: &str = "knowledge-ingester";
 const TEST_HARNESS_CAPABILITY_INGESTER_ID: &str = "test-harness-ingester";

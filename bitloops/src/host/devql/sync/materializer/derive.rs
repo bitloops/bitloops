@@ -218,7 +218,7 @@ pub(super) fn parse_cached_language_kind(
     raw_kind: &str,
 ) -> Result<crate::host::language_adapter::LanguageKind> {
     use crate::host::language_adapter::{
-        CSharpKind, GoKind, JavaKind, LanguageKind, PythonKind, RustKind, TsJsKind,
+        CSharpKind, GoKind, JavaKind, LanguageKind, PhpKind, PythonKind, RustKind, TsJsKind,
     };
 
     let normalized_language = language.trim().to_ascii_lowercase();
@@ -236,6 +236,7 @@ pub(super) fn parse_cached_language_kind(
                 _ => None,
             })
             .map(LanguageKind::java),
+        "php" => PhpKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::php),
         "python" => PythonKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::python),
         "rust" => RustKind::from_tree_sitter_kind(normalized_kind).map(LanguageKind::rust),
         "typescript" | "javascript" => {

@@ -42,7 +42,7 @@ pub(crate) fn persist_workplane_job_completion(
 ) -> Result<WorkplaneJobCompletionDisposition> {
     let now = unix_timestamp_now();
     let disposition = classify_workplane_job_completion(job, outcome, now);
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         match disposition {
             WorkplaneJobCompletionDisposition::Completed
             | WorkplaneJobCompletionDisposition::Failed => {
@@ -184,7 +184,7 @@ fn classify_workplane_job_completion(
 fn should_retry_transient_embedding_failure(job: &WorkplaneJobRecord, error: &str) -> bool {
     is_embedding_mailbox(job.mailbox_name.as_str())
         && job.attempts < WORKPLANE_TRANSIENT_EMBEDDING_RETRY_LIMIT
-        && error.contains("timed out after")
+        && is_retryable_embedding_failure(error)
 }
 
 pub(crate) fn transient_embedding_retry_backoff_secs(attempts: u32) -> u64 {
@@ -202,6 +202,13 @@ fn is_embedding_mailbox(mailbox_name: &str) -> bool {
     )
 }
 
+pub(crate) fn is_retryable_embedding_failure(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("timed out after")
+        || lower.contains("was cancelled")
+        || lower.contains("was canceled")
+}
+
 fn log_workplane_job_failure(job: &WorkplaneJobRecord, error: &str) {
     log::error!(
         "daemon enrichment job failed: id={} repo={} mailbox={} attempts={} error={}",
@@ -211,4 +218,23 @@ fn log_workplane_job_failure(job: &WorkplaneJobRecord, error: &str) {
         job.attempts,
         error,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_retryable_embedding_failure;
+
+    #[test]
+    fn retryable_embedding_failure_classifier_accepts_timeouts_and_cancellations() {
+        assert!(is_retryable_embedding_failure(
+            "embedding request timed out after 30000ms"
+        ));
+        assert!(is_retryable_embedding_failure(
+            "joining SQLite query task: task 13272 was cancelled"
+        ));
+        assert!(is_retryable_embedding_failure(
+            "joining SQLite query task: task 13272 was canceled"
+        ));
+        assert!(!is_retryable_embedding_failure("constraint failed"));
+    }
 }

@@ -39,10 +39,14 @@ mod workplane;
 mod tests;
 
 pub use self::coordinator::InitRuntimeCoordinator;
+#[cfg(test)]
+pub(crate) use self::progress::{
+    reset_runtime_lane_progress_load_count, runtime_lane_progress_load_count,
+};
 pub(crate) use self::types::{
     InitRuntimeLaneProgressView, InitRuntimeLaneQueueView, InitRuntimeLaneView,
-    InitRuntimeLaneWarningView, InitRuntimeSessionView, InitRuntimeSnapshot,
-    InitRuntimeWorkplaneMailboxSnapshot, InitRuntimeWorkplanePoolSnapshot,
+    InitRuntimeLaneWarningView, InitRuntimeOverviewSnapshot, InitRuntimeSessionView,
+    InitRuntimeSnapshot, InitRuntimeWorkplaneMailboxSnapshot, InitRuntimeWorkplanePoolSnapshot,
     InitRuntimeWorkplaneSnapshot, PersistedInitSessionState, PersistedSummaryBootstrapState,
 };
 pub use self::types::{InitSessionHandle, RuntimeEventRecord};

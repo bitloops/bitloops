@@ -12,6 +12,7 @@ pub mod graphql;
 pub mod host;
 pub mod models;
 pub(crate) mod runtime_presentation;
+pub(crate) mod sqlite_vec_auto_extension;
 pub mod storage;
 pub mod telemetry;
 pub mod utils;

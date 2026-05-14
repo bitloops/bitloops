@@ -233,53 +233,64 @@ END $$;
 pub(crate) async fn upgrade_sqlite_semantic_features_schema(sqlite_path: &Path) -> Result<()> {
     let db_path = sqlite_path.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let conn = rusqlite::Connection::open(&db_path)
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-
-        if !sqlite_table_has_column(&conn, "symbol_semantics", "docstring_summary")? {
-            conn.execute(
-                "ALTER TABLE symbol_semantics ADD COLUMN docstring_summary TEXT",
-                [],
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension().context(
+                "registering sqlite-vec auto-extension for semantic feature schema upgrade",
+            )?;
+            let conn = rusqlite::Connection::open(&db_path)
+                .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+            conn.busy_timeout(std::time::Duration::from_secs(30))
+                .context("setting SQLite busy timeout for semantic feature schema upgrade")?;
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
             )
-            .context("adding symbol_semantics.docstring_summary column")?;
-        }
+            .context("configuring SQLite semantic feature schema connection")?;
 
-        if sqlite_table_has_column(&conn, "symbol_semantics", "doc_comment_summary")?
-            && sqlite_table_has_column(&conn, "symbol_semantics", "docstring_summary")?
-        {
-            conn.execute(
-                "UPDATE symbol_semantics \
+            if !sqlite_table_has_column(&conn, "symbol_semantics", "docstring_summary")? {
+                conn.execute(
+                    "ALTER TABLE symbol_semantics ADD COLUMN docstring_summary TEXT",
+                    [],
+                )
+                .context("adding symbol_semantics.docstring_summary column")?;
+            }
+
+            if sqlite_table_has_column(&conn, "symbol_semantics", "doc_comment_summary")?
+                && sqlite_table_has_column(&conn, "symbol_semantics", "docstring_summary")?
+            {
+                conn.execute(
+                    "UPDATE symbol_semantics \
 SET docstring_summary = doc_comment_summary \
 WHERE docstring_summary IS NULL AND doc_comment_summary IS NOT NULL",
-                [],
-            )
-            .context("backfilling legacy symbol_semantics.doc_comment_summary values")?;
-        }
+                    [],
+                )
+                .context("backfilling legacy symbol_semantics.doc_comment_summary values")?;
+            }
 
-        if !sqlite_table_has_column(&conn, "symbol_features", "modifiers")? {
-            conn.execute(
-                "ALTER TABLE symbol_features ADD COLUMN modifiers TEXT NOT NULL DEFAULT '[]'",
-                [],
-            )
-            .context("adding symbol_features.modifiers column")?;
-        }
+            if !sqlite_table_has_column(&conn, "symbol_features", "modifiers")? {
+                conn.execute(
+                    "ALTER TABLE symbol_features ADD COLUMN modifiers TEXT NOT NULL DEFAULT '[]'",
+                    [],
+                )
+                .context("adding symbol_features.modifiers column")?;
+            }
 
-        relax_sqlite_semantics_confidence_not_null(&conn, "symbol_semantics")?;
-        relax_sqlite_semantics_confidence_not_null(&conn, "symbol_semantics_current")?;
+            relax_sqlite_semantics_confidence_not_null(&conn, "symbol_semantics")?;
+            relax_sqlite_semantics_confidence_not_null(&conn, "symbol_semantics_current")?;
 
-        if sqlite_table_exists(&conn, "artefacts_current")?
-            && sqlite_table_exists(&conn, "current_file_state")?
-            && sqlite_table_has_column(&conn, "current_file_state", "effective_content_id")?
-        {
-            conn.execute_batch(
-                &build_repair_all_current_semantic_projection_from_historical_sql(
-                    RelationalDialect::Sqlite,
-                ),
-            )
-            .context("repairing stranded current semantic projection rows")?;
-        }
+            if sqlite_table_exists(&conn, "artefacts_current")?
+                && sqlite_table_exists(&conn, "current_file_state")?
+                && sqlite_table_has_column(&conn, "current_file_state", "effective_content_id")?
+            {
+                conn.execute_batch(
+                    &build_repair_all_current_semantic_projection_from_historical_sql(
+                        RelationalDialect::Sqlite,
+                    ),
+                )
+                .context("repairing stranded current semantic projection rows")?;
+            }
 
-        Ok(())
+            Ok(())
+        })
     })
     .await
     .context("joining SQLite semantic feature upgrade task")?

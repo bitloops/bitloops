@@ -3,7 +3,9 @@ use std::collections::BTreeSet;
 use anyhow::{Context, Result};
 
 use crate::config::resolve_store_backend_config_for_repo;
-use crate::host::devql::{DevqlConfig, RelationalStorage, esc_pg, sql_string_list_pg};
+use crate::host::devql::{
+    DevqlConfig, RelationalPrimaryBackend, RelationalStorage, esc_pg, sql_string_list_pg,
+};
 
 use super::super::normalize_repo_path;
 
@@ -62,19 +64,18 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
         .collect::<Vec<_>>();
     let current_scope_predicate = sql_optional_path_scope_predicate_pg("c.path", &scoped_paths);
     let clone_scope_predicate = sql_clone_scope_predicate_pg("src.path", "tgt.path", &scoped_paths);
-    relational
-        .exec_batch_transactional(&[
-            format!(
-                "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) \
+    let statements = vec![
+        format!(
+            "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) \
                  SELECT c.repo_id, '{commit_sha}', c.path, c.effective_content_id \
                  FROM current_file_state c \
                  WHERE c.repo_id = '{repo_id}' \
                    AND c.effective_source = 'head' \
                    AND c.effective_content_id IS NOT NULL \
                  ON CONFLICT (repo_id, commit_sha, path) DO UPDATE SET blob_sha = EXCLUDED.blob_sha"
-            ),
-            format!(
-                "INSERT INTO artefacts (
+        ),
+        format!(
+            "INSERT INTO artefacts (
                     artefact_id, symbol_id, repo_id, language, canonical_kind, language_kind,
                     symbol_fqn, signature, modifiers, docstring, content_hash
                  )
@@ -101,10 +102,10 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
                     modifiers = EXCLUDED.modifiers,
                     docstring = EXCLUDED.docstring,
                     content_hash = EXCLUDED.content_hash",
-                current_scope_predicate = current_scope_predicate,
-            ),
-            format!(
-                "INSERT INTO artefact_snapshots (
+            current_scope_predicate = current_scope_predicate,
+        ),
+        format!(
+            "INSERT INTO artefact_snapshots (
                     repo_id, blob_sha, path, artefact_id, parent_artefact_id,
                     start_line, end_line, start_byte, end_byte
                  )
@@ -126,10 +127,10 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
                     end_line = EXCLUDED.end_line,
                     start_byte = EXCLUDED.start_byte,
                     end_byte = EXCLUDED.end_byte",
-                current_scope_predicate = current_scope_predicate,
-            ),
-            format!(
-                "INSERT INTO symbol_semantics (
+            current_scope_predicate = current_scope_predicate,
+        ),
+        format!(
+            "INSERT INTO symbol_semantics (
                     artefact_id, repo_id, blob_sha, semantic_features_input_hash,
                     docstring_summary, llm_summary, template_summary, summary, confidence,
                     source_model
@@ -156,10 +157,10 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
                     summary = EXCLUDED.summary,
                     confidence = EXCLUDED.confidence,
                     source_model = EXCLUDED.source_model",
-                current_scope_predicate = current_scope_predicate,
-            ),
-            format!(
-                "INSERT INTO symbol_features (
+            current_scope_predicate = current_scope_predicate,
+        ),
+        format!(
+            "INSERT INTO symbol_features (
                     artefact_id, repo_id, blob_sha, semantic_features_input_hash,
                     normalized_name, normalized_signature, modifiers, identifier_tokens,
                     normalized_body_tokens, parent_kind, context_tokens
@@ -188,10 +189,10 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
                     normalized_body_tokens = EXCLUDED.normalized_body_tokens,
                     parent_kind = EXCLUDED.parent_kind,
                     context_tokens = EXCLUDED.context_tokens",
-                current_scope_predicate = current_scope_predicate,
-            ),
-            format!(
-                "INSERT INTO symbol_search_documents (
+            current_scope_predicate = current_scope_predicate,
+        ),
+        format!(
+            "INSERT INTO symbol_search_documents (
                     artefact_id, repo_id, blob_sha, path, symbol_id, signature_text,
                     summary_text, body_text, searchable_text
                  )
@@ -215,10 +216,10 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
                     summary_text = EXCLUDED.summary_text,
                     body_text = EXCLUDED.body_text,
                     searchable_text = EXCLUDED.searchable_text",
-                current_scope_predicate = current_scope_predicate,
-            ),
-            format!(
-                "INSERT INTO symbol_embeddings (
+            current_scope_predicate = current_scope_predicate,
+        ),
+        format!(
+            "INSERT INTO symbol_embeddings (
                     artefact_id, repo_id, blob_sha, representation_kind, setup_fingerprint,
                     provider, model, dimension, embedding_input_hash, embedding
                  )
@@ -242,10 +243,10 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
                     dimension = EXCLUDED.dimension,
                     embedding_input_hash = EXCLUDED.embedding_input_hash,
                     embedding = EXCLUDED.embedding",
-                current_scope_predicate = current_scope_predicate,
-            ),
-            format!(
-                "INSERT INTO symbol_clone_edges (
+            current_scope_predicate = current_scope_predicate,
+        ),
+        format!(
+            "INSERT INTO symbol_clone_edges (
                     repo_id, source_symbol_id, source_artefact_id, target_symbol_id,
                     target_artefact_id, relation_kind, score, semantic_score,
                     lexical_score, structural_score, clone_input_hash, explanation_json
@@ -286,10 +287,20 @@ pub(super) async fn snapshot_committed_current_rows_for_commit(
                     structural_score = EXCLUDED.structural_score,
                     clone_input_hash = EXCLUDED.clone_input_hash,
                     explanation_json = EXCLUDED.explanation_json",
-                clone_scope_predicate = clone_scope_predicate,
-            ),
-        ])
+            clone_scope_predicate = clone_scope_predicate,
+        ),
+    ];
+    relational
+        .exec_batch_transactional(&statements)
         .await
+        .context("snapshotting committed current rows into local relational storage")?;
+    if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
+        relational
+            .exec_remote_batch_transactional(&statements)
+            .await
+            .context("snapshotting committed current rows into remote relational storage")?;
+    }
+    Ok(())
 }
 
 fn sql_optional_path_scope_predicate_pg(column: &str, paths: &[String]) -> String {

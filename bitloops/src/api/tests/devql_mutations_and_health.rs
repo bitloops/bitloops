@@ -130,6 +130,16 @@ fn assert_score_is_rounded_to_four_decimal_places(score: f64) {
     );
 }
 
+fn timing_stage_names(summary: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    summary["stages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|stage| stage.get("stage").and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
 fn localhost_bind_available(test_name: &str) -> bool {
     match std::net::TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => {
@@ -2689,6 +2699,108 @@ async fn slim_select_artefacts_search_mode_auto_returns_breakdown_and_mode_speci
         breakdown["summary"].as_array().is_some(),
         "expected summary breakdown slice, got {breakdown:?}"
     );
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_mode_summary_timings_skip_lexical_preloads() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+    let trace = crate::devql_timing::TimingTrace::new();
+
+    let response = crate::devql_timing::scope_trace(
+        trace.clone(),
+        schema.execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "build response payload", searchMode: SUMMARY }) {
+                count
+                artefacts {
+                  path
+                }
+              }
+            }
+            "#,
+        )),
+    )
+    .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let stage_names = timing_stage_names(&trace.summary_value());
+    for forbidden in [
+        "search.select_artefacts.list_artefacts",
+        "search.select_artefacts.load_search_features",
+        "search.select_artefacts.load_search_documents",
+        "search.select_artefacts.build_lexical_hits",
+    ] {
+        assert!(
+            !stage_names.contains(forbidden),
+            "summary search should skip lexical preload stage `{forbidden}`, got {stage_names:?}"
+        );
+    }
+    for required in [
+        "search.semantic.embed_query",
+        "search.semantic.vector_lookup",
+        "search.semantic.hydrate_candidates",
+        "search.semantic.rank_candidates",
+    ] {
+        assert!(
+            stage_names.contains(required),
+            "summary search should record semantic timing stage `{required}`, got {stage_names:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn slim_select_artefacts_search_mode_auto_timings_include_lexical_and_semantic_stages() {
+    let repo = seed_graphql_monorepo_repo();
+    seed_graphql_clone_scoring_inputs(repo.path());
+    seed_graphql_search_quality_inputs(repo.path());
+    seed_graphql_semantic_query_inputs(repo.path());
+    configure_graphql_semantic_query_runtime(repo.path());
+    let schema = slim_schema_for_repo(repo.path());
+    let trace = crate::devql_timing::TimingTrace::new();
+
+    let response = crate::devql_timing::scope_trace(
+        trace.clone(),
+        schema.execute(async_graphql::Request::new(
+            r#"
+            {
+              selectArtefacts(by: { search: "caller in caller ts" }) {
+                count
+              }
+            }
+            "#,
+        )),
+    )
+    .await;
+
+    assert!(
+        response.errors.is_empty(),
+        "graphql errors: {:?}",
+        response.errors
+    );
+
+    let stage_names = timing_stage_names(&trace.summary_value());
+    for required in [
+        "search.select_artefacts.list_artefacts",
+        "search.select_artefacts.load_search_features",
+        "search.select_artefacts.load_search_documents",
+        "search.select_artefacts.build_lexical_hits",
+        "search.semantic.embed_query",
+        "search.semantic.vector_lookup",
+    ] {
+        assert!(
+            stage_names.contains(required),
+            "auto search should record timing stage `{required}`, got {stage_names:?}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -1278,7 +1278,7 @@ fn insert_summary_mailbox_item(
         (fixture.status == SemanticMailboxItemStatus::Leased).then_some(fixture.updated_at_unix);
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO semantic_summary_mailbox_items (
                      item_id, repo_id, repo_root, config_root, init_session_id, item_kind,
@@ -1337,7 +1337,7 @@ fn insert_embedding_mailbox_item(
         (fixture.status == SemanticMailboxItemStatus::Leased).then_some(fixture.updated_at_unix);
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO semantic_embedding_mailbox_items (
                      item_id, repo_id, repo_root, config_root, init_session_id,
@@ -1872,7 +1872,7 @@ fn retry_failed_jobs_migrates_legacy_embedding_repo_backfill_rows_into_the_embed
     );
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_jobs (
                      job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
@@ -2637,7 +2637,7 @@ fn insert_workplane_job(
     .then_some(fixture.updated_at_unix);
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_jobs (
                      job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
@@ -2679,7 +2679,7 @@ fn insert_context_guidance_workplane_job(
 ) {
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_jobs (
                      job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,
@@ -2727,7 +2727,7 @@ fn insert_pending_artefact_jobs_bulk(
 ) {
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             let tx = conn.unchecked_transaction()?;
             {
                 let mut stmt = tx.prepare(
@@ -2773,7 +2773,7 @@ fn set_workplane_job_schedule(
 ) {
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "UPDATE capability_workplane_jobs
                  SET available_at_unix = ?1,
@@ -3709,7 +3709,7 @@ fn retry_failed_jobs_requeues_historical_repo_backfill_payloads() {
     );
     coordinator
         .workplane_store
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO capability_workplane_jobs (
                      job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,

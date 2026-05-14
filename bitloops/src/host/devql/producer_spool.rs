@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::daemon::{DevqlTaskSource, DevqlTaskSpec};
 
+#[path = "producer_spool/admission.rs"]
+mod admission;
 #[path = "producer_spool/enqueue.rs"]
 mod enqueue;
 #[path = "producer_spool/payload.rs"]
@@ -16,6 +18,9 @@ mod storage;
 #[path = "producer_spool/tests.rs"]
 mod tests;
 
+pub(crate) use admission::{
+    ProducerSpoolRunningTask, producer_spool_payload_conflicts_with_running_task,
+};
 pub(crate) use enqueue::enqueue_spooled_ingest_task_for_repo_root;
 #[cfg(test)]
 pub(crate) use enqueue::enqueue_spooled_post_commit_derivation;
@@ -116,6 +121,15 @@ pub(crate) enum ProducerSpoolJobPayload {
     PostMergeRefresh {
         head_sha: String,
         changed_files: Vec<String>,
+    },
+    PostMergeSyncRefresh {
+        merge_head_sha: String,
+        changed_files: Vec<String>,
+        is_squash: bool,
+    },
+    PostMergeIngestBackfill {
+        merge_head_sha: String,
+        is_squash: bool,
     },
     PrePushSync {
         remote: String,

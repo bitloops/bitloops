@@ -32,7 +32,7 @@ pub(crate) fn claim_next_workplane_job(
     control_state: &EnrichmentControlState,
     pool: EnrichmentWorkerPool,
 ) -> Result<Option<WorkplaneJobRecord>> {
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting capability workplane job claim transaction")?;
         let result = (|| {

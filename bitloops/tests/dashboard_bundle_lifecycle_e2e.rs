@@ -189,9 +189,30 @@ fn read_child_stderr(child: &mut Child) -> String {
     }
 }
 
+fn stop_child_and_read_stderr(child: &mut Child) -> (String, String) {
+    match child.try_wait() {
+        Ok(Some(status)) => (status.to_string(), read_child_stderr(child)),
+        Ok(None) => {
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .map(|status| format!("killed after readiness timeout; wait status: {status}"))
+                .unwrap_or_else(|err| format!("failed to wait after killing child: {err}"));
+            (status, read_child_stderr(child))
+        }
+        Err(err) => (
+            format!("<failed to inspect status: {err}>"),
+            "<stderr unavailable>".to_string(),
+        ),
+    }
+}
+
 async fn wait_until_ready(url: &str, child: &mut Child) {
+    const READY_ATTEMPTS: usize = 1_200;
+    const READY_INTERVAL: Duration = Duration::from_millis(100);
+
     let client = reqwest::Client::new();
-    for _ in 0..300 {
+    for _ in 0..READY_ATTEMPTS {
         if let Ok(response) = client.get(url).send().await
             && response.status().is_success()
         {
@@ -211,20 +232,10 @@ async fn wait_until_ready(url: &str, child: &mut Child) {
             }
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(READY_INTERVAL).await;
     }
 
-    let (child_status, child_stderr) = match child.try_wait() {
-        Ok(Some(status)) => (status.to_string(), read_child_stderr(child)),
-        Ok(None) => (
-            "still running".to_string(),
-            "<child still running; stderr cannot be drained without stopping it>".to_string(),
-        ),
-        Err(err) => (
-            format!("<failed to inspect status: {err}>"),
-            "<stderr unavailable>".to_string(),
-        ),
-    };
+    let (child_status, child_stderr) = stop_child_and_read_stderr(child);
     panic!(
         "daemon server did not become ready at {url}\nchild status: {child_status}\nchild stderr:\n{child_stderr}"
     );

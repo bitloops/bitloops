@@ -168,6 +168,7 @@ impl Drop for PooledSqliteConnection {
 }
 
 pub(crate) struct SqliteSyncWriter {
+    sqlite_path: PathBuf,
     connection: Arc<Mutex<Connection>>,
     pending_batch: SyncBatch,
     pending_touches: HashMap<CacheKey, bool>,
@@ -175,17 +176,21 @@ pub(crate) struct SqliteSyncWriter {
 
 impl SqliteSyncWriter {
     pub(crate) async fn open(path: &Path) -> Result<Self> {
-        let path = path.to_path_buf();
+        let sqlite_path = path.to_path_buf();
+        let path = sqlite_path.clone();
         let connection = tokio::task::spawn_blocking(move || -> Result<Connection> {
-            let conn = open_sync_sqlite_connection(&path)?;
-            conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
-                .context("configuring SQLite writer connection")?;
-            Ok(conn)
+            crate::storage::sqlite::with_sqlite_write_lock(&path, || {
+                let conn = open_sync_sqlite_connection(&path)?;
+                conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
+                    .context("configuring SQLite writer connection")?;
+                Ok(conn)
+            })
         })
         .await
         .context("joining SQLite writer connection task")??;
 
         Ok(Self {
+            sqlite_path,
             connection: Arc::new(Mutex::new(connection)),
             pending_batch: SyncBatch::default(),
             pending_touches: HashMap::new(),
@@ -230,75 +235,82 @@ impl SqliteSyncWriter {
         let repo_id = repo_id.to_string();
         let parser_version = parser_version.to_string();
         let extractor_version = extractor_version.to_string();
+        let sqlite_path = self.sqlite_path.clone();
 
         tokio::task::spawn_blocking(move || -> Result<WriterCommitOutcome> {
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
-            let tx = begin_immediate_transaction(
-                &mut connection,
-                "starting SQLite sync writer transaction",
-            )?;
-            let mut rows_written = 0usize;
-            let mut cache_store_operation_estimate = 0usize;
-            let mut materialisation_operation_estimate = 0usize;
-            let mut pre_artefacts = Vec::new();
-            let mut post_artefacts = Vec::new();
-            let materialized_paths = batch
-                .items
-                .iter()
-                .map(|item| item.desired.path.clone())
-                .collect::<Vec<_>>();
+            crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path, || {
+                let tx = begin_immediate_transaction(
+                    &mut connection,
+                    "starting SQLite sync writer transaction",
+                )?;
+                let mut rows_written = 0usize;
+                let mut cache_store_operation_estimate = 0usize;
+                let mut materialisation_operation_estimate = 0usize;
+                let mut pre_artefacts = Vec::new();
+                let mut post_artefacts = Vec::new();
+                let materialized_paths = batch
+                    .items
+                    .iter()
+                    .map(|item| item.desired.path.clone())
+                    .collect::<Vec<_>>();
 
-            for item in &batch.items {
-                if let Some(retention_class) = item.cache_store_retention_class {
-                    let (artefacts, edges) = deduped_cached_content_parts(&item.extraction);
-                    cache_store_operation_estimate += 3 + artefacts.len() + edges.len();
-                    rows_written +=
-                        persist_cached_content_tx(&tx, &item.extraction, retention_class)
-                            .with_context(|| {
-                                format!("persisting cached extraction for `{}`", item.desired.path)
-                            })?;
-                }
-                pre_artefacts.extend(query_current_artefacts_for_path_tx(
-                    &tx,
-                    &repo_id,
-                    &item.desired.path,
-                )?);
-                materialisation_operation_estimate += item.prepared_rows.row_operation_estimate();
-                rows_written += persist_prepared_materialisation_tx(
-                    &tx,
-                    &repo_id,
-                    &item.desired,
-                    &item.extraction,
-                    &item.prepared_rows,
-                    &parser_version,
-                    &extractor_version,
-                )
-                .with_context(|| {
-                    format!(
-                        "materialising `{}` in SQLite sync writer",
-                        item.desired.path
+                for item in &batch.items {
+                    if let Some(retention_class) = item.cache_store_retention_class {
+                        let (artefacts, edges) = deduped_cached_content_parts(&item.extraction);
+                        cache_store_operation_estimate += 3 + artefacts.len() + edges.len();
+                        rows_written +=
+                            persist_cached_content_tx(&tx, &item.extraction, retention_class)
+                                .with_context(|| {
+                                    format!(
+                                        "persisting cached extraction for `{}`",
+                                        item.desired.path
+                                    )
+                                })?;
+                    }
+                    pre_artefacts.extend(query_current_artefacts_for_path_tx(
+                        &tx,
+                        &repo_id,
+                        &item.desired.path,
+                    )?);
+                    materialisation_operation_estimate +=
+                        item.prepared_rows.row_operation_estimate();
+                    rows_written += persist_prepared_materialisation_tx(
+                        &tx,
+                        &repo_id,
+                        &item.desired,
+                        &item.extraction,
+                        &item.prepared_rows,
+                        &parser_version,
+                        &extractor_version,
                     )
-                })?;
-                post_artefacts.extend(query_current_artefacts_for_path_tx(
-                    &tx,
-                    &repo_id,
-                    &item.desired.path,
-                )?);
-            }
+                    .with_context(|| {
+                        format!(
+                            "materialising `{}` in SQLite sync writer",
+                            item.desired.path
+                        )
+                    })?;
+                    post_artefacts.extend(query_current_artefacts_for_path_tx(
+                        &tx,
+                        &repo_id,
+                        &item.desired.path,
+                    )?);
+                }
 
-            tx.commit()
-                .context("committing SQLite sync writer transaction")?;
-            Ok(WriterCommitOutcome {
-                materialized_paths,
-                removed_paths: Vec::new(),
-                pre_artefacts,
-                post_artefacts,
-                sqlite_commits: 1,
-                sqlite_rows_written: rows_written,
-                cache_store_operation_estimate,
-                materialisation_operation_estimate,
+                tx.commit()
+                    .context("committing SQLite sync writer transaction")?;
+                Ok(WriterCommitOutcome {
+                    materialized_paths,
+                    removed_paths: Vec::new(),
+                    pre_artefacts,
+                    post_artefacts,
+                    sqlite_commits: 1,
+                    sqlite_rows_written: rows_written,
+                    cache_store_operation_estimate,
+                    materialisation_operation_estimate,
+                })
             })
         })
         .await
@@ -312,27 +324,30 @@ impl SqliteSyncWriter {
 
         let touches = std::mem::take(&mut self.pending_touches);
         let connection = Arc::clone(&self.connection);
+        let sqlite_path = self.sqlite_path.clone();
         tokio::task::spawn_blocking(move || -> Result<WriterCommitOutcome> {
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
-            let tx = begin_immediate_transaction(
-                &mut connection,
-                "starting SQLite sync cache touch transaction",
-            )?;
-            let rows_written =
-                touch_cache_entries_tx(&tx, &touches).context("touching cached sync entries")?;
-            tx.commit()
-                .context("committing SQLite sync cache touch transaction")?;
-            Ok(WriterCommitOutcome {
-                materialized_paths: Vec::new(),
-                removed_paths: Vec::new(),
-                pre_artefacts: Vec::new(),
-                post_artefacts: Vec::new(),
-                sqlite_commits: 1,
-                sqlite_rows_written: rows_written,
-                cache_store_operation_estimate: rows_written,
-                materialisation_operation_estimate: 0,
+            crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path, || {
+                let tx = begin_immediate_transaction(
+                    &mut connection,
+                    "starting SQLite sync cache touch transaction",
+                )?;
+                let rows_written = touch_cache_entries_tx(&tx, &touches)
+                    .context("touching cached sync entries")?;
+                tx.commit()
+                    .context("committing SQLite sync cache touch transaction")?;
+                Ok(WriterCommitOutcome {
+                    materialized_paths: Vec::new(),
+                    removed_paths: Vec::new(),
+                    pre_artefacts: Vec::new(),
+                    post_artefacts: Vec::new(),
+                    sqlite_commits: 1,
+                    sqlite_rows_written: rows_written,
+                    cache_store_operation_estimate: rows_written,
+                    materialisation_operation_estimate: 0,
+                })
             })
         })
         .await
@@ -354,31 +369,34 @@ impl SqliteSyncWriter {
             .map(|removal| removal.path.clone())
             .collect::<Vec<_>>();
         let connection = Arc::clone(&self.connection);
+        let sqlite_path = self.sqlite_path.clone();
         tokio::task::spawn_blocking(move || -> Result<WriterCommitOutcome> {
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
-            let tx = begin_immediate_transaction(
-                &mut connection,
-                "starting SQLite removal transaction",
-            )?;
-            let mut pre_artefacts = Vec::new();
-            for path in &removed_paths {
-                pre_artefacts.extend(query_current_artefacts_for_path_tx(&tx, &repo_id, path)?);
-            }
-            let rows_written = remove_paths_tx(&tx, &repo_id, &removed_paths)
-                .context("removing deleted sync paths")?;
-            tx.commit()
-                .context("committing SQLite removal transaction")?;
-            Ok(WriterCommitOutcome {
-                materialized_paths: Vec::new(),
-                removed_paths,
-                pre_artefacts,
-                post_artefacts: Vec::new(),
-                sqlite_commits: 1,
-                sqlite_rows_written: rows_written,
-                cache_store_operation_estimate: 0,
-                materialisation_operation_estimate: rows_written,
+            crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path, || {
+                let tx = begin_immediate_transaction(
+                    &mut connection,
+                    "starting SQLite removal transaction",
+                )?;
+                let mut pre_artefacts = Vec::new();
+                for path in &removed_paths {
+                    pre_artefacts.extend(query_current_artefacts_for_path_tx(&tx, &repo_id, path)?);
+                }
+                let rows_written = remove_paths_tx(&tx, &repo_id, &removed_paths)
+                    .context("removing deleted sync paths")?;
+                tx.commit()
+                    .context("committing SQLite removal transaction")?;
+                Ok(WriterCommitOutcome {
+                    materialized_paths: Vec::new(),
+                    removed_paths,
+                    pre_artefacts,
+                    post_artefacts: Vec::new(),
+                    sqlite_commits: 1,
+                    sqlite_rows_written: rows_written,
+                    cache_store_operation_estimate: 0,
+                    materialisation_operation_estimate: rows_written,
+                })
             })
         })
         .await
@@ -390,12 +408,15 @@ impl SqliteSyncWriter {
         ttl_days: u32,
     ) -> Result<(crate::host::devql::sync::gc::GcResult, WriterCommitOutcome)> {
         let connection = Arc::clone(&self.connection);
+        let sqlite_path = self.sqlite_path.clone();
         tokio::task::spawn_blocking(move || -> Result<_> {
             let mut connection = connection
                 .lock()
                 .map_err(|_| anyhow!("locking SQLite sync writer connection"))?;
             let (result, rows_written) =
-                crate::host::devql::sync::gc::run_gc_with_connection(&mut connection, ttl_days)?;
+                crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path, || {
+                    crate::host::devql::sync::gc::run_gc_with_connection(&mut connection, ttl_days)
+                })?;
             let outcome = if rows_written == 0 {
                 WriterCommitOutcome::default()
             } else {
@@ -737,6 +758,8 @@ fn open_sync_sqlite_connection(path: &PathBuf) -> Result<Connection> {
             path.display()
         );
     }
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for sync SQLite writer")?;
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("opening SQLite database at {}", path.display()))?;
     connection
