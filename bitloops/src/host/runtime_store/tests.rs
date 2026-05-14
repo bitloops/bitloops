@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
@@ -420,6 +421,43 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
             assert_eq!(loaded.runs.len(), 1);
             assert_eq!(loaded.runs[0].run_id, "event-run-1");
             assert_eq!(loaded.runs[0].lane_key, "repo-1:test_harness.current_state");
+        },
+    );
+}
+
+#[test]
+fn daemon_runtime_store_mutations_wait_for_shared_sqlite_write_lock() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            let db_path = store.db_path().to_path_buf();
+            let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+            let blocker = std::thread::spawn(move || {
+                crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+                    locked_tx.send(()).expect("signal lock held");
+                    std::thread::sleep(Duration::from_millis(150));
+                    Ok(())
+                })
+            });
+            locked_rx.recv().expect("wait for blocker lock");
+
+            let started = Instant::now();
+            store
+                .mutate_capability_event_queue_state(|state| {
+                    state.version = 9;
+                    Ok(())
+                })
+                .expect("mutate capability event queue state");
+            let elapsed = started.elapsed();
+
+            blocker.join().expect("join blocker").expect("blocker ok");
+            assert!(
+                elapsed >= Duration::from_millis(100),
+                "runtime-store writes should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+            );
         },
     );
 }

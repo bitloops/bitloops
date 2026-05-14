@@ -93,6 +93,42 @@ fn wait_for_pid_exit(pid: u32) {
     }
 }
 
+#[test]
+fn parse_internal_daemon_process_pids_finds_orphan_daemon_processes() {
+    let output = "\
+      111 /usr/local/bin/bitloops __daemon-process --config-path /tmp/a/.bitloops/config.toml
+      222 /usr/local/bin/bitloops daemon status
+      333 /usr/local/bin/bitloops __daemon-supervisor
+      444 /usr/local/bin/bitloops __daemon-process --config-path /tmp/b/.bitloops/config.toml
+";
+
+    assert_eq!(
+        parse_internal_daemon_process_pids(output, 111, None),
+        vec![444],
+        "current process should be excluded and only internal daemon processes should match"
+    );
+}
+
+#[test]
+fn parse_internal_daemon_process_pids_filters_by_config_path() {
+    let output = "\
+      111 /usr/local/bin/bitloops __daemon-process --config-path /tmp/a/.bitloops/config.toml
+      222 /usr/local/bin/bitloops __daemon-process --config-path /tmp/b/.bitloops/config.toml
+      333 /usr/local/bin/bitloops __daemon-process --config-path=/tmp/a/.bitloops/config.toml
+      444 /usr/local/bin/bitloops __daemon-process --config-path /tmp/a/.bitloops/config.toml.bak
+";
+
+    assert_eq!(
+        parse_internal_daemon_process_pids(
+            output,
+            0,
+            Some(Path::new("/tmp/a/.bitloops/config.toml")),
+        ),
+        vec![111, 333],
+        "only daemon processes for the requested config path should match"
+    );
+}
+
 #[tokio::test]
 async fn daemon_lifecycle_logs_terminal_start_failure() {
     let temp = TempDir::new().expect("temp dir");

@@ -20,7 +20,7 @@ impl SqliteConnectionPool {
     }
 
     pub fn execute_batch(&self, sql: &str) -> Result<()> {
-        self.with_connection(|conn| {
+        self.with_write_connection(|conn| {
             conn.execute_batch(sql)
                 .context("executing SQLite statements")?;
             Ok(())
@@ -33,6 +33,16 @@ impl SqliteConnectionPool {
     ) -> Result<T> {
         let conn = open_sqlite_connection(&self.db_path)?;
         operation(&conn)
+    }
+
+    pub(crate) fn with_write_connection<T>(
+        &self,
+        operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+    ) -> Result<T> {
+        super::with_sqlite_write_lock(&self.db_path, || {
+            let conn = open_sqlite_write_connection(&self.db_path)?;
+            operation(&conn)
+        })
     }
 }
 
@@ -53,10 +63,14 @@ pub(super) fn create_sqlite_file_if_missing(db_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let conn = rusqlite::Connection::open(db_path)
-        .with_context(|| format!("creating SQLite database at {}", db_path.display()))?;
-    configure_sqlite_connection(&conn)?;
-    Ok(())
+    super::with_sqlite_write_lock(db_path, || {
+        if db_path.exists() {
+            return Ok(());
+        }
+        let conn = rusqlite::Connection::open(db_path)
+            .with_context(|| format!("creating SQLite database at {}", db_path.display()))?;
+        configure_sqlite_write_connection(&conn)
+    })
 }
 
 pub(super) fn ensure_sqlite_file_exists(db_path: &Path) -> Result<()> {
@@ -75,16 +89,30 @@ pub(super) fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connect
     let conn =
         rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
-    configure_sqlite_connection(&conn)?;
+    configure_sqlite_read_connection(&conn)?;
     Ok(conn)
 }
 
-fn configure_sqlite_connection(conn: &rusqlite::Connection) -> Result<()> {
+fn open_sqlite_write_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+    ensure_sqlite_file_exists(db_path)?;
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+    configure_sqlite_write_connection(&conn)?;
+    Ok(conn)
+}
+
+fn configure_sqlite_read_connection(conn: &rusqlite::Connection) -> Result<()> {
     conn.busy_timeout(std::time::Duration::from_secs(30))
         .context("setting SQLite busy timeout")?;
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
-    )
-    .context("configuring SQLite pragmas")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+        .context("configuring SQLite pragmas")?;
+    Ok(())
+}
+
+fn configure_sqlite_write_connection(conn: &rusqlite::Connection) -> Result<()> {
+    configure_sqlite_read_connection(conn)?;
+    conn.execute_batch("PRAGMA journal_mode = WAL;")
+        .context("configuring SQLite journal mode")?;
     Ok(())
 }

@@ -195,7 +195,7 @@ impl SessionBackend for DbSessionBackend {
             serde_json::to_string(&state.pending_prompt_attribution)
                 .context("serialising pending_prompt_attribution for session row")?;
 
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO sessions (
                     session_id, repo_id, cli_version, base_commit, attribution_base_commit,
@@ -274,7 +274,7 @@ impl SessionBackend for DbSessionBackend {
 
     fn delete_session(&self, session_id: &str) -> Result<()> {
         validate_session_id(session_id)?;
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM sessions WHERE session_id = ?1 AND repo_id = ?2",
                 params![session_id, self.repo_id.as_str()],
@@ -310,7 +310,7 @@ impl SessionBackend for DbSessionBackend {
     fn save_pre_prompt(&self, state: &PrePromptState) -> Result<()> {
         validate_session_id(&state.session_id)?;
         let data = serde_json::to_string(state).context("serialising pre-prompt state")?;
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO pre_prompt_states (session_id, repo_id, data, created_at)
                  VALUES (?1, ?2, ?3, datetime('now'))
@@ -327,7 +327,7 @@ impl SessionBackend for DbSessionBackend {
 
     fn delete_pre_prompt(&self, session_id: &str) -> Result<()> {
         validate_session_id(session_id)?;
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM pre_prompt_states WHERE session_id = ?1 AND repo_id = ?2",
                 params![session_id, self.repo_id.as_str()],
@@ -340,7 +340,7 @@ impl SessionBackend for DbSessionBackend {
     fn create_pre_task_marker(&self, state: &PreTaskState) -> Result<()> {
         validate_tool_use_id(&state.tool_use_id)?;
         let data = serde_json::to_string(state).context("serialising pre-task state")?;
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO pre_task_markers (tool_use_id, session_id, repo_id, data, created_at)
                  VALUES (?1, ?2, ?3, ?4, datetime('now'))
@@ -385,7 +385,7 @@ impl SessionBackend for DbSessionBackend {
 
     fn delete_pre_task_marker(&self, tool_use_id: &str) -> Result<()> {
         validate_tool_use_id(tool_use_id)?;
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM pre_task_markers WHERE tool_use_id = ?1 AND repo_id = ?2",
                 params![tool_use_id, self.repo_id.as_str()],

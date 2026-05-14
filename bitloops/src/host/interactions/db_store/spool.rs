@@ -342,7 +342,7 @@ impl InteractionSpool for SqliteInteractionSpool {
         let mutation = InteractionMutation::UpsertSession {
             session: session.clone(),
         };
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE;")
                 .context("starting interaction session spool transaction")?;
             let result = (|| -> Result<()> {
@@ -366,7 +366,7 @@ impl InteractionSpool for SqliteInteractionSpool {
 
     fn record_turn(&self, turn: &InteractionTurn) -> Result<()> {
         let mutation = InteractionMutation::UpsertTurn { turn: turn.clone() };
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE;")
                 .context("starting interaction turn spool transaction")?;
             let result = (|| -> Result<()> {
@@ -392,7 +392,7 @@ impl InteractionSpool for SqliteInteractionSpool {
         let mutation = InteractionMutation::AppendEvent {
             event: event.clone(),
         };
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE;")
                 .context("starting interaction event spool transaction")?;
             let result = (|| -> Result<()> {
@@ -428,7 +428,7 @@ impl InteractionSpool for SqliteInteractionSpool {
             checkpoint_id: checkpoint_id.to_string(),
             assigned_at: assigned_at.to_string(),
         };
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE;")
                 .context("starting checkpoint assignment spool transaction")?;
             let result = (|| -> Result<()> {
@@ -507,7 +507,7 @@ impl InteractionSpool for SqliteInteractionSpool {
             repository.repo_id(),
             "interaction repository",
         )?;
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT mutation_id, payload
                  FROM interaction_spool_queue

@@ -22,7 +22,7 @@ pub(crate) fn commit_has_checkpoint_mapping(repo_root: &Path, commit_sha: &str) 
     use rusqlite::OptionalExtension;
 
     let (sqlite, repo_id) = open_commit_checkpoint_mapping_db(repo_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.query_row(
             "SELECT 1
              FROM commit_checkpoints
@@ -43,7 +43,7 @@ pub fn insert_commit_checkpoint_mapping(
     checkpoint_id: &str,
 ) -> Result<()> {
     let (sqlite, repo_id) = open_commit_checkpoint_mapping_db(repo_root)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT OR IGNORE INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
              VALUES (?1, ?2, ?3)",

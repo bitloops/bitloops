@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -34,6 +35,85 @@ fn seed_store() -> (
     let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
         .expect("open repo runtime store");
     (dir, repo_root, repo, store)
+}
+
+fn block_sqlite_writer_for(
+    db_path: PathBuf,
+    hold_for: Duration,
+) -> (std::sync::mpsc::Receiver<()>, std::thread::JoinHandle<()>) {
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let blocker = std::thread::spawn(move || {
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            locked_tx.send(()).expect("signal lock held");
+            std::thread::sleep(hold_for);
+            Ok(())
+        })
+        .expect("hold sqlite write lock");
+    });
+    (locked_rx, blocker)
+}
+
+#[test]
+fn producer_spool_enqueue_waits_for_shared_runtime_sqlite_write_lock() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+
+    let (locked_rx, blocker) =
+        block_sqlite_writer_for(store.db_path().to_path_buf(), Duration::from_millis(150));
+    locked_rx.recv().expect("wait for sqlite lock");
+
+    let started = Instant::now();
+    enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+    )
+    .expect("enqueue watcher sync");
+    let elapsed = started.elapsed();
+
+    blocker.join().expect("join sqlite lock blocker");
+    assert!(
+        elapsed >= Duration::from_millis(100),
+        "producer spool enqueue should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+    );
+}
+
+#[test]
+fn producer_spool_claim_waits_for_shared_runtime_sqlite_write_lock() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+    enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+    )
+    .expect("enqueue watcher sync");
+
+    let (locked_rx, blocker) =
+        block_sqlite_writer_for(store.db_path().to_path_buf(), Duration::from_millis(150));
+    locked_rx.recv().expect("wait for sqlite lock");
+
+    let started = Instant::now();
+    let claimed =
+        claim_next_producer_spool_jobs(&store.config_root).expect("claim producer spool jobs");
+    let elapsed = started.elapsed();
+
+    blocker.join().expect("join sqlite lock blocker");
+    assert_eq!(claimed.len(), 1);
+    assert!(
+        elapsed >= Duration::from_millis(100),
+        "producer spool claim should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+    );
 }
 
 #[test]

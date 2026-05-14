@@ -198,7 +198,7 @@ impl EnrichmentCoordinator {
                     0
                 }
             };
-        let recovered_clone_rebuild_jobs = match self.workplane_store.with_connection(|conn| {
+        let recovered_clone_rebuild_jobs = match self.workplane_store.with_write_connection(|conn| {
             conn.execute(
                 "UPDATE capability_workplane_jobs
                      SET status = ?1,

@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::{Duration, Instant};
 
 use super::*;
 use crate::host::devql::file_symbol_id;
@@ -84,6 +85,37 @@ fn workspace_revision_count(repo_root: &std::path::Path, repo_id: &str) -> i64 {
         |row| row.get(0),
     )
     .expect("count workspace_revisions")
+}
+
+#[test]
+fn capture_workspace_revision_persist_waits_for_shared_sqlite_write_lock() {
+    let dir = seed_repo();
+    let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+        .expect("build devql config");
+    let db_path = devql_sqlite_path(dir.path());
+
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let db_path_for_blocker = db_path.clone();
+    let blocker = std::thread::spawn(move || {
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path_for_blocker, || {
+            locked_tx.send(()).expect("signal lock held");
+            std::thread::sleep(Duration::from_millis(150));
+            Ok(())
+        })
+        .expect("hold sqlite write lock");
+    });
+    locked_rx.recv().expect("wait for sqlite lock");
+
+    let started = Instant::now();
+    persist_workspace_revision(&cfg, "tree-hash-under-lock").expect("persist workspace revision");
+    let elapsed = started.elapsed();
+
+    blocker.join().expect("join sqlite lock blocker");
+    assert!(
+        elapsed >= Duration::from_millis(100),
+        "workspace revision persistence should wait for the shared SQLite write lock; elapsed={elapsed:?}"
+    );
 }
 
 #[test]

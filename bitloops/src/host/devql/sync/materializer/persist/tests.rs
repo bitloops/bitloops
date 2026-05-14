@@ -1,11 +1,14 @@
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
+use tempfile::TempDir;
 
 use super::{
     load_current_edges_for_local_reconciliation_with_connection,
     load_current_source_facts_for_paths_with_connection,
     load_current_targets_for_paths_for_local_resolution_with_connection,
+    reconcile_current_local_edges_for_paths_with_write_lock,
 };
 
 fn setup_edges_table(connection: &Connection) {
@@ -25,7 +28,8 @@ fn setup_edges_table(connection: &Connection) {
                 language TEXT NOT NULL,
                 start_line INTEGER,
                 end_line INTEGER,
-                metadata TEXT NOT NULL
+                metadata TEXT NOT NULL,
+                updated_at TEXT
             );",
         )
         .expect("create artefact_edges_current");
@@ -103,6 +107,66 @@ fn insert_target(
             ],
         )
         .expect("insert current target");
+}
+
+#[test]
+fn current_edge_reconciliation_waits_for_write_lock_before_reading_state() {
+    let temp = TempDir::new().expect("temp dir");
+    let sqlite_path = temp.path().join("devql.sqlite");
+    let mut connection = Connection::open(&sqlite_path).expect("open sqlite");
+    setup_edges_table(&connection);
+    setup_artefacts_table(&connection);
+
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let sqlite_path_for_blocker = sqlite_path.clone();
+    let blocker = std::thread::spawn(move || {
+        crate::storage::sqlite::with_sqlite_write_lock(&sqlite_path_for_blocker, || {
+            locked_tx.send(()).expect("signal lock held");
+            std::thread::sleep(Duration::from_millis(75));
+            let connection =
+                Connection::open(&sqlite_path_for_blocker).expect("open sqlite in blocker");
+            insert_edge(
+                &connection,
+                "stale-edge",
+                Some("old-symbol"),
+                Some("src/utils.ts::helper"),
+                "typescript",
+            );
+            insert_target(
+                &connection,
+                "src/utils.ts",
+                "new-symbol",
+                "new-artefact",
+                "src/utils.ts::helper",
+                "typescript",
+                "function_declaration",
+            );
+            std::thread::sleep(Duration::from_millis(75));
+            Ok(())
+        })
+        .expect("hold sqlite write lock");
+    });
+    locked_rx.recv().expect("wait for sqlite lock");
+
+    let started = Instant::now();
+    let affected_rows = reconcile_current_local_edges_for_paths_with_write_lock(
+        &mut connection,
+        &sqlite_path,
+        "repo",
+        &["src/utils.ts".to_string()],
+    )
+    .expect("reconcile current local edges");
+    let elapsed = started.elapsed();
+
+    blocker.join().expect("join sqlite lock blocker");
+    assert!(
+        elapsed >= Duration::from_millis(100),
+        "current edge reconciliation should wait before reading state; elapsed={elapsed:?}"
+    );
+    assert!(
+        affected_rows > 0,
+        "reconciliation should see rows inserted while the write lock was held"
+    );
 }
 
 #[test]

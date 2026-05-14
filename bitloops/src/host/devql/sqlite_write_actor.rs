@@ -149,9 +149,10 @@ fn writer_loop(path: PathBuf, receiver: Receiver<SqliteWriteRequest>) {
         .ok();
     while let Ok(request) = receiver.recv() {
         let result = match connection.as_mut() {
-            Some(connection) => execute_request(connection, &request.operation).map_err(|err| {
-                format!("serialised SQLite write for `{}`: {err:#}", path.display())
-            }),
+            Some(connection) => crate::storage::sqlite::with_sqlite_write_lock(&path, || {
+                execute_request(connection, &request.operation)
+            })
+            .map_err(|err| format!("serialised SQLite write for `{}`: {err:#}", path.display())),
             None => Err(format!(
                 "opening serialised SQLite writer connection for `{}` failed",
                 path.display()
@@ -175,7 +176,7 @@ fn execute_request(connection: &mut Connection, operation: &SqliteWriteOperation
 
 fn execute_statement_batch(connection: &mut Connection, statements: &[String]) -> Result<()> {
     let tx = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("starting serialised SQLite write transaction")?;
     for statement in statements {
         if statement.trim().is_empty() {
@@ -195,7 +196,7 @@ fn execute_architecture_graph_replace(
 ) -> Result<()> {
     validate_architecture_graph_repo_scope(request)?;
     let tx = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("starting architecture graph replacement transaction")?;
     tx.execute(
         "DELETE FROM architecture_graph_edges_current WHERE repo_id = ?1",
@@ -360,10 +361,8 @@ fn open_sqlite_writer_connection(path: &Path) -> Result<Connection> {
         .with_context(|| format!("opening SQLite database at {}", path.display()))?;
     conn.busy_timeout(Duration::from_secs(30))
         .context("setting SQLite busy timeout for serialised writer")?;
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
-    )
-    .context("configuring serialised SQLite writer connection")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+        .context("configuring serialised SQLite writer connection")?;
     Ok(conn)
 }
 

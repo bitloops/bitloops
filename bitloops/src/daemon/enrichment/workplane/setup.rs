@@ -30,7 +30,7 @@ pub(crate) fn default_state() -> EnrichmentControlState {
 pub(crate) fn migrate_legacy_semantic_workplane_rows(
     workplane_store: &DaemonSqliteRuntimeStore,
 ) -> Result<u64> {
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
             .context("starting legacy semantic workplane migration transaction")?;
         let result = (|| {

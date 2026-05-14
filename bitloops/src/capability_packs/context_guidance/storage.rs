@@ -211,7 +211,7 @@ impl SqliteContextGuidanceRepository {
         let summary_json =
             serde_json::to_string(&output.summary).context("serializing guidance summary")?;
 
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             let existing: Option<String> = conn
                 .query_row(
                     "SELECT run_id FROM context_guidance_distillation_runs
@@ -491,7 +491,7 @@ impl ContextGuidanceRepository for SqliteContextGuidanceRepository {
         repo_id: &str,
         input: ApplyTargetCompactionInput,
     ) -> Result<ApplyTargetCompactionOutcome> {
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION")
                 .context("starting context guidance compaction transaction")?;
             let result = (|| -> Result<ApplyTargetCompactionOutcome> {
