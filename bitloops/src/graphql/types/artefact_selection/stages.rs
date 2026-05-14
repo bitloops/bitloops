@@ -51,6 +51,38 @@ pub(super) struct ContextGuidanceStageData {
     pub(super) items: Vec<ContextGuidanceItem>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct ArchitectureOverviewStageData {
+    pub(super) summary: Value,
+    pub(super) expand_hint: Option<Value>,
+    pub(super) schema: Option<String>,
+}
+
+impl ArchitectureOverviewStageData {
+    pub(super) fn unavailable(selected_artefact_count: usize, reason: &str) -> Self {
+        Self {
+            summary: serde_json::json!({
+                "available": false,
+                "reason": reason,
+                "selectedArtefactCount": selected_artefact_count,
+                "matchedArtefactCount": 0,
+                "directNodeCount": 0,
+                "relatedNodeCount": 0,
+                "edgeCount": 0,
+                "nodeKinds": {},
+                "entryPointCount": 0,
+                "componentCount": 0,
+                "containerCount": 0,
+                "assertedCount": 0,
+                "suppressedCount": 0,
+                "topNodes": []
+            }),
+            expand_hint: None,
+            schema: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum HistoricalEvidenceKind {
     SymbolProvenance,

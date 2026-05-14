@@ -10,17 +10,18 @@ use super::super::{
     TestHarnessTestsResult,
 };
 use super::stages::{
-    CheckpointStageData, CloneStageData, ContextGuidanceCategory, ContextGuidanceItem,
-    ContextGuidanceStageData, ContextGuidanceStageResult, DependencyStageData,
+    ArchitectureOverviewStageData, CheckpointStageData, CloneStageData, ContextGuidanceCategory,
+    ContextGuidanceItem, ContextGuidanceStageData, ContextGuidanceStageResult, DependencyStageData,
     HistoricalContextStageData, TestsStageData,
 };
 use super::support::{
     CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA, CONTEXT_GUIDANCE_STAGE_SCHEMA,
     DEPENDENCY_STAGE_SCHEMA, HISTORICAL_CONTEXT_STAGE_SCHEMA, SelectionSummaryStages,
-    TESTS_STAGE_SCHEMA, build_checkpoint_summary, build_clone_expand_hint, build_clone_summary,
-    build_dependency_expand_hint, build_dependency_summary, build_historical_context_summary,
-    build_selection_summary, build_tests_stage_args, build_tests_summary, decode_stage_rows,
-    dedup_dependency_edges, selection_stage_row_from_artefact,
+    TESTS_STAGE_SCHEMA, build_architecture_overview_stage, build_checkpoint_summary,
+    build_clone_expand_hint, build_clone_summary, build_dependency_expand_hint,
+    build_dependency_summary, build_historical_context_summary, build_selection_summary,
+    build_tests_stage_args, build_tests_summary, decode_stage_rows, dedup_dependency_edges,
+    selection_stage_row_from_artefact,
 };
 use super::{
     ArtefactSelection, ArtefactSelectionMode, CheckpointStageResult, CloneStageResult,
@@ -46,6 +47,7 @@ impl ArtefactSelection {
             .resolve_context_guidance_stage_data(ctx, None, None, None, None, None)
             .await?;
         let http = self.resolve_http_context_stage_data(ctx, 10).await?;
+        let architecture = self.resolve_architecture_overview_stage_data(ctx).await?;
 
         Ok(async_graphql::types::Json(build_selection_summary(
             self.artefacts.len(),
@@ -57,6 +59,7 @@ impl ArtefactSelection {
                 historical_context: &historical_context,
                 context_guidance: &context_guidance,
                 http: &http.overview.0,
+                architecture: &architecture,
             },
         )))
     }
@@ -527,6 +530,35 @@ impl ArtefactSelection {
                     "failed to resolve selected HTTP context from search terms: {err:#}"
                 ))
             })
+    }
+
+    async fn resolve_architecture_overview_stage_data(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<ArchitectureOverviewStageData> {
+        if self.artefacts.is_empty() {
+            return Ok(ArchitectureOverviewStageData::unavailable(
+                0,
+                "empty_selection",
+            ));
+        }
+
+        let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let overview = context
+            .architecture_overview_for_targets(
+                &self.scope,
+                &self.artefact_ids(),
+                &self.symbol_ids(),
+                &self.paths(),
+            )
+            .await
+            .map_err(|err| {
+                backend_error(format!(
+                    "failed to resolve selected architecture overview: {err:#}"
+                ))
+            })?;
+
+        Ok(build_architecture_overview_stage(overview))
     }
 
     fn http_search_terms(&self) -> Vec<String> {

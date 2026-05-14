@@ -9,16 +9,17 @@ use crate::capability_packs::semantic_clones::scoring::{
     RELATION_KIND_WEAK_CLONE_CANDIDATE,
 };
 use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint_json;
+use crate::graphql::context::ArchitectureGraphTargetOverview;
 use crate::graphql::{backend_error, bad_user_input_error};
 
 use super::super::{
-    Artefact, Checkpoint, CloneSummary, DependencyEdge, DepsDirection, EdgeKind,
-    ExpandHintParameter, TestHarnessTestsResult,
+    ArchitectureGraphNode, ArchitectureGraphNodeKind, Artefact, Checkpoint, CloneSummary,
+    DependencyEdge, DepsDirection, EdgeKind, ExpandHintParameter, TestHarnessTestsResult,
 };
 use super::stages::{
-    CheckpointStageData, CloneExpandHint, CloneStageData, ContextGuidanceStageData,
-    DependencyExpandHint, DependencyStageData, HistoricalContextItem, HistoricalContextStageData,
-    HistoricalMatchReason, TestsStageData,
+    ArchitectureOverviewStageData, CheckpointStageData, CloneExpandHint, CloneStageData,
+    ContextGuidanceStageData, DependencyExpandHint, DependencyStageData, HistoricalContextItem,
+    HistoricalContextStageData, HistoricalMatchReason, TestsStageData,
 };
 
 pub(super) fn decode_stage_rows<T: DeserializeOwned>(
@@ -335,6 +336,7 @@ pub(super) struct SelectionSummaryStages<'a> {
     pub(super) historical_context: &'a HistoricalContextStageData,
     pub(super) context_guidance: &'a ContextGuidanceStageData,
     pub(super) http: &'a Value,
+    pub(super) architecture: &'a ArchitectureOverviewStageData,
 }
 
 pub(super) fn build_selection_summary(
@@ -362,6 +364,124 @@ pub(super) fn build_selection_summary(
             stages.context_guidance.schema.as_deref(),
         ),
         "http": stages.http,
+        "architecture": json_selection_stage_entry(
+            &stages.architecture.summary,
+            stages.architecture.expand_hint.as_ref(),
+            stages.architecture.schema.as_deref(),
+        ),
+    })
+}
+
+pub(super) fn build_architecture_overview_stage(
+    overview: ArchitectureGraphTargetOverview,
+) -> ArchitectureOverviewStageData {
+    if !overview.available {
+        let reason = overview
+            .reason
+            .as_deref()
+            .unwrap_or("no_matching_architecture_facts");
+        return ArchitectureOverviewStageData::unavailable(
+            overview.selected_artefact_count,
+            reason,
+        );
+    }
+
+    let mut node_kinds = serde_json::Map::new();
+    let mut entry_point_count = 0usize;
+    let mut component_count = 0usize;
+    let mut container_count = 0usize;
+    let mut asserted_count = 0usize;
+    let mut suppressed_count = 0usize;
+    for node in &overview.nodes {
+        let kind = node.kind.as_db();
+        let next = node_kinds
+            .get(kind)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            + 1;
+        node_kinds.insert(kind.to_string(), json!(next));
+        match node.kind {
+            ArchitectureGraphNodeKind::EntryPoint => entry_point_count += 1,
+            ArchitectureGraphNodeKind::Component => component_count += 1,
+            ArchitectureGraphNodeKind::Container => container_count += 1,
+            _ => {}
+        }
+        if node.asserted {
+            asserted_count += 1;
+        }
+        if node.suppressed {
+            suppressed_count += 1;
+        }
+    }
+
+    let mut top_nodes = overview.nodes.clone();
+    top_nodes.sort_by(compare_architecture_overview_nodes);
+    top_nodes.truncate(8);
+
+    ArchitectureOverviewStageData {
+        summary: json!({
+            "available": true,
+            "reason": null,
+            "selectedArtefactCount": overview.selected_artefact_count,
+            "matchedArtefactCount": overview.matched_artefact_ids.len(),
+            "directNodeCount": overview.direct_node_count,
+            "relatedNodeCount": overview.nodes.len(),
+            "edgeCount": overview.edges.len(),
+            "nodeKinds": Value::Object(node_kinds),
+            "entryPointCount": entry_point_count,
+            "componentCount": component_count,
+            "containerCount": container_count,
+            "assertedCount": asserted_count,
+            "suppressedCount": suppressed_count,
+            "topNodes": top_nodes
+                .iter()
+                .map(architecture_overview_node_json)
+                .collect::<Vec<_>>(),
+        }),
+        expand_hint: Some(json!({
+            "intent": "Inspect architecture graph facts for the selected artefacts.",
+            "template": "bitloops devql query '{ selectArtefacts(...) { artefacts { id path architectureNode { id kind label entryKind confidence } } } }'",
+        })),
+        schema: Some(ARCHITECTURE_OVERVIEW_SCHEMA.to_string()),
+    }
+}
+
+fn compare_architecture_overview_nodes(
+    left: &ArchitectureGraphNode,
+    right: &ArchitectureGraphNode,
+) -> std::cmp::Ordering {
+    architecture_overview_node_priority(left.kind)
+        .cmp(&architecture_overview_node_priority(right.kind))
+        .then_with(|| left.path.cmp(&right.path))
+        .then_with(|| left.label.cmp(&right.label))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn architecture_overview_node_priority(kind: ArchitectureGraphNodeKind) -> u8 {
+    match kind {
+        ArchitectureGraphNodeKind::EntryPoint => 0,
+        ArchitectureGraphNodeKind::Component => 1,
+        ArchitectureGraphNodeKind::Container => 2,
+        ArchitectureGraphNodeKind::Node => 3,
+        ArchitectureGraphNodeKind::System => 4,
+        ArchitectureGraphNodeKind::DeploymentUnit => 5,
+        ArchitectureGraphNodeKind::Flow => 6,
+        _ => 7,
+    }
+}
+
+fn architecture_overview_node_json(node: &ArchitectureGraphNode) -> Value {
+    json!({
+        "id": &node.id,
+        "kind": node.kind.as_db(),
+        "label": &node.label,
+        "path": &node.path,
+        "artefactId": &node.artefact_id,
+        "symbolId": &node.symbol_id,
+        "entryKind": &node.entry_kind,
+        "confidence": node.confidence,
+        "asserted": node.asserted,
+        "suppressed": node.suppressed,
     })
 }
 
@@ -410,6 +530,21 @@ fn selection_stage_entry(
             dependency_expand_hint_to_value(expand_hint),
         );
     }
+    entry.insert("schema".to_string(), json!(schema));
+    Value::Object(entry)
+}
+
+fn json_selection_stage_entry(
+    summary: &Value,
+    expand_hint: Option<&Value>,
+    schema: Option<&str>,
+) -> Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("overview".to_string(), summary.clone());
+    entry.insert(
+        "expandHint".to_string(),
+        expand_hint.cloned().unwrap_or(Value::Null),
+    );
     entry.insert("schema".to_string(), json!(schema));
     Value::Object(entry)
 }
@@ -705,4 +840,31 @@ enum ContextGuidanceConfidence {
   HIGH
   MEDIUM
   LOW
+}"#;
+
+pub(super) const ARCHITECTURE_OVERVIEW_SCHEMA: &str = r#"type ArtefactSelectionOverview {
+  architecture: ArchitectureOverviewStage!
+}
+
+type ArchitectureOverviewStage {
+  overview: JSON!
+  expandHint: JSON
+  schema: String
+}
+
+type ArchitectureOverview {
+  available: Boolean!
+  reason: String
+  selectedArtefactCount: Int!
+  matchedArtefactCount: Int!
+  directNodeCount: Int!
+  relatedNodeCount: Int!
+  edgeCount: Int!
+  nodeKinds: JSON!
+  entryPointCount: Int!
+  componentCount: Int!
+  containerCount: Int!
+  assertedCount: Int!
+  suppressedCount: Int!
+  topNodes: [JSON!]!
 }"#;

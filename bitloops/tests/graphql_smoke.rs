@@ -4,6 +4,7 @@ mod test_harness_support;
 mod fixtures;
 
 use crate::fixtures::{run_query_json_until, seeded_rust_graphql_workspace};
+use rusqlite::{Connection, params};
 use serde_json::Value;
 
 const FIXTURE_FILE_PATH: &str = "src/repositories/user_repository.rs";
@@ -86,6 +87,70 @@ fn bitloops_devql_query_smoke_end_to_end() {
         normalise_artefact_rows(&raw_nodes),
         "DSL output should match raw GraphQL nodes"
     );
+}
+
+#[test]
+fn select_artefacts_overview_includes_architecture_stage_end_to_end() {
+    if !localhost_bind_available("select_artefacts_overview_includes_architecture_stage_end_to_end")
+    {
+        return;
+    }
+
+    let seeded = seeded_rust_graphql_workspace("graphql-architecture-overview");
+    seed_architecture_node_for_fixture(&seeded);
+
+    let graphql_query = r#"
+        {
+          selectArtefacts(by: { path: "src/repositories/user_repository.rs" }) {
+            overview
+          }
+        }
+    "#;
+
+    let output = run_query_json_until(
+        &seeded,
+        &["devql", "query", "--graphql", "--compact", graphql_query],
+        "selected architecture overview",
+        |payload| {
+            payload["selectArtefacts"]["overview"]["architecture"]["overview"]["available"]
+                .as_bool()
+                == Some(true)
+        },
+    );
+    let architecture = &output["selectArtefacts"]["overview"]["architecture"];
+
+    assert_eq!(architecture["overview"]["available"], true);
+    assert_eq!(architecture["overview"]["matchedArtefactCount"], 1);
+    assert_eq!(architecture["overview"]["nodeKinds"]["NODE"], 1);
+}
+
+fn seed_architecture_node_for_fixture(seeded: &fixtures::SeededGraphqlWorkspace) {
+    let conn = Connection::open(seeded.workspace.db_path()).expect("open seeded DevQL SQLite");
+    let (repo_id, artefact_id): (String, String) = conn
+        .query_row(
+            "SELECT repo_id, artefact_id FROM artefacts_current WHERE path = ?1 ORDER BY symbol_id LIMIT 1",
+            [FIXTURE_FILE_PATH],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("fixture artefact row exists");
+
+    conn.execute(
+        r#"
+INSERT INTO architecture_graph_nodes_current (
+  repo_id, node_id, node_kind, label, artefact_id, symbol_id, path, entry_kind,
+  source_kind, confidence, provenance_json, evidence_json, properties_json
+) VALUES (
+  ?1, 'test-architecture-node', 'NODE', 'UserRepository', ?2, NULL, ?3, NULL,
+  'COMPUTED', 1.0, '{}', '[]', '{}'
+)
+ON CONFLICT(repo_id, node_id) DO UPDATE SET
+  artefact_id = excluded.artefact_id,
+  path = excluded.path,
+  updated_at = datetime('now')
+"#,
+        params![repo_id, artefact_id, FIXTURE_FILE_PATH],
+    )
+    .expect("seed architecture graph node");
 }
 
 fn extract_file_connection_nodes(payload: &Value) -> Vec<Value> {

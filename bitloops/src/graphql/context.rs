@@ -29,6 +29,8 @@ use super::scope::SelectedRepository;
 use super::subscriptions::SubscriptionHub;
 
 #[allow(unused_imports)]
+pub(crate) use architecture_graph::ArchitectureGraphTargetOverview;
+#[allow(unused_imports)]
 pub(crate) use historical_context::HistoricalContextSelectionInput;
 
 const BLOB_HEALTHCHECK_KEY: &str = "__bitloops/graphql/healthcheck";

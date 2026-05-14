@@ -3,6 +3,11 @@ use crate::capability_packs::semantic_clones::scoring::{
     RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
     RELATION_KIND_WEAK_CLONE_CANDIDATE,
 };
+use crate::graphql::context::ArchitectureGraphTargetOverview;
+use crate::graphql::types::{
+    ArchitectureGraphEdge, ArchitectureGraphEdgeKind, ArchitectureGraphNode,
+    ArchitectureGraphNodeKind,
+};
 use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineRangeInput};
 
 use super::support::{
@@ -14,9 +19,10 @@ use super::{
     ArtefactSelectorInput, ArtefactSelectorMode, CloneExpandHint, DependencyExpandHint, SearchMode,
 };
 use crate::graphql::types::artefact_selection::stages::{
-    CheckpointStageData, CloneStageData, ContextGuidanceItem, ContextGuidanceStageData,
-    DependencyStageData, HistoricalContextItem, HistoricalContextStageData, HistoricalMatchReason,
-    HistoricalMatchStrength, HistoricalToolEvent, TestsStageData,
+    ArchitectureOverviewStageData, CheckpointStageData, CloneStageData, ContextGuidanceItem,
+    ContextGuidanceStageData, DependencyStageData, HistoricalContextItem,
+    HistoricalContextStageData, HistoricalMatchReason, HistoricalMatchStrength,
+    HistoricalToolEvent, TestsStageData,
 };
 
 fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> DependencyEdge {
@@ -31,6 +37,57 @@ fn test_dependency_edge(id: &str, edge_kind: EdgeKind, to_symbol_ref: &str) -> D
         end_line: Some(1),
         metadata: None,
         scope: crate::graphql::ResolverScope::default(),
+    }
+}
+
+fn test_architecture_node(
+    id: &str,
+    kind: ArchitectureGraphNodeKind,
+    label: &str,
+    artefact_id: Option<&str>,
+    path: Option<&str>,
+) -> ArchitectureGraphNode {
+    ArchitectureGraphNode {
+        id: id.to_string(),
+        kind,
+        label: label.to_string(),
+        artefact_id: artefact_id.map(str::to_string),
+        symbol_id: None,
+        path: path.map(str::to_string),
+        entry_kind: None,
+        source_kind: "COMPUTED".to_string(),
+        confidence: 1.0,
+        computed: true,
+        asserted: false,
+        suppressed: false,
+        effective: true,
+        provenance: async_graphql::types::Json(serde_json::json!({})),
+        computed_provenance: async_graphql::types::Json(serde_json::json!({})),
+        asserted_provenance: async_graphql::types::Json(serde_json::Value::Null),
+        evidence: async_graphql::types::Json(serde_json::json!([])),
+        properties: async_graphql::types::Json(serde_json::json!({})),
+        annotations: Vec::new(),
+    }
+}
+
+fn test_architecture_edge(id: &str, from_node_id: &str, to_node_id: &str) -> ArchitectureGraphEdge {
+    ArchitectureGraphEdge {
+        id: id.to_string(),
+        kind: ArchitectureGraphEdgeKind::Implements,
+        from_node_id: from_node_id.to_string(),
+        to_node_id: to_node_id.to_string(),
+        source_kind: "COMPUTED".to_string(),
+        confidence: 1.0,
+        computed: true,
+        asserted: false,
+        suppressed: false,
+        effective: true,
+        provenance: async_graphql::types::Json(serde_json::json!({})),
+        computed_provenance: async_graphql::types::Json(serde_json::json!({})),
+        asserted_provenance: async_graphql::types::Json(serde_json::Value::Null),
+        evidence: async_graphql::types::Json(serde_json::json!([])),
+        properties: async_graphql::types::Json(serde_json::json!({})),
+        annotations: Vec::new(),
     }
 }
 
@@ -124,40 +181,56 @@ fn historical_context_summary_counts_distinct_evidence() {
     assert!(build_historical_context_expand_hint(0).is_none());
 }
 
+fn empty_overview_stage_inputs() -> (
+    CheckpointStageData,
+    CloneStageData,
+    DependencyStageData,
+    TestsStageData,
+    HistoricalContextStageData,
+    ContextGuidanceStageData,
+) {
+    (
+        CheckpointStageData {
+            summary: serde_json::json!({ "totalCount": 0 }),
+            schema: None,
+            items: Vec::new(),
+        },
+        CloneStageData {
+            summary: serde_json::json!({ "counts": { "total": 0 } }),
+            expand_hint: None,
+            schema: None,
+            items: Vec::new(),
+        },
+        DependencyStageData {
+            summary: serde_json::json!({ "dependencies": { "total": 0 } }),
+            expand_hint: None,
+            schema: None,
+            items: Vec::new(),
+        },
+        TestsStageData {
+            summary: serde_json::json!({ "totalCoveringTests": 0 }),
+            schema: None,
+            items: Vec::new(),
+        },
+        HistoricalContextStageData {
+            summary: serde_json::json!({ "totalCount": 0 }),
+            schema: None,
+            items: Vec::new(),
+        },
+        ContextGuidanceStageData {
+            summary: serde_json::json!({ "totalCount": 0 }),
+            schema: None,
+            items: Vec::new(),
+        },
+    )
+}
+
 #[test]
 fn selection_summary_includes_historical_context_stage() {
-    let checkpoints = CheckpointStageData {
-        summary: serde_json::json!({ "totalCount": 0 }),
-        schema: None,
-        items: Vec::new(),
-    };
-    let clones = CloneStageData {
-        summary: serde_json::json!({ "counts": { "total": 0 } }),
-        expand_hint: None,
-        schema: None,
-        items: Vec::new(),
-    };
-    let deps = DependencyStageData {
-        summary: serde_json::json!({ "dependencies": { "total": 0 } }),
-        expand_hint: None,
-        schema: None,
-        items: Vec::new(),
-    };
-    let tests = TestsStageData {
-        summary: serde_json::json!({ "totalCoveringTests": 0 }),
-        schema: None,
-        items: Vec::new(),
-    };
-    let historical_context = HistoricalContextStageData {
-        summary: serde_json::json!({ "totalCount": 0 }),
-        schema: None,
-        items: Vec::new(),
-    };
-    let context_guidance = ContextGuidanceStageData {
-        summary: serde_json::json!({ "totalCount": 0 }),
-        schema: None,
-        items: Vec::new(),
-    };
+    let (checkpoints, clones, deps, tests, historical_context, context_guidance) =
+        empty_overview_stage_inputs();
+    let architecture =
+        ArchitectureOverviewStageData::unavailable(1, "no_matching_architecture_facts");
 
     let summary = build_selection_summary(
         1,
@@ -176,6 +249,7 @@ fn selection_summary_includes_historical_context_stage() {
                 "template": "selectArtefacts(...){ httpContext { bundles { ... } } }"
             }
             }),
+            architecture: &architecture,
         },
     );
 
@@ -195,6 +269,193 @@ fn selection_summary_includes_historical_context_stage() {
     );
     assert_eq!(summary["http"]["bundleCount"], 0);
     assert_eq!(summary["http"]["riskCount"], 0);
+}
+
+#[test]
+fn selection_summary_includes_unavailable_architecture_stage() {
+    let (checkpoints, clones, deps, tests, historical_context, context_guidance) =
+        empty_overview_stage_inputs();
+    let architecture =
+        ArchitectureOverviewStageData::unavailable(2, "no_matching_architecture_facts");
+
+    let summary = build_selection_summary(
+        2,
+        SelectionSummaryStages {
+            checkpoints: &checkpoints,
+            clones: &clones,
+            deps: &deps,
+            tests: &tests,
+            historical_context: &historical_context,
+            context_guidance: &context_guidance,
+            http: &serde_json::json!({
+                "bundleCount": 0,
+                "riskCount": 0,
+                "topRisks": []
+            }),
+            architecture: &architecture,
+        },
+    );
+
+    assert_eq!(
+        summary["architecture"],
+        serde_json::json!({
+            "overview": {
+                "available": false,
+                "reason": "no_matching_architecture_facts",
+                "selectedArtefactCount": 2,
+                "matchedArtefactCount": 0,
+                "directNodeCount": 0,
+                "relatedNodeCount": 0,
+                "edgeCount": 0,
+                "nodeKinds": {},
+                "entryPointCount": 0,
+                "componentCount": 0,
+                "containerCount": 0,
+                "assertedCount": 0,
+                "suppressedCount": 0,
+                "topNodes": []
+            },
+            "expandHint": null,
+            "schema": null
+        })
+    );
+}
+
+#[test]
+fn selection_summary_includes_available_architecture_stage() {
+    let (checkpoints, clones, deps, tests, historical_context, context_guidance) =
+        empty_overview_stage_inputs();
+    let architecture = ArchitectureOverviewStageData {
+        summary: serde_json::json!({
+            "available": true,
+            "reason": null,
+            "selectedArtefactCount": 1,
+            "matchedArtefactCount": 1,
+            "directNodeCount": 1,
+            "relatedNodeCount": 2,
+            "edgeCount": 2,
+            "nodeKinds": {
+                "NODE": 1,
+                "COMPONENT": 1,
+                "CONTAINER": 1
+            },
+            "entryPointCount": 0,
+            "componentCount": 1,
+            "containerCount": 1,
+            "assertedCount": 0,
+            "suppressedCount": 0,
+            "topNodes": [
+                {
+                    "id": "component-1",
+                    "kind": "COMPONENT",
+                    "label": "src/service",
+                    "path": "src/service.rs",
+                    "artefactId": null,
+                    "symbolId": null,
+                    "entryKind": null,
+                    "confidence": 0.55,
+                    "asserted": false,
+                    "suppressed": false
+                }
+            ]
+        }),
+        expand_hint: Some(serde_json::json!({
+            "intent": "Inspect architecture graph facts for the selected artefacts.",
+            "template": "bitloops devql query '{ selectArtefacts(...) { artefacts { id path architectureNode { id kind label entryKind confidence } } } }'"
+        })),
+        schema: Some(super::support::ARCHITECTURE_OVERVIEW_SCHEMA.to_string()),
+    };
+
+    let summary = build_selection_summary(
+        1,
+        SelectionSummaryStages {
+            checkpoints: &checkpoints,
+            clones: &clones,
+            deps: &deps,
+            tests: &tests,
+            historical_context: &historical_context,
+            context_guidance: &context_guidance,
+            http: &serde_json::json!({
+                "bundleCount": 0,
+                "riskCount": 0,
+                "topRisks": []
+            }),
+            architecture: &architecture,
+        },
+    );
+
+    assert_eq!(summary["architecture"]["overview"]["available"], true);
+    assert_eq!(
+        summary["architecture"]["overview"]["matchedArtefactCount"],
+        1
+    );
+    assert_eq!(
+        summary["architecture"]["overview"]["nodeKinds"]["COMPONENT"],
+        1
+    );
+    assert_eq!(
+        summary["architecture"]["expandHint"]["template"],
+        "bitloops devql query '{ selectArtefacts(...) { artefacts { id path architectureNode { id kind label entryKind confidence } } } }'"
+    );
+    assert!(
+        summary["architecture"]["schema"]
+            .as_str()
+            .unwrap()
+            .contains("architecture")
+    );
+}
+
+#[test]
+fn architecture_overview_stage_summarizes_nodes_edges_and_top_nodes() {
+    let overview = ArchitectureGraphTargetOverview {
+        available: true,
+        reason: None,
+        selected_artefact_count: 1,
+        matched_artefact_ids: vec!["artefact-main".to_string()],
+        direct_node_count: 1,
+        nodes: vec![
+            test_architecture_node(
+                "node-main",
+                ArchitectureGraphNodeKind::Node,
+                "main",
+                Some("artefact-main"),
+                Some("src/main.rs"),
+            ),
+            test_architecture_node(
+                "component-main",
+                ArchitectureGraphNodeKind::Component,
+                "src/main",
+                None,
+                Some("src/main.rs"),
+            ),
+        ],
+        edges: vec![test_architecture_edge(
+            "node-component",
+            "node-main",
+            "component-main",
+        )],
+    };
+
+    let stage = super::support::build_architecture_overview_stage(overview);
+
+    assert_eq!(stage.summary["available"], true);
+    assert_eq!(stage.summary["selectedArtefactCount"], 1);
+    assert_eq!(stage.summary["matchedArtefactCount"], 1);
+    assert_eq!(stage.summary["directNodeCount"], 1);
+    assert_eq!(stage.summary["relatedNodeCount"], 2);
+    assert_eq!(stage.summary["edgeCount"], 1);
+    assert_eq!(stage.summary["nodeKinds"]["NODE"], 1);
+    assert_eq!(stage.summary["nodeKinds"]["COMPONENT"], 1);
+    assert_eq!(stage.summary["componentCount"], 1);
+    assert_eq!(stage.summary["topNodes"][0]["id"], "component-main");
+    assert!(stage.expand_hint.is_some());
+    assert!(
+        stage
+            .schema
+            .as_deref()
+            .unwrap()
+            .contains("ArchitectureOverview")
+    );
 }
 
 #[test]

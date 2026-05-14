@@ -24,6 +24,31 @@ use flows::*;
 use storage::*;
 use systems::*;
 
+#[derive(Debug, Clone)]
+pub(crate) struct ArchitectureGraphTargetOverview {
+    pub(crate) available: bool,
+    pub(crate) reason: Option<String>,
+    pub(crate) selected_artefact_count: usize,
+    pub(crate) matched_artefact_ids: Vec<String>,
+    pub(crate) direct_node_count: usize,
+    pub(crate) nodes: Vec<ArchitectureGraphNode>,
+    pub(crate) edges: Vec<ArchitectureGraphEdge>,
+}
+
+impl ArchitectureGraphTargetOverview {
+    pub(crate) fn unavailable(selected_artefact_count: usize, reason: &str) -> Self {
+        Self {
+            available: false,
+            reason: Some(reason.to_string()),
+            selected_artefact_count,
+            matched_artefact_ids: Vec::new(),
+            direct_node_count: 0,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        }
+    }
+}
+
 impl DevqlGraphqlContext {
     pub(crate) async fn list_architecture_graph(
         &self,
@@ -293,6 +318,151 @@ impl DevqlGraphqlContext {
             .into_iter()
             .find(|node| node.artefact_id.as_deref() == Some(artefact_id)))
     }
+
+    pub(crate) async fn architecture_overview_for_targets(
+        &self,
+        scope: &ResolverScope,
+        artefact_ids: &[String],
+        symbol_ids: &[String],
+        paths: &[String],
+    ) -> Result<ArchitectureGraphTargetOverview> {
+        if scope.temporal_scope().is_some() {
+            return Ok(ArchitectureGraphTargetOverview::unavailable(
+                artefact_ids.len(),
+                "unsupported_scope",
+            ));
+        }
+
+        let graph = match self.list_architecture_graph(scope, None, None, None).await {
+            Ok(graph) => graph,
+            Err(err) if is_missing_architecture_graph_table_error(&err) => {
+                return Ok(ArchitectureGraphTargetOverview::unavailable(
+                    artefact_ids.len(),
+                    "missing_architecture_graph_tables",
+                ));
+            }
+            Err(err) => return Err(err),
+        };
+
+        Ok(architecture_target_overview_from_graph(
+            graph,
+            artefact_ids,
+            symbol_ids,
+            paths,
+        ))
+    }
+}
+
+const ARCHITECTURE_OVERVIEW_RELATED_HOPS: usize = 2;
+
+fn architecture_target_overview_from_graph(
+    graph: ArchitectureGraph,
+    artefact_ids: &[String],
+    symbol_ids: &[String],
+    paths: &[String],
+) -> ArchitectureGraphTargetOverview {
+    let selected_artefact_count = artefact_ids.len();
+    if artefact_ids.is_empty() && symbol_ids.is_empty() && paths.is_empty() {
+        return ArchitectureGraphTargetOverview::unavailable(
+            selected_artefact_count,
+            "empty_selection",
+        );
+    }
+
+    let artefact_ids = artefact_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let symbol_ids = symbol_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let paths = paths.iter().map(String::as_str).collect::<BTreeSet<_>>();
+
+    let mut nodes_by_id = graph
+        .nodes
+        .into_iter()
+        .map(|node| (node.id.clone(), node))
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = graph.edges;
+    edges.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut direct_node_ids = BTreeSet::new();
+    let mut matched_artefact_ids = BTreeSet::new();
+    for node in nodes_by_id.values() {
+        let artefact_match = node
+            .artefact_id
+            .as_deref()
+            .is_some_and(|id| artefact_ids.contains(id));
+        let symbol_match = node
+            .symbol_id
+            .as_deref()
+            .is_some_and(|id| symbol_ids.contains(id));
+        let path_match = node
+            .path
+            .as_deref()
+            .is_some_and(|path| paths.contains(path));
+        if artefact_match || symbol_match || path_match {
+            direct_node_ids.insert(node.id.clone());
+            if let Some(artefact_id) = node.artefact_id.as_ref()
+                && artefact_ids.contains(artefact_id.as_str())
+            {
+                matched_artefact_ids.insert(artefact_id.clone());
+            }
+        }
+    }
+
+    if direct_node_ids.is_empty() {
+        return ArchitectureGraphTargetOverview::unavailable(
+            selected_artefact_count,
+            "no_matching_architecture_facts",
+        );
+    }
+
+    let mut included_node_ids = direct_node_ids.clone();
+    for _ in 0..ARCHITECTURE_OVERVIEW_RELATED_HOPS {
+        let mut next_node_ids = included_node_ids.clone();
+        for edge in &edges {
+            if included_node_ids.contains(&edge.from_node_id)
+                || included_node_ids.contains(&edge.to_node_id)
+            {
+                next_node_ids.insert(edge.from_node_id.clone());
+                next_node_ids.insert(edge.to_node_id.clone());
+            }
+        }
+        if next_node_ids == included_node_ids {
+            break;
+        }
+        included_node_ids = next_node_ids;
+    }
+
+    let mut nodes = included_node_ids
+        .iter()
+        .filter_map(|id| nodes_by_id.remove(id))
+        .collect::<Vec<_>>();
+    nodes.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let included_node_ids = nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .collect::<BTreeSet<_>>();
+    let edges = edges
+        .into_iter()
+        .filter(|edge| {
+            included_node_ids.contains(edge.from_node_id.as_str())
+                && included_node_ids.contains(edge.to_node_id.as_str())
+        })
+        .collect::<Vec<_>>();
+
+    ArchitectureGraphTargetOverview {
+        available: true,
+        reason: None,
+        selected_artefact_count,
+        matched_artefact_ids: matched_artefact_ids.into_iter().collect(),
+        direct_node_count: direct_node_ids.len(),
+        nodes,
+        edges,
+    }
 }
 
 #[cfg(test)]
@@ -390,6 +560,104 @@ mod tests {
             properties: Json(serde_json::json!({})),
             annotations: Vec::new(),
         }
+    }
+
+    #[test]
+    fn architecture_target_overview_includes_direct_and_nearby_nodes() {
+        let code = flow_code_node("code-main", "src/main.rs", "artefact-main");
+        let entry = flow_entry_point("entry-main", "src/main.rs", "artefact-main");
+        let component = graph_node(
+            "component-cli",
+            ArchitectureGraphNodeKind::Component,
+            "src/main",
+            serde_json::json!({ "component_key": "src/main" }),
+        );
+        let container = graph_node(
+            "container-cli",
+            ArchitectureGraphNodeKind::Container,
+            "bitloops-cli",
+            serde_json::json!({ "container_key": "bitloops-cli" }),
+        );
+        let unrelated = flow_code_node("code-other", "src/other.rs", "artefact-other");
+        let graph = ArchitectureGraph {
+            nodes: vec![code, entry, component, container, unrelated],
+            edges: vec![
+                graph_edge(
+                    "code-component",
+                    ArchitectureGraphEdgeKind::Implements,
+                    "code-main",
+                    "component-cli",
+                ),
+                graph_edge(
+                    "container-component",
+                    ArchitectureGraphEdgeKind::Contains,
+                    "container-cli",
+                    "component-cli",
+                ),
+            ],
+            total_nodes: 5,
+            total_edges: 2,
+        };
+
+        let overview = architecture_target_overview_from_graph(
+            graph,
+            &["artefact-main".to_string()],
+            &[],
+            &["src/main.rs".to_string()],
+        );
+
+        assert!(overview.available);
+        assert_eq!(overview.reason, None);
+        assert_eq!(
+            overview.matched_artefact_ids,
+            vec!["artefact-main".to_string()]
+        );
+        assert_eq!(overview.direct_node_count, 2);
+        assert_eq!(
+            overview
+                .nodes
+                .iter()
+                .map(|node| node.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["code-main", "component-cli", "container-cli", "entry-main"]
+        );
+        assert_eq!(
+            overview
+                .edges
+                .iter()
+                .map(|edge| edge.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["code-component", "container-component"]
+        );
+    }
+
+    #[test]
+    fn architecture_target_overview_reports_no_matching_facts() {
+        let graph = ArchitectureGraph {
+            nodes: vec![flow_code_node(
+                "code-other",
+                "src/other.rs",
+                "artefact-other",
+            )],
+            edges: Vec::new(),
+            total_nodes: 1,
+            total_edges: 0,
+        };
+
+        let overview = architecture_target_overview_from_graph(
+            graph,
+            &["artefact-main".to_string()],
+            &[],
+            &["src/main.rs".to_string()],
+        );
+
+        assert!(!overview.available);
+        assert_eq!(
+            overview.reason.as_deref(),
+            Some("no_matching_architecture_facts")
+        );
+        assert!(overview.nodes.is_empty());
+        assert!(overview.edges.is_empty());
     }
 
     #[test]
