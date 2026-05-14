@@ -5,7 +5,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::config::REPO_POLICY_LOCAL_FILE_NAME;
-use crate::daemon::{DevqlTaskSource, DevqlTaskSpec, SyncTaskMode};
+use crate::daemon::{DevqlTaskKind, DevqlTaskSource, DevqlTaskSpec, SyncTaskMode};
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 use crate::test_support::git_fixtures::{init_test_repo, write_test_daemon_config};
 
@@ -213,7 +213,118 @@ fn running_producer_spool_repo_ids_returns_running_repos() {
 }
 
 #[test]
-fn producer_spool_claim_skips_repos_with_running_tasks() {
+fn producer_spool_claim_allows_spooled_sync_while_ingest_task_running() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+
+    enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+    )
+    .expect("enqueue sync");
+
+    let running_tasks = vec![ProducerSpoolRunningTask::new(
+        store.repo_id(),
+        DevqlTaskKind::Ingest,
+        DevqlTaskSource::PostMerge,
+    )];
+    let claimed = claim_next_producer_spool_jobs_excluding(
+        &store.config_root,
+        &HashSet::new(),
+        &running_tasks,
+        &PostCommitDerivationClaimGuards::default(),
+    )
+    .expect("claim producer spool jobs with running ingest");
+
+    assert_eq!(
+        claimed.len(),
+        1,
+        "watcher sync should be claimable while same-repo ingest is running"
+    );
+}
+
+#[test]
+fn producer_spool_claim_blocks_spooled_sync_while_sync_task_running() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+
+    enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+    )
+    .expect("enqueue sync");
+
+    let running_tasks = vec![ProducerSpoolRunningTask::new(
+        store.repo_id(),
+        DevqlTaskKind::Sync,
+        DevqlTaskSource::Watcher,
+    )];
+    let blocked = claim_next_producer_spool_jobs_excluding(
+        &store.config_root,
+        &HashSet::new(),
+        &running_tasks,
+        &PostCommitDerivationClaimGuards::default(),
+    )
+    .expect("claim producer spool jobs with running sync");
+
+    assert!(
+        blocked.is_empty(),
+        "spooled sync should wait while same-repo sync lane is running"
+    );
+
+    let unblocked =
+        claim_next_producer_spool_jobs(&store.config_root).expect("claim unblocked job");
+    assert_eq!(unblocked.len(), 1);
+}
+
+#[test]
+fn producer_spool_claim_allows_spooled_ingest_while_sync_task_running() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    enqueue_spooled_ingest_task_for_repo_root(
+        &repo_root,
+        DevqlTaskSource::PostCommit,
+        crate::daemon::IngestTaskSpec {
+            commits: vec!["commit-a".to_string()],
+            backfill: None,
+        },
+    )
+    .expect("enqueue ingest");
+
+    let running_tasks = vec![ProducerSpoolRunningTask::new(
+        store.repo_id(),
+        DevqlTaskKind::Sync,
+        DevqlTaskSource::PostCommit,
+    )];
+    let claimed = claim_next_producer_spool_jobs_excluding(
+        &store.config_root,
+        &HashSet::new(),
+        &running_tasks,
+        &PostCommitDerivationClaimGuards::default(),
+    )
+    .expect("claim producer spool jobs with running sync");
+
+    assert_eq!(
+        claimed.len(),
+        1,
+        "spooled ingest should be claimable while same-repo sync is running"
+    );
+}
+
+#[test]
+fn producer_spool_claim_excludes_explicitly_blocked_repo_ids() {
     let (_dir, repo_root, repo, store) = seed_store();
     let cfg = crate::host::devql::DevqlConfig::from_roots(
         store.config_root.clone(),
@@ -308,6 +419,7 @@ fn producer_spool_claim_skips_blocked_post_commit_derivation_until_unblocked() {
     let blocked_claim = claim_next_producer_spool_jobs_excluding(
         &store.config_root,
         &HashSet::new(),
+        &[],
         &blocked_derivations,
     )
     .expect("claim producer spool jobs with blocked derivation");
@@ -325,6 +437,7 @@ fn producer_spool_claim_skips_blocked_post_commit_derivation_until_unblocked() {
     let still_blocked = claim_next_producer_spool_jobs_excluding(
         &store.config_root,
         &HashSet::new(),
+        &[],
         &blocked_derivations,
     )
     .expect("claim producer spool jobs while derivation remains blocked");
@@ -361,7 +474,7 @@ fn producer_spool_claim_deletes_abandoned_post_commit_derivation() {
         abandoned: HashSet::from([(store.repo_id().to_string(), "commit-head".to_string())]),
     };
     let abandoned_claim =
-        claim_next_producer_spool_jobs_excluding(&store.config_root, &HashSet::new(), &guards)
+        claim_next_producer_spool_jobs_excluding(&store.config_root, &HashSet::new(), &[], &guards)
             .expect("claim producer spool jobs with abandoned derivation");
     assert!(
         abandoned_claim.is_empty(),
@@ -493,6 +606,7 @@ fn hook_enqueue_helpers_use_repo_binding_and_share_repo_runtime_store() {
         &repo_root,
         "merge-head",
         &["src/lib.rs".to_string()],
+        false,
     )
     .expect("enqueue post-merge refresh");
     crate::host::devql::enqueue_spooled_pre_push_sync(
@@ -516,9 +630,172 @@ fn hook_enqueue_helpers_use_repo_binding_and_share_repo_runtime_store() {
         })
         .expect("count queued producer spool jobs");
     assert_eq!(
-        queued_rows, 4,
+        queued_rows, 5,
         "helper enqueues should target the bound repo runtime db"
     );
+}
+
+#[test]
+fn post_merge_enqueue_splits_sync_and_ingest_for_non_squash_merge() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    let result = crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        " merge-head ",
+        &[
+            "./src/lib.rs".to_string(),
+            "src/main.rs".to_string(),
+            "src/lib.rs".to_string(),
+        ],
+        false,
+    )
+    .expect("enqueue split post-merge refresh");
+    assert_eq!(result.inserted_jobs, 2);
+
+    let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    assert_eq!(
+        claimed.len(),
+        2,
+        "non-squash post-merge should create two lane jobs"
+    );
+
+    let payloads = claimed.iter().map(|job| &job.payload).collect::<Vec<_>>();
+    assert!(payloads.iter().any(|payload| matches!(
+        payload,
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash: false,
+        } if merge_head_sha == "merge-head"
+            && changed_files == &vec!["src/lib.rs".to_string(), "src/main.rs".to_string()]
+    )));
+    assert!(payloads.iter().any(|payload| matches!(
+        payload,
+        ProducerSpoolJobPayload::PostMergeIngestBackfill {
+            merge_head_sha,
+            is_squash: false,
+        } if merge_head_sha == "merge-head"
+    )));
+}
+
+#[test]
+fn post_merge_enqueue_skips_ingest_for_squash_merge() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    let result = crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "squash-head",
+        &["src/lib.rs".to_string()],
+        true,
+    )
+    .expect("enqueue squash post-merge refresh");
+    assert_eq!(result.inserted_jobs, 1);
+
+    let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    assert_eq!(
+        claimed.len(),
+        1,
+        "squash post-merge should only create sync work"
+    );
+    match &claimed[0].payload {
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash,
+        } => {
+            assert_eq!(merge_head_sha, "squash-head");
+            assert_eq!(changed_files, &vec!["src/lib.rs".to_string()]);
+            assert!(*is_squash);
+        }
+        other => panic!("unexpected squash post-merge payload: {other:?}"),
+    }
+}
+
+#[test]
+fn split_post_merge_sync_payload_prunes_excluded_changed_files() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+    crate::config::settings::set_scope_exclusions(
+        &repo_root.join(crate::config::REPO_POLICY_FILE_NAME),
+        &["generated/**".to_string()],
+        &[],
+    )
+    .expect("write exclusions");
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "merge-head",
+        &["src/lib.rs".to_string(), "generated/out.rs".to_string()],
+        false,
+    )
+    .expect("enqueue post-merge refresh");
+
+    let claimed =
+        claim_next_producer_spool_jobs(&store.config_root).expect("claim producer spool jobs");
+    assert!(
+        !claimed.is_empty(),
+        "claim should trigger pending producer spool pruning"
+    );
+    let jobs = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    let sync_job = claimed
+        .iter()
+        .chain(jobs.iter())
+        .find(|job| {
+            matches!(
+                job.payload,
+                ProducerSpoolJobPayload::PostMergeSyncRefresh { .. }
+            )
+        })
+        .expect("sync job");
+    match &sync_job.payload {
+        ProducerSpoolJobPayload::PostMergeSyncRefresh { changed_files, .. } => {
+            assert_eq!(changed_files, &vec!["src/lib.rs".to_string()]);
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
+}
+
+#[test]
+fn split_post_merge_sync_dedupe_merges_changed_files() {
+    let (_dir, repo_root, _repo, store) = seed_store();
+
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "merge-head",
+        &["src/a.rs".to_string()],
+        false,
+    )
+    .expect("enqueue first post-merge refresh");
+    crate::host::devql::enqueue_spooled_post_merge_refresh(
+        &repo_root,
+        "merge-head",
+        &["src/b.rs".to_string()],
+        false,
+    )
+    .expect("enqueue second post-merge refresh");
+
+    let claimed = list_recent_producer_spool_jobs(&store.config_root, store.repo_id(), 10)
+        .expect("list producer spool jobs");
+    let sync_job = claimed
+        .iter()
+        .find(|job| {
+            matches!(
+                job.payload,
+                ProducerSpoolJobPayload::PostMergeSyncRefresh { .. }
+            )
+        })
+        .expect("sync job");
+    match &sync_job.payload {
+        ProducerSpoolJobPayload::PostMergeSyncRefresh { changed_files, .. } => {
+            assert_eq!(
+                changed_files,
+                &vec!["src/a.rs".to_string(), "src/b.rs".to_string()]
+            );
+        }
+        other => panic!("unexpected payload: {other:?}"),
+    }
 }
 
 #[test]

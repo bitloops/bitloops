@@ -1,5 +1,39 @@
 use super::*;
 
+const DASHBOARD_RUNTIME_OVERVIEW_QUERY: &str = r#"
+    query RuntimeOverview($repoId: String!) {
+      runtimeSnapshot(repoId: $repoId) {
+        repoId
+        taskQueue {
+          queuedTasks
+          runningTasks
+          failedTasks
+          completedRecentTasks
+        }
+        currentStateConsumer {
+          pendingRuns
+          runningRuns
+          failedRuns
+          completedRecentRuns
+        }
+        workplane {
+          pendingJobs
+          runningJobs
+          failedJobs
+          completedRecentJobs
+        }
+        blockedMailboxes {
+          mailboxName
+          reason
+        }
+        embeddingsReadinessGate {
+          blocked
+          readiness
+        }
+      }
+    }
+"#;
+
 #[allow(dead_code)]
 fn write_current_repo_runtime_state(repo_root: &Path) {
     let runtime_path = crate::daemon::repo_local_runtime_state_path_for_tests(repo_root)
@@ -361,6 +395,7 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
         repo.path(),
         "merge-head",
         &["src/lib.rs".to_string()],
+        false,
     )
     .expect("enqueue post-merge refresh");
     crate::host::runtime_store::RepoSqliteRuntimeStore::open(repo.path())
@@ -412,6 +447,7 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
                             pathCount
                             paths
                             headSha
+                            isSquash
                             lastError
                           }
                         }
@@ -460,15 +496,31 @@ async fn devql_runtime_debug_snapshot_exposes_repo_operational_state() {
     );
     let snapshot = &payload["data"]["runtimeDebugSnapshot"];
     assert_eq!(snapshot["repoId"], repo_id);
-    assert_eq!(snapshot["producerSpool"]["pendingCount"], 1);
+    assert_eq!(snapshot["producerSpool"]["pendingCount"], 2);
     assert_eq!(snapshot["producerSpool"]["runningCount"], 0);
-    let first_job = &snapshot["producerSpool"]["jobs"][0];
-    assert_eq!(first_job["status"], "pending");
-    assert_eq!(first_job["payloadKind"], "post_merge_refresh");
-    assert_eq!(first_job["dedupeKey"], "post_merge:merge-head");
-    assert_eq!(first_job["pathCount"], 1);
-    assert_eq!(first_job["paths"][0], "src/lib.rs");
-    assert_eq!(first_job["headSha"], "merge-head");
+    let jobs = snapshot["producerSpool"]["jobs"]
+        .as_array()
+        .expect("producer spool jobs");
+    assert_eq!(jobs.len(), 2);
+    let sync_job = jobs
+        .iter()
+        .find(|job| job["payloadKind"] == "post_merge_sync_refresh")
+        .expect("post-merge sync job");
+    assert_eq!(sync_job["status"], "pending");
+    assert_eq!(sync_job["dedupeKey"], "post_merge_sync:merge-head");
+    assert_eq!(sync_job["pathCount"], 1);
+    assert_eq!(sync_job["paths"][0], "src/lib.rs");
+    assert_eq!(sync_job["headSha"], "merge-head");
+    assert_eq!(sync_job["isSquash"], false);
+    let ingest_job = jobs
+        .iter()
+        .find(|job| job["payloadKind"] == "post_merge_ingest_backfill")
+        .expect("post-merge ingest job");
+    assert_eq!(ingest_job["status"], "pending");
+    assert_eq!(ingest_job["dedupeKey"], "post_merge_ingest:merge-head");
+    assert_eq!(ingest_job["pathCount"], 0);
+    assert_eq!(ingest_job["headSha"], "merge-head");
+    assert_eq!(ingest_job["isSquash"], false);
 
     assert_eq!(snapshot["repoState"]["branch"], "main");
     assert_eq!(snapshot["repoState"]["mergeState"], "none");
@@ -507,6 +559,7 @@ async fn devql_runtime_debug_snapshot_counts_full_producer_spool_queue() {
             repo.path(),
             &format!("merge-head-{idx:03}"),
             &["README.md".to_string()],
+            false,
         )
         .expect("enqueue post-merge refresh");
     }
@@ -560,7 +613,7 @@ async fn devql_runtime_debug_snapshot_counts_full_producer_spool_queue() {
         payload.get("errors")
     );
     let producer_spool = &payload["data"]["runtimeDebugSnapshot"]["producerSpool"];
-    assert_eq!(producer_spool["pendingCount"], 101);
+    assert_eq!(producer_spool["pendingCount"], 202);
     assert_eq!(producer_spool["runningCount"], 0);
     assert_eq!(
         producer_spool["jobs"]
@@ -992,6 +1045,107 @@ fn devql_runtime_route_accepts_the_runtime_snapshot_query_used_by_init() {
                     payload.get("errors")
                 );
                 assert_eq!(payload["data"]["runtimeSnapshot"]["repoId"], repo_id);
+            });
+        },
+    );
+}
+
+#[test]
+fn devql_runtime_route_dashboard_overview_query_skips_current_init_session_progress() {
+    let repo = seed_dashboard_repo();
+    let repo_id = crate::host::devql::resolve_repo_identity(repo.path())
+        .expect("resolve repo identity")
+        .repo_id;
+    let config_path = repo
+        .path()
+        .join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH);
+    let config_path_string = config_path.to_string_lossy().to_string();
+
+    crate::test_support::process_state::with_env_var(
+        crate::config::ENV_DAEMON_CONFIG_PATH_OVERRIDE,
+        Some(config_path_string.as_str()),
+        || {
+            let runtime = tokio::runtime::Runtime::new().expect("create runtime");
+            runtime.block_on(async {
+                let app = build_dashboard_router(test_state(
+                    repo.path().to_path_buf(),
+                    ServeMode::HelloWorld,
+                    repo.path().to_path_buf(),
+                ));
+                let headers = runtime_binding_headers(repo.path());
+                let headers_ref = headers
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_str()))
+                    .collect::<Vec<_>>();
+
+                let (start_status, start_payload) =
+                    request_json_with_method_content_type_and_headers(
+                        app.clone(),
+                        Method::POST,
+                        "/devql/runtime",
+                        "application/json",
+                        &headers_ref,
+                        Body::from(
+                            json!({
+                                "query": "mutation StartInit($repoId: String!, $input: StartInitInput!) { startInit(repoId: $repoId, input: $input) { initSessionId } }",
+                                "variables": {
+                                    "repoId": repo_id,
+                                    "input": {
+                                        "runSync": false,
+                                        "runIngest": false,
+                                        "runCodeEmbeddings": false,
+                                        "runSummaries": false,
+                                        "runSummaryEmbeddings": false,
+                                        "ingestBackfill": serde_json::Value::Null,
+                                        "embeddingsBootstrap": serde_json::Value::Null,
+                                        "summariesBootstrap": serde_json::Value::Null,
+                                    }
+                                }
+                            })
+                            .to_string(),
+                        ),
+                    )
+                    .await;
+
+                assert_eq!(start_status, StatusCode::OK);
+                assert!(
+                    start_payload.get("errors").is_none(),
+                    "startInit graphql errors: {:?}",
+                    start_payload.get("errors")
+                );
+
+                crate::daemon::reset_runtime_lane_progress_load_count();
+
+                let (status, payload) = request_json_with_method_content_type_and_headers(
+                    app,
+                    Method::POST,
+                    "/devql/runtime",
+                    "application/json",
+                    &headers_ref,
+                    Body::from(
+                        json!({
+                            "query": DASHBOARD_RUNTIME_OVERVIEW_QUERY,
+                            "variables": {
+                                "repoId": repo_id,
+                            }
+                        })
+                        .to_string(),
+                    ),
+                )
+                .await;
+
+                assert_eq!(status, StatusCode::OK);
+                assert!(
+                    payload.get("errors").is_none(),
+                    "runtime graphql errors: {:?}",
+                    payload.get("errors")
+                );
+                assert_eq!(payload["data"]["runtimeSnapshot"]["repoId"], repo_id);
+                assert_eq!(
+                    crate::daemon::runtime_lane_progress_load_count(),
+                    0,
+                    "dashboard overview runtimeSnapshot must not load init lane progress"
+                );
             });
         },
     );

@@ -356,6 +356,8 @@ fn open_sqlite_writer_connection(path: &Path) -> Result<Connection> {
             path.display()
         );
     }
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for serialised SQLite writer")?;
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("opening SQLite database at {}", path.display()))?;
     conn.busy_timeout(Duration::from_secs(30))

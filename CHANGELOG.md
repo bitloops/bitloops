@@ -14,13 +14,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **Architecture-graph current-state reconcile now uses substantially less memory on large repositories**: `architecture_graph` now streams current canonical artefacts and dependency edges from the relational gateway instead of loading both tables into full in-memory vectors, `CHANGE_UNIT -> IMPACTS` edges now keep only the matched target paths instead of duplicating the entire affected-path set on every edge, and graph replacement now writes nodes, edges, and run metadata through prepared SQLite statements inside one atomic serialized transaction instead of materializing one giant SQL-string batch. This reduces init-time memory spikes while preserving graph topology, current-table atomicity, and reconcile metrics.
 - **PHP test discovery no longer emits duplicate scenario artefact identities for whitespace-variant method signatures**: PHP source discovery now deduplicates scenario candidates using whitespace-insensitive identity normalization before materialization, preventing `duplicate test artefact ids detected before persistence` failures in current-state consumer runs for PHPUnit-style fixtures with equivalent signature variants such as `test_my_app()` vs `test_my_app ()`.
-
+- **DevQL producer spool no longer blocks unrelated same-repo sync and ingest work**: producer-spool admission now distinguishes promotion-only sync and ingest tasks from expansion-only and inline repo-exclusive producer actions, so watcher sync can be promoted while an unrelated ingest task is already running. Post-merge hook follow-up is now split into sync and ingest producer payloads, with ingest anchored to the merge HEAD captured by the hook. Same-kind work, repo policy changes, and inline producer actions still keep the previous conservative guard.
 
 ## [0.0.25] - 2026-05-12
 
 ### Changed
 
 - **README getting-started video thumbnail now renders at a bounded width**: the hero README uses a centered HTML thumbnail (`<img>` inside a link) so `assets/bitloops_getting_started.png` displays correctly on GitHub and stays smaller on the page than the full source asset dimensions.
+
 ### Fixed
 
 - **Daemon log level filtering now applies before tail limits**: `bitloops daemon logs --level ...` now returns the last matching log lines instead of filtering only the already-tailed mixed log window, so recent INFO noise no longer hides older WARN or ERROR entries.
@@ -43,7 +44,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **Claude Code now picks up and uses the repo-local DevQL skill reliably**: Claude repo setup now installs the DevQL skill at `.claude/skills/devql-explore-first/SKILL.md`, matching Claude's canonical project-skill location. This fixes the previous nested `bitloops/...` path layout that Claude was not reliably loading, so Claude can use DevQL guidance from the repo-local skill again.
 - **Existing repo-local OpenCode plugins could silently stop dashboard capture after model-metadata updates**: the generated `.opencode/plugins/bitloops.ts` plugin now keeps rich OpenCode transcript metadata such as nested `model.id`, `model.modelID`, and provider ids in the exported transcript while emitting only the single canonical `model` field on lifecycle hook payloads. This prevents Bitloops from rejecting OpenCode hook payloads with duplicate-model parse errors, restores live session and turn capture for fresh OpenCode runs, and ensures newly generated plugins come out with the corrected payload shape after rebuild/regeneration.
-
 
 ## [0.0.22] - 2026-05-09
 

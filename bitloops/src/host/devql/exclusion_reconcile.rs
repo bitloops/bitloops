@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use crate::capability_packs::semantic_clones::vector_backend::clear_sqlite_current_rows_for_paths;
 use crate::config::{
     RepoPolicyScopeExclusions, discover_repo_policy_optional, resolve_repo_policy_scope_exclusions,
 };
@@ -92,6 +93,10 @@ pub(crate) async fn purge_scope_excluded_repo_data(
             .await
             .context("purging excluded DevQL rows from remote relational storage")?;
     }
+    let excluded_paths_vec = excluded_paths.iter().cloned().collect::<Vec<_>>();
+    clear_sqlite_current_rows_for_paths(relational, &cfg.repo.repo_id, &excluded_paths_vec)
+        .await
+        .context("purging excluded sqlite-vec current rows")?;
 
     Ok(snapshot.fingerprint)
 }

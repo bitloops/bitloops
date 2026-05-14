@@ -50,6 +50,8 @@ pub(crate) struct CommitEmbeddingBatchRequest {
     pub lease_token: String,
     pub embedding_statements: Vec<String>,
     pub setup_statements: Vec<String>,
+    pub remote_embedding_statements: Vec<String>,
+    pub remote_setup_statements: Vec<String>,
     pub clone_rebuild_signal: Option<CapabilityWorkplaneJobInsert>,
     pub replacement_backfill_item: Option<SemanticEmbeddingMailboxItemInsert>,
     pub acked_item_ids: Vec<String>,

@@ -136,6 +136,8 @@ async fn check_postgres_connection(dsn: &str) -> Result<()> {
 async fn check_sqlite_connection(path: &Path) -> Result<()> {
     let db_path = path.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<()> {
+        crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+            .context("registering sqlite-vec auto-extension for SQLite health check")?;
         let conn = rusqlite::Connection::open_with_flags(
             &db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,

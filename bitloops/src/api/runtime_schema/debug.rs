@@ -69,6 +69,8 @@ pub(crate) struct RuntimeDebugProducerSpoolJobObject {
     pub commit_sha: Option<String>,
     #[graphql(name = "headSha")]
     pub head_sha: Option<String>,
+    #[graphql(name = "isSquash")]
+    pub is_squash: Option<bool>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -200,6 +202,7 @@ fn map_producer_spool_job(job: ProducerSpoolJobRecord) -> RuntimeDebugProducerSp
         paths: payload.paths,
         commit_sha: payload.commit_sha,
         head_sha: payload.head_sha,
+        is_squash: payload.is_squash,
     }
 }
 
@@ -209,6 +212,7 @@ struct MappedProducerSpoolPayload {
     paths: Vec<String>,
     commit_sha: Option<String>,
     head_sha: Option<String>,
+    is_squash: Option<bool>,
 }
 
 fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProducerSpoolPayload {
@@ -227,6 +231,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
                 paths,
                 commit_sha: None,
                 head_sha: None,
+                is_squash: None,
             }
         }
         ProducerSpoolJobPayload::PostCommitRefresh {
@@ -238,6 +243,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: changed_files.clone(),
             commit_sha: Some(commit_sha.clone()),
             head_sha: None,
+            is_squash: None,
         },
         ProducerSpoolJobPayload::PostCommitDerivation {
             commit_sha,
@@ -249,6 +255,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: committed_files.clone(),
             commit_sha: Some(commit_sha.clone()),
             head_sha: None,
+            is_squash: None,
         },
         ProducerSpoolJobPayload::PostMergeRefresh {
             head_sha,
@@ -259,6 +266,30 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: changed_files.clone(),
             commit_sha: None,
             head_sha: Some(head_sha.clone()),
+            is_squash: None,
+        },
+        ProducerSpoolJobPayload::PostMergeSyncRefresh {
+            merge_head_sha,
+            changed_files,
+            is_squash,
+        } => MappedProducerSpoolPayload {
+            payload_kind: "post_merge_sync_refresh".to_string(),
+            source: Some("post_merge".to_string()),
+            paths: changed_files.clone(),
+            commit_sha: None,
+            head_sha: Some(merge_head_sha.clone()),
+            is_squash: Some(*is_squash),
+        },
+        ProducerSpoolJobPayload::PostMergeIngestBackfill {
+            merge_head_sha,
+            is_squash,
+        } => MappedProducerSpoolPayload {
+            payload_kind: "post_merge_ingest_backfill".to_string(),
+            source: Some("post_merge".to_string()),
+            paths: Vec::new(),
+            commit_sha: None,
+            head_sha: Some(merge_head_sha.clone()),
+            is_squash: Some(*is_squash),
         },
         ProducerSpoolJobPayload::PrePushSync { .. } => MappedProducerSpoolPayload {
             payload_kind: "pre_push_sync".to_string(),
@@ -266,6 +297,7 @@ fn map_producer_spool_payload(payload: &ProducerSpoolJobPayload) -> MappedProduc
             paths: Vec::new(),
             commit_sha: None,
             head_sha: None,
+            is_squash: None,
         },
     }
 }

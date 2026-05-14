@@ -93,6 +93,8 @@ pub(super) fn reconcile_current_local_edges_for_paths_with_connection(
 }
 
 fn open_current_state_reconciliation_connection(path: &Path) -> Result<Connection> {
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for current edge reconciliation")?;
     let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
         .with_context(|| format!("opening SQLite database at {}", path.display()))?;
     connection

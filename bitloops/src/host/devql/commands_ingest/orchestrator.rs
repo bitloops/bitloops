@@ -10,6 +10,35 @@ pub async fn run_ingest(cfg: &DevqlConfig) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn select_ingest_backfill_commits_for_head(
+    cfg: &DevqlConfig,
+    head_sha: &str,
+    backfill_window: usize,
+) -> Result<Vec<String>> {
+    let head_sha = head_sha.trim();
+    if head_sha.is_empty() || backfill_window == 0 {
+        return Ok(Vec::new());
+    }
+
+    let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
+        .context("resolving DevQL backend config for post-merge ingest commit selection")?;
+    let relational = RelationalStorage::connect(
+        cfg,
+        &backends.relational,
+        "post-merge ingest commit selection",
+    )
+    .await?;
+    ensure_repository_row(cfg, &relational).await?;
+    select_recent_branch_commit_backfill_window(
+        &cfg.repo_root,
+        &relational,
+        &cfg.repo.repo_id,
+        head_sha,
+        backfill_window,
+    )
+    .await
+}
+
 pub(crate) async fn execute_ingest(cfg: &DevqlConfig) -> Result<IngestionCounters> {
     execute_ingest_with_observer(cfg, false, 0, None, None).await
 }
