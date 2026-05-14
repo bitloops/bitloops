@@ -158,33 +158,28 @@ fn open_sqlite_write_lock_file(lock_path: &Path) -> Result<File> {
         .with_context(|| format!("opening SQLite write lock file {}", lock_path.display()))
 }
 
-#[cfg(unix)]
 fn lock_sqlite_write_file(file: File, lock_path: &Path) -> Result<SqliteWriteFileGuard> {
-    use std::os::fd::AsRawFd;
-
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-    if rc == 0 {
-        return Ok(SqliteWriteFileGuard { file });
-    }
-    Err(std::io::Error::last_os_error())
-        .with_context(|| format!("locking SQLite write lock file {}", lock_path.display()))
-}
-
-#[cfg(not(unix))]
-fn lock_sqlite_write_file(file: File, _lock_path: &Path) -> Result<SqliteWriteFileGuard> {
-    Ok(SqliteWriteFileGuard { file })
+    fs2::FileExt::lock_exclusive(&file)
+        .with_context(|| format!("locking SQLite write lock file {}", lock_path.display()))?;
+    Ok(SqliteWriteFileGuard {
+        file,
+        lock_path: lock_path.to_path_buf(),
+    })
 }
 
 struct SqliteWriteFileGuard {
     file: File,
+    lock_path: PathBuf,
 }
 
-#[cfg(unix)]
 impl Drop for SqliteWriteFileGuard {
     fn drop(&mut self) {
-        use std::os::fd::AsRawFd;
-
-        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        if let Err(err) = fs2::FileExt::unlock(&self.file) {
+            log::warn!(
+                "failed to release SQLite write lock file {}: {err}",
+                self.lock_path.display()
+            );
+        }
     }
 }
 

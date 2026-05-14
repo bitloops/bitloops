@@ -115,38 +115,12 @@ impl Drop for DefaultDaemonBootstrapLock {
     }
 }
 
-#[cfg(unix)]
 fn lock_default_daemon_bootstrap_file(file: &std::fs::File) -> Result<()> {
-    use std::os::fd::AsRawFd;
-
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error()).context("acquiring default daemon bootstrap lock")
-    }
+    fs2::FileExt::lock_exclusive(file).context("acquiring default daemon bootstrap lock")
 }
 
-#[cfg(unix)]
 fn unlock_default_daemon_bootstrap_file(file: &std::fs::File) -> Result<()> {
-    use std::os::fd::AsRawFd;
-
-    let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error()).context("releasing default daemon bootstrap lock")
-    }
-}
-
-#[cfg(not(unix))]
-fn lock_default_daemon_bootstrap_file(_file: &std::fs::File) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn unlock_default_daemon_bootstrap_file(_file: &std::fs::File) -> Result<()> {
-    Ok(())
+    fs2::FileExt::unlock(file).context("releasing default daemon bootstrap lock")
 }
 
 pub(crate) async fn maybe_enable_default_daemon_service(
