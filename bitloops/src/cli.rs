@@ -115,6 +115,9 @@ pub enum Commands {
     /// Hidden internal daemon supervisor entry point.
     #[command(name = "__daemon-supervisor", hide = true)]
     DaemonSupervisor(crate::daemon::InternalDaemonSupervisorArgs),
+    /// Hidden internal current-state worker process entry point.
+    #[command(name = "__current-state-worker", hide = true)]
+    CurrentStateWorker(crate::daemon::CurrentStateWorkerArgs),
     /// Diagnose and fix stuck sessions.
     Doctor(root::DoctorArgs),
     /// Hidden internal analytics dispatch command.
@@ -210,6 +213,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Commands::DevqlWatcher(args) => crate::host::devql::watch::run_process_command(args).await,
         Commands::DaemonProcess(args) => crate::daemon::run_internal_process(args).await,
         Commands::DaemonSupervisor(args) => crate::daemon::run_internal_supervisor(args).await,
+        Commands::CurrentStateWorker(args) => crate::daemon::run_current_state_worker(args).await,
         Commands::Doctor(args) => root::run_doctor_command(&args),
         Commands::SendAnalytics(args) => root::run_send_analytics_command(&args),
         Commands::Completion(args) => root::run_completion_command(&args),

@@ -5,6 +5,7 @@ use rusqlite::params;
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
 };
+use crate::daemon::should_use_current_state_worker;
 use crate::daemon::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 use crate::host::capability_host::{ChangedFile, ReconcileMode, RemovedArtefact, RemovedFile};
 
@@ -117,6 +118,25 @@ fn determine_reconcile_mode_promotes_full_reconcile_for_first_run_and_thresholds
         determine_reconcile_mode(Some(0), &generations, 1, 5_001),
         ReconcileMode::FullReconcile
     );
+}
+
+#[test]
+fn current_state_worker_routing_is_limited_to_architecture_graph_full_reconcile() {
+    assert!(should_use_current_state_worker(
+        "architecture_graph",
+        "architecture_graph.snapshot",
+        ReconcileMode::FullReconcile,
+    ));
+    assert!(!should_use_current_state_worker(
+        "architecture_graph",
+        "architecture_graph.snapshot",
+        ReconcileMode::MergedDelta,
+    ));
+    assert!(!should_use_current_state_worker(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
+        ReconcileMode::FullReconcile,
+    ));
 }
 
 #[test]

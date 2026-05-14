@@ -251,7 +251,7 @@ impl ShutdownCleanupStatus {
     }
 }
 
-fn force_kill_process(pid: u32) -> Result<()> {
+pub(super) fn force_kill_process(pid: u32) -> Result<()> {
     if !process_is_running(pid)? {
         return Ok(());
     }

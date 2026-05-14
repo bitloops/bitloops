@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 #[cfg(test)]
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -45,12 +46,29 @@ impl CapabilityEventCoordinator {
     }
 
     pub(crate) fn new_shared_instance(runtime_store: DaemonSqliteRuntimeStore) -> Arc<Self> {
-        Self::new_shared_instance_with_memory(runtime_store, Arc::new(PlatformMemoryMaintenance))
+        Self::new_shared_instance_with_memory_and_runner(
+            runtime_store,
+            Arc::new(PlatformMemoryMaintenance),
+            Arc::new(crate::daemon::SubprocessCurrentStateWorkerRunner),
+        )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_shared_instance_with_memory(
         runtime_store: DaemonSqliteRuntimeStore,
         memory_maintenance: Arc<dyn MemoryMaintenance>,
+    ) -> Arc<Self> {
+        Self::new_shared_instance_with_memory_and_runner(
+            runtime_store,
+            memory_maintenance,
+            Arc::new(crate::daemon::SubprocessCurrentStateWorkerRunner),
+        )
+    }
+
+    pub(crate) fn new_shared_instance_with_memory_and_runner(
+        runtime_store: DaemonSqliteRuntimeStore,
+        memory_maintenance: Arc<dyn MemoryMaintenance>,
+        current_state_worker_runner: Arc<dyn crate::daemon::CurrentStateWorkerRunner>,
     ) -> Arc<Self> {
         Arc::new(Self {
             runtime_store,
@@ -59,6 +77,8 @@ impl CapabilityEventCoordinator {
             worker_started: AtomicBool::new(false),
             subscription_hub: Mutex::new(None),
             memory_maintenance,
+            current_state_worker_runner,
+            active_worker_children: Mutex::new(BTreeMap::new()),
         })
     }
 

@@ -105,6 +105,7 @@ impl CurrentStateConsumer for ArchitectureGraphCurrentStateConsumer {
                 });
                 (facts, warnings, metrics)
             };
+            context.ensure_parent_process_alive("persisting architecture graph")?;
             replace_computed_graph(
                 &context.storage,
                 &request.repo_id,

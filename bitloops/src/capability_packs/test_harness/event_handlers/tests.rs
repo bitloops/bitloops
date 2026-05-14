@@ -455,6 +455,7 @@ impl TestFixture {
             workplane: Arc::new(NoopWorkplaneGateway),
             test_harness: None,
             init_session_id: None,
+            parent_pid: None,
         })
     }
 }

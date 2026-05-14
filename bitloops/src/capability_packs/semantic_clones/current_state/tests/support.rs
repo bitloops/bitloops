@@ -142,6 +142,7 @@ pub(super) async fn test_context(
         workplane: Arc::new(workplane.clone()),
         test_harness: None,
         init_session_id: None,
+        parent_pid: None,
     };
 
     Ok(TestContext {

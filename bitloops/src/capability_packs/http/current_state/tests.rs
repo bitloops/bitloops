@@ -228,6 +228,7 @@ impl<B> Future for RouteFuture<B> {
             workplane: Arc::new(NoopCapabilityWorkplaneGateway),
             test_harness: None,
             init_session_id: None,
+            parent_pid: None,
         };
 
     let consumer = HttpCurrentStateConsumer;
