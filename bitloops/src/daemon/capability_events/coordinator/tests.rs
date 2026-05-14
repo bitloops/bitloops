@@ -6,13 +6,16 @@ use std::sync::Mutex;
 use rusqlite::params;
 use tempfile::TempDir;
 
+use crate::capability_packs::navigation_context::types::{
+    NAVIGATION_CONTEXT_CAPABILITY_ID, NAVIGATION_CONTEXT_CONSUMER_ID,
+};
 use crate::daemon::capability_events::queue::sql_i64;
 use crate::daemon::current_state_worker::{
     CurrentStateWorkerHandle, CurrentStateWorkerInvocation, CurrentStateWorkerRunner,
 };
 use crate::daemon::types::{CapabilityEventRunRecord, CapabilityEventRunStatus};
 use crate::host::capability_host::{
-    CurrentStateConsumerResult, DevqlCapabilityHost, SyncArtefactDiff, SyncFileDiff,
+    CurrentStateConsumerResult, DevqlCapabilityHost, ReconcileMode, SyncArtefactDiff, SyncFileDiff,
 };
 use crate::host::devql::{DevqlConfig, SyncSummary, resolve_repo_identity};
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
@@ -388,7 +391,14 @@ fn snapshot_uses_latest_run_status_and_timestamp() {
     assert_eq!(snapshot.state.last_updated_unix, 42);
 }
 
-fn architecture_graph_worker_run(status: CapabilityEventRunStatus) -> CapabilityEventRunRecord {
+fn architecture_graph_worker_run(
+    status: CapabilityEventRunStatus,
+    reconcile_mode: ReconcileMode,
+) -> CapabilityEventRunRecord {
+    let reconcile_mode = match reconcile_mode {
+        ReconcileMode::FullReconcile => "full_reconcile",
+        ReconcileMode::MergedDelta => "merged_delta",
+    };
     CapabilityEventRunRecord {
         run_id: "run-architecture-graph".to_string(),
         repo_id: "repo-architecture".to_string(),
@@ -397,7 +407,7 @@ fn architecture_graph_worker_run(status: CapabilityEventRunStatus) -> Capability
         handler_id: "architecture_graph.snapshot".to_string(),
         from_generation_seq: 0,
         to_generation_seq: 1,
-        reconcile_mode: "full_reconcile".to_string(),
+        reconcile_mode: reconcile_mode.to_string(),
         event_kind: "current_state_consumer".to_string(),
         lane_key: "repo-architecture:architecture_graph.snapshot".to_string(),
         event_payload_json: String::new(),
@@ -414,6 +424,7 @@ fn architecture_graph_worker_run(status: CapabilityEventRunStatus) -> Capability
 
 fn prepare_architecture_graph_worker_run(
     runner: Arc<dyn CurrentStateWorkerRunner>,
+    reconcile_mode: ReconcileMode,
 ) -> (
     TempDir,
     Arc<CapabilityEventCoordinator>,
@@ -429,7 +440,78 @@ fn prepare_architecture_graph_worker_run(
     let store = test_runtime_store(&temp);
     let coordinator =
         CapabilityEventCoordinator::new_shared_instance_with_runner(store.clone(), runner);
-    let run = architecture_graph_worker_run(CapabilityEventRunStatus::Running);
+    let run = architecture_graph_worker_run(CapabilityEventRunStatus::Running, reconcile_mode);
+    insert_consumer_row(
+        &store,
+        &run.repo_id,
+        &run.capability_id,
+        &run.consumer_id,
+        Some(0),
+        None,
+        1,
+    );
+    insert_generation_row(&store, &run.repo_id, 1, "main", "abc123");
+    insert_file_change_row(&store, &run.repo_id, 1, "src/lib.rs");
+    insert_run_row(&store, &run);
+
+    let stored_run = StoredRunRecord {
+        record: run.clone(),
+        repo_root,
+    };
+
+    (temp, coordinator, run, stored_run)
+}
+
+fn navigation_context_worker_run(
+    status: CapabilityEventRunStatus,
+    reconcile_mode: ReconcileMode,
+) -> CapabilityEventRunRecord {
+    let reconcile_mode = match reconcile_mode {
+        ReconcileMode::FullReconcile => "full_reconcile",
+        ReconcileMode::MergedDelta => "merged_delta",
+    };
+    CapabilityEventRunRecord {
+        run_id: "run-navigation-context".to_string(),
+        repo_id: "repo-navigation".to_string(),
+        capability_id: NAVIGATION_CONTEXT_CAPABILITY_ID.to_string(),
+        consumer_id: NAVIGATION_CONTEXT_CONSUMER_ID.to_string(),
+        handler_id: NAVIGATION_CONTEXT_CONSUMER_ID.to_string(),
+        from_generation_seq: 0,
+        to_generation_seq: 1,
+        reconcile_mode: reconcile_mode.to_string(),
+        event_kind: "current_state_consumer".to_string(),
+        lane_key: "repo-navigation:navigation_context.snapshot".to_string(),
+        event_payload_json: String::new(),
+        init_session_id: Some("init-session-2".to_string()),
+        status,
+        attempts: 1,
+        submitted_at_unix: 10,
+        started_at_unix: Some(20),
+        updated_at_unix: 30,
+        completed_at_unix: None,
+        error: None,
+    }
+}
+
+fn prepare_navigation_context_worker_run(
+    runner: Arc<dyn CurrentStateWorkerRunner>,
+    reconcile_mode: ReconcileMode,
+) -> (
+    TempDir,
+    Arc<CapabilityEventCoordinator>,
+    CapabilityEventRunRecord,
+    StoredRunRecord,
+) {
+    let temp = TempDir::new().expect("tempdir");
+    let repo_root = temp.path().join("repo");
+    fs::create_dir_all(&repo_root).expect("create repo root");
+    init_test_repo(&repo_root, "main", "Bitloops Test", "bitloops@example.com");
+    write_test_daemon_config(&repo_root);
+
+    let store = test_runtime_store(&temp);
+    let coordinator =
+        CapabilityEventCoordinator::new_shared_instance_with_runner(store.clone(), runner);
+    let run = navigation_context_worker_run(CapabilityEventRunStatus::Running, reconcile_mode);
     insert_consumer_row(
         &store,
         &run.repo_id,
@@ -458,7 +540,7 @@ async fn execute_run_uses_worker_for_architecture_graph_full_reconcile_and_appli
         CurrentStateConsumerResult::applied(1),
     ));
     let (_temp, coordinator, run, stored_run) =
-        prepare_architecture_graph_worker_run(runner.clone());
+        prepare_architecture_graph_worker_run(runner.clone(), ReconcileMode::FullReconcile);
 
     let (completion, records) =
         capture_logs_async(Arc::clone(&coordinator).execute_run(stored_run)).await;
@@ -477,7 +559,7 @@ async fn execute_run_uses_worker_for_architecture_graph_full_reconcile_and_appli
     assert_eq!(invocations[0].consumer_id, "architecture_graph.snapshot");
     assert_eq!(
         invocations[0].request.reconcile_mode,
-        crate::host::capability_host::ReconcileMode::FullReconcile
+        ReconcileMode::FullReconcile
     );
     assert_eq!(invocations[0].parent_pid, Some(std::process::id()));
     assert_eq!(
@@ -548,45 +630,377 @@ async fn execute_run_uses_worker_for_architecture_graph_full_reconcile_and_appli
 }
 
 #[tokio::test]
-async fn execute_run_worker_failures_follow_retry_budget() {
+async fn execute_run_uses_worker_for_architecture_graph_merged_delta_and_applies_completion() {
+    let runner = Arc::new(StubWorkerRunner::success(
+        4343,
+        CurrentStateConsumerResult::applied(1),
+    ));
+    let (_temp, coordinator, run, stored_run) =
+        prepare_architecture_graph_worker_run(runner.clone(), ReconcileMode::MergedDelta);
+
+    let (completion, records) =
+        capture_logs_async(Arc::clone(&coordinator).execute_run(stored_run)).await;
+    let RunCompletion::Completed {
+        applied_to_generation_seq,
+        ..
+    } = completion.clone()
+    else {
+        panic!("expected completed worker run, got {completion:?}");
+    };
+    assert_eq!(applied_to_generation_seq, 1);
+
+    let invocations = runner.invocations();
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].capability_id, "architecture_graph");
+    assert_eq!(invocations[0].consumer_id, "architecture_graph.snapshot");
+    assert_eq!(
+        invocations[0].request.reconcile_mode,
+        ReconcileMode::MergedDelta
+    );
+    assert_eq!(invocations[0].parent_pid, Some(std::process::id()));
+    assert_eq!(
+        invocations[0].init_session_id.as_deref(),
+        run.init_session_id.as_deref()
+    );
+    assert!(records.iter().any(|record| {
+        record.message.contains("current-state worker spawned")
+            && record.message.contains("pid=4343")
+            && record.message.contains("run_id=run-architecture-graph")
+            && record.message.contains("capability_id=architecture_graph")
+            && record
+                .message
+                .contains("consumer_id=architecture_graph.snapshot")
+            && record
+                .message
+                .contains("route_reason=architecture_graph_merged_delta")
+    }));
+    assert!(records.iter().any(|record| {
+        record
+            .message
+            .contains("current-state worker exited successfully")
+            && record.message.contains("pid=4343")
+            && record.message.contains("run_id=run-architecture-graph")
+            && record
+                .message
+                .contains("route_reason=architecture_graph_merged_delta")
+    }));
+    assert!(
+        coordinator
+            .active_worker_children
+            .lock()
+            .expect("lock active worker map")
+            .is_empty(),
+        "tracked worker map should be empty after worker exit"
+    );
+
+    coordinator
+        .apply_completion(completion)
+        .expect("apply completion should succeed");
+
+    let persisted = coordinator
+        .run(&run.run_id)
+        .expect("load run")
+        .expect("persisted run");
+    assert_eq!(persisted.status, CapabilityEventRunStatus::Completed);
+
+    coordinator
+        .runtime_store
+        .with_connection(|conn| {
+            let cursor = conn.query_row(
+                "SELECT last_applied_generation_seq, last_error
+                 FROM capability_workplane_cursor_mailboxes
+                 WHERE repo_id = ?1 AND mailbox_name = ?2",
+                params![&run.repo_id, &run.consumer_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )?;
+            assert_eq!(cursor.0, Some(1));
+            assert_eq!(cursor.1, None);
+            Ok(())
+        })
+        .expect("load updated cursor");
+}
+
+#[tokio::test]
+async fn execute_run_uses_worker_for_navigation_context_full_reconcile_and_applies_completion() {
+    let runner = Arc::new(StubWorkerRunner::success(
+        4444,
+        CurrentStateConsumerResult::applied(1),
+    ));
+    let (_temp, coordinator, run, stored_run) =
+        prepare_navigation_context_worker_run(runner.clone(), ReconcileMode::FullReconcile);
+
+    let (completion, records) =
+        capture_logs_async(Arc::clone(&coordinator).execute_run(stored_run)).await;
+    let RunCompletion::Completed {
+        applied_to_generation_seq,
+        ..
+    } = completion.clone()
+    else {
+        panic!("expected completed worker run, got {completion:?}");
+    };
+    assert_eq!(applied_to_generation_seq, 1);
+
+    let invocations = runner.invocations();
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(
+        invocations[0].capability_id,
+        NAVIGATION_CONTEXT_CAPABILITY_ID
+    );
+    assert_eq!(invocations[0].consumer_id, NAVIGATION_CONTEXT_CONSUMER_ID);
+    assert_eq!(
+        invocations[0].request.reconcile_mode,
+        ReconcileMode::FullReconcile
+    );
+    assert_eq!(invocations[0].parent_pid, Some(std::process::id()));
+    assert_eq!(
+        invocations[0].init_session_id.as_deref(),
+        run.init_session_id.as_deref()
+    );
+    assert!(records.iter().any(|record| {
+        record.message.contains("current-state worker spawned")
+            && record.message.contains("pid=4444")
+            && record.message.contains("run_id=run-navigation-context")
+            && record.message.contains("capability_id=navigation_context")
+            && record
+                .message
+                .contains("consumer_id=navigation_context.snapshot")
+            && record
+                .message
+                .contains("route_reason=navigation_context_full_reconcile")
+    }));
+    assert!(records.iter().any(|record| {
+        record
+            .message
+            .contains("current-state worker exited successfully")
+            && record.message.contains("pid=4444")
+            && record.message.contains("run_id=run-navigation-context")
+            && record
+                .message
+                .contains("route_reason=navigation_context_full_reconcile")
+    }));
+    assert!(
+        coordinator
+            .active_worker_children
+            .lock()
+            .expect("lock active worker map")
+            .is_empty(),
+        "tracked worker map should be empty after worker exit"
+    );
+
+    coordinator
+        .apply_completion(completion)
+        .expect("apply completion should succeed");
+
+    let persisted = coordinator
+        .run(&run.run_id)
+        .expect("load run")
+        .expect("persisted run");
+    assert_eq!(persisted.status, CapabilityEventRunStatus::Completed);
+
+    coordinator
+        .runtime_store
+        .with_connection(|conn| {
+            let cursor = conn.query_row(
+                "SELECT last_applied_generation_seq, last_error
+                 FROM capability_workplane_cursor_mailboxes
+                 WHERE repo_id = ?1 AND mailbox_name = ?2",
+                params![&run.repo_id, &run.consumer_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )?;
+            assert_eq!(cursor.0, Some(1));
+            assert_eq!(cursor.1, None);
+            Ok(())
+        })
+        .expect("load updated cursor");
+}
+
+#[tokio::test]
+async fn execute_run_uses_worker_for_navigation_context_merged_delta_and_applies_completion() {
+    let runner = Arc::new(StubWorkerRunner::success(
+        4545,
+        CurrentStateConsumerResult::applied(1),
+    ));
+    let (_temp, coordinator, run, stored_run) =
+        prepare_navigation_context_worker_run(runner.clone(), ReconcileMode::MergedDelta);
+
+    let (completion, records) =
+        capture_logs_async(Arc::clone(&coordinator).execute_run(stored_run)).await;
+    let RunCompletion::Completed {
+        applied_to_generation_seq,
+        ..
+    } = completion.clone()
+    else {
+        panic!("expected completed worker run, got {completion:?}");
+    };
+    assert_eq!(applied_to_generation_seq, 1);
+
+    let invocations = runner.invocations();
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(
+        invocations[0].capability_id,
+        NAVIGATION_CONTEXT_CAPABILITY_ID
+    );
+    assert_eq!(invocations[0].consumer_id, NAVIGATION_CONTEXT_CONSUMER_ID);
+    assert_eq!(
+        invocations[0].request.reconcile_mode,
+        ReconcileMode::MergedDelta
+    );
+    assert_eq!(invocations[0].parent_pid, Some(std::process::id()));
+    assert_eq!(
+        invocations[0].init_session_id.as_deref(),
+        run.init_session_id.as_deref()
+    );
+    assert!(records.iter().any(|record| {
+        record.message.contains("current-state worker spawned")
+            && record.message.contains("pid=4545")
+            && record.message.contains("run_id=run-navigation-context")
+            && record.message.contains("capability_id=navigation_context")
+            && record
+                .message
+                .contains("consumer_id=navigation_context.snapshot")
+            && record
+                .message
+                .contains("route_reason=navigation_context_merged_delta")
+    }));
+    assert!(records.iter().any(|record| {
+        record
+            .message
+            .contains("current-state worker exited successfully")
+            && record.message.contains("pid=4545")
+            && record.message.contains("run_id=run-navigation-context")
+            && record
+                .message
+                .contains("route_reason=navigation_context_merged_delta")
+    }));
+    assert!(
+        coordinator
+            .active_worker_children
+            .lock()
+            .expect("lock active worker map")
+            .is_empty(),
+        "tracked worker map should be empty after worker exit"
+    );
+
+    coordinator
+        .apply_completion(completion)
+        .expect("apply completion should succeed");
+
+    let persisted = coordinator
+        .run(&run.run_id)
+        .expect("load run")
+        .expect("persisted run");
+    assert_eq!(persisted.status, CapabilityEventRunStatus::Completed);
+
+    coordinator
+        .runtime_store
+        .with_connection(|conn| {
+            let cursor = conn.query_row(
+                "SELECT last_applied_generation_seq, last_error
+                 FROM capability_workplane_cursor_mailboxes
+                 WHERE repo_id = ?1 AND mailbox_name = ?2",
+                params![&run.repo_id, &run.consumer_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )?;
+            assert_eq!(cursor.0, Some(1));
+            assert_eq!(cursor.1, None);
+            Ok(())
+        })
+        .expect("load updated cursor");
+}
+
+#[tokio::test]
+async fn execute_run_worker_failures_follow_retry_budget_for_architecture_and_navigation_routes() {
     for error in [
         "current-state worker exited unsuccessfully (exit code 7)",
         "current-state worker produced empty stdout",
         "parsing current-state worker stdout as JSON",
         "unsupported current-state worker target",
     ] {
-        let runner = Arc::new(StubWorkerRunner::failure(4242, error));
-        let (_temp, coordinator, _run, stored_run) = prepare_architecture_graph_worker_run(runner);
+        for (prepare_run, reconcile_mode, route_reason, run_id) in [
+            (
+                prepare_architecture_graph_worker_run
+                    as fn(
+                        Arc<dyn CurrentStateWorkerRunner>,
+                        ReconcileMode,
+                    ) -> (
+                        TempDir,
+                        Arc<CapabilityEventCoordinator>,
+                        CapabilityEventRunRecord,
+                        StoredRunRecord,
+                    ),
+                ReconcileMode::FullReconcile,
+                "architecture_graph_full_reconcile",
+                "run-architecture-graph",
+            ),
+            (
+                prepare_architecture_graph_worker_run,
+                ReconcileMode::MergedDelta,
+                "architecture_graph_merged_delta",
+                "run-architecture-graph",
+            ),
+            (
+                prepare_navigation_context_worker_run,
+                ReconcileMode::FullReconcile,
+                "navigation_context_full_reconcile",
+                "run-navigation-context",
+            ),
+            (
+                prepare_navigation_context_worker_run,
+                ReconcileMode::MergedDelta,
+                "navigation_context_merged_delta",
+                "run-navigation-context",
+            ),
+        ] {
+            let runner = Arc::new(StubWorkerRunner::failure(4242, error));
+            let (_temp, coordinator, _run, stored_run) = prepare_run(runner, reconcile_mode);
 
-        let (completion, records) =
-            capture_logs_async(Arc::clone(&coordinator).execute_run(stored_run)).await;
-        let RunCompletion::RetryableFailure { error: actual, .. } = completion else {
-            panic!("expected retryable failure for `{error}`, got {completion:?}");
-        };
-        assert!(
-            actual.contains(error),
-            "expected retryable failure to include `{error}`, got `{actual}`"
-        );
-        assert!(records.iter().any(|record| {
-            record.message.contains("current-state worker spawned")
-                && record.message.contains("pid=4242")
-        }));
-        assert!(records.iter().any(|record| {
-            record
-                .message
-                .contains("current-state worker exited with failure")
-                && record.message.contains("pid=4242")
-                && record.message.contains("run_id=run-architecture-graph")
-                && record.message.contains(error)
-        }));
-        assert!(
-            coordinator
-                .active_worker_children
-                .lock()
-                .expect("lock active worker map")
-                .is_empty(),
-            "tracked worker map should be empty after worker failure"
-        );
+            let (completion, records) =
+                capture_logs_async(Arc::clone(&coordinator).execute_run(stored_run)).await;
+            let RunCompletion::RetryableFailure { error: actual, .. } = completion else {
+                panic!("expected retryable failure for `{error}`, got {completion:?}");
+            };
+            assert!(
+                actual.contains(error),
+                "expected retryable failure to include `{error}`, got `{actual}`"
+            );
+            assert!(records.iter().any(|record| {
+                record.message.contains("current-state worker spawned")
+                    && record.message.contains("pid=4242")
+                    && record.message.contains(route_reason)
+            }));
+            assert!(records.iter().any(|record| {
+                record
+                    .message
+                    .contains("current-state worker exited with failure")
+                    && record.message.contains("pid=4242")
+                    && record.message.contains(&format!("run_id={run_id}"))
+                    && record.message.contains(route_reason)
+                    && record.message.contains(error)
+            }));
+            assert!(
+                coordinator
+                    .active_worker_children
+                    .lock()
+                    .expect("lock active worker map")
+                    .is_empty(),
+                "tracked worker map should be empty after worker failure"
+            );
+        }
     }
 }
 

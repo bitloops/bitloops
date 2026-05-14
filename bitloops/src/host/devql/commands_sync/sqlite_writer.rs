@@ -797,7 +797,7 @@ pub(crate) fn sync_prepare_worker_count() -> usize {
     std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(2)
-        .clamp(2, 8)
+        .clamp(2, 4)
 }
 
 #[cfg(test)]
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn sync_prepare_worker_count_is_bounded() {
         let count = sync_prepare_worker_count();
-        assert!((2..=8).contains(&count), "worker count should be clamped");
+        assert!((2..=4).contains(&count), "worker count should be clamped");
     }
 
     #[test]

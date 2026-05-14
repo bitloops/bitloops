@@ -2,6 +2,9 @@ use std::path::Path;
 
 use rusqlite::params;
 
+use crate::capability_packs::navigation_context::types::{
+    NAVIGATION_CONTEXT_CAPABILITY_ID, NAVIGATION_CONTEXT_CONSUMER_ID,
+};
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CURRENT_STATE_CONSUMER_ID,
 };
@@ -121,7 +124,7 @@ fn determine_reconcile_mode_promotes_full_reconcile_for_first_run_and_thresholds
 }
 
 #[test]
-fn current_state_worker_routing_is_limited_to_architecture_graph_full_reconcile() {
+fn current_state_worker_routing_is_limited_to_architecture_graph_and_navigation_context() {
     assert_eq!(
         current_state_execution_route(
             "architecture_graph",
@@ -138,7 +141,29 @@ fn current_state_worker_routing_is_limited_to_architecture_graph_full_reconcile(
             "architecture_graph.snapshot",
             ReconcileMode::MergedDelta,
         ),
-        CurrentStateExecutionRoute::Inline
+        CurrentStateExecutionRoute::Subprocess {
+            reason: "architecture_graph_merged_delta",
+        }
+    );
+    assert_eq!(
+        current_state_execution_route(
+            NAVIGATION_CONTEXT_CAPABILITY_ID,
+            NAVIGATION_CONTEXT_CONSUMER_ID,
+            ReconcileMode::FullReconcile,
+        ),
+        CurrentStateExecutionRoute::Subprocess {
+            reason: "navigation_context_full_reconcile",
+        }
+    );
+    assert_eq!(
+        current_state_execution_route(
+            NAVIGATION_CONTEXT_CAPABILITY_ID,
+            NAVIGATION_CONTEXT_CONSUMER_ID,
+            ReconcileMode::MergedDelta,
+        ),
+        CurrentStateExecutionRoute::Subprocess {
+            reason: "navigation_context_merged_delta",
+        }
     );
     assert_eq!(
         current_state_execution_route(

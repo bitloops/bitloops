@@ -388,6 +388,7 @@ async fn execute_sync_inner(
         paths_total,
         paths_completed,
     );
+    stats.maybe_record_memory_snapshot(&cfg.repo.repo_id, "after_classification");
 
     let mut writer = SqliteSyncWriter::open(relational.sqlite_path())
         .await
@@ -441,6 +442,7 @@ async fn execute_sync_inner(
             );
         }
     }
+    stats.maybe_record_memory_snapshot(&cfg.repo.repo_id, "before_prepare_stage");
 
     let prepare_inputs = classified
         .iter()
@@ -611,6 +613,7 @@ async fn execute_sync_inner(
             }
         }
     }
+    stats.maybe_record_memory_snapshot(&cfg.repo.repo_id, "after_prepare_stage");
 
     flush_pending_materialisations(
         &mut writer,
@@ -642,6 +645,7 @@ async fn execute_sync_inner(
         touch_outcome.sqlite_commits,
         touch_outcome.sqlite_rows_written,
     );
+    stats.maybe_record_memory_snapshot(&cfg.repo.repo_id, "after_cache_touch_flush");
 
     let touched_paths = touched_paths.into_iter().collect::<Vec<_>>();
     let reconcile_started = Instant::now();
@@ -653,6 +657,7 @@ async fn execute_sync_inner(
     .await
     .context("reconciling current local dependency edges after sync")?;
     stats.current_edge_reconcile_total = reconcile_started.elapsed();
+    stats.maybe_record_memory_snapshot(&cfg.repo.repo_id, "after_current_edge_reconcile");
 
     emit_progress(
         observer,
@@ -682,6 +687,7 @@ async fn execute_sync_inner(
             }
         }
     }
+    stats.maybe_record_memory_snapshot(&cfg.repo.repo_id, "after_gc");
 
     let summary = SyncSummary {
         success: true,
@@ -859,6 +865,7 @@ async fn flush_pending_materialisations(
         return Ok(());
     }
 
+    stats.maybe_record_peak_memory_snapshot(repo_id, "before_materialisation_flush_peak");
     let flush_started = Instant::now();
     let outcome = writer
         .flush(repo_id, parser_version, extractor_version)
@@ -873,6 +880,7 @@ async fn flush_pending_materialisations(
     let flush_duration = flush_started.elapsed();
     stats.add_writer_commit(outcome.sqlite_commits, outcome.sqlite_rows_written);
     apply_writer_duration(stats, flush_duration, &outcome);
+    stats.maybe_record_peak_memory_snapshot(repo_id, "after_materialisation_flush_peak");
 
     for path in outcome.materialized_paths {
         touched_paths.insert(path.clone());

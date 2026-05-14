@@ -14,6 +14,9 @@ use tokio::process::{Child, Command};
 use crate::capability_packs::architecture_graph::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID,
 };
+use crate::capability_packs::navigation_context::types::{
+    NAVIGATION_CONTEXT_CAPABILITY_ID, NAVIGATION_CONTEXT_CONSUMER_ID,
+};
 use crate::host::capability_host::{
     CurrentStateConsumerRequest, CurrentStateConsumerResult, DevqlCapabilityHost, ReconcileMode,
 };
@@ -84,6 +87,12 @@ pub(crate) enum CurrentStateExecutionRoute {
     Subprocess { reason: &'static str },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CurrentStateWorkerTarget {
+    ArchitectureGraph,
+    NavigationContext,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct SubprocessCurrentStateWorkerRunner;
 
@@ -136,8 +145,7 @@ pub(crate) fn is_supported_current_state_worker_target(
     capability_id: &str,
     consumer_id: &str,
 ) -> bool {
-    capability_id == ARCHITECTURE_GRAPH_CAPABILITY_ID
-        && consumer_id == ARCHITECTURE_GRAPH_CONSUMER_ID
+    current_state_worker_target(capability_id, consumer_id).is_some()
 }
 
 pub(crate) fn current_state_execution_route(
@@ -145,15 +153,47 @@ pub(crate) fn current_state_execution_route(
     consumer_id: &str,
     reconcile_mode: ReconcileMode,
 ) -> CurrentStateExecutionRoute {
-    if is_supported_current_state_worker_target(capability_id, consumer_id)
-        && reconcile_mode == ReconcileMode::FullReconcile
-    {
-        return CurrentStateExecutionRoute::Subprocess {
-            reason: "architecture_graph_full_reconcile",
-        };
+    if let Some(target) = current_state_worker_target(capability_id, consumer_id) {
+        let reason = current_state_worker_route_reason(target, reconcile_mode);
+        return CurrentStateExecutionRoute::Subprocess { reason };
     }
 
     CurrentStateExecutionRoute::Inline
+}
+
+fn current_state_worker_target(
+    capability_id: &str,
+    consumer_id: &str,
+) -> Option<CurrentStateWorkerTarget> {
+    match (capability_id, consumer_id) {
+        (ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_CONSUMER_ID) => {
+            Some(CurrentStateWorkerTarget::ArchitectureGraph)
+        }
+        (NAVIGATION_CONTEXT_CAPABILITY_ID, NAVIGATION_CONTEXT_CONSUMER_ID) => {
+            Some(CurrentStateWorkerTarget::NavigationContext)
+        }
+        _ => None,
+    }
+}
+
+fn current_state_worker_route_reason(
+    target: CurrentStateWorkerTarget,
+    reconcile_mode: ReconcileMode,
+) -> &'static str {
+    match (target, reconcile_mode) {
+        (CurrentStateWorkerTarget::ArchitectureGraph, ReconcileMode::FullReconcile) => {
+            "architecture_graph_full_reconcile"
+        }
+        (CurrentStateWorkerTarget::ArchitectureGraph, ReconcileMode::MergedDelta) => {
+            "architecture_graph_merged_delta"
+        }
+        (CurrentStateWorkerTarget::NavigationContext, ReconcileMode::FullReconcile) => {
+            "navigation_context_full_reconcile"
+        }
+        (CurrentStateWorkerTarget::NavigationContext, ReconcileMode::MergedDelta) => {
+            "navigation_context_merged_delta"
+        }
+    }
 }
 
 pub(crate) fn should_use_current_state_worker(
@@ -501,6 +541,10 @@ impl Drop for SubprocessCurrentStateWorkerHandle {
 
 #[cfg(test)]
 mod tests {
+    use crate::capability_packs::navigation_context::types::{
+        NAVIGATION_CONTEXT_CAPABILITY_ID, NAVIGATION_CONTEXT_CONSUMER_ID,
+    };
+
     use super::*;
 
     #[test]
@@ -525,7 +569,33 @@ mod tests {
                 ARCHITECTURE_GRAPH_CONSUMER_ID,
                 ReconcileMode::MergedDelta,
             ),
-            CurrentStateExecutionRoute::Inline
+            CurrentStateExecutionRoute::Subprocess {
+                reason: "architecture_graph_merged_delta",
+            }
+        );
+        assert!(is_supported_current_state_worker_target(
+            NAVIGATION_CONTEXT_CAPABILITY_ID,
+            NAVIGATION_CONTEXT_CONSUMER_ID
+        ));
+        assert_eq!(
+            current_state_execution_route(
+                NAVIGATION_CONTEXT_CAPABILITY_ID,
+                NAVIGATION_CONTEXT_CONSUMER_ID,
+                ReconcileMode::FullReconcile,
+            ),
+            CurrentStateExecutionRoute::Subprocess {
+                reason: "navigation_context_full_reconcile",
+            }
+        );
+        assert_eq!(
+            current_state_execution_route(
+                NAVIGATION_CONTEXT_CAPABILITY_ID,
+                NAVIGATION_CONTEXT_CONSUMER_ID,
+                ReconcileMode::MergedDelta,
+            ),
+            CurrentStateExecutionRoute::Subprocess {
+                reason: "navigation_context_merged_delta",
+            }
         );
         assert!(!is_supported_current_state_worker_target(
             "semantic_clones",
