@@ -28,8 +28,8 @@ use super::coordinator::InitRuntimeCoordinator;
 use super::coordinator::{selected_lane_waiting_reason, selected_lanes_have_warning_status};
 use super::embedding_freshness::EmbeddingFreshnessState;
 use super::lanes::{
-    derive_code_embeddings_lane, derive_ingest_lane, derive_session_status, derive_summaries_lane,
-    derive_sync_lane,
+    SummaryEmbeddingsLaneContext, derive_code_embeddings_lane, derive_ingest_lane,
+    derive_session_status, derive_summaries_lane, derive_summary_embeddings_lane, derive_sync_lane,
 };
 use super::orchestration::{
     selected_session_workplane_stats, selected_sync_terminal, selected_top_level_terminal,
@@ -1437,10 +1437,10 @@ fn summaries_lane_waits_for_follow_up_sync_after_summary_bootstrap_finishes_late
         follow_up_sync_required: true,
         follow_up_sync_task_id: None,
         follow_up_sync_terminal: None,
-        next_completion_seq: 2,
+        next_completion_seq: 3,
         initial_sync_completion_seq: Some(1),
-        embeddings_bootstrap_completion_seq: None,
-        summary_bootstrap_completion_seq: Some(2),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: Some(3),
         follow_up_sync_completion_seq: None,
         submitted_at_unix: 1,
         updated_at_unix: 1,
@@ -1488,6 +1488,258 @@ fn summaries_lane_waits_for_follow_up_sync_after_summary_bootstrap_finishes_late
         lane.activity_label.as_deref(),
         Some("Running a follow-up sync")
     );
+}
+
+#[test]
+fn summary_embeddings_lane_reports_queued_work_during_active_summary_refresh_overlap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: Some(SummaryBootstrapRequest {
+                action: SummaryBootstrapAction::ConfigureCloud,
+                message: None,
+                model_name: None,
+                gateway_url_override: None,
+            }),
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: None,
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 3,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: Some(3),
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let summary_run = SummaryBootstrapRunRecord {
+        run_id: "summary-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: "init-session-1".to_string(),
+        request: SummaryBootstrapRequest {
+            action: SummaryBootstrapAction::ConfigureCloud,
+            message: None,
+            model_name: None,
+            gateway_url_override: None,
+        },
+        status: SummaryBootstrapStatus::Completed,
+        progress: SummaryBootstrapProgress::default(),
+        result: None,
+        error: None,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 10,
+        completed_at_unix: Some(10),
+    };
+    let mut stats = SessionWorkplaneStats {
+        summary_refresh_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 4,
+                running: 0,
+                failed: 0,
+                completed: 8,
+            },
+            latest_error: None,
+        },
+        summary_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 2,
+                running: 0,
+                failed: 0,
+                completed: 1,
+            },
+            latest_error: None,
+        },
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let lane = derive_summary_embeddings_lane(
+        &session,
+        &stats,
+        SummaryEmbeddingsLaneContext {
+            initial_sync: Some(&initial_sync),
+            follow_up_sync: None,
+            embeddings_task: None,
+            summary_run: Some(&summary_run),
+            current_state: StatusCounts::default(),
+            progress: Some(InitRuntimeLaneProgressView {
+                completed: 12,
+                in_memory_completed: 0,
+                total: 40,
+                remaining: 28,
+            }),
+            summaries_progress: Some(InitRuntimeLaneProgressView {
+                completed: 20,
+                in_memory_completed: 0,
+                total: 40,
+                remaining: 20,
+            }),
+        },
+    );
+
+    assert_eq!(lane.status, "queued");
+    assert_eq!(lane.waiting_reason, None);
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Creating summary embeddings")
+    );
+    assert_eq!(lane.pending_count, 2);
+}
+
+#[test]
+fn summary_embeddings_lane_reports_running_work_during_active_summary_refresh_overlap() {
+    let session = InitSessionRecord {
+        init_session_id: "init-session-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        daemon_config_root: PathBuf::from("/tmp/config-1"),
+        selections: StartInitSessionSelections {
+            run_sync: true,
+            run_ingest: false,
+            run_code_embeddings: true,
+            run_summaries: true,
+            run_summary_embeddings: true,
+            ingest_backfill: None,
+            embeddings_bootstrap: Some(InitEmbeddingsBootstrapRequest {
+                config_path: PathBuf::from("/tmp/config-1/config.toml"),
+                profile_name: "local_code".to_string(),
+                mode: crate::daemon::EmbeddingsBootstrapMode::Local,
+                gateway_url_override: None,
+                api_key_env: None,
+            }),
+            summaries_bootstrap: Some(SummaryBootstrapRequest {
+                action: SummaryBootstrapAction::ConfigureCloud,
+                message: None,
+                model_name: None,
+                gateway_url_override: None,
+            }),
+        },
+        initial_sync_task_id: Some("sync-task-1".to_string()),
+        initial_sync_terminal: None,
+        ingest_task_id: None,
+        ingest_terminal: None,
+        embeddings_bootstrap_task_id: Some("bootstrap-task-1".to_string()),
+        embeddings_bootstrap_terminal: None,
+        summary_bootstrap_task_id: Some("summary-task-1".to_string()),
+        summary_bootstrap_terminal: None,
+        follow_up_sync_required: false,
+        follow_up_sync_task_id: None,
+        follow_up_sync_terminal: None,
+        next_completion_seq: 3,
+        initial_sync_completion_seq: Some(1),
+        embeddings_bootstrap_completion_seq: Some(2),
+        summary_bootstrap_completion_seq: Some(3),
+        follow_up_sync_completion_seq: None,
+        submitted_at_unix: 1,
+        updated_at_unix: 1,
+        terminal_status: None,
+        terminal_error: None,
+    };
+    let initial_sync = completed_sync_task("sync-task-1", 10);
+    let summary_run = SummaryBootstrapRunRecord {
+        run_id: "summary-task-1".to_string(),
+        repo_id: "repo-1".to_string(),
+        repo_root: PathBuf::from("/tmp/repo-1"),
+        init_session_id: "init-session-1".to_string(),
+        request: SummaryBootstrapRequest {
+            action: SummaryBootstrapAction::ConfigureCloud,
+            message: None,
+            model_name: None,
+            gateway_url_override: None,
+        },
+        status: SummaryBootstrapStatus::Completed,
+        progress: SummaryBootstrapProgress::default(),
+        result: None,
+        error: None,
+        submitted_at_unix: 1,
+        started_at_unix: Some(1),
+        updated_at_unix: 10,
+        completed_at_unix: Some(10),
+    };
+    let mut stats = SessionWorkplaneStats {
+        summary_refresh_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 1,
+                running: 3,
+                failed: 0,
+                completed: 8,
+            },
+            latest_error: None,
+        },
+        summary_embedding_jobs: SessionMailboxStats {
+            counts: StatusCounts {
+                pending: 1,
+                running: 2,
+                failed: 0,
+                completed: 1,
+            },
+            latest_error: None,
+        },
+        ..SessionWorkplaneStats::default()
+    };
+    stats.refresh_lane_counts();
+
+    let lane = derive_summary_embeddings_lane(
+        &session,
+        &stats,
+        SummaryEmbeddingsLaneContext {
+            initial_sync: Some(&initial_sync),
+            follow_up_sync: None,
+            embeddings_task: None,
+            summary_run: Some(&summary_run),
+            current_state: StatusCounts::default(),
+            progress: Some(InitRuntimeLaneProgressView {
+                completed: 18,
+                in_memory_completed: 0,
+                total: 40,
+                remaining: 22,
+            }),
+            summaries_progress: Some(InitRuntimeLaneProgressView {
+                completed: 24,
+                in_memory_completed: 0,
+                total: 40,
+                remaining: 16,
+            }),
+        },
+    );
+
+    assert_eq!(lane.status, "running");
+    assert_eq!(lane.waiting_reason, None);
+    assert_eq!(
+        lane.activity_label.as_deref(),
+        Some("Creating summary embeddings")
+    );
+    assert_eq!(lane.running_count, 2);
 }
 
 #[test]

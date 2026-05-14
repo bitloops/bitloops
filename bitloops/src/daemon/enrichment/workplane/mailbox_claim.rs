@@ -48,6 +48,14 @@ pub(crate) struct ClaimedEmbeddingMailboxBatch {
     pub items: Vec<SemanticEmbeddingMailboxItemRecord>,
 }
 
+#[derive(Debug, Clone)]
+struct EmbeddingMailboxRepoCandidate {
+    repo_id: String,
+    repo_root: PathBuf,
+    config_root: PathBuf,
+    representation_kind: EmbeddingRepresentationKind,
+}
+
 pub(crate) fn claim_summary_mailbox_batch(
     workplane_store: &DaemonSqliteRuntimeStore,
     runtime_store: &DaemonSqliteRuntimeStore,
@@ -93,7 +101,13 @@ pub(crate) fn claim_embedding_mailbox_batch(
     workplane_store.with_connection(|conn| {
         let candidates = load_embedding_mailbox_repo_candidates(conn, unix_timestamp_now())?;
         let mut readiness_cache = BTreeMap::new();
-        for (repo_id, repo_root, config_root, representation_kind) in candidates {
+        for candidate in candidates {
+            let EmbeddingMailboxRepoCandidate {
+                repo_id,
+                repo_root,
+                config_root,
+                representation_kind,
+            } = candidate;
             let mailbox_name = match representation_kind {
                 EmbeddingRepresentationKind::Summary => SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
                 EmbeddingRepresentationKind::Identity => SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
@@ -184,7 +198,7 @@ fn load_summary_mailbox_repo_candidates(
 fn load_embedding_mailbox_repo_candidates(
     conn: &rusqlite::Connection,
     now: u64,
-) -> Result<Vec<(String, PathBuf, PathBuf, EmbeddingRepresentationKind)>> {
+) -> Result<Vec<EmbeddingMailboxRepoCandidate>> {
     let limit = i64::try_from(WORKPLANE_JOB_CLAIM_CANDIDATE_LIMIT)
         .context("converting embedding mailbox claim candidate limit")?;
     let mut stmt = conn.prepare(
@@ -208,19 +222,86 @@ fn load_embedding_mailbox_repo_candidates(
                 "identity" | "locator" => EmbeddingRepresentationKind::Identity,
                 _ => EmbeddingRepresentationKind::Code,
             };
-            Ok((
-                row.get::<_, String>(0)?,
-                PathBuf::from(row.get::<_, String>(1)?),
-                PathBuf::from(row.get::<_, String>(2)?),
+            Ok(EmbeddingMailboxRepoCandidate {
+                repo_id: row.get::<_, String>(0)?,
+                repo_root: PathBuf::from(row.get::<_, String>(1)?),
+                config_root: PathBuf::from(row.get::<_, String>(2)?),
                 representation_kind,
-            ))
+            })
         },
     )?;
     let mut values = Vec::new();
     for row in rows {
         values.push(row?);
     }
-    Ok(values)
+    let mut prioritized = Vec::new();
+    let mut fallback = Vec::new();
+    let has_summary_overlap_candidates = values.iter().any(|candidate| {
+        candidate.representation_kind == EmbeddingRepresentationKind::Summary
+            && repo_has_active_summary_refresh_work(conn, &candidate.repo_id).unwrap_or(false)
+    });
+    if !has_summary_overlap_candidates {
+        return Ok(values);
+    }
+    for candidate in values {
+        let prioritise = candidate.representation_kind == EmbeddingRepresentationKind::Summary
+            && repo_has_active_summary_refresh_work(conn, &candidate.repo_id)?;
+        if prioritise {
+            prioritized.push(candidate);
+        } else {
+            fallback.push(candidate);
+        }
+    }
+    prioritized.extend(fallback);
+    Ok(prioritized)
+}
+
+fn repo_has_active_summary_refresh_work(
+    conn: &rusqlite::Connection,
+    repo_id: &str,
+) -> Result<bool> {
+    Ok(summary_mailbox_work_is_active(conn, repo_id)?
+        || summary_workplane_jobs_are_active(conn, repo_id)?)
+}
+
+fn summary_mailbox_work_is_active(conn: &rusqlite::Connection, repo_id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1
+             FROM semantic_summary_mailbox_items
+             WHERE repo_id = ?1
+               AND status IN (?2, ?3)
+             LIMIT 1",
+            params![
+                repo_id,
+                SemanticMailboxItemStatus::Pending.as_str(),
+                SemanticMailboxItemStatus::Leased.as_str(),
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn summary_workplane_jobs_are_active(conn: &rusqlite::Connection, repo_id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1
+             FROM capability_workplane_jobs
+             WHERE repo_id = ?1
+               AND mailbox_name = ?2
+               AND status IN (?3, ?4)
+             LIMIT 1",
+            params![
+                repo_id,
+                SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                crate::host::runtime_store::WorkplaneJobStatus::Pending.as_str(),
+                crate::host::runtime_store::WorkplaneJobStatus::Running.as_str(),
+            ],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 fn lease_summary_mailbox_batch_for_repo(

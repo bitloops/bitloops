@@ -605,29 +605,6 @@ pub(crate) fn derive_summary_embeddings_lane(
         .with_waiting_reason("waiting_for_current_state_consumer")
         .with_activity_label("Applying codebase updates");
     }
-    if stats.summary_jobs.pending > 0 || stats.summary_jobs.running > 0 {
-        return runtime_lane(
-            "waiting",
-            progress,
-            stats.summary_embedding_jobs.counts,
-            warnings,
-        )
-        .with_waiting_reason("waiting_for_summaries")
-        .with_activity_label("Waiting for summaries to be ready");
-    }
-    if progress_has_remaining(summaries_progress.as_ref()) {
-        return runtime_lane(
-            "warning",
-            progress,
-            stats.summary_embedding_jobs.counts,
-            warnings,
-        )
-        .with_activity_label("Waiting for summaries to be ready")
-        .with_detail(
-            "Summary generation finished without producing current summaries for every eligible artefact"
-                .to_string(),
-        );
-    }
     if let Some(reason) = stats.blocked_summary_embedding_reason.clone() {
         return runtime_lane(
             "waiting",
@@ -653,6 +630,29 @@ pub(crate) fn derive_summary_embeddings_lane(
             warnings,
         )
         .with_activity_label("Creating summary embeddings");
+    }
+    if stats.summary_jobs.pending > 0 || stats.summary_jobs.running > 0 {
+        return runtime_lane(
+            "waiting",
+            progress,
+            stats.summary_embedding_jobs.counts,
+            warnings,
+        )
+        .with_waiting_reason("waiting_for_summaries")
+        .with_activity_label("Waiting for summaries to be ready");
+    }
+    if progress_has_remaining(summaries_progress.as_ref()) {
+        return runtime_lane(
+            "warning",
+            progress,
+            stats.summary_embedding_jobs.counts,
+            warnings,
+        )
+        .with_activity_label("Waiting for summaries to be ready")
+        .with_detail(
+            "Summary generation finished without producing current summaries for every eligible artefact"
+                .to_string(),
+        );
     }
     if !warnings.is_empty() {
         return runtime_lane(
