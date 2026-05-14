@@ -1,8 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
-use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use super::types::{
     InteractionLinkedCheckpoint, InteractionSessionSummary, InteractionTurnSummary,
@@ -14,7 +13,8 @@ use crate::host::interactions::store::InteractionSpool;
 use crate::host::interactions::types::{
     InteractionEvent, InteractionSubagentRun, InteractionToolInvocation, InteractionTurn,
 };
-use crate::host::relational_store::DefaultRelationalStore;
+use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
+use crate::storage::SqliteConnectionPool;
 
 const MAX_INTERACTION_ROWS: usize = 1_000_000;
 
@@ -264,64 +264,46 @@ fn query_checkpoint_links(
     relational: &DefaultRelationalStore,
     repo_id: &str,
 ) -> Result<HashMap<String, Vec<InteractionLinkedCheckpoint>>> {
-    query_checkpoint_links_sqlite(relational.sqlite_path(), repo_id)
+    let sqlite = relational.local_sqlite_pool()?;
+    query_checkpoint_links_sqlite(&sqlite, repo_id)
 }
 
 fn query_checkpoint_links_sqlite(
-    sqlite_path: &Path,
+    sqlite: &SqliteConnectionPool,
     repo_id: &str,
 ) -> Result<HashMap<String, Vec<InteractionLinkedCheckpoint>>> {
-    let conn = open_checkpoint_links_readonly_connection(sqlite_path)?;
-    let mut stmt = conn.prepare(
-        "SELECT cc.checkpoint_id, cc.commit_sha,
-                COALESCE(c.author_name, ''), COALESCE(c.author_email, ''),
-                COALESCE(c.committed_at, '')
-         FROM commit_checkpoints cc
-         LEFT JOIN commits c
-           ON c.commit_sha = cc.commit_sha AND c.repo_id = cc.repo_id
-         WHERE cc.repo_id = ?1
-         ORDER BY COALESCE(c.committed_at, '') DESC, cc.checkpoint_id DESC, cc.commit_sha DESC",
-    )?;
-    let rows = stmt.query_map(rusqlite::params![repo_id], |row| {
-        Ok(InteractionLinkedCheckpoint {
-            checkpoint_id: row.get(0)?,
-            commit_sha: row.get(1)?,
-            author_name: row.get(2)?,
-            author_email: row.get(3)?,
-            committed_at: row.get(4)?,
-        })
-    })?;
-    let mut out: HashMap<String, Vec<InteractionLinkedCheckpoint>> = HashMap::new();
-    for row in rows {
-        let checkpoint = row?;
-        if checkpoint.checkpoint_id.trim().is_empty() {
-            continue;
+    sqlite.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT cc.checkpoint_id, cc.commit_sha,
+                    COALESCE(c.author_name, ''), COALESCE(c.author_email, ''),
+                    COALESCE(c.committed_at, '')
+             FROM commit_checkpoints cc
+             LEFT JOIN commits c
+               ON c.commit_sha = cc.commit_sha AND c.repo_id = cc.repo_id
+             WHERE cc.repo_id = ?1
+             ORDER BY COALESCE(c.committed_at, '') DESC, cc.checkpoint_id DESC, cc.commit_sha DESC",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![repo_id], |row| {
+            Ok(InteractionLinkedCheckpoint {
+                checkpoint_id: row.get(0)?,
+                commit_sha: row.get(1)?,
+                author_name: row.get(2)?,
+                author_email: row.get(3)?,
+                committed_at: row.get(4)?,
+            })
+        })?;
+        let mut out: HashMap<String, Vec<InteractionLinkedCheckpoint>> = HashMap::new();
+        for row in rows {
+            let checkpoint = row?;
+            if checkpoint.checkpoint_id.trim().is_empty() {
+                continue;
+            }
+            out.entry(checkpoint.checkpoint_id.clone())
+                .or_default()
+                .push(checkpoint);
         }
-        out.entry(checkpoint.checkpoint_id.clone())
-            .or_default()
-            .push(checkpoint);
-    }
-    Ok(out)
-}
-
-fn open_checkpoint_links_readonly_connection(db_path: &Path) -> Result<rusqlite::Connection> {
-    if !db_path.is_file() {
-        bail!(
-            "SQLite database file not found at {}. Run `bitloops init` to create and initialise stores.",
-            db_path.display()
-        );
-    }
-
-    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
-        .context("registering sqlite-vec auto-extension for checkpoint-link read")?;
-    let conn =
-        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .with_context(|| format!("opening relational sqlite at {}", db_path.display()))?;
-    conn.busy_timeout(Duration::from_secs(30))
-        .context("setting SQLite busy timeout for checkpoint-link read")?;
-    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA query_only = ON;")
-        .context("configuring read-only SQLite checkpoint-link connection")?;
-    Ok(conn)
+        Ok(out)
+    })
 }
 
 fn bootstrap_checkpoint_link_schema(relational: &DefaultRelationalStore) -> Result<()> {
