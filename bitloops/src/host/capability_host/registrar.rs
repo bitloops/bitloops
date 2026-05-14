@@ -341,6 +341,12 @@ pub enum CapabilityMailboxBacklogPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityMailboxInitPolicy {
+    Background,
+    BlocksInitCompletion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityMailboxHandler {
     CurrentStateConsumer(&'static str),
     Ingester(&'static str),
@@ -354,6 +360,7 @@ pub struct CapabilityMailboxRegistration {
     pub handler: CapabilityMailboxHandler,
     pub readiness_policy: CapabilityMailboxReadinessPolicy,
     pub backlog_policy: CapabilityMailboxBacklogPolicy,
+    pub init_policy: CapabilityMailboxInitPolicy,
 }
 
 impl CapabilityMailboxRegistration {
@@ -370,6 +377,7 @@ impl CapabilityMailboxRegistration {
             handler,
             readiness_policy: CapabilityMailboxReadinessPolicy::None,
             backlog_policy: CapabilityMailboxBacklogPolicy::None,
+            init_policy: CapabilityMailboxInitPolicy::Background,
         }
     }
 
@@ -381,6 +389,15 @@ impl CapabilityMailboxRegistration {
     pub const fn backlog_policy(mut self, policy: CapabilityMailboxBacklogPolicy) -> Self {
         self.backlog_policy = policy;
         self
+    }
+
+    pub const fn init_policy(mut self, policy: CapabilityMailboxInitPolicy) -> Self {
+        self.init_policy = policy;
+        self
+    }
+
+    pub const fn blocks_init_completion(self) -> Self {
+        self.init_policy(CapabilityMailboxInitPolicy::BlocksInitCompletion)
     }
 }
 
@@ -447,6 +464,34 @@ mod tests {
 
         let result = IngestResult::json(json!({ "status": "ok" }));
         assert!(result.render_human().contains("\"status\": \"ok\""));
+    }
+
+    #[test]
+    fn mailbox_registration_defaults_to_background_and_can_block_init() {
+        let background = CapabilityMailboxRegistration::new(
+            "capability",
+            "capability.background",
+            CapabilityMailboxPolicy::Cursor,
+            CapabilityMailboxHandler::CurrentStateConsumer("capability.background"),
+        );
+
+        assert_eq!(
+            background.init_policy,
+            CapabilityMailboxInitPolicy::Background
+        );
+
+        let blocking = CapabilityMailboxRegistration::new(
+            "capability",
+            "capability.blocking",
+            CapabilityMailboxPolicy::Cursor,
+            CapabilityMailboxHandler::CurrentStateConsumer("capability.blocking"),
+        )
+        .blocks_init_completion();
+
+        assert_eq!(
+            blocking.init_policy,
+            CapabilityMailboxInitPolicy::BlocksInitCompletion
+        );
     }
 
     #[test]
