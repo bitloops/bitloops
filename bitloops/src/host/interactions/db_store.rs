@@ -38,7 +38,7 @@ pub struct SqliteInteractionSpool {
 
 pub(crate) fn initialise_interaction_spool_schema(sqlite: &SqliteConnectionPool) -> Result<()> {
     sqlite
-        .with_connection(schema::initialise_schema)
+        .with_write_connection(schema::initialise_schema)
         .context("initialising interaction spool schema")
 }
 
@@ -47,7 +47,7 @@ pub(crate) fn rebuild_interaction_search_projections(
     repo_id: &str,
 ) -> Result<()> {
     sqlite
-        .with_connection(|conn| projections::rebuild_all_projections(conn, repo_id))
+        .with_write_connection(|conn| projections::rebuild_all_projections(conn, repo_id))
         .context("rebuilding interaction search projections")
 }
 

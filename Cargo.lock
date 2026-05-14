@@ -634,6 +634,7 @@ dependencies = [
  "duckdb",
  "env_logger",
  "figlet-rs",
+ "fs2",
  "futures-util",
  "hex",
  "hnsw_rs",
@@ -1634,6 +1635,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -4218,8 +4229,6 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 [[package]]
 name = "sqlite-vec"
 version = "0.1.10-alpha.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b89e325282d9d05a53c7e5510b886d9510059c2b854c9606d07652549686f1"
 dependencies = [
  "cc",
 ]

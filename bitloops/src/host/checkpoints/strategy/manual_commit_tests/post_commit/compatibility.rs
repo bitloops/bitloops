@@ -46,6 +46,39 @@ pub(crate) fn post_commit_no_head_is_noop() {
 }
 
 #[test]
+pub(crate) fn commit_has_checkpoint_mapping_reads_without_waiting_for_write_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+
+    let relational =
+        crate::host::relational_store::DefaultRelationalStore::open_local_for_repo_root(dir.path())
+            .unwrap();
+    relational
+        .initialise_local_relational_checkpoint_schema()
+        .unwrap();
+    let sqlite =
+        crate::host::relational_store::RelationalStore::local_sqlite_pool(&relational).unwrap();
+    let db_path = sqlite.db_path().to_path_buf();
+
+    crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let repo_root = dir.path().to_path_buf();
+        let handle = std::thread::spawn(move || {
+            tx.send(commit_has_checkpoint_mapping(&repo_root, "deadbeef"))
+                .expect("send commit mapping read result");
+        });
+
+        let result = rx
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .expect("commit mapping read should not wait for SQLite write lock");
+        assert!(!result.unwrap());
+        handle.join().expect("join commit mapping reader");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 pub(crate) fn update_base_commit_no_head_is_noop() {
     let dir = tempfile::tempdir().unwrap();
     setup_empty_git_repo(&dir);

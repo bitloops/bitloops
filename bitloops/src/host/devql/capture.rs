@@ -221,7 +221,7 @@ fn persist_workspace_revision(
         .context("opening local relational store for watcher workspace revision persist")?;
     relational.initialise_local_devql_schema()?;
     let sqlite = RelationalStore::local_sqlite_pool(&relational)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         let tx = conn
             .unchecked_transaction()
             .context("starting watcher workspace revision transaction")?;

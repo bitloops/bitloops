@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
@@ -97,7 +98,7 @@ fn runtime_schema_initialisation_does_not_rebuild_interaction_projections() {
         .expect("initialise runtime schema");
 
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO interaction_sessions (session_id, repo_id, first_prompt, started_at, updated_at)
                  VALUES ('session-1', '__runtime-bootstrap__', 'bootstrap prompt', '2026-05-13T00:00:00Z', '2026-05-13T00:00:00Z')",
@@ -464,6 +465,46 @@ fn daemon_runtime_store_persists_capability_event_queue_state_in_sqlite() {
 }
 
 #[test]
+fn daemon_runtime_store_mutations_wait_for_shared_sqlite_write_lock() {
+    let state_dir = TempDir::new().expect("tempdir");
+    with_env_var(
+        "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+        Some(state_dir.path().to_string_lossy().as_ref()),
+        || {
+            let store = DaemonSqliteRuntimeStore::open().expect("open daemon runtime store");
+            let db_path = store.db_path().to_path_buf();
+            let held_lock = crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path)
+                .expect("hold sqlite write lock");
+            let store_for_mutation = store.clone();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                started_tx.send(()).expect("signal mutation started");
+                done_tx
+                    .send(
+                        store_for_mutation.mutate_capability_event_queue_state(|state| {
+                            state.version = 9;
+                            Ok(())
+                        }),
+                    )
+                    .expect("send mutation result");
+            });
+            started_rx.recv().expect("wait for mutation start");
+            assert!(
+                done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+                "runtime-store mutation should not complete while the shared SQLite write lock is held"
+            );
+            held_lock.release().expect("release sqlite write lock");
+            done_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("wait for mutation result")
+                .expect("mutate capability event queue state");
+            worker.join().expect("join mutation worker");
+        },
+    );
+}
+
+#[test]
 fn persisted_capability_event_queue_state_default_preserves_legacy_values() {
     let default = PersistedCapabilityEventQueueState::default();
     assert_eq!(default.version, 1);
@@ -571,7 +612,7 @@ fn daemon_runtime_store_loads_legacy_sync_queue_state_with_config_root_field() {
                 crate::storage::SqliteConnectionPool::connect(store.db_path().to_path_buf())
                     .expect("connect runtime sqlite");
             sqlite
-                .with_connection(|conn| {
+                .with_write_connection(|conn| {
                     conn.execute(
                         "INSERT INTO runtime_documents (document_kind, payload, updated_at)
                          VALUES (?1, ?2, datetime('now'))
@@ -786,7 +827,7 @@ CREATE TABLE repo_watcher_registrations (
         )
         .expect("create legacy watcher registration table");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO repo_watcher_registrations (
                     repo_id, repo_root, pid, restart_token, created_at, updated_at
@@ -933,7 +974,7 @@ fn repo_runtime_store_lists_workplane_jobs_by_capability_mailbox_and_status() {
 
     let sqlite = store.connect_repo_sqlite().expect("connect sqlite");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "UPDATE capability_workplane_jobs SET status = 'failed', payload = '{invalid', last_error = 'boom'
                  WHERE repo_id = ?1 AND capability_id = 'architecture_graph'

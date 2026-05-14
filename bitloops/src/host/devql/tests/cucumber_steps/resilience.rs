@@ -602,7 +602,7 @@ model = "bdd-test-model""#,
                 repo_store
                     .connect_repo_sqlite()
                     .expect("connect repo workplane sqlite")
-                    .with_connection(|conn| {
+                    .with_write_connection(|conn| {
                         conn.execute(
                             "INSERT INTO capability_workplane_jobs (
                                  job_id, repo_id, repo_root, config_root, capability_id, mailbox_name,

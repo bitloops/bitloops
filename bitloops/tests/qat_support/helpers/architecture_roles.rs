@@ -2149,7 +2149,7 @@ fn mark_architecture_role_adjudication_job_running(
 ) -> Result<()> {
     let now = qat_unix_timestamp_i64()?;
     let sqlite = open_scenario_runtime_sqlite(world)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "UPDATE capability_workplane_jobs
              SET status = 'running',
@@ -2198,7 +2198,7 @@ fn persist_architecture_role_adjudication_job_outcome(
     let status = if error.is_some() { "failed" } else { "completed" };
     let last_error = error.map(|err| err.to_string());
     let sqlite = open_scenario_runtime_sqlite(world)?;
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "UPDATE capability_workplane_jobs
              SET status = ?1,

@@ -184,7 +184,7 @@ pub fn upsert_checkpoint_blob_reference(
     sqlite: &SqliteConnectionPool,
     reference: &CheckpointBlobReference,
 ) -> Result<()> {
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO checkpoint_blobs (
                 blob_id, checkpoint_id, session_index, blob_type, storage_backend,

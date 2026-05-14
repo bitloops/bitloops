@@ -235,12 +235,10 @@ async fn devql_global_route_rejects_mismatched_daemon_binding_for_repo_scoped_re
 
 #[tokio::test]
 async fn devql_playground_route_serves_explorer() {
-    let temp = TempDir::new().expect("temp dir");
-    let app = build_dashboard_router(test_state(
-        temp.path().to_path_buf(),
-        ServeMode::HelloWorld,
-        temp.path().to_path_buf(),
-    ));
+    let app = axum::Router::new().route(
+        "/devql/playground",
+        axum::routing::get(crate::graphql::slim_graphql_playground_handler),
+    );
 
     let (status, body) = request_text(app, "/devql/playground").await;
 

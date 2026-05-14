@@ -56,7 +56,7 @@ pub(crate) fn claim_summary_mailbox_batch(
     if control_state.paused_semantic {
         return Ok(None);
     }
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         let candidates = load_summary_mailbox_repo_candidates(conn, unix_timestamp_now())?;
         let mut readiness_cache = BTreeMap::new();
         for (repo_id, repo_root, config_root) in candidates {
@@ -90,7 +90,7 @@ pub(crate) fn claim_embedding_mailbox_batch(
     if control_state.paused_embeddings {
         return Ok(None);
     }
-    workplane_store.with_connection(|conn| {
+    workplane_store.with_write_connection(|conn| {
         let candidates = load_embedding_mailbox_repo_candidates(conn, unix_timestamp_now())?;
         let mut readiness_cache = BTreeMap::new();
         for (repo_id, repo_root, config_root, representation_kind) in candidates {

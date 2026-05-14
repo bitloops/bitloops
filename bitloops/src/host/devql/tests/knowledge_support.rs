@@ -360,7 +360,7 @@ impl KnowledgeBddHarness {
     pub(super) fn seed_checkpoint(&self, checkpoint_id: &str) -> Result<()> {
         let pool = SqliteConnectionPool::connect(self.ctx.sqlite_path.clone())?;
         pool.initialise_checkpoint_schema()?;
-        pool.with_connection(|conn| {
+        pool.with_write_connection(|conn| {
             conn.execute(
                 "INSERT OR IGNORE INTO checkpoints (checkpoint_id, repo_id) VALUES (?1, ?2)",
                 rusqlite::params![checkpoint_id, self.ctx.repo.repo_id.as_str()],
@@ -371,7 +371,7 @@ impl KnowledgeBddHarness {
 
     pub(super) fn seed_artefact(&self, artefact_id: &str) -> Result<()> {
         let pool = SqliteConnectionPool::connect(self.ctx.sqlite_path.clone())?;
-        pool.with_connection(|conn| {
+        pool.with_write_connection(|conn| {
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS artefacts_current (
                     repo_id TEXT NOT NULL,

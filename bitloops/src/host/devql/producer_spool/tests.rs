@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -34,6 +35,87 @@ fn seed_store() -> (
     let store = RepoSqliteRuntimeStore::open_for_roots(dir.path(), &repo_root)
         .expect("open repo runtime store");
     (dir, repo_root, repo, store)
+}
+
+#[test]
+fn producer_spool_enqueue_waits_for_shared_runtime_sqlite_write_lock() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+
+    let held_lock =
+        crate::storage::sqlite::hold_sqlite_write_lock_until_release(store.db_path().to_path_buf())
+            .expect("hold sqlite write lock");
+    let cfg_for_enqueue = cfg.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal enqueue started");
+        done_tx
+            .send(enqueue_spooled_sync_task(
+                &cfg_for_enqueue,
+                DevqlTaskSource::Watcher,
+                crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+            ))
+            .expect("send enqueue result");
+    });
+    started_rx.recv().expect("wait for enqueue start");
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "producer spool enqueue should not complete while the shared SQLite write lock is held"
+    );
+    held_lock.release().expect("release sqlite write lock");
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for enqueue result")
+        .expect("enqueue watcher sync");
+    worker.join().expect("join enqueue worker");
+}
+
+#[test]
+fn producer_spool_claim_waits_for_shared_runtime_sqlite_write_lock() {
+    let (_dir, repo_root, repo, store) = seed_store();
+    let cfg = crate::host::devql::DevqlConfig::from_roots(
+        store.config_root.clone(),
+        repo_root.clone(),
+        repo.clone(),
+    )
+    .expect("build devql config");
+    enqueue_spooled_sync_task(
+        &cfg,
+        DevqlTaskSource::Watcher,
+        crate::host::devql::SyncMode::Paths(vec!["src/a.ts".to_string()]),
+    )
+    .expect("enqueue watcher sync");
+
+    let held_lock =
+        crate::storage::sqlite::hold_sqlite_write_lock_until_release(store.db_path().to_path_buf())
+            .expect("hold sqlite write lock");
+    let config_root = store.config_root.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal claim started");
+        done_tx
+            .send(claim_next_producer_spool_jobs(&config_root))
+            .expect("send claim result");
+    });
+    started_rx.recv().expect("wait for claim start");
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "producer spool claim should not complete while the shared SQLite write lock is held"
+    );
+    held_lock.release().expect("release sqlite write lock");
+    let claimed = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for claim result")
+        .expect("claim producer spool jobs");
+    worker.join().expect("join claim worker");
+    assert_eq!(claimed.len(), 1);
 }
 
 #[test]
@@ -366,7 +448,7 @@ fn producer_spool_claim_skips_blocked_post_commit_derivation_until_unblocked() {
         .connect_repo_sqlite()
         .expect("open repo runtime sqlite");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             for (job_id, payload) in [
                 (
                     "producer-spool-job-a-derivation",
@@ -497,7 +579,7 @@ fn post_commit_refresh_claims_before_derivation_with_same_timestamp() {
         .connect_repo_sqlite()
         .expect("open repo runtime sqlite");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             for (job_id, payload) in [
                 (
                     "producer-spool-job-a-derivation",

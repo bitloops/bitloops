@@ -135,7 +135,7 @@ fn opening_spool_does_not_rebuild_search_projections() -> Result<()> {
     let sqlite = SqliteConnectionPool::connect(dir.path().join("interaction-spool.sqlite"))?;
     initialise_interaction_spool_schema(&sqlite)?;
 
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO interaction_sessions (session_id, repo_id, first_prompt, started_at, updated_at)
              VALUES ('session-1', 'repo-test', 'hello from prompt', '2026-05-13T00:00:00Z', '2026-05-13T00:00:00Z')",

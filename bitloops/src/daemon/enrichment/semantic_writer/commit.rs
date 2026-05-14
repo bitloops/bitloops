@@ -118,7 +118,7 @@ pub(super) fn execute_summary_commit(
     let mut runtime_store_writes_succeeded_in_tx = false;
 
     let stage_started = Instant::now();
-    let tx = match connection.transaction() {
+    let tx = match connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate) {
         Ok(tx) => tx,
         Err(err) => {
             timings.transaction_start_ms = elapsed_ms(stage_started);
@@ -215,7 +215,7 @@ pub(super) fn execute_embedding_commit(
     request: &CommitEmbeddingBatchRequest,
 ) -> Result<()> {
     let tx = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("starting semantic embedding batch transaction")?;
     for statement in request
         .embedding_statements

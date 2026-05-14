@@ -682,7 +682,7 @@ fn stop_registered_watcher_for_scenario(world: &QatWorld) -> Result<()> {
     }
 
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM repo_watcher_registrations
                  WHERE repo_root = ?1 AND pid = ?2 AND restart_token = ?3",

@@ -198,7 +198,7 @@ async fn architecture_consumer_test_context(
         sqlite_path.clone(),
     ));
     let sqlite_pool = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path.clone())?;
-    sqlite_pool.with_connection(|conn| {
+    sqlite_pool.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
              VALUES (?1, 'local', 'bitloops', 'repo', 'main')",
@@ -377,7 +377,7 @@ async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
         sqlite_path.clone(),
     ));
     let sqlite_pool = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path.clone())?;
-    sqlite_pool.with_connection(|conn| {
+    sqlite_pool.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
              VALUES (?1, 'local', 'bitloops', 'repo', 'main')",

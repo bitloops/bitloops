@@ -54,7 +54,7 @@ pub(crate) fn insert_temporary_checkpoint_record(
     let deleted_files = serde_json::to_string(&record.deleted_files)
         .context("serialising deleted_files for temporary checkpoint row")?;
 
-    sqlite.with_connection(|conn| {
+    sqlite.with_write_connection(|conn| {
         conn.execute(
             "INSERT INTO temporary_checkpoints (
                 session_id, repo_id, tree_hash, step_number,
