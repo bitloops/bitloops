@@ -60,8 +60,8 @@ mod tests {
     };
     use super::*;
     use crate::host::capability_host::{
-        CurrentStateConsumerRegistration, IngesterRegistration, QueryExample, SchemaModule,
-        StageRegistration,
+        CapabilityMailboxInitPolicy, CurrentStateConsumerRegistration, IngesterRegistration,
+        QueryExample, SchemaModule, StageRegistration,
     };
 
     #[derive(Default)]
@@ -157,6 +157,15 @@ mod tests {
                     ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX
                 ),
             ]
+        );
+        let snapshot_mailbox = registrar
+            .mailboxes
+            .iter()
+            .find(|mailbox| mailbox.mailbox_name == ARCHITECTURE_GRAPH_CONSUMER_ID)
+            .expect("architecture graph snapshot mailbox to be registered");
+        assert_eq!(
+            snapshot_mailbox.init_policy,
+            CapabilityMailboxInitPolicy::Background
         );
         let adjudication_mailbox = registrar
             .mailboxes

@@ -44,9 +44,9 @@ pub use policy::{
 };
 pub use registrar::{
     BoxFuture, CapabilityMailboxBacklogPolicy, CapabilityMailboxHandler, CapabilityMailboxPolicy,
-    CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration, CapabilityPack,
-    CapabilityRegistrar, CurrentStateConsumerRegistration, IngestRequest, IngestResult,
-    IngesterHandler, IngesterRegistration, KnowledgeIngesterHandler, KnowledgeIngesterRegistration,
-    KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample, SchemaModule, StageHandler,
-    StageRegistration, StageRequest, StageResponse,
+    CapabilityMailboxInitPolicy, CapabilityMailboxReadinessPolicy, CapabilityMailboxRegistration,
+    CapabilityPack, CapabilityRegistrar, CurrentStateConsumerRegistration, IngestRequest,
+    IngestResult, IngesterHandler, IngesterRegistration, KnowledgeIngesterHandler,
+    KnowledgeIngesterRegistration, KnowledgeStageHandler, KnowledgeStageRegistration, QueryExample,
+    SchemaModule, StageHandler, StageRegistration, StageRequest, StageResponse,
 };

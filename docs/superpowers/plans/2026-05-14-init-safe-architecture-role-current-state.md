@@ -191,7 +191,7 @@ git commit -m "feat: add init policy to capability cursor mailboxes"
 - Modify: `bitloops/src/capability_packs/semantic_clones/register.rs`
 - Modify: `bitloops/src/capability_packs/architecture_graph/register.rs`
 
-- [ ] **Step 1: Write failing semantic registration assertions**
+- [x] **Step 1: Write failing semantic registration assertions**
 
 In `bitloops/src/capability_packs/semantic_clones/register.rs`, change the test `CollectingRegistrar` mailbox storage from tuples to full registrations:
 
@@ -262,7 +262,7 @@ assert_eq!(
 
 Import `CapabilityMailboxInitPolicy` in the test module.
 
-- [ ] **Step 2: Write failing architecture registration assertions**
+- [x] **Step 2: Write failing architecture registration assertions**
 
 In `bitloops/src/capability_packs/architecture_graph/register.rs`, add assertions to the existing registration test:
 
@@ -280,7 +280,7 @@ assert_eq!(
 
 Also import `CapabilityMailboxInitPolicy`.
 
-- [ ] **Step 3: Run the focused failing tests**
+- [x] **Step 3: Run the focused failing tests**
 
 Run:
 
@@ -290,7 +290,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: FAIL because the semantic cursor has not been marked blocking yet.
 
-- [ ] **Step 4: Mark semantic current-state as blocking**
+- [x] **Step 4: Mark semantic current-state as blocking**
 
 In `bitloops/src/capability_packs/semantic_clones/register.rs`, update only the semantic current-state cursor registration:
 
@@ -310,7 +310,7 @@ registrar.register_mailbox(
 
 Do not mark `architecture_graph.snapshot` as blocking. It should keep the default `Background` policy.
 
-- [ ] **Step 5: Run focused registration tests**
+- [x] **Step 5: Run focused registration tests**
 
 Run:
 
@@ -320,7 +320,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add bitloops/src/capability_packs/semantic_clones/register.rs bitloops/src/capability_packs/architecture_graph/register.rs
