@@ -28,7 +28,7 @@ use super::{
     handle_lifecycle_tool_invocation, handle_lifecycle_tool_result, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
-use crate::adapters::agents::AGENT_NAME_CODEX;
+use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
 use crate::adapters::agents::canonical::{
     CanonicalContractCompatibility, CanonicalResumableSessionState,
 };
@@ -97,6 +97,18 @@ fn latest_turn_model(repo_root: &Path) -> String {
         |row| row.get(0),
     )
     .expect("read interaction turn model")
+}
+
+fn session_transcript_path_for(repo_root: &Path, session_id: &str) -> String {
+    let conn = open_events_duckdb(repo_root);
+    conn.query_row(
+        "SELECT transcript_path FROM interaction_sessions WHERE session_id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .unwrap_or_else(|err| {
+        panic!("read interaction_sessions.transcript_path for {session_id}: {err}")
+    })
 }
 
 fn latest_turn_end_payload(repo_root: &Path) -> serde_json::Value {
@@ -481,6 +493,52 @@ fn test_handle_lifecycle_turn_end_persists_transcript_fragment() {
         );
         assert_eq!(latest_session_model(dir.path()), "gemini-2.5-pro");
         assert_eq!(latest_turn_model(dir.path()), "gemini-2.5-pro");
+    });
+}
+
+#[test]
+fn test_handle_lifecycle_turn_end_spools_transcript_path_when_session_path_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    setup_git_repo(&dir);
+    let transcript_path = dir.path().join("transcript-path-fix.json");
+    std::fs::write(
+        &transcript_path,
+        "{\"model\":\"default\",\"messages\":[{\"type\":\"user\",\"content\":\"Hi\"},{\"type\":\"gemini\",\"content\":\"Hello\"}]}",
+    )
+    .unwrap();
+    let transcript_path = transcript_path.canonicalize().unwrap_or(transcript_path);
+    std::fs::write(dir.path().join("tracked.txt"), "changed\n").unwrap();
+
+    let session_id = "turn-end-transcript-path-session";
+    with_cwd(dir.path(), || {
+        let backend = create_session_backend_or_local(dir.path());
+        backend
+            .save_session(&SessionState {
+                session_id: session_id.to_string(),
+                phase: SessionPhase::Active,
+                transcript_path: String::new(),
+                agent_type: AGENT_NAME_GEMINI.to_string(),
+                ..Default::default()
+            })
+            .expect("save session");
+
+        let adapter = GeminiCliLifecycleAdapter;
+        let event = LifecycleEvent {
+            event_type: Some(LifecycleEventType::TurnEnd),
+            session_id: session_id.to_string(),
+            session_ref: transcript_path.to_string_lossy().to_string(),
+            prompt: "Hi".to_string(),
+            ..LifecycleEvent::default()
+        };
+
+        handle_lifecycle_turn_end(&adapter, &event).expect("turn end");
+
+        let stored = session_transcript_path_for(dir.path(), session_id);
+        assert_eq!(
+            stored,
+            transcript_path.to_string_lossy().to_string(),
+            "interaction_sessions.transcript_path should use turn-end transcript_ref when session state path was empty"
+        );
     });
 }
 

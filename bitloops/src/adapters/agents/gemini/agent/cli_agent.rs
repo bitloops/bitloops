@@ -250,4 +250,43 @@ impl Agent for GeminiCliAgent {
     fn format_resume_command(&self, session_id: &str) -> String {
         format!("gemini --resume {session_id}")
     }
+
+    fn as_transcript_entry_deriver(&self) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+        Some(self)
+    }
+
+    /// Override the default JSONL line slice. For Gemini, the host's
+    /// `TranscriptAnalyzer::get_transcript_position` returns the post-dedup
+    /// message count (not raw line count), so `transcript_offset_*` markers
+    /// are message indices. Parse the live transcript (handles both JSONL and
+    /// the legacy JSON-document shape), slice the messages array, and emit
+    /// each as a JSONL line so downstream `parse_transcript` re-reads it.
+    fn slice_transcript_by_position(
+        &self,
+        transcript: &str,
+        start: usize,
+        end: usize,
+    ) -> String {
+        use crate::adapters::agents::gemini::transcript::parse_transcript;
+
+        if end <= start || transcript.is_empty() {
+            return String::new();
+        }
+        let parsed = match parse_transcript(transcript.as_bytes()) {
+            Ok(parsed) => parsed,
+            Err(_) => return String::new(),
+        };
+        let total = parsed.messages.len();
+        if start >= total {
+            return String::new();
+        }
+        let bounded_end = end.min(total);
+        let mut lines = Vec::new();
+        for msg in &parsed.messages[start..bounded_end] {
+            if let Ok(line) = serde_json::to_string(msg) {
+                lines.push(line);
+            }
+        }
+        lines.join("\n")
+    }
 }

@@ -163,6 +163,12 @@ impl Agent for CursorAgent {
     fn format_resume_command(&self, _session_id: &str) -> String {
         "Open this project in Cursor to continue the session.".to_string()
     }
+
+    fn as_transcript_entry_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+        Some(self)
+    }
 }
 
 impl HookSupport for CursorAgent {

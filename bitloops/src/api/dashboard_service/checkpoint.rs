@@ -5,9 +5,10 @@ use crate::api::dashboard_file_diffs::{
     dashboard_zeroed_file_diff_list,
 };
 use crate::api::dashboard_params::normalize_checkpoint_id;
+use crate::adapters::agents::AgentRegistry;
 use crate::api::dashboard_types::{
     DashboardCheckpointDetail, DashboardCheckpointSessionDetail, DashboardCommitFileDiff,
-    DashboardTokenUsage,
+    DashboardTokenUsage, DashboardTranscriptEntry,
 };
 use crate::api::{
     API_GIT_SCAN_LIMIT, ApiError, DashboardState, canonical_agent_key,
@@ -83,18 +84,39 @@ async fn load_checkpoint_detail(
         };
 
         let metadata = content.metadata;
+        let session_id_str = metadata
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let agent_key = metadata
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .map(canonical_agent_key)
+            .unwrap_or_default();
+
+        // Derive canonical transcript entries via the agent's deriver. Falls
+        // through to an empty vec when the agent is unknown, has no deriver,
+        // or the transcript can't be parsed — `transcript_jsonl` is still
+        // returned for debug/export use either way.
+        let transcript_entries: Vec<DashboardTranscriptEntry> = AgentRegistry::builtin()
+            .get_by_agent_type(&agent_key)
+            .ok()
+            .and_then(|agent| agent.as_transcript_entry_deriver())
+            .and_then(|deriver| {
+                deriver
+                    .derive_transcript_entries(&session_id_str, None, &content.transcript)
+                    .ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .map(DashboardTranscriptEntry::from)
+            .collect();
+
         sessions.push(DashboardCheckpointSessionDetail {
             session_index,
-            session_id: metadata
-                .get("session_id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            agent: metadata
-                .get("agent")
-                .and_then(serde_json::Value::as_str)
-                .map(canonical_agent_key)
-                .unwrap_or_default(),
+            session_id: session_id_str,
+            agent: agent_key,
             created_at: metadata
                 .get("created_at")
                 .and_then(serde_json::Value::as_str)
@@ -114,6 +136,7 @@ async fn load_checkpoint_detail(
             transcript_jsonl: content.transcript,
             prompts_text: content.prompts,
             context_text: content.context,
+            transcript_entries,
         });
     }
 

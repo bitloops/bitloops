@@ -369,6 +369,12 @@ impl Agent for CodexAgent {
     ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
         Some(self)
     }
+
+    fn as_transcript_entry_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+        Some(self)
+    }
 }
 
 impl TranscriptAnalyzer for CodexAgent {

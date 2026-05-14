@@ -153,6 +153,10 @@ impl Agent for CopilotCliAgent {
     fn format_resume_command(&self, session_id: &str) -> String {
         format!("copilot --resume {session_id}")
     }
+
+    fn as_transcript_entry_deriver(&self) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+        Some(self)
+    }
 }
 
 impl HookSupport for CopilotCliAgent {

@@ -5,8 +5,12 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::adapters::agents::TranscriptToolEventDeriver;
+use crate::adapters::agents::{TranscriptEntryDeriver, TranscriptToolEventDeriver};
 use crate::host::interactions::tool_events::TranscriptToolEventObservation;
+use crate::host::interactions::transcript_entry::{
+    DerivationScope, TranscriptActor, TranscriptEntry, TranscriptSource, TranscriptVariant,
+    make_entry_id,
+};
 
 use super::agent::CodexAgent;
 
@@ -140,6 +144,285 @@ pub fn derive_exec_command_observations(
     }
 
     Ok(observations)
+}
+
+impl TranscriptEntryDeriver for CodexAgent {
+    fn derive_transcript_entries(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+        transcript: &str,
+    ) -> Result<Vec<TranscriptEntry>> {
+        derive_transcript_entries(session_id, turn_id, transcript)
+    }
+}
+
+/// Normalize a Codex transcript fragment into canonical `TranscriptEntry` rows.
+/// Maps `user_message`/`agent_message` event payloads to USER/ASSISTANT CHAT entries
+/// and `response_item.function_call` / `function_call_output` (plus the `event_msg`
+/// `exec_command_end` fallback) to paired TOOL_USE / TOOL_RESULT entries.
+pub fn derive_transcript_entries(
+    session_id: &str,
+    turn_id: Option<&str>,
+    transcript: &str,
+) -> Result<Vec<TranscriptEntry>> {
+    let scope = match turn_id {
+        Some(id) => DerivationScope::Turn(id),
+        None => DerivationScope::Session,
+    };
+    let mut entries: Vec<TranscriptEntry> = Vec::new();
+    let mut order: i32 = 0;
+    let mut pending_exec_commands: HashSet<String> = HashSet::new();
+    let mut handled_exec_commands: HashSet<String> = HashSet::new();
+
+    for raw_line in transcript.lines() {
+        if raw_line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(raw_line) else {
+            continue;
+        };
+        let record_type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let payload = value.get("payload").cloned().unwrap_or(Value::Null);
+        let payload_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        match (record_type, payload_type) {
+            (_, "user_message") | (_, "user_input_message") => {
+                if let Some(text) = extract_message_text(&payload) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        entries.push(canonical_chat_entry(
+                            session_id,
+                            &scope,
+                            order,
+                            TranscriptActor::User,
+                            trimmed,
+                        ));
+                        order += 1;
+                    }
+                }
+            }
+            (_, "agent_message") | (_, "assistant_message") => {
+                if let Some(text) = extract_message_text(&payload) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        entries.push(canonical_chat_entry(
+                            session_id,
+                            &scope,
+                            order,
+                            TranscriptActor::Assistant,
+                            trimmed,
+                        ));
+                        order += 1;
+                    }
+                }
+            }
+            ("response_item", "function_call") => {
+                let name = payload
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if name != "exec_command" {
+                    continue;
+                }
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                if call_id.is_empty() {
+                    continue;
+                }
+                let arguments = payload
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let command = exec_command_string_from_arguments(arguments);
+                if command.is_empty() {
+                    continue;
+                }
+                let tool_input_summary =
+                    serde_json::to_string(&json!({"command": command})).unwrap_or_default();
+                let tool_use_text = format!("Tool: Bash\n{tool_input_summary}");
+                pending_exec_commands.insert(call_id.to_string());
+                entries.push(canonical_tool_use_entry(
+                    session_id,
+                    &scope,
+                    order,
+                    call_id,
+                    "Bash",
+                    &tool_use_text,
+                ));
+                order += 1;
+            }
+            ("response_item", "function_call_output") => {
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                if call_id.is_empty() || !pending_exec_commands.contains(call_id) {
+                    continue;
+                }
+                let output_raw = payload
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let output_text = exec_command_output_from_function_call_output(output_raw);
+                entries.push(canonical_tool_result_entry(
+                    session_id,
+                    &scope,
+                    order,
+                    call_id,
+                    "Bash",
+                    &output_text,
+                    false,
+                ));
+                order += 1;
+                pending_exec_commands.remove(call_id);
+                handled_exec_commands.insert(call_id.to_string());
+            }
+            ("event_msg", "exec_command_end") => {
+                let call_id = payload
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim();
+                if call_id.is_empty()
+                    || pending_exec_commands.contains(call_id)
+                    || handled_exec_commands.contains(call_id)
+                {
+                    continue;
+                }
+                let command =
+                    exec_command_string(payload.get("command").unwrap_or(&Value::Null));
+                if command.is_empty() {
+                    continue;
+                }
+                let tool_input_summary =
+                    serde_json::to_string(&json!({"command": command})).unwrap_or_default();
+                let tool_use_text = format!("Tool: Bash\n{tool_input_summary}");
+                entries.push(canonical_tool_use_entry(
+                    session_id,
+                    &scope,
+                    order,
+                    call_id,
+                    "Bash",
+                    &tool_use_text,
+                ));
+                order += 1;
+
+                let payload_struct: CodexEventPayload =
+                    serde_json::from_value(payload.clone()).unwrap_or_default();
+                let output_summary = exec_command_output_summary(&payload_struct);
+                entries.push(canonical_tool_result_entry(
+                    session_id,
+                    &scope,
+                    order,
+                    call_id,
+                    "Bash",
+                    &output_summary,
+                    payload_struct.exit_code != 0,
+                ));
+                order += 1;
+                handled_exec_commands.insert(call_id.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    Ok(entries)
+}
+
+fn canonical_chat_entry(
+    session_id: &str,
+    scope: &DerivationScope<'_>,
+    order: i32,
+    actor: TranscriptActor,
+    text: &str,
+) -> TranscriptEntry {
+    TranscriptEntry {
+        entry_id: make_entry_id(session_id, scope, order),
+        session_id: session_id.to_string(),
+        turn_id: scope.turn_id().map(str::to_string),
+        order,
+        timestamp: None,
+        actor,
+        variant: TranscriptVariant::Chat,
+        source: TranscriptSource::Transcript,
+        text: text.to_string(),
+        tool_use_id: None,
+        tool_kind: None,
+        is_error: false,
+    }
+}
+
+fn canonical_tool_use_entry(
+    session_id: &str,
+    scope: &DerivationScope<'_>,
+    order: i32,
+    tool_use_id: &str,
+    tool_kind: &str,
+    text: &str,
+) -> TranscriptEntry {
+    TranscriptEntry {
+        entry_id: make_entry_id(session_id, scope, order),
+        session_id: session_id.to_string(),
+        turn_id: scope.turn_id().map(str::to_string),
+        order,
+        timestamp: None,
+        actor: TranscriptActor::System,
+        variant: TranscriptVariant::ToolUse,
+        source: TranscriptSource::Transcript,
+        text: text.to_string(),
+        tool_use_id: Some(tool_use_id.to_string()),
+        tool_kind: Some(tool_kind.to_string()),
+        is_error: false,
+    }
+}
+
+fn canonical_tool_result_entry(
+    session_id: &str,
+    scope: &DerivationScope<'_>,
+    order: i32,
+    tool_use_id: &str,
+    tool_kind: &str,
+    text: &str,
+    is_error: bool,
+) -> TranscriptEntry {
+    TranscriptEntry {
+        entry_id: make_entry_id(session_id, scope, order),
+        session_id: session_id.to_string(),
+        turn_id: scope.turn_id().map(str::to_string),
+        order,
+        timestamp: None,
+        actor: TranscriptActor::System,
+        variant: TranscriptVariant::ToolResult,
+        source: TranscriptSource::Transcript,
+        text: text.to_string(),
+        tool_use_id: Some(tool_use_id.to_string()),
+        tool_kind: Some(tool_kind.to_string()),
+        is_error,
+    }
+}
+
+fn extract_message_text(payload: &Value) -> Option<String> {
+    if let Some(text) = payload.get("message").and_then(Value::as_str) {
+        return Some(text.to_string());
+    }
+    if let Some(text) = payload.get("text").and_then(Value::as_str) {
+        return Some(text.to_string());
+    }
+    if let Some(text) = payload.get("content").and_then(Value::as_str) {
+        return Some(text.to_string());
+    }
+    None
 }
 
 fn exec_command_string_from_arguments(arguments: &str) -> String {

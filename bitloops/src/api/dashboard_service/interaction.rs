@@ -3,15 +3,22 @@ use std::path::PathBuf;
 use chrono::{DateTime, SecondsFormat, Utc};
 use tokio::task;
 
+use crate::adapters::agents::AgentRegistry;
 use crate::api::dashboard_types::{
     DashboardInteractionActorBucket, DashboardInteractionAgentBucket,
     DashboardInteractionCommitAuthorBucket, DashboardInteractionFilterInput,
     DashboardInteractionKpis, DashboardInteractionSearchInput, DashboardInteractionSession,
     DashboardInteractionSessionDetail, DashboardInteractionSessionSearchHit,
-    DashboardInteractionTurnSearchHit, DashboardInteractionUpdate,
+    DashboardInteractionTurnSearchHit, DashboardInteractionUpdate, DashboardTranscriptEntry,
 };
 use crate::api::{API_DEFAULT_PAGE_LIMIT, ApiError, ApiPage, DashboardState, paginate};
 use crate::host::interactions::query;
+use crate::host::interactions::transcript_entry::{TranscriptActor, TranscriptEntry, TranscriptSource};
+use crate::host::interactions::types::InteractionTurn;
+use crate::host::interactions::{
+    derive_session_transcript_entries, derive_turn_transcript_entries,
+    partition_session_entries_to_turns, read_session_transcript_text,
+};
 
 use super::repository::resolve_dashboard_repo_root;
 
@@ -200,22 +207,158 @@ pub(in crate::api) async fn load_dashboard_interaction_session(
     if session_id.is_empty() {
         return Err(ApiError::bad_request("sessionId is required"));
     }
-    let detail = task::spawn_blocking(move || query::load_session_detail(&repo_root, &session_id))
-        .await
-        .map_err(|err| {
-            ApiError::internal(format!(
-                "failed to join interaction session detail task: {err:#}"
-            ))
-        })?
-        .map_err(|err| {
-            ApiError::internal(format!(
-                "failed to load interaction session detail: {err:#}"
-            ))
-        })?;
-    let Some(detail) = detail else {
+    let dashboard_detail = task::spawn_blocking(move || {
+        let detail = query::load_session_detail(&repo_root, &session_id)?;
+        Ok::<Option<DashboardInteractionSessionDetail>, anyhow::Error>(
+            detail.map(enrich_session_detail_with_transcript_entries),
+        )
+    })
+    .await
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed to join interaction session detail task: {err:#}"
+        ))
+    })?
+    .map_err(|err| {
+        ApiError::internal(format!(
+            "failed to load interaction session detail: {err:#}"
+        ))
+    })?;
+    let Some(dashboard_detail) = dashboard_detail else {
         return Err(ApiError::not_found("unknown interaction session"));
     };
-    Ok(DashboardInteractionSessionDetail::from_domain(&detail))
+    Ok(dashboard_detail)
+}
+
+/// Convert a domain `InteractionSessionDetail` into the dashboard response,
+/// enriching it with canonical transcript entries derived from the session's
+/// agent. Reads the transcript file from disk **once** and slices it per turn
+/// using each turn's `transcript_offset_start`/`end` markers — call from
+/// inside `spawn_blocking`.
+fn enrich_session_detail_with_transcript_entries(
+    detail: query::InteractionSessionDetail,
+) -> DashboardInteractionSessionDetail {
+    let agent_type = detail.summary.session.agent_type.clone();
+    let session_id_str = detail.summary.session.session_id.clone();
+    let transcript_path = detail.summary.session.transcript_path.clone();
+
+    let registry = AgentRegistry::builtin();
+    let agent_opt = registry.get_by_agent_type(&agent_type).ok();
+
+    // Read the live transcript file once. Empty when path is blank or file is
+    // unreadable; downstream calls degrade gracefully via prompt fallback.
+    let full_transcript = read_session_transcript_text(&transcript_path);
+
+    // Derive the session-wide stream (canonical entries from the whole file).
+    let session_entries_raw: Vec<TranscriptEntry> = if let Some(agent) = agent_opt {
+        derive_session_transcript_entries(&session_id_str, &full_transcript, agent)
+    } else {
+        Vec::new()
+    };
+
+    // Per-turn: try offset-based slicing first. If any turn comes back with
+    // only PROMPT_FALLBACK (offset markers missing/invalid for this agent, or
+    // the slice produced nothing), fall back to content-based partitioning of
+    // the session-wide stream. This covers agents whose offset semantics don't
+    // align with `slice_transcript_by_position` for the session shape on disk.
+    let offset_based: Vec<Vec<TranscriptEntry>> = detail
+        .turns
+        .iter()
+        .map(|summary| {
+            if let Some(agent) = agent_opt {
+                derive_turn_transcript_entries(
+                    &session_id_str,
+                    &summary.turn,
+                    &full_transcript,
+                    agent,
+                )
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+
+    // Cumulative-offset detection: when more than one turn has
+    // `transcript_offset_start = 0`, the host wasn't tracking per-turn
+    // boundaries (Claude and Cursor exhibit this — the pre-prompt offset
+    // capture doesn't fire or doesn't pin a non-zero start). In that case
+    // every turn's offset slice covers the cumulative content from the start
+    // of the session, which means each turn duplicates the previous turns.
+    let zero_start_turns = detail
+        .turns
+        .iter()
+        .filter(|s| {
+            s.turn.transcript_offset_start.unwrap_or(-1) == 0
+                && s.turn.transcript_offset_end.unwrap_or(0) > 0
+        })
+        .count();
+    let offsets_look_cumulative = zero_start_turns > 1;
+
+    // Missing-assistant detection: the session-wide stream contains assistant
+    // (or system) entries but at least one turn's offset slice produced none.
+    // This happens for Gemini when older sessions on disk still have
+    // line-count offset markers that the message-index slicer cannot
+    // interpret — the slice returns just the user prompt line and drops the
+    // assistant/tool content. Force the partition fallback in that case so the
+    // dashboard shows the assistant response for those turns too.
+    let session_has_assistant = session_entries_raw.iter().any(|e| {
+        matches!(
+            e.actor,
+            TranscriptActor::Assistant | TranscriptActor::System
+        )
+    });
+    let per_turn_missing_assistant = offset_based.iter().any(|entries| {
+        !entries.is_empty()
+            && !entries.iter().any(|e| {
+                matches!(
+                    e.actor,
+                    TranscriptActor::Assistant | TranscriptActor::System
+                )
+            })
+    });
+
+    // Fall back to content-based partitioning when:
+    //   - offsets look cumulative (Claude / Cursor case), OR
+    //   - any turn came back with only `PROMPT_FALLBACK` entries (offsets
+    //     missing/invalid; Gemini exhibits this), OR
+    //   - the session has assistant content but a turn's slice doesn't
+    //     (Gemini stale-offset case).
+    let needs_partition_fallback = !session_entries_raw.is_empty()
+        && (offsets_look_cumulative
+            || offset_based.iter().any(|entries| {
+                entries.is_empty()
+                    || entries
+                        .iter()
+                        .all(|e| matches!(e.source, TranscriptSource::PromptFallback))
+            })
+            || (session_has_assistant && per_turn_missing_assistant));
+
+    let per_turn_raw: Vec<Vec<TranscriptEntry>> = if needs_partition_fallback {
+        let turns_refs: Vec<&InteractionTurn> =
+            detail.turns.iter().map(|s| &s.turn).collect();
+        partition_session_entries_to_turns(&session_id_str, &session_entries_raw, &turns_refs)
+    } else {
+        offset_based
+    };
+
+    let session_entries: Vec<DashboardTranscriptEntry> = session_entries_raw
+        .into_iter()
+        .map(DashboardTranscriptEntry::from)
+        .collect();
+
+    let per_turn_entries: Vec<Vec<DashboardTranscriptEntry>> = per_turn_raw
+        .into_iter()
+        .map(|entries| entries.into_iter().map(DashboardTranscriptEntry::from).collect())
+        .collect();
+
+    let mut dashboard = DashboardInteractionSessionDetail::from_domain(&detail)
+        .with_session_transcript_entries(session_entries);
+    for (idx, entries) in per_turn_entries.into_iter().enumerate() {
+        if let Some(turn) = dashboard.turns.get_mut(idx) {
+            turn.transcript_entries = entries;
+        }
+    }
+    dashboard
 }
 
 pub(in crate::api) async fn load_dashboard_interaction_actors(
