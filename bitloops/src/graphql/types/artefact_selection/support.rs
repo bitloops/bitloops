@@ -3,18 +3,31 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+mod architecture;
+mod schemas;
+
+pub(super) use architecture::{
+    architecture_overview_expand_hint, architecture_role_assignment_item,
+    build_architecture_graph_context_summary, build_architecture_overview_stage,
+};
+pub(super) use schemas::{
+    ARCHITECTURE_GRAPH_CONTEXT_STAGE_SCHEMA, ARCHITECTURE_OVERVIEW_SCHEMA,
+    ARCHITECTURE_ROLE_STAGE_SCHEMA, CHECKPOINT_STAGE_SCHEMA, CLONE_STAGE_SCHEMA,
+    CONTEXT_GUIDANCE_STAGE_SCHEMA, DEPENDENCY_STAGE_SCHEMA, HISTORICAL_CONTEXT_STAGE_SCHEMA,
+    TESTS_STAGE_SCHEMA,
+};
+
 use crate::capability_packs::semantic_clones::scoring::{
     RELATION_KIND_DIVERGED_IMPLEMENTATION, RELATION_KIND_EXACT_DUPLICATE,
     RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
     RELATION_KIND_WEAK_CLONE_CANDIDATE,
 };
 use crate::capability_packs::test_harness::types::test_harness_tests_expand_hint_json;
-use crate::graphql::context::ArchitectureGraphTargetOverview;
 use crate::graphql::{backend_error, bad_user_input_error};
 
 use super::super::{
-    ArchitectureGraphNode, ArchitectureGraphNodeKind, Artefact, Checkpoint, CloneSummary,
-    DependencyEdge, DepsDirection, EdgeKind, ExpandHintParameter, TestHarnessTestsResult,
+    Artefact, Checkpoint, CloneSummary, DependencyEdge, DepsDirection, EdgeKind,
+    ExpandHintParameter, TestHarnessTestsResult,
 };
 use super::stages::{
     ArchitectureOverviewStageData, CheckpointStageData, CloneExpandHint, CloneStageData,
@@ -372,119 +385,6 @@ pub(super) fn build_selection_summary(
     })
 }
 
-pub(super) fn build_architecture_overview_stage(
-    overview: ArchitectureGraphTargetOverview,
-) -> ArchitectureOverviewStageData {
-    if !overview.available {
-        let reason = overview
-            .reason
-            .as_deref()
-            .unwrap_or("no_matching_architecture_facts");
-        return ArchitectureOverviewStageData::unavailable(
-            overview.selected_artefact_count,
-            reason,
-        );
-    }
-
-    let mut node_kinds = serde_json::Map::new();
-    let mut entry_point_count = 0usize;
-    let mut component_count = 0usize;
-    let mut container_count = 0usize;
-    let mut asserted_count = 0usize;
-    let mut suppressed_count = 0usize;
-    for node in &overview.nodes {
-        let kind = node.kind.as_db();
-        let next = node_kinds
-            .get(kind)
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            + 1;
-        node_kinds.insert(kind.to_string(), json!(next));
-        match node.kind {
-            ArchitectureGraphNodeKind::EntryPoint => entry_point_count += 1,
-            ArchitectureGraphNodeKind::Component => component_count += 1,
-            ArchitectureGraphNodeKind::Container => container_count += 1,
-            _ => {}
-        }
-        if node.asserted {
-            asserted_count += 1;
-        }
-        if node.suppressed {
-            suppressed_count += 1;
-        }
-    }
-
-    let mut top_nodes = overview.nodes.clone();
-    top_nodes.sort_by(compare_architecture_overview_nodes);
-    top_nodes.truncate(8);
-
-    ArchitectureOverviewStageData {
-        summary: json!({
-            "available": true,
-            "reason": null,
-            "selectedArtefactCount": overview.selected_artefact_count,
-            "matchedArtefactCount": overview.matched_artefact_ids.len(),
-            "directNodeCount": overview.direct_node_count,
-            "relatedNodeCount": overview.nodes.len(),
-            "edgeCount": overview.edges.len(),
-            "nodeKinds": Value::Object(node_kinds),
-            "entryPointCount": entry_point_count,
-            "componentCount": component_count,
-            "containerCount": container_count,
-            "assertedCount": asserted_count,
-            "suppressedCount": suppressed_count,
-            "topNodes": top_nodes
-                .iter()
-                .map(architecture_overview_node_json)
-                .collect::<Vec<_>>(),
-        }),
-        expand_hint: Some(json!({
-            "intent": "Inspect architecture graph facts for the selected artefacts.",
-            "template": "bitloops devql query '{ selectArtefacts(...) { artefacts { id path architectureNode { id kind label entryKind confidence } } } }'",
-        })),
-        schema: Some(ARCHITECTURE_OVERVIEW_SCHEMA.to_string()),
-    }
-}
-
-fn compare_architecture_overview_nodes(
-    left: &ArchitectureGraphNode,
-    right: &ArchitectureGraphNode,
-) -> std::cmp::Ordering {
-    architecture_overview_node_priority(left.kind)
-        .cmp(&architecture_overview_node_priority(right.kind))
-        .then_with(|| left.path.cmp(&right.path))
-        .then_with(|| left.label.cmp(&right.label))
-        .then_with(|| left.id.cmp(&right.id))
-}
-
-fn architecture_overview_node_priority(kind: ArchitectureGraphNodeKind) -> u8 {
-    match kind {
-        ArchitectureGraphNodeKind::EntryPoint => 0,
-        ArchitectureGraphNodeKind::Component => 1,
-        ArchitectureGraphNodeKind::Container => 2,
-        ArchitectureGraphNodeKind::Node => 3,
-        ArchitectureGraphNodeKind::System => 4,
-        ArchitectureGraphNodeKind::DeploymentUnit => 5,
-        ArchitectureGraphNodeKind::Flow => 6,
-        _ => 7,
-    }
-}
-
-fn architecture_overview_node_json(node: &ArchitectureGraphNode) -> Value {
-    json!({
-        "id": &node.id,
-        "kind": node.kind.as_db(),
-        "label": &node.label,
-        "path": &node.path,
-        "artefactId": &node.artefact_id,
-        "symbolId": &node.symbol_id,
-        "entryKind": &node.entry_kind,
-        "confidence": node.confidence,
-        "asserted": node.asserted,
-        "suppressed": node.suppressed,
-    })
-}
-
 pub(super) fn dedup_strings<'a>(values: impl Iterator<Item = &'a str>) -> Vec<String> {
     values
         .map(str::trim)
@@ -610,261 +510,3 @@ fn deps_direction_name(direction: DepsDirection) -> &'static str {
         DepsDirection::Both => "BOTH",
     }
 }
-
-pub(super) const CHECKPOINT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  checkpoints(agent: String, since: DateTime): CheckpointStageResult!
-}
-
-type CheckpointStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [Checkpoint!]!
-}
-
-type Checkpoint {
-  id: ID!
-  sessionId: String!
-  commitSha: String
-  branch: String
-  agent: String
-  eventTime: DateTime!
-  strategy: String
-  filesTouched: [String!]!
-  payload: JSON
-  commit: Commit
-  fileRelations: [CheckpointFileRelation!]!
-}"#;
-
-pub(super) const CLONE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  codeMatches(relationKind: String, minScore: Float): CloneStageResult!
-}
-
-type CloneStageResult {
-  overview: JSON!
-  expandHint: CloneExpandHint
-  schema: String
-  items(first: Int! = 20): [Clone!]!
-}
-
-interface ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type ExpandHintParameter {
-  name: String!
-  intent: String!
-  supportedValues: [String!]!
-}
-
-type CloneExpandHint implements ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type Clone {
-  id: ID!
-  sourceArtefactId: ID!
-  targetArtefactId: ID!
-  relationKind: String!
-  score: Float!
-  metadata: JSON
-  sourceArtefact: Artefact!
-  targetArtefact: Artefact!
-}"#;
-
-pub(super) const DEPENDENCY_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  dependencies(kind: EdgeKind, direction: DependenciesDirection! = BOTH, includeUnresolved: Boolean! = true): DependencyStageResult!
-}
-
-type DependencyStageResult {
-  overview: JSON!
-  expandHint: DependencyExpandHint
-  schema: String
-  items(first: Int! = 20): [DependencyEdge!]!
-}
-
-interface ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type ExpandHintParameter {
-  name: String!
-  intent: String!
-  supportedValues: [String!]!
-}
-
-type DependencyExpandHint implements ExpandHint {
-  intent: String!
-  template: String!
-  parameters: [ExpandHintParameter!]!
-}
-
-type DependencyEdge {
-  id: ID!
-  edgeKind: EdgeKind!
-  fromArtefactId: ID!
-  toArtefactId: ID
-  toSymbolRef: String
-  startLine: Int
-  endLine: Int
-  metadata: JSON
-  fromArtefact: Artefact!
-  toArtefact: Artefact
-}"#;
-
-pub(super) const TESTS_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  tests(minConfidence: Float, linkageSource: String): TestsStageResult!
-}
-
-type TestsStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [TestHarnessTestsResult!]!
-}
-
-type TestHarnessTestsResult {
-  artefact: TestHarnessArtefactRef!
-  coveringTests: [TestHarnessCoveringTest!]!
-  summary: TestHarnessTestsSummary!
-}"#;
-
-pub(super) const HISTORICAL_CONTEXT_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
-}
-
-type HistoricalContextStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [HistoricalContextItem!]!
-}
-
-enum HistoricalEvidenceKind {
-  SYMBOL_PROVENANCE
-  FILE_RELATION
-  LINE_OVERLAP
-}
-
-type HistoricalContextItem {
-  checkpointId: ID!
-  sessionId: String!
-  turnId: String
-  agentType: String
-  model: String
-  eventTime: DateTime!
-  matchReason: HistoricalMatchReason!
-  matchStrength: HistoricalMatchStrength!
-  promptPreview: String
-  turnSummary: String
-  transcriptPreview: String
-  filesModified: [String!]!
-  fileRelations: [CheckpointFileRelation!]!
-  toolEvents: [HistoricalToolEvent!]!
-}
-
-enum HistoricalMatchReason {
-  SYMBOL_PROVENANCE
-  FILE_RELATION
-  LINE_OVERLAP
-}
-
-enum HistoricalMatchStrength {
-  HIGH
-  MEDIUM
-  LOW
-}
-
-type HistoricalToolEvent {
-  toolKind: String
-  inputSummary: String
-  outputSummary: String
-  command: String
-}"#;
-
-pub(super) const CONTEXT_GUIDANCE_STAGE_SCHEMA: &str = r#"type ArtefactSelection {
-  contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
-}
-
-type ContextGuidanceStageResult {
-  overview: JSON!
-  schema: String
-  items(first: Int! = 20): [ContextGuidanceItem!]!
-}
-
-type ContextGuidanceItem {
-  id: ID!
-  category: ContextGuidanceCategory!
-  kind: String!
-  label: String!
-  guidance: String!
-  evidenceExcerpt: String!
-  confidence: ContextGuidanceConfidence!
-  relevanceScore: Float!
-  generatedAt: DateTime
-  sourceModel: String
-  sourceCount: Int!
-  sources: [ContextGuidanceSource!]!
-}
-
-type ContextGuidanceSource {
-  sourceType: String!
-  sourceId: String!
-  checkpointId: ID
-  sessionId: String
-  turnId: String
-  toolKind: String
-  knowledgeItemId: ID
-  knowledgeItemVersionId: ID
-  relationAssertionId: ID
-  provider: String
-  sourceKind: String
-  title: String
-  url: String
-  excerpt: String
-}
-
-enum ContextGuidanceCategory {
-  DECISION
-  CONSTRAINT
-  PATTERN
-  RISK
-  VERIFICATION
-  CONTEXT
-}
-
-enum ContextGuidanceConfidence {
-  HIGH
-  MEDIUM
-  LOW
-}"#;
-
-pub(super) const ARCHITECTURE_OVERVIEW_SCHEMA: &str = r#"type ArtefactSelectionOverview {
-  architecture: ArchitectureOverviewStage!
-}
-
-type ArchitectureOverviewStage {
-  overview: JSON!
-  expandHint: JSON
-  schema: String
-}
-
-type ArchitectureOverview {
-  available: Boolean!
-  reason: String
-  selectedArtefactCount: Int!
-  matchedArtefactCount: Int!
-  directNodeCount: Int!
-  relatedNodeCount: Int!
-  edgeCount: Int!
-  nodeKinds: JSON!
-  entryPointCount: Int!
-  componentCount: Int!
-  containerCount: Int!
-  assertedCount: Int!
-  suppressedCount: Int!
-  topNodes: [JSON!]!
-}"#;

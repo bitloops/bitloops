@@ -8,11 +8,13 @@ use crate::graphql::{ResolverScope, bad_user_input_error};
 
 use super::{Artefact, LineRangeInput};
 
+#[allow(unused_imports)]
 pub use stages::{
-    CheckpointStageResult, CloneExpandHint, CloneStageResult, DependencyExpandHint,
-    DependencyStageResult, HistoricalContextItem, HistoricalContextStageResult,
-    HistoricalEvidenceKind, HistoricalMatchReason, HistoricalMatchStrength, HistoricalToolEvent,
-    TestsStageResult,
+    ArchitectureGraphContextStageResult, ArchitectureRoleAssignmentItem, ArchitectureRoleInfo,
+    ArchitectureRoleStageResult, ArchitectureRoleTarget, CheckpointStageResult, CloneExpandHint,
+    CloneStageResult, DependencyExpandHint, DependencyStageResult, HistoricalContextItem,
+    HistoricalContextStageResult, HistoricalEvidenceKind, HistoricalMatchReason,
+    HistoricalMatchStrength, HistoricalToolEvent, TestsStageResult,
 };
 pub(crate) use support::captured_preview;
 use support::{dedup_strings, saturating_i32};

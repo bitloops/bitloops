@@ -3,7 +3,10 @@ use crate::capability_packs::semantic_clones::scoring::{
     RELATION_KIND_SHARED_LOGIC_CANDIDATE, RELATION_KIND_SIMILAR_IMPLEMENTATION,
     RELATION_KIND_WEAK_CLONE_CANDIDATE,
 };
-use crate::graphql::context::ArchitectureGraphTargetOverview;
+use crate::graphql::context::{
+    ArchitectureGraphTargetOverview, ArchitectureRoleOverviewAssignment,
+    ArchitectureRoleTargetOverview,
+};
 use crate::graphql::types::{
     ArchitectureGraphEdge, ArchitectureGraphEdgeKind, ArchitectureGraphNode,
     ArchitectureGraphNodeKind,
@@ -88,6 +91,42 @@ fn test_architecture_edge(id: &str, from_node_id: &str, to_node_id: &str) -> Arc
         evidence: async_graphql::types::Json(serde_json::json!([])),
         properties: async_graphql::types::Json(serde_json::json!({})),
         annotations: Vec::new(),
+    }
+}
+
+struct ArchitectureRoleAssignmentFixture<'a> {
+    assignment_id: &'a str,
+    role_id: &'a str,
+    canonical_key: &'a str,
+    display_name: &'a str,
+    family: &'a str,
+    artefact_id: Option<&'a str>,
+    symbol_id: Option<&'a str>,
+    symbol_fqn: Option<&'a str>,
+}
+
+fn architecture_role_assignment(
+    fixture: ArchitectureRoleAssignmentFixture<'_>,
+) -> ArchitectureRoleOverviewAssignment {
+    ArchitectureRoleOverviewAssignment {
+        assignment_id: fixture.assignment_id.to_string(),
+        role_id: fixture.role_id.to_string(),
+        canonical_key: fixture.canonical_key.to_string(),
+        display_name: fixture.display_name.to_string(),
+        description: "Handles HTTP-facing route definitions and request/response adapter functions for user operations.".to_string(),
+        family: Some(fixture.family.to_string()),
+        target_kind: "artefact".to_string(),
+        artefact_id: fixture.artefact_id.map(str::to_string),
+        symbol_id: fixture.symbol_id.map(str::to_string),
+        path: "src/api/users_handler.rs".to_string(),
+        symbol_fqn: fixture.symbol_fqn.map(str::to_string),
+        canonical_kind: Some("function".to_string()),
+        priority: "primary".to_string(),
+        status: "active".to_string(),
+        source: "rule".to_string(),
+        confidence: 1.0,
+        classifier_version: "architecture_roles.deterministic.contract.v1".to_string(),
+        rule_version: None,
     }
 }
 
@@ -229,8 +268,11 @@ fn empty_overview_stage_inputs() -> (
 fn selection_summary_includes_historical_context_stage() {
     let (checkpoints, clones, deps, tests, historical_context, context_guidance) =
         empty_overview_stage_inputs();
-    let architecture =
-        ArchitectureOverviewStageData::unavailable(1, "no_matching_architecture_facts");
+    let architecture = ArchitectureOverviewStageData::unavailable(
+        1,
+        "no_matching_architecture_role_assignments",
+        false,
+    );
 
     let summary = build_selection_summary(
         1,
@@ -275,8 +317,11 @@ fn selection_summary_includes_historical_context_stage() {
 fn selection_summary_includes_unavailable_architecture_stage() {
     let (checkpoints, clones, deps, tests, historical_context, context_guidance) =
         empty_overview_stage_inputs();
-    let architecture =
-        ArchitectureOverviewStageData::unavailable(2, "no_matching_architecture_facts");
+    let architecture = ArchitectureOverviewStageData::unavailable(
+        2,
+        "no_matching_architecture_role_assignments",
+        false,
+    );
 
     let summary = build_selection_summary(
         2,
@@ -301,22 +346,24 @@ fn selection_summary_includes_unavailable_architecture_stage() {
         serde_json::json!({
             "overview": {
                 "available": false,
-                "reason": "no_matching_architecture_facts",
+                "reason": "no_matching_architecture_role_assignments",
                 "selectedArtefactCount": 2,
-                "matchedArtefactCount": 0,
-                "directNodeCount": 0,
-                "relatedNodeCount": 0,
-                "edgeCount": 0,
-                "nodeKinds": {},
-                "entryPointCount": 0,
-                "componentCount": 0,
-                "containerCount": 0,
-                "assertedCount": 0,
-                "suppressedCount": 0,
-                "topNodes": []
+                "assignedSelectedArtefactCount": 0,
+                "unassignedSelectedArtefactCount": 2,
+                "roleAssignmentCount": 0,
+                "roleCount": 0,
+                "familyCounts": {},
+                "sourceCounts": {},
+                "targetKindCounts": {},
+                "confidence": null,
+                "primaryRoles": [],
+                "graphContextAvailable": false
             },
-            "expandHint": null,
-            "schema": null
+            "expandHint": {
+                "intent": "Inspect architecture role assignments for the selected artefacts.",
+                "template": "bitloops devql query '{ selectArtefacts(by: <selector>) { architectureRoles { overview items(first: 20) { role { canonicalKey displayName family description } target { path symbolFqn canonicalKind } confidence source status } } architectureGraphContext { overview nodes(first: 20) { id kind label path } edges(first: 20) { id kind fromNodeId toNodeId } } } }'"
+            },
+            "schema": super::support::ARCHITECTURE_OVERVIEW_SCHEMA
         })
     );
 }
@@ -329,40 +376,25 @@ fn selection_summary_includes_available_architecture_stage() {
         summary: serde_json::json!({
             "available": true,
             "reason": null,
-            "selectedArtefactCount": 1,
-            "matchedArtefactCount": 1,
-            "directNodeCount": 1,
-            "relatedNodeCount": 2,
-            "edgeCount": 2,
-            "nodeKinds": {
-                "NODE": 1,
-                "COMPONENT": 1,
-                "CONTAINER": 1
-            },
-            "entryPointCount": 0,
-            "componentCount": 1,
-            "containerCount": 1,
-            "assertedCount": 0,
-            "suppressedCount": 0,
-            "topNodes": [
+            "selectedArtefactCount": 3,
+            "assignedSelectedArtefactCount": 2,
+            "unassignedSelectedArtefactCount": 1,
+            "roleAssignmentCount": 2,
+            "roleCount": 1,
+            "familyCounts": { "entrypoint": 2 },
+            "sourceCounts": { "rule": 2 },
+            "targetKindCounts": { "artefact": 2 },
+            "confidence": { "min": 1.0, "avg": 1.0, "max": 1.0 },
+            "primaryRoles": [
                 {
-                    "id": "component-1",
-                    "kind": "COMPONENT",
-                    "label": "src/service",
-                    "path": "src/service.rs",
-                    "artefactId": null,
-                    "symbolId": null,
-                    "entryKind": null,
-                    "confidence": 0.55,
-                    "asserted": false,
-                    "suppressed": false
+                    "canonicalKey": "http_api_surface",
+                    "displayName": "HTTP API Surface",
+                    "assignmentCount": 2
                 }
-            ]
+            ],
+            "graphContextAvailable": true
         }),
-        expand_hint: Some(serde_json::json!({
-            "intent": "Inspect architecture graph facts for the selected artefacts.",
-            "template": "bitloops devql query '{ selectArtefacts(...) { artefacts { id path architectureNode { id kind label entryKind confidence } } } }'"
-        })),
+        expand_hint: Some(super::support::architecture_overview_expand_hint()),
         schema: Some(super::support::ARCHITECTURE_OVERVIEW_SCHEMA.to_string()),
     };
 
@@ -386,16 +418,22 @@ fn selection_summary_includes_available_architecture_stage() {
 
     assert_eq!(summary["architecture"]["overview"]["available"], true);
     assert_eq!(
-        summary["architecture"]["overview"]["matchedArtefactCount"],
-        1
+        summary["architecture"]["overview"]["roleAssignmentCount"],
+        2
+    );
+    assert_eq!(summary["architecture"]["overview"]["roleCount"], 1);
+    assert_eq!(
+        summary["architecture"]["overview"]["primaryRoles"][0]["canonicalKey"],
+        "http_api_surface"
     );
     assert_eq!(
-        summary["architecture"]["overview"]["nodeKinds"]["COMPONENT"],
-        1
+        summary["architecture"]["overview"]["graphContextAvailable"],
+        true
     );
-    assert_eq!(
-        summary["architecture"]["expandHint"]["template"],
-        "bitloops devql query '{ selectArtefacts(...) { artefacts { id path architectureNode { id kind label entryKind confidence } } } }'"
+    assert!(
+        summary["architecture"]["overview"]
+            .get("edgeCount")
+            .is_none()
     );
     assert!(
         summary["architecture"]["schema"]
@@ -406,7 +444,7 @@ fn selection_summary_includes_available_architecture_stage() {
 }
 
 #[test]
-fn architecture_overview_stage_summarizes_nodes_edges_and_top_nodes() {
+fn architecture_graph_context_summary_keeps_graph_counts_out_of_overview() {
     let overview = ArchitectureGraphTargetOverview {
         available: true,
         reason: None,
@@ -436,26 +474,151 @@ fn architecture_overview_stage_summarizes_nodes_edges_and_top_nodes() {
         )],
     };
 
-    let stage = super::support::build_architecture_overview_stage(overview);
+    let summary = super::support::build_architecture_graph_context_summary(&overview);
+
+    assert_eq!(summary["available"], true);
+    assert_eq!(summary["matchedArtefactCount"], 1);
+    assert_eq!(summary["directNodeCount"], 1);
+    assert_eq!(summary["relatedNodeCount"], 2);
+    assert_eq!(summary["edgeCount"], 1);
+    assert_eq!(summary["nodeKinds"]["NODE"], 1);
+    assert_eq!(summary["nodeKinds"]["COMPONENT"], 1);
+    assert_eq!(summary["componentCount"], 1);
+    assert!(summary.get("topNodes").is_none());
+}
+
+#[test]
+fn architecture_overview_stage_prefers_role_assignments_over_graph_counts() {
+    let overview = ArchitectureRoleTargetOverview {
+        available: true,
+        reason: None,
+        selected_artefact_count: 3,
+        assigned_artefact_ids: vec![
+            "62e5ddba-4108-021b-d87d-7689a9b00e05".to_string(),
+            "e3662529-8705-9810-0f48-fe353d189ef4".to_string(),
+        ],
+        assignments: vec![
+            architecture_role_assignment(ArchitectureRoleAssignmentFixture {
+                assignment_id: "df412e24-4f79-99aa-af57-06684518c264",
+                role_id: "bedecda4-4dac-3aea-7a17-036857cc4a13",
+                canonical_key: "http_api_surface",
+                display_name: "HTTP API Surface",
+                family: "entrypoint",
+                artefact_id: Some("62e5ddba-4108-021b-d87d-7689a9b00e05"),
+                symbol_id: Some("87571974-d08c-d157-26f8-2cd20b09103b"),
+                symbol_fqn: Some("src/api/users_handler.rs::create_user_http_handler"),
+            }),
+            architecture_role_assignment(ArchitectureRoleAssignmentFixture {
+                assignment_id: "c50fa84d-71ac-b805-4da7-fe9eaa2713f5",
+                role_id: "bedecda4-4dac-3aea-7a17-036857cc4a13",
+                canonical_key: "http_api_surface",
+                display_name: "HTTP API Surface",
+                family: "entrypoint",
+                artefact_id: Some("e3662529-8705-9810-0f48-fe353d189ef4"),
+                symbol_id: Some("cc0e957d-7ff6-f860-916c-48a678ed37f9"),
+                symbol_fqn: Some("src/api/users_handler.rs::get_user_http_handler"),
+            }),
+        ],
+    };
+
+    let stage = super::support::build_architecture_overview_stage(overview, true);
 
     assert_eq!(stage.summary["available"], true);
-    assert_eq!(stage.summary["selectedArtefactCount"], 1);
-    assert_eq!(stage.summary["matchedArtefactCount"], 1);
-    assert_eq!(stage.summary["directNodeCount"], 1);
-    assert_eq!(stage.summary["relatedNodeCount"], 2);
-    assert_eq!(stage.summary["edgeCount"], 1);
-    assert_eq!(stage.summary["nodeKinds"]["NODE"], 1);
-    assert_eq!(stage.summary["nodeKinds"]["COMPONENT"], 1);
-    assert_eq!(stage.summary["componentCount"], 1);
-    assert_eq!(stage.summary["topNodes"][0]["id"], "component-main");
-    assert!(stage.expand_hint.is_some());
-    assert!(
-        stage
-            .schema
-            .as_deref()
-            .unwrap()
-            .contains("ArchitectureOverview")
+    assert_eq!(stage.summary["selectedArtefactCount"], 3);
+    assert_eq!(stage.summary["assignedSelectedArtefactCount"], 2);
+    assert_eq!(stage.summary["unassignedSelectedArtefactCount"], 1);
+    assert_eq!(stage.summary["roleAssignmentCount"], 2);
+    assert_eq!(stage.summary["roleCount"], 1);
+    assert_eq!(stage.summary["familyCounts"]["entrypoint"], 2);
+    assert_eq!(stage.summary["sourceCounts"]["rule"], 2);
+    assert_eq!(stage.summary["targetKindCounts"]["artefact"], 2);
+    assert_eq!(stage.summary["confidence"]["avg"], 1.0);
+    assert_eq!(
+        stage.summary["primaryRoles"][0]["canonicalKey"],
+        "http_api_surface"
     );
+    assert_eq!(stage.summary["primaryRoles"][0]["assignmentCount"], 2);
+    assert_eq!(
+        stage.summary["primaryRoles"][0]["confidence"],
+        serde_json::json!({ "min": 1.0, "avg": 1.0, "max": 1.0 })
+    );
+    assert_eq!(
+        stage.summary["primaryRoles"][0]["targetKinds"],
+        serde_json::json!({ "artefact": 2 })
+    );
+    assert_eq!(
+        stage.summary["primaryRoles"][0]["sources"],
+        serde_json::json!({ "rule": 2 })
+    );
+    assert_eq!(
+        stage.summary["primaryRoles"][0]["targets"][0]["symbolFqn"],
+        "src/api/users_handler.rs::create_user_http_handler"
+    );
+    assert_eq!(
+        stage.summary["primaryRoles"][0]["targets"][1]["symbolFqn"],
+        "src/api/users_handler.rs::get_user_http_handler"
+    );
+    assert_eq!(stage.summary["graphContextAvailable"], true);
+    assert!(stage.summary.get("edgeCount").is_none());
+    assert!(stage.summary.get("nodeKinds").is_none());
+    assert!(stage.summary.get("topNodes").is_none());
+}
+
+#[test]
+fn architecture_overview_stage_reports_no_role_assignments_with_graph_flag() {
+    let overview =
+        ArchitectureRoleTargetOverview::unavailable(3, "no_matching_architecture_role_assignments");
+
+    let stage = super::support::build_architecture_overview_stage(overview, true);
+
+    assert_eq!(
+        stage.summary,
+        serde_json::json!({
+            "available": false,
+            "reason": "no_matching_architecture_role_assignments",
+            "selectedArtefactCount": 3,
+            "assignedSelectedArtefactCount": 0,
+            "unassignedSelectedArtefactCount": 3,
+            "roleAssignmentCount": 0,
+            "roleCount": 0,
+            "familyCounts": {},
+            "sourceCounts": {},
+            "targetKindCounts": {},
+            "confidence": null,
+            "primaryRoles": [],
+            "graphContextAvailable": true
+        })
+    );
+    assert_eq!(
+        stage.expand_hint.as_ref().unwrap()["template"],
+        "bitloops devql query '{ selectArtefacts(by: <selector>) { architectureRoles { overview items(first: 20) { role { canonicalKey displayName family description } target { path symbolFqn canonicalKind } confidence source status } } architectureGraphContext { overview nodes(first: 20) { id kind label path } edges(first: 20) { id kind fromNodeId toNodeId } } } }'"
+    );
+}
+
+#[test]
+fn architecture_role_assignment_item_preserves_role_and_target_details() {
+    let assignment = architecture_role_assignment(ArchitectureRoleAssignmentFixture {
+        assignment_id: "assignment-1",
+        role_id: "role-http",
+        canonical_key: "http_api_surface",
+        display_name: "HTTP API Surface",
+        family: "entrypoint",
+        artefact_id: Some("artefact-create"),
+        symbol_id: Some("symbol-create"),
+        symbol_fqn: Some("src/api/users_handler.rs::create_user_http_handler"),
+    });
+
+    let item = super::support::architecture_role_assignment_item(&assignment);
+
+    assert_eq!(item.assignment_id, "assignment-1");
+    assert_eq!(item.role.canonical_key, "http_api_surface");
+    assert_eq!(item.role.display_name, "HTTP API Surface");
+    assert_eq!(item.target.path, "src/api/users_handler.rs");
+    assert_eq!(
+        item.target.symbol_fqn.as_deref(),
+        Some("src/api/users_handler.rs::create_user_http_handler")
+    );
+    assert_eq!(item.confidence, 1.0);
 }
 
 #[test]

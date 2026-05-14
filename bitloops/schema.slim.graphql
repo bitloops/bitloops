@@ -80,6 +80,13 @@ type ArchitectureGraphAssertionSummary {
 	properties: JSON!
 }
 
+type ArchitectureGraphContextStageResult {
+	overview: JSON!
+	schema: String
+	nodes(first: Int! = 20): [ArchitectureGraphNode!]!
+	edges(first: Int! = 20): [ArchitectureGraphEdge!]!
+}
+
 type ArchitectureGraphEdge {
 	id: String!
 	kind: ArchitectureGraphEdgeKind!
@@ -216,6 +223,42 @@ enum ArchitectureGraphTargetKind {
 	EDGE
 }
 
+type ArchitectureRoleAssignmentItem {
+	assignmentId: String!
+	role: ArchitectureRoleInfo!
+	target: ArchitectureRoleTarget!
+	priority: String!
+	status: String!
+	source: String!
+	confidence: Float!
+	classifierVersion: String!
+	ruleVersion: Int
+}
+
+type ArchitectureRoleInfo {
+	roleId: String!
+	canonicalKey: String!
+	displayName: String!
+	family: String
+	description: String!
+}
+
+type ArchitectureRoleStageResult {
+	overview: JSON!
+	expandHint: JSON
+	schema: String
+	items(first: Int! = 20): [ArchitectureRoleAssignmentItem!]!
+}
+
+type ArchitectureRoleTarget {
+	targetKind: String!
+	path: String!
+	artefactId: String
+	symbolId: String
+	symbolFqn: String
+	canonicalKind: String
+}
+
 type ArchitectureSystem {
 	id: String!
 	key: String!
@@ -329,6 +372,8 @@ type ArtefactSelection {
 	historicalContext(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind): HistoricalContextStageResult!
 	contextGuidance(agent: String, since: DateTime, evidenceKind: HistoricalEvidenceKind, category: ContextGuidanceCategory, kind: String): ContextGuidanceStageResult!
 	httpContext(first: Int! = 20): HttpContextResult!
+	architectureRoles(first: Int! = 20): ArchitectureRoleStageResult!
+	architectureGraphContext(nodeFirst: Int! = 20, edgeFirst: Int! = 20): ArchitectureGraphContextStageResult!
 }
 
 input ArtefactSelectorInput {
