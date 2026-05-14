@@ -462,7 +462,7 @@ impl InitRuntimeCoordinator {
             &selected_workplane,
         );
         let warning_failures = selected_workplane.warning_failed_jobs_total;
-        let selected_lane_warning = selected_lanes_have_warning_status(&[
+        let selected_lanes = [
             (
                 session.selections.run_code_embeddings,
                 &code_embeddings_lane,
@@ -472,7 +472,9 @@ impl InitRuntimeCoordinator {
                 session.selections.run_summary_embeddings,
                 &summary_embeddings_lane,
             ),
-        ]);
+        ];
+        let selected_lane_warning = selected_lanes_have_warning_status(&selected_lanes);
+        let selected_lane_blocking_reason = selected_lane_waiting_reason(&selected_lanes);
         let has_warnings = warning_failures > 0 || selected_lane_warning;
         let semantic_bootstraps_terminal =
             semantic_bootstraps_terminal(&session, embeddings_task.as_ref(), summary_run.as_ref());
@@ -521,7 +523,7 @@ impl InitRuntimeCoordinator {
         } else if !semantic_bootstraps_terminal {
             Some("waiting_for_bootstrap".to_string())
         } else {
-            None
+            selected_lane_blocking_reason.clone()
         };
 
         let completed = !has_fatal_failure
@@ -535,7 +537,8 @@ impl InitRuntimeCoordinator {
             && selected_workplane.summary_jobs.pending == 0
             && selected_workplane.summary_jobs.running == 0
             && blocked_embedding.is_none()
-            && blocked_summary.is_none();
+            && blocked_summary.is_none()
+            && selected_lane_blocking_reason.is_none();
         let terminal_failed = has_fatal_failure && !has_remaining_work;
         let status = derive_session_status(
             has_fatal_failure,
@@ -838,6 +841,30 @@ pub(super) fn selected_lanes_have_warning_status(
     selected_lanes
         .iter()
         .any(|(selected, lane)| *selected && lane.status.eq_ignore_ascii_case("warning"))
+}
+
+pub(super) fn selected_lane_waiting_reason(
+    selected_lanes: &[(bool, &InitRuntimeLaneView)],
+) -> Option<String> {
+    selected_lanes.iter().find_map(|(selected, lane)| {
+        if !*selected {
+            return None;
+        }
+        if lane.status.eq_ignore_ascii_case("waiting") {
+            return Some(
+                lane.waiting_reason
+                    .as_deref()
+                    .filter(|reason| reason.starts_with("waiting"))
+                    .unwrap_or("waiting_for_workplane")
+                    .to_string(),
+            );
+        }
+        if lane.status.eq_ignore_ascii_case("queued") || lane.status.eq_ignore_ascii_case("running")
+        {
+            return Some("waiting_for_workplane".to_string());
+        }
+        None
+    })
 }
 
 fn task_terminal_snapshot(task: &DevqlTaskRecord) -> Option<InitSessionTaskTerminalSnapshot> {
