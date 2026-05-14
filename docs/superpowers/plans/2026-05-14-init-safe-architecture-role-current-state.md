@@ -943,7 +943,7 @@ git commit -m "test: cover init-safe background current-state cursors"
 - Modify: `bitloops/src/capability_packs/architecture_graph/current_state/tests.rs`
 - Modify: `bitloops/src/capability_packs/architecture_graph/roles/classifier/tests.rs` only if existing coverage is missing.
 
-- [ ] **Step 1: Add or verify test coverage for affected-path classification**
+- [x] **Step 1: Add or verify test coverage for affected-path classification**
 
 Confirm these existing tests still pass:
 
@@ -953,7 +953,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 2: Add a role current-state delta test**
+- [x] **Step 2: Add a role current-state delta test**
 
 Add this test in `bitloops/src/capability_packs/architecture_graph/current_state/tests.rs`:
 
@@ -1019,7 +1019,7 @@ async fn role_current_state_reconcile_uses_affected_paths_from_sync_delta() -> a
 }
 ```
 
-- [ ] **Step 3: Run role current-state tests**
+- [x] **Step 3: Run role current-state tests**
 
 Run:
 
@@ -1029,7 +1029,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add bitloops/src/capability_packs/architecture_graph/current_state/tests.rs bitloops/src/capability_packs/architecture_graph/roles/classifier/tests.rs

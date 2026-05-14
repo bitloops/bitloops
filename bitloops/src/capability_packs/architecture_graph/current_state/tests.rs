@@ -815,6 +815,66 @@ async fn current_state_reconcile_warns_when_role_adjudication_enqueue_fails() ->
 }
 
 #[tokio::test]
+async fn role_current_state_reconcile_uses_affected_paths_from_sync_delta() -> anyhow::Result<()> {
+    let repo_id = "repo-role-current-state-delta";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/worker.rs", "rust")?;
+    upsert_test_role(test.storage.as_ref(), repo_id, "role-api", "api").await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-api",
+        "rule-api",
+        "api.rs",
+        0.95,
+    )
+    .await?;
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: repo_id.to_string(),
+        repo_root: test._temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 10,
+        to_generation_seq_inclusive: 11,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: vec![crate::host::capability_host::ChangedFile {
+            path: "src/api.rs".to_string(),
+            language: "rust".to_string(),
+            content_id: "content-api".to_string(),
+        }],
+        file_removals: Vec::new(),
+        affected_paths: Vec::new(),
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let result = ArchitectureGraphRoleCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/affected_paths"))
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.pointer("/roles/full_reconcile"))
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn current_state_reconcile_skips_unchanged_role_paths() -> anyhow::Result<()> {
     let repo_id = "repo-role-delta-skip";
     let test = architecture_consumer_test_context(repo_id).await?;
