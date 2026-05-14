@@ -1043,7 +1043,7 @@ git commit -m "test: verify architecture role current-state delta flow"
 **Files:**
 - No source changes.
 
-- [ ] **Step 1: Run capability-host registration and scheduler tests**
+- [x] **Step 1: Run capability-host registration and scheduler tests**
 
 Run:
 
@@ -1057,7 +1057,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 2: Run architecture graph and role focused tests**
+- [x] **Step 2: Run architecture graph and role focused tests**
 
 Run:
 
@@ -1072,7 +1072,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 3: Run init runtime focused tests**
+- [x] **Step 3: Run init runtime focused tests**
 
 Run:
 
@@ -1086,7 +1086,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 4: Run compile check**
+- [x] **Step 4: Run compile check**
 
 Run:
 
@@ -1096,7 +1096,7 @@ cargo dev-check
 
 Expected: PASS.
 
-- [ ] **Step 5: Record verification status**
+- [x] **Step 5: Record verification status**
 
 No source changes are expected in this step. If any command fails, return to the task that owns the failed behavior and fix it there before rerunning the focused command.
 
