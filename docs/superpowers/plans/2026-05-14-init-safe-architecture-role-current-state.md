@@ -335,7 +335,7 @@ git commit -m "fix: mark semantic current-state as init blocking"
 - Modify: `bitloops/src/daemon/capability_events/coordinator/ingestion.rs`
 - Modify: `bitloops/src/daemon/capability_events/coordinator/tests.rs`
 
-- [ ] **Step 1: Write the failing scheduling test**
+- [x] **Step 1: Write the failing scheduling test**
 
 In `bitloops/src/daemon/capability_events/coordinator/tests.rs`, import:
 
@@ -421,7 +421,7 @@ fn record_sync_generation_attaches_init_session_only_to_blocking_cursor_mailboxe
 }
 ```
 
-- [ ] **Step 2: Run the focused failing test**
+- [x] **Step 2: Run the focused failing test**
 
 Run:
 
@@ -431,7 +431,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: FAIL because all cursor runs currently receive the init session.
 
-- [ ] **Step 3: Apply the policy during scheduling**
+- [x] **Step 3: Apply the policy during scheduling**
 
 In `bitloops/src/daemon/capability_events/coordinator/ingestion.rs`, import:
 
@@ -458,7 +458,7 @@ init_session_id: run_init_session_id,
 
 Do not filter out background cursors. They still need to run after sync; they just must not be associated with the init session.
 
-- [ ] **Step 4: Run scheduling tests**
+- [x] **Step 4: Run scheduling tests**
 
 Run:
 
@@ -468,7 +468,7 @@ cargo nextest run --manifest-path bitloops/Cargo.toml --no-default-features -p b
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bitloops/src/daemon/capability_events/coordinator/ingestion.rs bitloops/src/daemon/capability_events/coordinator/tests.rs
