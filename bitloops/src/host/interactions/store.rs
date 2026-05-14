@@ -46,6 +46,8 @@ pub trait InteractionSpool: Send + Sync {
 
     fn record_turn(&self, turn: &InteractionTurn) -> Result<()>;
 
+    fn refresh_turn_local_only(&self, turn: &InteractionTurn) -> Result<()>;
+
     fn record_event(&self, event: &InteractionEvent) -> Result<()>;
 
     fn assign_checkpoint_to_turns(

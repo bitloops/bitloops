@@ -6,12 +6,38 @@ use serde_json::Value;
 use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
 use crate::host::devql::{
-    EDGE_KIND_CALLS, EDGE_KIND_EXPORTS, RelationalStorage, esc_pg, sql_string_list_pg,
+    EDGE_KIND_CALLS, EDGE_KIND_EXPORTS, RelationalStorage, RelationalStorageRole, esc_pg,
+    sql_string_list_pg,
 };
 
 use super::parse::{parse_json_f32_array, value_as_usize};
 use super::schema::CloneProjection;
 use super::state::LoadedRepresentationEmbedding;
+
+async fn query_projection_rows(
+    relational: &RelationalStorage,
+    projection: CloneProjection,
+    sql: &str,
+) -> Result<Vec<Value>> {
+    match projection {
+        CloneProjection::Current => {
+            relational
+                .query_rows_for_role(RelationalStorageRole::CurrentProjection, sql)
+                .await
+        }
+        CloneProjection::Historical => {
+            relational
+                .query_rows_for_role(RelationalStorageRole::SharedRelational, sql)
+                .await
+        }
+    }
+}
+
+async fn query_shared_rows(relational: &RelationalStorage, sql: &str) -> Result<Vec<Value>> {
+    relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, sql)
+        .await
+}
 
 pub(super) async fn load_representation_embeddings_by_artefact_id(
     relational: &RelationalStorage,
@@ -27,14 +53,12 @@ pub(super) async fn load_representation_embeddings_by_artefact_id(
         return Ok(HashMap::new());
     }
 
-    let rows = relational
-        .query_rows(&build_representation_embedding_lookup_sql(
-            repo_id,
-            projection,
-            active_state,
-            artefact_ids,
-        ))
-        .await?;
+    let rows = query_projection_rows(
+        relational,
+        projection,
+        &build_representation_embedding_lookup_sql(repo_id, projection, active_state, artefact_ids),
+    )
+    .await?;
     let mut embeddings_by_artefact_id = HashMap::with_capacity(rows.len());
     for row in rows {
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
@@ -77,7 +101,7 @@ WHERE a.repo_id = '{}' AND a.symbol_id IS NOT NULL \
 GROUP BY a.symbol_id",
         esc_pg(repo_id),
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = query_shared_rows(relational, &sql).await?;
     let mut out = HashMap::with_capacity(rows.len());
     for row in rows {
         let Some(symbol_id) = row.get("symbol_id").and_then(Value::as_str) else {
@@ -115,7 +139,7 @@ WHERE e.repo_id = '{}' AND e.edge_kind = '{}'",
         target_join = target_join,
         target_ref_expr = target_ref_expr,
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = query_projection_rows(relational, projection, &sql).await?;
     let mut out = HashMap::<String, HashSet<String>>::new();
     for row in rows {
         let Some(from_symbol_id) = row.get("from_symbol_id").and_then(Value::as_str) else {
@@ -167,7 +191,7 @@ WHERE e.repo_id = '{}' AND e.edge_kind <> '{}' AND e.edge_kind <> '{}'",
         target_join = target_join,
         target_ref_expr = target_ref_expr,
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = query_projection_rows(relational, projection, &sql).await?;
     let mut out = HashMap::<String, HashSet<String>>::new();
     for row in rows {
         let Some(from_symbol_id) = row.get("from_symbol_id").and_then(Value::as_str) else {

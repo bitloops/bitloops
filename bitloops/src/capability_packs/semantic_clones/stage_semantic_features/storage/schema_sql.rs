@@ -89,6 +89,45 @@ ON symbol_features_current (repo_id, artefact_id);
 "#
 }
 
+pub(crate) fn semantic_features_postgres_shared_schema_sql() -> &'static str {
+    r#"
+CREATE TABLE IF NOT EXISTS symbol_semantics (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL,
+    source_model TEXT,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
+ON symbol_semantics (repo_id, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_features (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    modifiers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    identifier_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    normalized_body_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    parent_kind TEXT,
+    context_tokens JSONB NOT NULL DEFAULT '[]'::jsonb,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
+ON symbol_features (repo_id, blob_sha);
+"#
+}
+
 pub(crate) fn semantic_features_sqlite_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics (
@@ -126,6 +165,94 @@ CREATE TABLE IF NOT EXISTS symbol_features (
 CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
 ON symbol_features (repo_id, blob_sha);
 
+CREATE TABLE IF NOT EXISTS symbol_semantics_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_semantics_current_repo_path_idx
+ON symbol_semantics_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_semantics_current_repo_artefact_idx
+ON symbol_semantics_current (repo_id, artefact_id);
+
+CREATE TABLE IF NOT EXISTS symbol_features_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    identifier_tokens TEXT NOT NULL DEFAULT '[]',
+    normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
+    parent_kind TEXT,
+    context_tokens TEXT NOT NULL DEFAULT '[]',
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_features_current_repo_path_idx
+ON symbol_features_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_features_current_repo_artefact_idx
+ON symbol_features_current (repo_id, artefact_id);
+"#
+}
+
+pub(crate) fn semantic_features_sqlite_shared_schema_sql() -> &'static str {
+    r#"
+CREATE TABLE IF NOT EXISTS symbol_semantics (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    docstring_summary TEXT,
+    llm_summary TEXT,
+    template_summary TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL,
+    source_model TEXT,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_semantics_repo_blob_idx
+ON symbol_semantics (repo_id, blob_sha);
+
+CREATE TABLE IF NOT EXISTS symbol_features (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    semantic_features_input_hash TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_signature TEXT,
+    modifiers TEXT NOT NULL DEFAULT '[]',
+    identifier_tokens TEXT NOT NULL DEFAULT '[]',
+    normalized_body_tokens TEXT NOT NULL DEFAULT '[]',
+    parent_kind TEXT,
+    context_tokens TEXT NOT NULL DEFAULT '[]',
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_features_repo_blob_idx
+ON symbol_features (repo_id, blob_sha);
+"#
+}
+
+pub(crate) fn semantic_features_sqlite_current_projection_schema_sql() -> &'static str {
+    r#"
 CREATE TABLE IF NOT EXISTS symbol_semantics_current (
     artefact_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
@@ -433,4 +560,34 @@ fn sqlite_column_is_not_null(
         }
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        semantic_features_postgres_shared_schema_sql,
+        semantic_features_sqlite_current_projection_schema_sql,
+        semantic_features_sqlite_shared_schema_sql,
+    };
+
+    #[test]
+    fn semantic_feature_split_schemas_follow_current_vs_shared_boundary() {
+        let postgres = semantic_features_postgres_shared_schema_sql();
+        assert!(postgres.contains("CREATE TABLE IF NOT EXISTS symbol_semantics ("));
+        assert!(postgres.contains("CREATE TABLE IF NOT EXISTS symbol_features ("));
+        assert!(!postgres.contains("symbol_semantics_current"));
+        assert!(!postgres.contains("symbol_features_current"));
+
+        let sqlite_shared = semantic_features_sqlite_shared_schema_sql();
+        assert!(sqlite_shared.contains("CREATE TABLE IF NOT EXISTS symbol_semantics ("));
+        assert!(sqlite_shared.contains("CREATE TABLE IF NOT EXISTS symbol_features ("));
+        assert!(!sqlite_shared.contains("symbol_semantics_current"));
+        assert!(!sqlite_shared.contains("symbol_features_current"));
+
+        let sqlite_current = semantic_features_sqlite_current_projection_schema_sql();
+        assert!(sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_semantics_current ("));
+        assert!(sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_features_current ("));
+        assert!(!sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_semantics ("));
+        assert!(!sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_features ("));
+    }
 }

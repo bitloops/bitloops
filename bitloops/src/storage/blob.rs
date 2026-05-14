@@ -34,6 +34,12 @@ pub struct ResolvedBlobStore {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobStorageOwnership {
+    RuntimeLocal,
+    ProjectPayload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlobType {
     Transcript,
     Prompts,
@@ -117,6 +123,25 @@ pub fn create_blob_store(cfg: &BlobStorageConfig) -> Result<Box<dyn BlobStore>> 
     Ok(create_blob_store_with_backend(cfg)?.store)
 }
 
+fn create_local_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<ResolvedBlobStore> {
+    Ok(ResolvedBlobStore {
+        store: Box::new(LocalBlobStore::from_config(cfg)?),
+        backend: "local",
+    })
+}
+
+fn create_local_blob_store_with_backend_for_repo(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+) -> Result<ResolvedBlobStore> {
+    let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
+        .context("resolving local blob store path for repository")?;
+    Ok(ResolvedBlobStore {
+        store: Box::new(LocalBlobStore::new(root)?),
+        backend: "local",
+    })
+}
+
 fn reject_conflicting_remote_blob_backends(cfg: &BlobStorageConfig) -> Result<()> {
     if cfg.s3_bucket.is_some() && cfg.gcs_bucket.is_some() {
         bail!(
@@ -144,14 +169,41 @@ pub fn create_blob_store_with_backend(cfg: &BlobStorageConfig) -> Result<Resolve
             backend: "gcs",
         })
     } else {
-        Ok(ResolvedBlobStore {
-            store: Box::new(LocalBlobStore::from_config(cfg)?),
-            backend: "local",
-        })
+        create_local_blob_store_with_backend(cfg)
     }
 }
 
 pub fn create_blob_store_with_backend_for_repo(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+) -> Result<ResolvedBlobStore> {
+    create_project_blob_store_with_backend_for_repo(cfg, repo_root)
+}
+
+pub fn create_blob_store_for_repo_by_ownership(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+    ownership: BlobStorageOwnership,
+) -> Result<ResolvedBlobStore> {
+    match ownership {
+        BlobStorageOwnership::RuntimeLocal => {
+            create_runtime_blob_store_with_backend_for_repo(cfg, repo_root)
+        }
+        BlobStorageOwnership::ProjectPayload => {
+            create_project_blob_store_with_backend_for_repo(cfg, repo_root)
+        }
+    }
+}
+
+pub fn create_runtime_blob_store_with_backend_for_repo(
+    cfg: &BlobStorageConfig,
+    repo_root: &Path,
+) -> Result<ResolvedBlobStore> {
+    reject_conflicting_remote_blob_backends(cfg)?;
+    create_local_blob_store_with_backend_for_repo(cfg, repo_root)
+}
+
+pub fn create_project_blob_store_with_backend_for_repo(
     cfg: &BlobStorageConfig,
     repo_root: &Path,
 ) -> Result<ResolvedBlobStore> {
@@ -171,12 +223,7 @@ pub fn create_blob_store_with_backend_for_repo(
             backend: "gcs",
         })
     } else {
-        let root = resolve_blob_local_path_for_repo(repo_root, cfg.local_path.as_deref())
-            .context("resolving local blob store path for repository")?;
-        Ok(ResolvedBlobStore {
-            store: Box::new(LocalBlobStore::new(root)?),
-            backend: "local",
-        })
+        create_local_blob_store_with_backend_for_repo(cfg, repo_root)
     }
 }
 
@@ -351,6 +398,45 @@ mod tests {
             err.to_string().contains("s3_bucket") && err.to_string().contains("gcs_bucket"),
             "error should name the conflicting fields, got: {err}"
         );
+    }
+
+    #[test]
+    fn runtime_blob_store_stays_local_when_remote_backend_is_configured() {
+        let temp = TempDir::new().expect("temp dir");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).expect("repo root");
+        let local_root = temp.path().join("blobs");
+        let mut cfg = test_blob_config(local_root.to_string_lossy().to_string());
+        cfg.s3_bucket = Some("test-bucket".to_string());
+
+        let resolved = create_runtime_blob_store_with_backend_for_repo(&cfg, &repo_root)
+            .expect("runtime-local blob dispatch should succeed");
+        assert_eq!(resolved.backend, "local");
+
+        let key = "repo-1/runtime/session/transcript.jsonl";
+        resolved
+            .store
+            .write(key, b"runtime-payload")
+            .expect("write runtime-local blob");
+
+        assert!(
+            local_root.join(key).exists(),
+            "runtime-local payload should be written under the local blob root"
+        );
+    }
+
+    #[test]
+    fn project_blob_store_uses_configured_remote_backend_when_present() {
+        let temp = TempDir::new().expect("temp dir");
+        let repo_root = temp.path().join("repo");
+        std::fs::create_dir_all(&repo_root).expect("repo root");
+        let mut cfg = test_blob_config(temp.path().join("blobs").to_string_lossy().to_string());
+        cfg.s3_bucket = Some("test-bucket".to_string());
+
+        let resolved = create_project_blob_store_with_backend_for_repo(&cfg, &repo_root)
+            .expect("configured project blob dispatch should succeed");
+
+        assert_eq!(resolved.backend, "s3");
     }
 
     #[test]

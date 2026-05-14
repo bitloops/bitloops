@@ -1,6 +1,8 @@
 use crate::adapters::agents::agent_display_name;
 use crate::cli::enable::find_repo_root;
-use crate::config::settings;
+use crate::config::{
+    resolve_daemon_config_root_for_repo, resolve_store_backend_config_for_repo, settings,
+};
 use crate::runtime_presentation::{
     INIT_CODE_EMBEDDINGS_LANE_LABEL, INIT_INGEST_LANE_LABEL, INIT_SUMMARIES_LANE_LABEL,
     INIT_SUMMARY_EMBEDDINGS_LANE_LABEL, INIT_SYNC_LANE_LABEL, queue_state_summary,
@@ -53,7 +55,7 @@ pub fn run_status(w: &mut dyn Write, detailed: bool) -> Result<()> {
 }
 
 fn run_status_at(w: &mut dyn Write, detailed: bool, start: &Path) -> Result<()> {
-    let Ok(_repo_root) = find_repo_root(start) else {
+    let Ok(repo_root) = find_repo_root(start) else {
         writeln!(w, "✕ not a git repository")?;
         return Ok(());
     };
@@ -74,6 +76,7 @@ fn run_status_at(w: &mut dyn Write, detailed: bool, start: &Path) -> Result<()> 
             None => writeln!(w, "Policy Root: built-in defaults")?,
         }
         writeln!(w, "Config Fingerprint: {fingerprint}")?;
+        write_storage_authority(w, &repo_root)?;
     } else {
         writeln!(w, "{}", format_settings_status_short(&effective_cli))?;
     }
@@ -82,6 +85,29 @@ fn run_status_at(w: &mut dyn Write, detailed: bool, start: &Path) -> Result<()> 
         write_active_sessions(w, &[])?;
     }
 
+    Ok(())
+}
+
+fn write_storage_authority(w: &mut dyn Write, repo_root: &Path) -> Result<()> {
+    writeln!(w)?;
+    writeln!(w, "Storage Authority:")?;
+    match resolve_store_backend_config_for_repo(repo_root) {
+        Ok(cfg) => {
+            let config_root = resolve_daemon_config_root_for_repo(repo_root)
+                .unwrap_or_else(|_| repo_root.to_path_buf());
+            let rows = crate::host::db_status::collect_storage_authority_rows(
+                &config_root,
+                repo_root,
+                &cfg,
+            );
+            for row in rows {
+                writeln!(w, "  {}: {} ({})", row.family, row.authority, row.backend)?;
+            }
+        }
+        Err(err) => {
+            writeln!(w, "  unavailable: {err:#}")?;
+        }
+    }
     Ok(())
 }
 
@@ -907,6 +933,37 @@ mod tests {
         assert!(
             output.contains("Disabled (auto-commit)"),
             "status should read .bitloops.local.toml override and show Disabled, got: {output}"
+        );
+    }
+
+    #[test]
+    fn detailed_status_reports_storage_authority_split() {
+        let repo = setup_status_test_repo();
+
+        let mut stdout = Cursor::new(Vec::new());
+        let err = run_status_at(&mut stdout, true, repo.path());
+        assert!(err.is_ok(), "run_status detailed returned error: {err:?}");
+
+        let output = String::from_utf8(stdout.into_inner()).expect("utf8");
+        assert!(
+            output.contains("Storage Authority:"),
+            "expected storage authority header, got: {output}"
+        );
+        assert!(
+            output.contains("runtime: workspace-local (sqlite)"),
+            "expected runtime authority row, got: {output}"
+        );
+        assert!(
+            output.contains("relational current: workspace-local (sqlite)"),
+            "expected current relational authority row, got: {output}"
+        );
+        assert!(
+            output.contains("relational shared: workspace-local (sqlite)"),
+            "expected shared relational fallback row, got: {output}"
+        );
+        assert!(
+            output.contains("blob runtime/session: workspace-local (local)"),
+            "expected runtime blob authority row, got: {output}"
         );
     }
 }

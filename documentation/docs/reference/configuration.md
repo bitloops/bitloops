@@ -337,6 +337,35 @@ Configured relational, events, and blob stores still come from the daemon config
 - `[stores.events]` selects the event backend, using DuckDB or ClickHouse
 - `[stores.blob]` selects the blob backend, using local disk or a remote object store
 
+The effective storage authority is split by data family:
+
+| Data family | Authority | Backend selection |
+| --- | --- | --- |
+| `runtime` | workspace-local | always SQLite |
+| `relational current` | workspace-local | always SQLite |
+| `relational shared` | workspace-local or shared | SQLite by default, Postgres when `[stores.relational].postgres_dsn` is configured |
+| `events` | workspace-local or shared | DuckDB by default, ClickHouse when `[stores.events].clickhouse_url` is configured |
+| `blob runtime/session` | workspace-local | always local disk |
+| `blob project/knowledge` | workspace-local or shared | local disk by default, S3 or GCS when `[stores.blob]` is configured for a remote object store |
+
+Notes:
+
+- Runtime/session state always stays workspace-local in runtime SQLite.
+- Relational `*_current` and other current/projection tables always stay workspace-local in SQLite, even when Postgres is configured.
+- Shared relational historical tables use Postgres when `[stores.relational].postgres_dsn` is configured; otherwise they stay local in SQLite.
+- Canonical interaction event rows use the selected event backend from `[stores.events]`. The local interaction spool is runtime-local staging, not a second canonical event store.
+- Runtime/session blob payloads always stay workspace-local on disk.
+- Project/knowledge blob payloads follow `[stores.blob]`, using local disk when no remote object store is configured and S3 or GCS when one is configured.
+
+### Multi-Workspace Behavior
+
+Bitloops treats each workspace or worktree as having its own local runtime and current-projection state:
+
+- Local runtime SQLite and local current/projection relational state are derived from the active config root and workspace path, so one worktree’s current state does not overwrite another worktree’s local current state.
+- Shared historical relational data, canonical event data, and project/knowledge blob payloads may point at shared remote backends when configured.
+- This means different worktrees can keep divergent local runtime and `*_current` views while still sharing the same historical or project-level backing stores.
+- The detailed `bitloops status` view and the GraphQL `health` surface report this split explicitly so you can see which families stay local and which resolve to shared infrastructure.
+
 ## Project Policy
 
 `bitloops init` bootstraps the current directory as a Bitloops project by creating or updating `.bitloops.local.toml`, adding it to `.git/info/exclude`, and installing hooks.

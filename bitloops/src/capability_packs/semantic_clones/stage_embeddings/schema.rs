@@ -73,6 +73,41 @@ CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
 "#
 }
 
+pub(crate) fn semantic_embeddings_postgres_shared_schema_sql() -> &'static str {
+    r#"
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS semantic_embedding_setups (
+    setup_fingerprint TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS symbol_embeddings (
+    artefact_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    representation_kind TEXT NOT NULL DEFAULT 'code',
+    setup_fingerprint TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding vector NOT NULL,
+    generated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_artefact_idx
+ON symbol_embeddings (repo_id, artefact_id, representation_kind, setup_fingerprint);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
+ON symbol_embeddings (repo_id, representation_kind, setup_fingerprint, blob_sha);
+"#
+}
+
 pub(crate) fn semantic_embeddings_sqlite_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS semantic_embedding_setups (
@@ -104,6 +139,77 @@ ON symbol_embeddings (repo_id, artefact_id, representation_kind, setup_fingerpri
 CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
 ON symbol_embeddings (repo_id, representation_kind, setup_fingerprint, blob_sha);
 
+CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
+    artefact_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    representation_kind TEXT NOT NULL DEFAULT 'code',
+    setup_fingerprint TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_current_repo_path_idx
+ON symbol_embeddings_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_embeddings_current_repo_artefact_idx
+ON symbol_embeddings_current (repo_id, artefact_id, representation_kind, setup_fingerprint);
+
+CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (
+    repo_id TEXT NOT NULL,
+    representation_kind TEXT NOT NULL DEFAULT 'code',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    setup_fingerprint TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (repo_id, representation_kind)
+);
+"#
+}
+
+pub(crate) fn semantic_embeddings_sqlite_shared_schema_sql() -> &'static str {
+    r#"
+CREATE TABLE IF NOT EXISTS semantic_embedding_setups (
+    setup_fingerprint TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS symbol_embeddings (
+    artefact_id TEXT NOT NULL,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    representation_kind TEXT NOT NULL DEFAULT 'code',
+    setup_fingerprint TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    embedding_input_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_artefact_idx
+ON symbol_embeddings (repo_id, artefact_id, representation_kind, setup_fingerprint);
+
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
+ON symbol_embeddings (repo_id, representation_kind, setup_fingerprint, blob_sha);
+"#
+}
+
+pub(crate) fn semantic_embeddings_sqlite_current_projection_schema_sql() -> &'static str {
+    r#"
 CREATE TABLE IF NOT EXISTS symbol_embeddings_current (
     artefact_id TEXT NOT NULL,
     repo_id TEXT NOT NULL,
@@ -289,7 +395,73 @@ END $$;
 "#
 }
 
+fn semantic_embeddings_postgres_shared_upgrade_sql() -> &'static str {
+    r#"
+CREATE TABLE IF NOT EXISTS semantic_embedding_setups (
+    setup_fingerprint TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    dimension INTEGER NOT NULL CHECK (dimension > 0),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE symbol_embeddings
+    ADD COLUMN IF NOT EXISTS representation_kind TEXT NOT NULL DEFAULT 'code';
+ALTER TABLE symbol_embeddings
+    ADD COLUMN IF NOT EXISTS setup_fingerprint TEXT;
+
+UPDATE symbol_embeddings
+SET setup_fingerprint = 'provider=' || provider || '|model=' || model || '|dimension=' || dimension::text
+WHERE setup_fingerprint IS NULL OR btrim(setup_fingerprint) = '';
+
+INSERT INTO semantic_embedding_setups (setup_fingerprint, provider, model, dimension)
+SELECT DISTINCT setup_fingerprint, provider, model, dimension
+FROM symbol_embeddings
+WHERE setup_fingerprint IS NOT NULL AND btrim(setup_fingerprint) <> ''
+ON CONFLICT (setup_fingerprint) DO UPDATE
+SET provider = EXCLUDED.provider, model = EXCLUDED.model, dimension = EXCLUDED.dimension;
+
+ALTER TABLE symbol_embeddings
+    ALTER COLUMN setup_fingerprint SET NOT NULL;
+
+DROP INDEX IF EXISTS symbol_embeddings_repo_artefact_idx;
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_artefact_idx
+ON symbol_embeddings (repo_id, artefact_id, representation_kind, setup_fingerprint);
+
+DROP INDEX IF EXISTS symbol_embeddings_repo_model_idx;
+CREATE INDEX IF NOT EXISTS symbol_embeddings_repo_model_idx
+ON symbol_embeddings (repo_id, representation_kind, setup_fingerprint, blob_sha);
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'symbol_embeddings'::regclass
+          AND conname = 'symbol_embeddings_pkey'
+    ) THEN
+        ALTER TABLE symbol_embeddings DROP CONSTRAINT symbol_embeddings_pkey;
+    END IF;
+EXCEPTION WHEN undefined_table THEN
+    NULL;
+END $$;
+
+DO $$
+BEGIN
+    ALTER TABLE symbol_embeddings
+        ADD CONSTRAINT symbol_embeddings_pkey PRIMARY KEY (artefact_id, representation_kind, setup_fingerprint);
+EXCEPTION WHEN duplicate_table THEN
+    NULL;
+WHEN duplicate_object THEN
+    NULL;
+END $$;
+"#
+}
+
 pub(crate) async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
+    if crate::host::devql::types::sqlite_path_uses_remote_shared_relational_authority(sqlite_path) {
+        return init_sqlite_current_projection_semantic_embeddings_schema(sqlite_path).await;
+    }
     upgrade_sqlite_semantic_embeddings_schema(sqlite_path).await?;
     sqlite_exec_path_allow_create(sqlite_path, semantic_embeddings_sqlite_schema_sql())
         .await
@@ -297,15 +469,27 @@ pub(crate) async fn init_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -
     Ok(())
 }
 
+pub(crate) async fn init_sqlite_current_projection_semantic_embeddings_schema(
+    sqlite_path: &Path,
+) -> Result<()> {
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        semantic_embeddings_sqlite_current_projection_schema_sql(),
+    )
+    .await
+    .context("creating SQLite current semantic embedding tables")?;
+    Ok(())
+}
+
 pub(crate) async fn init_postgres_semantic_embeddings_schema(
     pg_client: &tokio_postgres::Client,
 ) -> Result<()> {
-    postgres_exec(pg_client, semantic_embeddings_postgres_schema_sql())
+    postgres_exec(pg_client, semantic_embeddings_postgres_shared_schema_sql())
         .await
-        .context("creating Postgres semantic embedding tables")?;
-    postgres_exec(pg_client, semantic_embeddings_postgres_upgrade_sql())
+        .context("creating Postgres shared semantic embedding tables")?;
+    postgres_exec(pg_client, semantic_embeddings_postgres_shared_upgrade_sql())
         .await
-        .context("upgrading Postgres semantic embedding tables")?;
+        .context("upgrading Postgres shared semantic embedding tables")?;
     Ok(())
 }
 
@@ -606,6 +790,11 @@ fn sqlite_table_primary_key_columns(
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        semantic_embeddings_postgres_shared_schema_sql,
+        semantic_embeddings_sqlite_current_projection_schema_sql,
+        semantic_embeddings_sqlite_shared_schema_sql,
+    };
     use crate::capability_packs::semantic_clones::embeddings::EmbeddingSetup;
 
     #[test]
@@ -615,5 +804,29 @@ mod tests {
             setup.setup_fingerprint,
             "provider=provider-x|model=model-y|dimension=42"
         );
+    }
+
+    #[test]
+    fn semantic_embedding_split_schemas_keep_setup_state_local_current_only() {
+        let postgres = semantic_embeddings_postgres_shared_schema_sql();
+        assert!(postgres.contains("CREATE TABLE IF NOT EXISTS semantic_embedding_setups ("));
+        assert!(postgres.contains("CREATE TABLE IF NOT EXISTS symbol_embeddings ("));
+        assert!(!postgres.contains("symbol_embeddings_current"));
+        assert!(!postgres.contains("semantic_clone_embedding_setup_state"));
+
+        let sqlite_shared = semantic_embeddings_sqlite_shared_schema_sql();
+        assert!(sqlite_shared.contains("CREATE TABLE IF NOT EXISTS semantic_embedding_setups ("));
+        assert!(sqlite_shared.contains("CREATE TABLE IF NOT EXISTS symbol_embeddings ("));
+        assert!(!sqlite_shared.contains("symbol_embeddings_current"));
+        assert!(!sqlite_shared.contains("semantic_clone_embedding_setup_state"));
+
+        let sqlite_current = semantic_embeddings_sqlite_current_projection_schema_sql();
+        assert!(sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_embeddings_current ("));
+        assert!(
+            sqlite_current
+                .contains("CREATE TABLE IF NOT EXISTS semantic_clone_embedding_setup_state (")
+        );
+        assert!(!sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_embeddings ("));
+        assert!(!sqlite_current.contains("CREATE TABLE IF NOT EXISTS semantic_embedding_setups ("));
     }
 }

@@ -22,8 +22,10 @@ pub(crate) fn open_checkpoint_storage_context(
         .context("opening committed checkpoint SQLite database")?;
 
     let resolved_blob_store =
-        crate::storage::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
-            .context("initialising blob storage for committed checkpoints")?;
+        crate::storage::blob::create_runtime_blob_store_with_backend_for_repo(
+            &cfg.blobs, repo_root,
+        )
+        .context("initialising runtime-local blob storage for committed checkpoints")?;
 
     let repo_id = crate::host::devql::resolve_repo_identity(repo_root)
         .context("resolving repo identity for committed checkpoints")?

@@ -163,7 +163,9 @@ pub(super) async fn load_sync_state_value(
         esc_pg(&cfg.repo.repo_id),
         esc_pg(key),
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await?;
     Ok(rows
         .first()
         .and_then(|row| row.get("state_value"))
@@ -175,9 +177,9 @@ fn build_upsert_sync_state_sql(
     repo_id: &str,
     key: &str,
     value: &str,
-    relational: &RelationalStorage,
+    dialect: RelationalDialect,
 ) -> String {
-    let now_sql = sql_now(relational);
+    let now_sql = sql_now_for_dialect(dialect);
     format!(
         "INSERT INTO sync_state (repo_id, state_key, state_value, updated_at) VALUES ('{}', '{}', '{}', {}) \
 ON CONFLICT (repo_id, state_key) DO UPDATE SET state_value = EXCLUDED.state_value, updated_at = {}",
@@ -195,8 +197,14 @@ pub(super) async fn upsert_sync_state_value(
     key: &str,
     value: &str,
 ) -> Result<()> {
-    let sql = build_upsert_sync_state_sql(&cfg.repo.repo_id, key, value, relational);
-    relational.exec(&sql).await
+    let role = RelationalStorageRole::SharedRelational;
+    let sql = build_upsert_sync_state_sql(
+        &cfg.repo.repo_id,
+        key,
+        value,
+        relational.dialect_for_role(role),
+    );
+    relational.exec_for_role(role, &sql).await
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -248,7 +256,8 @@ pub(super) async fn upsert_commit_metadata_row(
     relational: &RelationalStorage,
     commit_info: &CheckpointCommitInfo,
 ) -> Result<()> {
-    let committed_at_sql = match relational.dialect() {
+    let role = RelationalStorageRole::SharedRelational;
+    let committed_at_sql = match relational.dialect_for_role(role) {
         RelationalDialect::Postgres => format!("to_timestamp({})", commit_info.commit_unix),
         RelationalDialect::Sqlite => format!("datetime({}, 'unixepoch')", commit_info.commit_unix),
     };
@@ -263,5 +272,5 @@ ON CONFLICT (commit_sha) DO UPDATE SET repo_id = EXCLUDED.repo_id, author_name =
         esc_pg(&commit_info.subject),
         committed_at_sql,
     );
-    relational.exec(&sql).await
+    relational.exec_for_role(role, &sql).await
 }

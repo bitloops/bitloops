@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
+use crate::host::devql::RelationalStorageRole;
 use crate::host::relational_store::DefaultRelationalStore;
 
 #[derive(Debug, Clone, Default)]
@@ -234,7 +235,7 @@ fn representation_kind_sql_predicate(
 }
 
 fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<BTreeSet<String>> {
-    match relational.query_rows_primary_blocking(sql) {
+    match relational.query_rows_for_role_blocking(RelationalStorageRole::CurrentProjection, sql) {
         Ok(rows) => Ok(rows
             .into_iter()
             .filter_map(|row| {
@@ -250,7 +251,7 @@ fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<
 }
 
 pub(crate) fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {
-    match relational.query_rows_primary_blocking(sql) {
+    match relational.query_rows_for_role_blocking(RelationalStorageRole::CurrentProjection, sql) {
         Ok(rows) => Ok(rows
             .first()
             .and_then(|row| row.as_object())
@@ -318,10 +319,15 @@ mod tests {
     }
 
     #[test]
-    fn query_progress_count_uses_primary_backend_when_postgres_is_configured() {
+    fn query_progress_count_reads_current_projection_from_local_sqlite_when_postgres_is_configured()
+    {
         let temp = tempdir().expect("temp dir");
         let db_path = temp.path().join("relational.sqlite");
-        rusqlite::Connection::open(&db_path).expect("create sqlite file");
+        let conn = rusqlite::Connection::open(&db_path).expect("create sqlite file");
+        conn.execute("CREATE TABLE counts (total INTEGER)", [])
+            .expect("create counts table");
+        conn.execute("INSERT INTO counts (total) VALUES (7)", [])
+            .expect("insert count");
         let relational = DefaultRelationalStore::from_inner(
             RelationalStorage::primary_backend_with_dsn_for_tests(
                 db_path,
@@ -330,12 +336,9 @@ mod tests {
             ),
         );
 
-        let err = query_progress_count(&relational, "SELECT 7 AS total")
-            .expect_err("configured Postgres primary backend should be queried");
-
-        assert!(
-            err.to_string()
-                .contains("querying primary relational Postgres rows")
+        assert_eq!(
+            query_progress_count(&relational, "SELECT total FROM counts").expect("query count"),
+            7
         );
     }
 }

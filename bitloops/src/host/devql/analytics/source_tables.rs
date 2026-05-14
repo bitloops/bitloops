@@ -9,8 +9,8 @@ use super::super::{
 };
 use super::row_access::{ignore_missing_table, row_string, set_row_string, sql_in_list};
 use super::specs::{
-    CACHE_CURRENT_FILE_STATE_SPEC, CACHE_INTERACTION_EVENTS_SPEC, CACHE_INTERACTION_SESSIONS_SPEC,
-    CACHE_INTERACTION_TURNS_SPEC, CACHE_REPO_SYNC_STATE_SPEC, CACHE_REPOSITORIES_SPEC,
+    CACHE_INTERACTION_EVENTS_SPEC, CACHE_INTERACTION_SESSIONS_SPEC, CACHE_INTERACTION_TURNS_SPEC,
+    CACHE_REPO_SYNC_STATE_SPEC, CACHE_REPOSITORIES_SPEC,
 };
 use super::types::{AnalyticsRepository, AnalyticsSourceTables};
 use crate::config::StoreBackendConfig;
@@ -57,31 +57,15 @@ pub(super) async fn load_source_tables(
     } else {
         Vec::new()
     };
-    let remote_current_file_state = if backends.relational.has_postgres() {
-        relational
-            .query_rows_remote(&remote_current_file_state_sql(&repo_ids))
-            .await
-            .or_else(ignore_missing_table)?
-    } else {
-        Vec::new()
-    };
-
-    let mut repositories_rows = merge_rows(
-        remote_repositories,
-        local_repositories,
-        CACHE_REPOSITORIES_SPEC.key_columns,
-    );
-    ensure_repository_catalog_rows(&mut repositories_rows, repositories);
-    let repo_sync_state_rows = merge_rows(
-        remote_repo_sync_state,
-        local_repo_sync_state,
-        CACHE_REPO_SYNC_STATE_SPEC.key_columns,
-    );
-    let current_file_state_rows = merge_rows(
-        remote_current_file_state,
-        local_current_file_state,
-        CACHE_CURRENT_FILE_STATE_SPEC.key_columns,
-    );
+    let (repositories_rows, repo_sync_state_rows, current_file_state_rows) =
+        merge_relational_source_rows(
+            repositories,
+            remote_repositories,
+            local_repositories,
+            remote_repo_sync_state,
+            local_repo_sync_state,
+            local_current_file_state,
+        );
 
     let (interaction_sessions, interaction_turns, interaction_events) =
         if backends.events.has_clickhouse() {
@@ -215,6 +199,34 @@ pub(super) fn ensure_repository_catalog_rows(
             "created_at": "",
         }));
     }
+}
+
+fn merge_relational_source_rows(
+    repositories: &[AnalyticsRepository],
+    remote_repositories: Vec<Value>,
+    local_repositories: Vec<Value>,
+    remote_repo_sync_state: Vec<Value>,
+    local_repo_sync_state: Vec<Value>,
+    local_current_file_state: Vec<Value>,
+) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
+    let mut repositories_rows = merge_rows(
+        remote_repositories,
+        local_repositories,
+        CACHE_REPOSITORIES_SPEC.key_columns,
+    );
+    ensure_repository_catalog_rows(&mut repositories_rows, repositories);
+    let repo_sync_state_rows = merge_rows(
+        remote_repo_sync_state,
+        local_repo_sync_state,
+        CACHE_REPO_SYNC_STATE_SPEC.key_columns,
+    );
+
+    // current_file_state is the local current projection authority.
+    (
+        repositories_rows,
+        repo_sync_state_rows,
+        local_current_file_state,
+    )
 }
 
 fn merge_rows(base: Vec<Value>, overlay: Vec<Value>, key_columns: &[&str]) -> Vec<Value> {
@@ -422,26 +434,6 @@ fn local_current_file_state_sql(repo_ids: &[String]) -> String {
     )
 }
 
-fn remote_current_file_state_sql(repo_ids: &[String]) -> String {
-    format!(
-        "SELECT repo_id, path, COALESCE(analysis_mode, '') AS analysis_mode, COALESCE(file_role, '') AS file_role, \
-                COALESCE(text_index_mode, '') AS text_index_mode, COALESCE(language, '') AS language, \
-                COALESCE(resolved_language, '') AS resolved_language, COALESCE(dialect, '') AS dialect, \
-                COALESCE(primary_context_id, '') AS primary_context_id, \
-                COALESCE(secondary_context_ids_json::text, '[]') AS secondary_context_ids_json, \
-                COALESCE(frameworks_json::text, '[]') AS frameworks_json, \
-                COALESCE(runtime_profile, '') AS runtime_profile, COALESCE(classification_reason, '') AS classification_reason, \
-                COALESCE(context_fingerprint, '') AS context_fingerprint, COALESCE(extraction_fingerprint, '') AS extraction_fingerprint, \
-                COALESCE(head_content_id, '') AS head_content_id, COALESCE(index_content_id, '') AS index_content_id, \
-                COALESCE(worktree_content_id, '') AS worktree_content_id, COALESCE(effective_content_id, '') AS effective_content_id, \
-                COALESCE(effective_source, '') AS effective_source, COALESCE(parser_version, '') AS parser_version, \
-                COALESCE(extractor_version, '') AS extractor_version, exists_in_head, exists_in_index, exists_in_worktree, \
-                COALESCE(last_synced_at, '') AS last_synced_at \
-         FROM current_file_state WHERE repo_id IN ({})",
-        sql_in_list(repo_ids, esc_pg)
-    )
-}
-
 fn local_interaction_sessions_sql(repo_ids: &[String]) -> String {
     format!(
         "SELECT session_id, repo_id, COALESCE(branch, '') AS branch, COALESCE(actor_id, '') AS actor_id, \
@@ -502,4 +494,102 @@ fn clickhouse_interaction_events_sql(repo_ids: &[String]) -> String {
 pub(super) async fn clickhouse_rows(cfg: &DevqlConfig, sql: &str) -> Result<Vec<Value>> {
     let data = clickhouse_query_data(cfg, sql).await?;
     Ok(data.as_array().cloned().unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn merge_relational_source_rows_keeps_shared_rows_but_current_file_state_local() {
+        let local_current_file_state = vec![json!({
+            "repo_id": "repo-local",
+            "path": "src/local.rs",
+            "last_synced_at": "2026-04-22T09:06:00Z",
+        })];
+
+        let (repositories_rows, repo_sync_state_rows, current_file_state_rows) =
+            merge_relational_source_rows(
+                &[],
+                vec![json!({
+                    "repo_id": "repo-remote",
+                    "repo_root": "/remote",
+                    "provider": "github",
+                    "organization": "bitloops",
+                    "name": "shared",
+                    "identity": "github://bitloops/shared",
+                    "default_branch": "main",
+                    "metadata_json": "{}",
+                    "created_at": "2026-04-22T09:00:00Z",
+                })],
+                vec![json!({
+                    "repo_id": "repo-local",
+                    "repo_root": "/local",
+                    "provider": "github",
+                    "organization": "bitloops",
+                    "name": "local",
+                    "identity": "github://bitloops/local",
+                    "default_branch": "main",
+                    "metadata_json": "{}",
+                    "created_at": "2026-04-22T09:00:00Z",
+                })],
+                vec![json!({
+                    "repo_id": "repo-remote",
+                    "repo_root": "/remote",
+                    "active_branch": "main",
+                    "head_commit_sha": "remote-head",
+                    "head_tree_sha": "remote-tree",
+                    "parser_version": "1",
+                    "extractor_version": "1",
+                    "scope_exclusions_fingerprint": "",
+                    "last_sync_started_at": "2026-04-22T09:00:00Z",
+                    "last_sync_completed_at": "2026-04-22T09:05:00Z",
+                    "last_sync_status": "completed",
+                    "last_sync_reason": "",
+                })],
+                vec![json!({
+                    "repo_id": "repo-local",
+                    "repo_root": "/local",
+                    "active_branch": "main",
+                    "head_commit_sha": "local-head",
+                    "head_tree_sha": "local-tree",
+                    "parser_version": "1",
+                    "extractor_version": "1",
+                    "scope_exclusions_fingerprint": "",
+                    "last_sync_started_at": "2026-04-22T09:00:00Z",
+                    "last_sync_completed_at": "2026-04-22T09:06:00Z",
+                    "last_sync_status": "completed",
+                    "last_sync_reason": "",
+                })],
+                local_current_file_state.clone(),
+            );
+
+        assert_eq!(repositories_rows.len(), 2);
+        assert!(
+            repositories_rows
+                .iter()
+                .any(|row| row["repo_id"] == "repo-remote")
+        );
+        assert!(
+            repositories_rows
+                .iter()
+                .any(|row| row["repo_id"] == "repo-local")
+        );
+
+        assert_eq!(repo_sync_state_rows.len(), 2);
+        assert!(
+            repo_sync_state_rows
+                .iter()
+                .any(|row| row["repo_id"] == "repo-remote")
+        );
+        assert!(
+            repo_sync_state_rows
+                .iter()
+                .any(|row| row["repo_id"] == "repo-local")
+        );
+
+        assert_eq!(current_file_state_rows, local_current_file_state);
+    }
 }

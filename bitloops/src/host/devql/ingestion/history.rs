@@ -145,7 +145,10 @@ pub(super) async fn select_recent_branch_commit_backfill_window(
 }
 
 pub(super) fn uses_local_ingest_watermarks(relational: &RelationalStorage) -> bool {
-    matches!(relational.dialect(), RelationalDialect::Sqlite)
+    matches!(
+        relational.dialect_for_role(RelationalStorageRole::SharedRelational),
+        RelationalDialect::Sqlite
+    )
 }
 
 pub(super) async fn load_commit_ingest_ledger_entry(
@@ -161,7 +164,9 @@ pub(super) async fn load_commit_ingest_ledger_entry(
         esc_pg(repo_id),
         esc_pg(commit_sha),
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await?;
     Ok(rows.first().map(|row| CommitIngestLedgerEntry {
         history_status: row
             .get("history_status")
@@ -286,7 +291,9 @@ async fn load_fully_ingested_commits(
          WHERE repo_id = '{}'",
         esc_pg(repo_id),
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await?;
     let mut out = HashSet::new();
     for row in rows {
         let Some(commit_sha) = row.get("commit_sha").and_then(Value::as_str) else {
@@ -321,7 +328,9 @@ async fn load_sync_state_value_for_repo(
         esc_pg(repo_id),
         esc_pg(key),
     );
-    let rows = relational.query_rows(&sql).await?;
+    let rows = relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await?;
     Ok(rows
         .first()
         .and_then(|row| row.get("state_value"))
@@ -338,7 +347,8 @@ async fn upsert_commit_ingest_ledger_row(
     checkpoint_id: Option<&str>,
     error_message: Option<&str>,
 ) -> Result<()> {
-    let now_sql = sql_now(relational);
+    let role = RelationalStorageRole::SharedRelational;
+    let now_sql = sql_now_for_dialect(relational.dialect_for_role(role));
     let checkpoint_id_sql = checkpoint_id
         .map(|value| format!("'{}'", esc_pg(value)))
         .unwrap_or_else(|| "NULL".to_string());
@@ -366,7 +376,7 @@ async fn upsert_commit_ingest_ledger_row(
         last_error = error_sql,
         now_sql = now_sql,
     );
-    relational.exec(&sql).await
+    relational.exec_for_role(role, &sql).await
 }
 
 fn list_commit_range(repo_root: &Path, range: &str) -> Result<Vec<String>> {

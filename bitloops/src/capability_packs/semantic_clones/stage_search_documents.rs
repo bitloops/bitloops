@@ -10,7 +10,7 @@ pub(crate) use self::persistence::{
 };
 pub(crate) use self::schema::{
     ensure_search_documents_schema, init_postgres_search_documents_schema,
-    init_sqlite_search_documents_schema,
+    init_sqlite_current_projection_search_documents_schema, init_sqlite_search_documents_schema,
 };
 pub(crate) use self::storage::{
     SearchDocumentRow, build_current_search_document_persist_sql,

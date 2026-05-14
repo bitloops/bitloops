@@ -434,7 +434,10 @@ impl<'a> CheckpointFileGateway<'a> {
             return Ok(Vec::new());
         }
         let sql = build_checkpoint_file_lookup_sql(repo_id, path, blob_sha, activity_filter, limit);
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = self
+            .relational
+            .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+            .await?;
         rows.into_iter()
             .map(checkpoint_match_from_row)
             .collect::<Result<Vec<_>>>()
@@ -451,7 +454,10 @@ impl<'a> CheckpointFileGateway<'a> {
             return Ok(Vec::new());
         }
         let sql = build_checkpoint_file_debug_sql(repo_id, scope, activity_filter, limit);
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = self
+            .relational
+            .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+            .await?;
         rows.into_iter()
             .map(checkpoint_debug_row_from_row)
             .collect()
@@ -472,7 +478,10 @@ impl<'a> CheckpointFileGateway<'a> {
             esc_pg(repo_id),
             esc_pg(checkpoint_id),
         );
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = self
+            .relational
+            .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+            .await?;
         rows.into_iter()
             .map(checkpoint_file_detail_from_row)
             .collect()
@@ -496,7 +505,10 @@ impl<'a> CheckpointFileGateway<'a> {
             activity_filter,
             limit,
         );
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = self
+            .relational
+            .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+            .await?;
         rows.into_iter()
             .map(checkpoint_copy_origin_from_row)
             .collect()
@@ -524,7 +536,10 @@ impl<'a> CheckpointFileGateway<'a> {
             esc_pg(artefact_id),
             limit,
         );
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = self
+            .relational
+            .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+            .await?;
         rows.into_iter()
             .map(checkpoint_artefact_copy_lineage_from_row)
             .collect()
@@ -571,7 +586,10 @@ impl<'a> CheckpointFileGateway<'a> {
         else {
             return Ok(Vec::new());
         };
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = self
+            .relational
+            .query_rows_for_role(RelationalStorageRole::SharedRelational, &sql)
+            .await?;
         checkpoint_selection_matches_from_rows(rows)
     }
 }

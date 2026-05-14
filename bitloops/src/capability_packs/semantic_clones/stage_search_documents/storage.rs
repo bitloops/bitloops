@@ -113,6 +113,43 @@ USING GIN (searchable_text gin_trgm_ops);
 "#
 }
 
+pub(crate) fn search_documents_postgres_shared_schema_sql() -> &'static str {
+    r#"
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE TABLE IF NOT EXISTS symbol_search_documents (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    symbol_id TEXT,
+    signature_text TEXT,
+    summary_text TEXT,
+    body_text TEXT NOT NULL,
+    searchable_text TEXT NOT NULL,
+    generated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS symbol_search_documents_repo_blob_idx
+ON symbol_search_documents (repo_id, blob_sha);
+
+CREATE INDEX IF NOT EXISTS symbol_search_documents_repo_path_idx
+ON symbol_search_documents (repo_id, path);
+
+CREATE INDEX IF NOT EXISTS symbol_search_documents_tsv_idx
+ON symbol_search_documents
+USING GIN ((
+    setweight(to_tsvector('simple', COALESCE(signature_text, '')), 'A') ||
+    setweight(to_tsvector('simple', COALESCE(summary_text, '')), 'B') ||
+    setweight(to_tsvector('simple', COALESCE(body_text, '')), 'C')
+));
+
+CREATE INDEX IF NOT EXISTS symbol_search_documents_searchable_trgm_idx
+ON symbol_search_documents
+USING GIN (searchable_text gin_trgm_ops);
+"#
+}
+
 pub(crate) fn search_documents_sqlite_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS symbol_search_documents (
@@ -147,6 +184,78 @@ CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search_documents_fts USING fts5(
     tokenize = 'unicode61'
 );
 
+CREATE TABLE IF NOT EXISTS symbol_search_documents_current (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    content_id TEXT NOT NULL,
+    symbol_id TEXT,
+    signature_text TEXT,
+    summary_text TEXT,
+    body_text TEXT NOT NULL,
+    searchable_text TEXT NOT NULL,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_search_documents_current_repo_path_idx
+ON symbol_search_documents_current (repo_id, path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS symbol_search_documents_current_repo_artefact_idx
+ON symbol_search_documents_current (repo_id, artefact_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search_documents_current_fts USING fts5(
+    artefact_id UNINDEXED,
+    repo_id UNINDEXED,
+    content_id UNINDEXED,
+    path UNINDEXED,
+    symbol_id UNINDEXED,
+    signature_text,
+    summary_text,
+    body_text,
+    searchable_text,
+    tokenize = 'unicode61'
+);
+"#
+}
+
+pub(crate) fn search_documents_sqlite_shared_schema_sql() -> &'static str {
+    r#"
+CREATE TABLE IF NOT EXISTS symbol_search_documents (
+    artefact_id TEXT PRIMARY KEY,
+    repo_id TEXT NOT NULL,
+    blob_sha TEXT NOT NULL,
+    path TEXT NOT NULL,
+    symbol_id TEXT,
+    signature_text TEXT,
+    summary_text TEXT,
+    body_text TEXT NOT NULL,
+    searchable_text TEXT NOT NULL,
+    generated_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS symbol_search_documents_repo_blob_idx
+ON symbol_search_documents (repo_id, blob_sha);
+
+CREATE INDEX IF NOT EXISTS symbol_search_documents_repo_path_idx
+ON symbol_search_documents (repo_id, path);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search_documents_fts USING fts5(
+    artefact_id UNINDEXED,
+    repo_id UNINDEXED,
+    blob_sha UNINDEXED,
+    path UNINDEXED,
+    symbol_id UNINDEXED,
+    signature_text,
+    summary_text,
+    body_text,
+    searchable_text,
+    tokenize = 'unicode61'
+);
+"#
+}
+
+pub(crate) fn search_documents_sqlite_current_projection_schema_sql() -> &'static str {
+    r#"
 CREATE TABLE IF NOT EXISTS symbol_search_documents_current (
     artefact_id TEXT PRIMARY KEY,
     repo_id TEXT NOT NULL,
@@ -354,5 +463,39 @@ fn current_timestamp_sql(dialect: RelationalDialect) -> &'static str {
     match dialect {
         RelationalDialect::Postgres => "now()",
         RelationalDialect::Sqlite => "CURRENT_TIMESTAMP",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        search_documents_postgres_shared_schema_sql,
+        search_documents_sqlite_current_projection_schema_sql,
+        search_documents_sqlite_shared_schema_sql,
+    };
+
+    #[test]
+    fn search_document_split_schemas_follow_current_vs_shared_boundary() {
+        let postgres = search_documents_postgres_shared_schema_sql();
+        assert!(postgres.contains("CREATE TABLE IF NOT EXISTS symbol_search_documents ("));
+        assert!(!postgres.contains("symbol_search_documents_current"));
+
+        let sqlite_shared = search_documents_sqlite_shared_schema_sql();
+        assert!(sqlite_shared.contains("CREATE TABLE IF NOT EXISTS symbol_search_documents ("));
+        assert!(
+            sqlite_shared
+                .contains("CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search_documents_fts")
+        );
+        assert!(!sqlite_shared.contains("symbol_search_documents_current"));
+
+        let sqlite_current = search_documents_sqlite_current_projection_schema_sql();
+        assert!(
+            sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_search_documents_current (")
+        );
+        assert!(
+            sqlite_current
+                .contains("CREATE VIRTUAL TABLE IF NOT EXISTS symbol_search_documents_current_fts")
+        );
+        assert!(!sqlite_current.contains("CREATE TABLE IF NOT EXISTS symbol_search_documents ("));
     }
 }

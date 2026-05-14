@@ -12,6 +12,11 @@ enum PostgresSyncSchemaPolicy {
 }
 
 pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
+    if crate::host::devql::types::sqlite_path_uses_remote_shared_relational_authority(sqlite_path) {
+        warn_on_legacy_shared_sqlite_tables(sqlite_path)?;
+        return init_sqlite_current_projection_schema(sqlite_path).await;
+    }
+
     let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.to_path_buf())
         .context("connecting SQLite pool for current-state schema migrations")?;
     sqlite
@@ -104,6 +109,112 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     Ok(())
 }
 
+const LEGACY_SHARED_SQLITE_TABLES: &[&str] = &[
+    "sync_state",
+    "commits",
+    "commit_ingest_ledger",
+    "file_state",
+    "artefact_snapshots",
+    "artefacts",
+    "artefact_edges",
+    "checkpoint_files",
+    "checkpoint_artefacts",
+    "checkpoint_artefact_lineage",
+    "symbol_semantics",
+    "symbol_features",
+    "symbol_embeddings",
+    "symbol_clone_edges",
+];
+
+fn warn_on_legacy_shared_sqlite_tables(sqlite_path: &Path) -> Result<()> {
+    if !sqlite_path.is_file() {
+        return Ok(());
+    }
+
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path.to_path_buf())
+        .context("opening SQLite current/projection database to inspect legacy shared tables")?;
+    let legacy_tables = sqlite
+        .with_connection(detect_legacy_shared_sqlite_tables)
+        .context("inspecting SQLite for legacy shared-table mirrors")?;
+    if !legacy_tables.is_empty() {
+        log::warn!(
+            "remote shared relational authority is configured, but the local SQLite file still contains legacy shared tables that are now inert: {}",
+            legacy_tables.join(", ")
+        );
+    }
+    Ok(())
+}
+
+pub(crate) async fn init_sqlite_current_projection_schema(sqlite_path: &Path) -> Result<()> {
+    let repositories_only_sql =
+        build_schema_subset_sql(sqlite_shared_schema_sql(), &["repositories"]);
+    sqlite_exec_path_allow_create(sqlite_path, &repositories_only_sql)
+        .await
+        .context("creating SQLite local repo catalog helper table")?;
+    sqlite_exec_path_allow_create(sqlite_path, sqlite_current_projection_schema_sql())
+        .await
+        .context("creating SQLite current/projection relational tables")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::host::devql::sync::schema::sync_schema_sql(),
+    )
+    .await
+    .context("creating SQLite current/projection sync tables")?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.to_path_buf())
+        .context("connecting SQLite pool for current/projection schema migrations")?;
+    let sync_tables_need_rebuild = sqlite
+        .with_connection(sync_tables_need_rebuild)
+        .context("inspecting SQLite current/projection sync table shape")?;
+    if sync_tables_need_rebuild {
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection repo_sync_state table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_project_contexts_current_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection project_contexts_current table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection current_file_state table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_content_cache_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection content cache tables")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection artefact tables")?;
+    }
+    crate::capability_packs::semantic_clones::init_sqlite_semantic_features_schema(sqlite_path)
+        .await
+        .context("creating SQLite current semantic feature tables")?;
+    crate::capability_packs::semantic_clones::init_sqlite_search_documents_schema(sqlite_path)
+        .await
+        .context("creating SQLite current search document tables")?;
+    crate::capability_packs::semantic_clones::init_sqlite_semantic_embeddings_schema(sqlite_path)
+        .await
+        .context("creating SQLite current semantic embedding tables")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_current_projection_schema_sql(),
+    )
+    .await
+    .context("creating SQLite current semantic clone tables")?;
+    Ok(())
+}
+
 fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Result<bool> {
     let columns = sqlite_table_columns(conn, "artefacts")?;
     Ok([
@@ -117,6 +228,16 @@ fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Res
     ]
     .iter()
     .any(|column| columns.iter().any(|existing| existing == column)))
+}
+
+fn detect_legacy_shared_sqlite_tables(conn: &rusqlite::Connection) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    for table in LEGACY_SHARED_SQLITE_TABLES {
+        if sqlite_table_exists(conn, table)? {
+            found.push((*table).to_string());
+        }
+    }
+    Ok(found)
 }
 
 fn sync_tables_need_rebuild(conn: &rusqlite::Connection) -> Result<bool> {
@@ -366,6 +487,20 @@ fn sqlite_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<
     Ok(columns)
 }
 
+fn sqlite_table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM sqlite_master
+            WHERE type IN ('table', 'view') AND name = ?1
+        )",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(anyhow::Error::from)
+}
+
 fn sqlite_table_pk_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<String>> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -437,12 +572,12 @@ pub(crate) async fn init_postgres_schema_for_sync_execution(
 
 async fn init_postgres_schema_with_policy(
     pg_client: &tokio_postgres::Client,
-    policy: PostgresSyncSchemaPolicy,
+    _policy: PostgresSyncSchemaPolicy,
 ) -> Result<PostgresSyncSchemaInitOutcome> {
-    let sql = postgres_schema_sql();
+    let sql = postgres_shared_schema_sql();
     postgres_exec(pg_client, sql)
         .await
-        .context("creating Postgres DevQL tables")?;
+        .context("creating Postgres shared DevQL tables")?;
     postgres_exec(
         pg_client,
         "ALTER TABLE repositories ADD COLUMN IF NOT EXISTS metadata_json TEXT;",
@@ -470,79 +605,21 @@ async fn init_postgres_schema_with_policy(
         .await
         .context("normalising Postgres DevQL edge model values")?;
 
-    postgres_exec(
-        pg_client,
-        crate::host::devql::sync::schema::sync_schema_sql(),
-    )
-    .await
-    .context("creating Postgres DevQL sync tables")?;
-
-    let sync_tables_need_rebuild = postgres_sync_tables_need_rebuild(pg_client)
-        .await
-        .context("inspecting Postgres DevQL sync table shape")?;
-    let should_rebuild_sync_tables = match policy {
-        PostgresSyncSchemaPolicy::SafeBootstrap => {
-            sync_tables_need_rebuild
-                && postgres_sync_tables_are_empty(pg_client)
-                    .await
-                    .context("checking whether Postgres sync tables are empty")?
-        }
-        PostgresSyncSchemaPolicy::SyncExecution => sync_tables_need_rebuild,
-    };
-
-    let mut outcome = PostgresSyncSchemaInitOutcome::default();
-    if should_rebuild_sync_tables {
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync repo_sync_state table")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_project_contexts_current_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync project_contexts_current table")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync current_file_state table")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_content_cache_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync content cache tables")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres current-state sync tables")?;
-        outcome.rebuilt_current_state = true;
-    }
-
     crate::capability_packs::semantic_clones::init_postgres_semantic_features_schema(pg_client)
         .await
-        .context("creating Postgres semantic feature tables")?;
+        .context("creating Postgres shared semantic feature tables")?;
     crate::capability_packs::semantic_clones::init_postgres_search_documents_schema(pg_client)
         .await
-        .context("creating Postgres search document tables")?;
+        .context("creating Postgres shared search document tables")?;
     crate::capability_packs::semantic_clones::init_postgres_semantic_embeddings_schema(pg_client)
         .await
-        .context("creating Postgres semantic embedding tables")?;
-    crate::capability_packs::semantic_clones::pipeline::init_postgres_semantic_clones_schema(
+        .context("creating Postgres shared semantic embedding tables")?;
+    postgres_exec(
         pg_client,
+        crate::capability_packs::semantic_clones::schema::semantic_clones_postgres_shared_schema_sql(),
     )
     .await
-    .context("creating Postgres semantic clone tables")?;
+    .context("creating Postgres shared semantic clone tables")?;
     let checkpoint_schema_sql = checkpoint_relational_schema_sql_postgres();
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await
@@ -553,12 +630,7 @@ async fn init_postgres_schema_with_policy(
         .await
         .context("adding confidence/linkage_status columns to test_links")?;
 
-    let workspace_revisions_sql = workspace_revisions_sql();
-    postgres_exec(pg_client, workspace_revisions_sql)
-        .await
-        .context("creating workspace_revisions table")?;
-
-    Ok(outcome)
+    Ok(PostgresSyncSchemaInitOutcome::default())
 }
 
 async fn postgres_sync_tables_need_rebuild(pg_client: &tokio_postgres::Client) -> Result<bool> {
@@ -907,6 +979,7 @@ async fn postgres_table_has_rows(pg_client: &tokio_postgres::Client, table: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::RelationalPrimaryBackend;
     use tempfile::TempDir;
 
     #[test]
@@ -973,5 +1046,110 @@ mod tests {
             .expect("count preserved current_file_state row");
 
         assert_eq!(row_count, 1);
+    }
+
+    #[tokio::test]
+    async fn init_sqlite_schema_uses_current_projection_split_when_shared_authority_is_remote() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let _relational = crate::host::devql::RelationalStorage::primary_backend_for_tests(
+            sqlite_path.clone(),
+            RelationalPrimaryBackend::Postgres,
+        );
+
+        init_sqlite_schema(&sqlite_path)
+            .await
+            .expect("initialise split SQLite current/projection schema");
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        let table_exists = |name: &str| -> bool {
+            conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type IN ('table', 'view') AND name = ?1
+                )",
+                [name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("query sqlite_master")
+                != 0
+        };
+
+        assert!(table_exists("repositories"));
+        assert!(table_exists("current_file_state"));
+        assert!(table_exists("artefacts_current"));
+        assert!(table_exists("symbol_features_current"));
+        assert!(table_exists("symbol_semantics_current"));
+        assert!(table_exists("symbol_search_documents_current"));
+        assert!(table_exists("symbol_embeddings_current"));
+        assert!(table_exists("semantic_clone_embedding_setup_state"));
+        assert!(table_exists("symbol_clone_edges_current"));
+        assert!(table_exists("workspace_revisions"));
+
+        assert!(!table_exists("commits"));
+        assert!(!table_exists("artefacts"));
+        assert!(!table_exists("symbol_features"));
+        assert!(!table_exists("symbol_semantics"));
+        assert!(!table_exists("symbol_search_documents"));
+        assert!(!table_exists("symbol_embeddings"));
+        assert!(!table_exists("semantic_embedding_setups"));
+        assert!(!table_exists("symbol_clone_edges"));
+    }
+
+    #[test]
+    fn detect_legacy_shared_sqlite_tables_reports_inert_shared_tables() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory sqlite");
+        conn.execute("CREATE TABLE sync_state(state_key TEXT)", [])
+            .expect("create sync_state");
+        conn.execute("CREATE TABLE checkpoint_files(relation_id TEXT)", [])
+            .expect("create checkpoint_files");
+
+        let detected = detect_legacy_shared_sqlite_tables(&conn)
+            .expect("detect legacy shared sqlite tables");
+
+        assert!(detected.contains(&"sync_state".to_string()));
+        assert!(detected.contains(&"checkpoint_files".to_string()));
+        assert!(!detected.contains(&"repositories".to_string()));
+    }
+
+    #[tokio::test]
+    async fn init_sqlite_schema_keeps_historical_tables_when_shared_authority_is_local() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("devql.sqlite");
+
+        init_sqlite_schema(&sqlite_path)
+            .await
+            .expect("initialise full local SQLite schema");
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        let table_exists = |name: &str| -> bool {
+            conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type IN ('table', 'view') AND name = ?1
+                )",
+                [name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("query sqlite_master")
+                != 0
+        };
+
+        assert!(table_exists("repositories"));
+        assert!(table_exists("current_file_state"));
+        assert!(table_exists("artefacts_current"));
+        assert!(table_exists("workspace_revisions"));
+
+        assert!(table_exists("commits"));
+        assert!(table_exists("file_state"));
+        assert!(table_exists("artefacts"));
+        assert!(table_exists("symbol_features"));
+        assert!(table_exists("symbol_semantics"));
+        assert!(table_exists("symbol_search_documents"));
+        assert!(table_exists("symbol_embeddings"));
+        assert!(table_exists("semantic_embedding_setups"));
+        assert!(table_exists("symbol_clone_edges"));
     }
 }

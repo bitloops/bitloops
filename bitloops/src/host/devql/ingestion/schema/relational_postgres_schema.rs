@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 pub(crate) fn postgres_schema_sql() -> &'static str {
     r#"
 CREATE TABLE IF NOT EXISTS repositories (
@@ -481,9 +483,73 @@ CREATE TABLE IF NOT EXISTS content_cache_edges (
 "#
 }
 
+pub(crate) fn postgres_shared_schema_sql() -> &'static str {
+    static SQL: OnceLock<String> = OnceLock::new();
+    SQL.get_or_init(|| {
+        build_schema_subset_sql(
+            postgres_schema_sql(),
+            &[
+                "repositories",
+                "commits",
+                "file_state",
+                "checkpoint_files",
+                "checkpoint_artefacts",
+                "checkpoint_artefact_lineage",
+                "artefacts",
+                "artefact_snapshots",
+                "artefacts_historical",
+                "artefact_edges",
+                "commit_ingest_ledger",
+            ],
+        )
+    })
+    .as_str()
+}
+
+fn build_schema_subset_sql(full_sql: &str, included_objects: &[&str]) -> String {
+    full_sql
+        .split(";\n")
+        .filter_map(|statement| {
+            let statement = statement.trim();
+            if statement.is_empty() {
+                return None;
+            }
+            let object_name = schema_statement_object_name(statement)?;
+            included_objects
+                .iter()
+                .any(|candidate| *candidate == object_name)
+                .then(|| format!("{statement};\n"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn schema_statement_object_name(statement: &str) -> Option<&str> {
+    for prefix in [
+        "CREATE TABLE IF NOT EXISTS ",
+        "CREATE VIEW IF NOT EXISTS ",
+        "CREATE OR REPLACE VIEW ",
+    ] {
+        if let Some(rest) = statement.strip_prefix(prefix) {
+            return rest.split_whitespace().next();
+        }
+    }
+    if statement.starts_with("CREATE INDEX IF NOT EXISTS ")
+        || statement.starts_with("CREATE UNIQUE INDEX IF NOT EXISTS ")
+    {
+        return statement.split_once("ON ").map(|(_, rest)| {
+            rest.split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('(')
+        });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    use super::postgres_schema_sql;
+    use super::{postgres_schema_sql, postgres_shared_schema_sql};
 
     #[test]
     fn postgres_schema_sql_uses_sync_current_state_indexes() {
@@ -503,5 +569,18 @@ mod tests {
         assert!(!sql.contains("artefacts_current_branch_fqn_idx"));
         assert!(!sql.contains("artefact_edges_current_branch_from_idx"));
         assert!(!sql.contains("artefact_edges_current_branch_to_idx"));
+    }
+
+    #[test]
+    fn postgres_shared_schema_sql_excludes_current_projection_tables() {
+        let sql = postgres_shared_schema_sql();
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS artefacts ("));
+        assert!(sql.contains("CREATE TABLE IF NOT EXISTS commit_ingest_ledger ("));
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS current_file_state ("));
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS artefacts_current ("));
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS artefact_edges_current ("));
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS repo_sync_state ("));
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS workspace_revisions ("));
+        assert!(!sql.contains("CREATE TABLE IF NOT EXISTS content_cache ("));
     }
 }

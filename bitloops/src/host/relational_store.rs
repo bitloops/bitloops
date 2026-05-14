@@ -8,8 +8,8 @@ use crate::config::{
     resolve_store_backend_config_for_repo,
 };
 use crate::host::devql::{
-    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalStorage,
-    sqlite_value_to_json,
+    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalRoleBackend,
+    RelationalStorage, RelationalStorageRole, sqlite_value_to_json,
 };
 use crate::storage::{PostgresSyncConnection, SqliteConnectionPool};
 
@@ -18,6 +18,8 @@ pub trait RelationalStore: Send + Sync {
     fn has_remote(&self) -> bool;
     fn dialect(&self) -> RelationalDialect;
     fn local_sqlite_pool(&self) -> Result<SqliteConnectionPool>;
+    fn backend_for_role(&self, role: RelationalStorageRole) -> RelationalRoleBackend;
+    fn dialect_for_role(&self, role: RelationalStorageRole) -> RelationalDialect;
 
     fn exec<'a>(
         &'a self,
@@ -36,6 +38,18 @@ pub trait RelationalStore: Send + Sync {
 
     fn query_rows<'a>(
         &'a self,
+        sql: &'a str,
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + Send + 'a>>;
+
+    fn exec_batch_transactional_for_role<'a>(
+        &'a self,
+        role: RelationalStorageRole,
+        statements: &'a [String],
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>>;
+
+    fn query_rows_for_role<'a>(
+        &'a self,
+        role: RelationalStorageRole,
         sql: &'a str,
     ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + Send + 'a>>;
 }
@@ -76,6 +90,18 @@ impl DefaultRelationalStore {
 
     pub fn sqlite_path(&self) -> &Path {
         &self.inner.local.path
+    }
+
+    pub fn backend_for_role(&self, role: RelationalStorageRole) -> RelationalRoleBackend {
+        self.inner.backend_for_role(role)
+    }
+
+    pub fn dialect_for_role(&self, role: RelationalStorageRole) -> RelationalDialect {
+        self.inner.dialect_for_role(role)
+    }
+
+    pub fn has_remote_shared_relational_authority(&self) -> bool {
+        self.inner.has_remote_shared_relational_authority()
     }
 
     pub fn open_local_for_repo_root(repo_root: &Path) -> Result<Self> {
@@ -167,6 +193,30 @@ impl DefaultRelationalStore {
                 PostgresSyncConnection::connect(dsn)?
                     .query_rows(sql)
                     .context("querying primary relational Postgres rows")
+            }
+        }
+    }
+
+    pub fn query_rows_for_role_blocking(
+        &self,
+        role: RelationalStorageRole,
+        sql: &str,
+    ) -> Result<Vec<Value>> {
+        match self.backend_for_role(role) {
+            RelationalRoleBackend::LocalSqlite => query_local_sqlite_rows_blocking(
+                self.sqlite_path(),
+                sql,
+                "querying local relational SQLite rows for explicit role",
+            ),
+            RelationalRoleBackend::Postgres => {
+                let dsn = self.inner.remote_dsn().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "remote Postgres shared relational backend is configured without a DSN"
+                    )
+                })?;
+                PostgresSyncConnection::connect(dsn)?
+                    .query_rows(sql)
+                    .context("querying shared relational Postgres rows for explicit role")
             }
         }
     }
@@ -284,6 +334,14 @@ impl RelationalStore for DefaultRelationalStore {
         })
     }
 
+    fn backend_for_role(&self, role: RelationalStorageRole) -> RelationalRoleBackend {
+        self.inner.backend_for_role(role)
+    }
+
+    fn dialect_for_role(&self, role: RelationalStorageRole) -> RelationalDialect {
+        self.inner.dialect_for_role(role)
+    }
+
     fn exec<'a>(
         &'a self,
         sql: &'a str,
@@ -316,5 +374,26 @@ impl RelationalStore for DefaultRelationalStore {
     ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + Send + 'a>>
     {
         Box::pin(async move { self.inner.query_rows(sql).await })
+    }
+
+    fn exec_batch_transactional_for_role<'a>(
+        &'a self,
+        role: RelationalStorageRole,
+        statements: &'a [String],
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.inner
+                .exec_batch_transactional_for_role(role, statements)
+                .await
+        })
+    }
+
+    fn query_rows_for_role<'a>(
+        &'a self,
+        role: RelationalStorageRole,
+        sql: &'a str,
+    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<Vec<Value>>> + Send + 'a>>
+    {
+        Box::pin(async move { self.inner.query_rows_for_role(role, sql).await })
     }
 }

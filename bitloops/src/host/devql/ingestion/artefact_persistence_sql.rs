@@ -39,6 +39,13 @@ pub(crate) fn sql_now(relational: &RelationalStorage) -> &'static str {
     }
 }
 
+pub(crate) fn sql_now_for_dialect(dialect: RelationalDialect) -> &'static str {
+    match dialect {
+        RelationalDialect::Postgres => "now()",
+        RelationalDialect::Sqlite => "datetime('now')",
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn parse_json_array_strings(value: Option<&Value>) -> Vec<String> {
     match value {

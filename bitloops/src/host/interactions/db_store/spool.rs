@@ -414,6 +414,25 @@ impl InteractionSpool for SqliteInteractionSpool {
         })
     }
 
+    fn refresh_turn_local_only(&self, turn: &InteractionTurn) -> Result<()> {
+        self.sqlite.with_connection(|conn| {
+            conn.execute_batch("BEGIN IMMEDIATE;")
+                .context("starting local-only interaction turn refresh transaction")?;
+            let result = self.upsert_local_turn(conn, turn);
+            match result {
+                Ok(()) => {
+                    conn.execute_batch("COMMIT;")
+                        .context("committing local-only interaction turn refresh transaction")?;
+                    Ok(())
+                }
+                Err(err) => {
+                    let _ = conn.execute_batch("ROLLBACK;");
+                    Err(err)
+                }
+            }
+        })
+    }
+
     fn assign_checkpoint_to_turns(
         &self,
         turn_ids: &[String],

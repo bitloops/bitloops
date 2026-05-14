@@ -9,6 +9,7 @@ use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentatio
 use crate::capability_packs::semantic_clones::runtime_config::embedding_slot_for_representation;
 use crate::config::resolve_semantic_clones_config_for_repo;
 use crate::daemon::types::InitSessionRecord;
+use crate::host::devql::RelationalStorageRole;
 use crate::host::relational_store::DefaultRelationalStore;
 
 use super::embedding_freshness::{
@@ -59,7 +60,7 @@ pub(crate) fn load_runtime_lane_progress(
     }
 
     let relational =
-        DefaultRelationalStore::open_primary_for_repo_root_preferring_bound_config(repo_root)?;
+        DefaultRelationalStore::open_local_for_repo_root_preferring_bound_config(repo_root)?;
     let embedding_freshness = load_embedding_freshness_counts(
         &relational,
         repo_id,
@@ -165,48 +166,27 @@ fn fresh_model_backed_summary_artefacts_sql(repo_id: &str) -> String {
         "SELECT DISTINCT a.artefact_id \
          FROM artefacts_current a \
          JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         JOIN symbol_features_current f \
+           ON f.repo_id = a.repo_id \
+          AND f.artefact_id = a.artefact_id \
+          AND f.content_id = a.content_id \
+         JOIN {CURRENT_SUMMARY_SEMANTICS_TABLE} s \
+           ON s.repo_id = f.repo_id \
+          AND s.artefact_id = f.artefact_id \
+          AND s.content_id = f.content_id \
          WHERE a.repo_id = '{repo_id}' \
            AND cfs.analysis_mode = 'code' \
            AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import' \
+           AND s.semantic_features_input_hash = f.semantic_features_input_hash \
            AND ( \
-                EXISTS ( \
-                    SELECT 1 \
-                    FROM symbol_features_current f \
-                    JOIN {CURRENT_SUMMARY_SEMANTICS_TABLE} s \
-                      ON s.repo_id = f.repo_id \
-                     AND s.artefact_id = f.artefact_id \
-                     AND s.content_id = f.content_id \
-                    WHERE f.repo_id = a.repo_id \
-                      AND f.artefact_id = a.artefact_id \
-                      AND f.content_id = a.content_id \
-                      AND s.semantic_features_input_hash = f.semantic_features_input_hash \
-                      AND ( \
-                           (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
-                           OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
-                      ) \
-                ) \
-                OR EXISTS ( \
-                    SELECT 1 \
-                    FROM symbol_features f \
-                    JOIN symbol_semantics s \
-                      ON s.repo_id = f.repo_id \
-                     AND s.artefact_id = f.artefact_id \
-                     AND s.blob_sha = f.blob_sha \
-                    WHERE f.repo_id = a.repo_id \
-                      AND f.artefact_id = a.artefact_id \
-                      AND f.blob_sha = a.content_id \
-                      AND s.semantic_features_input_hash = f.semantic_features_input_hash \
-                      AND ( \
-                           (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
-                           OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
-                      ) \
-                ) \
+                (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
+                OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
            )",
     )
 }
 
 fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<BTreeSet<String>> {
-    match relational.query_rows_primary_blocking(sql) {
+    match relational.query_rows_for_role_blocking(RelationalStorageRole::CurrentProjection, sql) {
         Ok(rows) => Ok(rows
             .into_iter()
             .filter_map(|row| {
@@ -389,7 +369,7 @@ code_embeddings = "local_code"
     }
 
     #[test]
-    fn query_progress_ids_uses_primary_backend_when_postgres_is_configured() {
+    fn query_progress_ids_reads_current_projection_from_local_sqlite_when_postgres_is_configured() {
         let temp = tempdir().expect("temp dir");
         let db_path = temp.path().join("relational.sqlite");
         let conn = Connection::open(&db_path).expect("create sqlite file");
@@ -406,12 +386,10 @@ code_embeddings = "local_code"
             ),
         );
 
-        let err = query_progress_ids(&relational, "SELECT artefact_id FROM progress_rows")
-            .expect_err("configured Postgres primary backend should be queried");
-
-        assert!(
-            err.to_string()
-                .contains("querying primary relational Postgres rows")
+        assert_eq!(
+            query_progress_ids(&relational, "SELECT artefact_id FROM progress_rows")
+                .expect("query local progress rows"),
+            BTreeSet::from(["artefact-1".to_string()])
         );
     }
 }

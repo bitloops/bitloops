@@ -123,7 +123,7 @@ pub(crate) fn post_commit_devql_refresh_disabled_env_still_maps_checkpoint() {
 }
 
 #[test]
-pub(crate) fn post_commit_falls_back_to_local_spool_when_interaction_repository_is_unavailable() {
+pub(crate) fn post_commit_errors_when_interaction_repository_is_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     setup_git_repo(&dir);
     init_devql_schema(dir.path());
@@ -154,21 +154,26 @@ pub(crate) fn post_commit_falls_back_to_local_spool_when_interaction_repository_
         .current_dir(dir.path())
         .output()
         .unwrap();
-    let head_sha = run_git(dir.path(), &["rev-parse", "HEAD"]).unwrap();
-
     let strategy = ManualCommitStrategy::new(dir.path());
-    strategy.post_commit().unwrap();
+    let err = strategy
+        .post_commit()
+        .expect_err("post_commit should fail when canonical interaction storage is unavailable");
 
-    let checkpoint_id = query_commit_checkpoint_id(dir.path(), &head_sha)
-        .expect("checkpoint mapping should exist after spool fallback post_commit");
+    let err_text = format!("{err:#}");
+    assert!(
+        err_text.contains("interaction spool")
+            || err_text.contains("event repository")
+            || err_text.contains("interaction"),
+        "expected interaction storage failure context, got: {err_text}"
+    );
     let turns = open_test_spool(dir.path())
         .list_turns_for_session("pc-fallback", 10)
-        .expect("list turns after spool fallback derivation");
+        .expect("list turns after failed post_commit derivation");
     assert_eq!(turns.len(), 1);
     assert_eq!(
         turns[0].checkpoint_id.as_deref(),
-        Some(checkpoint_id.as_str()),
-        "local spool should record the assigned checkpoint id when canonical interaction storage is unavailable"
+        None,
+        "local spool should remain staging-only when canonical interaction storage is unavailable"
     );
 }
 

@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use tokio_postgres::Client;
 
 use crate::capability_packs::semantic_clones::schema::{
-    semantic_clones_postgres_schema_sql, semantic_clones_sqlite_schema_sql,
+    semantic_clones_postgres_shared_schema_sql,
+    semantic_clones_sqlite_current_projection_schema_sql, semantic_clones_sqlite_schema_sql,
 };
 use crate::host::devql::{RelationalStorage, postgres_exec, sqlite_exec_path_allow_create};
 
@@ -107,16 +108,30 @@ ON target.repo_id = e.repo_id AND target.artefact_id = e.to_artefact_id"
 }
 
 async fn init_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
+    if crate::host::devql::types::sqlite_path_uses_remote_shared_relational_authority(sqlite_path) {
+        return init_sqlite_current_projection_semantic_clones_schema(sqlite_path).await;
+    }
     sqlite_exec_path_allow_create(sqlite_path, semantic_clones_sqlite_schema_sql())
         .await
         .context("creating SQLite semantic clone tables")?;
     upgrade_sqlite_semantic_clones_schema(sqlite_path).await
 }
 
+pub(crate) async fn init_sqlite_current_projection_semantic_clones_schema(
+    sqlite_path: &Path,
+) -> Result<()> {
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        semantic_clones_sqlite_current_projection_schema_sql(),
+    )
+    .await
+    .context("creating SQLite current semantic clone tables")
+}
+
 pub(crate) async fn init_postgres_semantic_clones_schema(pg_client: &Client) -> Result<()> {
-    postgres_exec(pg_client, semantic_clones_postgres_schema_sql())
+    postgres_exec(pg_client, semantic_clones_postgres_shared_schema_sql())
         .await
-        .context("creating Postgres semantic clone tables")?;
+        .context("creating Postgres shared semantic clone tables")?;
     postgres_exec(
         pg_client,
         "ALTER TABLE symbol_clone_edges DROP CONSTRAINT IF EXISTS symbol_clone_edges_pkey;",

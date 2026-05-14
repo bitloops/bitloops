@@ -11,6 +11,7 @@ pub(super) async fn ensure_repository_row(
     cfg: &DevqlConfig,
     relational: &RelationalStorage,
 ) -> Result<()> {
+    let role = RelationalStorageRole::SharedRelational;
     let metadata_json = build_repository_metadata_json(cfg)
         .context("building repository metadata profile for DevQL persistence")?;
     let sql_with_metadata = format!(
@@ -23,7 +24,7 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
         esc_pg(&default_branch_name(&cfg.repo_root)),
         esc_pg(&metadata_json),
     );
-    if let Err(err) = relational.exec(&sql_with_metadata).await {
+    if let Err(err) = relational.exec_for_role(role, &sql_with_metadata).await {
         let message = format!("{err:#}");
         let missing_metadata_column = message.contains("no column named metadata_json")
             || message.contains("column \"metadata_json\" does not exist");
@@ -40,7 +41,7 @@ ON CONFLICT (repo_id) DO UPDATE SET provider = EXCLUDED.provider, organization =
             esc_pg(&cfg.repo.name),
             esc_pg(&default_branch_name(&cfg.repo_root)),
         );
-        return relational.exec(&legacy_sql).await;
+        return relational.exec_for_role(role, &legacy_sql).await;
     }
     Ok(())
 }
@@ -478,6 +479,7 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
             &file_rows,
         )?;
 
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
     let mut sqlite_statements = Vec::with_capacity(
         3 + file_rows.len()
             + artefact_provenance.semantic_rows.len()
@@ -505,7 +507,7 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
         sqlite_statements.push(
             crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
                 row,
-                RelationalDialect::Sqlite,
+                shared_dialect,
             ),
         );
     }
@@ -513,7 +515,7 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
         sqlite_statements.push(
             crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
                 row,
-                RelationalDialect::Sqlite,
+                shared_dialect,
             ),
         );
     }
@@ -521,66 +523,16 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
         sqlite_statements.push(
             crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
                 row,
-                RelationalDialect::Sqlite,
+                shared_dialect,
             ),
         );
     }
     relational
-        .exec_batch_transactional(&sqlite_statements)
+        .exec_batch_transactional_for_role(
+            RelationalStorageRole::SharedRelational,
+            &sqlite_statements,
+        )
         .await?;
-
-    if relational.remote.is_some() {
-        let mut postgres_statements = Vec::with_capacity(
-            3 + file_rows.len()
-                + artefact_provenance.semantic_rows.len()
-                + artefact_provenance.lineage_rows.len(),
-        );
-        postgres_statements.push(
-            crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_lineage_rows_sql(
-                &cfg.repo.repo_id,
-                &cp.checkpoint_id,
-            ),
-        );
-        postgres_statements.push(
-            crate::host::devql::checkpoint_provenance::delete_checkpoint_artefact_rows_sql(
-                &cfg.repo.repo_id,
-                &cp.checkpoint_id,
-            ),
-        );
-        postgres_statements.push(
-            crate::host::devql::checkpoint_provenance::delete_checkpoint_file_rows_sql(
-                &cfg.repo.repo_id,
-                &cp.checkpoint_id,
-            ),
-        );
-        for row in &file_rows {
-            postgres_statements.push(
-                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_file_row_sql(
-                    row,
-                    RelationalDialect::Postgres,
-                ),
-            );
-        }
-        for row in &artefact_provenance.semantic_rows {
-            postgres_statements.push(
-                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_row_sql(
-                    row,
-                    RelationalDialect::Postgres,
-                ),
-            );
-        }
-        for row in &artefact_provenance.lineage_rows {
-            postgres_statements.push(
-                crate::host::devql::checkpoint_provenance::build_upsert_checkpoint_artefact_lineage_row_sql(
-                    row,
-                    RelationalDialect::Postgres,
-                ),
-            );
-        }
-        relational
-            .exec_remote_batch_transactional(&postgres_statements)
-            .await?;
-    }
 
     Ok(file_rows.len())
 }

@@ -21,7 +21,7 @@ pub(crate) use self::persistence::{
 };
 pub(crate) use self::schema::{
     ensure_semantic_features_schema, init_postgres_semantic_features_schema,
-    init_sqlite_semantic_features_schema,
+    init_sqlite_current_projection_semantic_features_schema, init_sqlite_semantic_features_schema,
 };
 pub(crate) use self::storage::{
     build_conditional_current_semantic_persist_rows_sql,

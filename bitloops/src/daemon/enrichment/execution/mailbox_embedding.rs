@@ -32,13 +32,14 @@ use crate::capability_packs::semantic_clones::{
     build_conditional_current_symbol_feature_persist_rows_sql,
     build_current_symbol_embedding_persist_sql,
     build_delete_stale_current_symbol_embedding_rows_for_path_sql,
-    build_embedding_setup_persist_sql, build_postgres_current_symbol_embedding_persist_sql,
-    build_postgres_symbol_embedding_persist_sql, build_sqlite_symbol_embedding_persist_sql,
-    build_symbol_feature_persist_rows_sql, load_current_semantic_summary_map,
+    build_embedding_setup_persist_sql, build_postgres_symbol_embedding_persist_sql,
+    build_sqlite_symbol_embedding_persist_sql, build_symbol_feature_persist_rows_sql,
+    load_current_semantic_summary_map,
 };
 use crate::config::resolve_store_backend_config_for_repo;
 use crate::host::devql::{
-    DevqlConfig, RelationalPrimaryBackend, RelationalStorage, build_capability_host, esc_pg,
+    DevqlConfig, RelationalDialect, RelationalStorage, RelationalStorageRole,
+    build_capability_host, esc_pg,
 };
 use crate::host::runtime_store::{
     CapabilityWorkplaneJobInsert, SemanticEmbeddingMailboxItemInsert, SemanticMailboxItemKind,
@@ -281,6 +282,18 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
 
     let mut embedding_statements = Vec::new();
     let mut remote_embedding_statements = Vec::new();
+    let mut remote_setup_statements = Vec::new();
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
+    let shared_writes_remote = relational.has_remote_shared_relational_authority();
+
+    let push_shared_statement =
+        |local: &mut Vec<String>, remote: &mut Vec<String>, statement: String| {
+            if shared_writes_remote {
+                remote.push(statement);
+            } else {
+                local.push(statement);
+            }
+        };
     let mut repaired_feature_projection = false;
     if batch.representation_kind == EmbeddingRepresentationKind::Code {
         let feature_hash_provider = code_feature_hash_provider
@@ -295,10 +308,11 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             })
             .await
             .context("building code embedding feature rows on blocking worker")?;
-            embedding_statements.push(build_symbol_feature_persist_rows_sql(
-                &rows,
-                relational.dialect(),
-            )?);
+            push_shared_statement(
+                &mut embedding_statements,
+                &mut remote_embedding_statements,
+                build_symbol_feature_persist_rows_sql(&rows, shared_dialect)?,
+            );
             embedding_statements.push(build_conditional_current_symbol_feature_persist_rows_sql(
                 &rows,
                 input,
@@ -309,10 +323,11 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     }
     let mut upserted_any = false;
     if !embedding_inputs.is_empty() {
-        embedding_statements.push(build_embedding_setup_persist_sql(&setup));
-        if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-            remote_embedding_statements.push(build_embedding_setup_persist_sql(&setup));
-        }
+        push_shared_statement(
+            &mut embedding_statements,
+            &mut remote_setup_statements,
+            build_embedding_setup_persist_sql(&setup),
+        );
     }
     if should_prune_stale_current_rows {
         for (path, content_id) in current_paths_by_content {
@@ -337,9 +352,6 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                 )
                 .await?,
             );
-            if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-                remote_embedding_statements.push(delete_sql);
-            }
         }
     }
     let freshness_started = Instant::now();
@@ -398,7 +410,15 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         let mut sqlite_vec_upsert_statements = Vec::new();
         let mut postgres_index_dimensions = BTreeSet::new();
         for row in rows {
-            embedding_statements.push(build_sqlite_symbol_embedding_persist_sql(&row)?);
+            let shared_sql = match shared_dialect {
+                RelationalDialect::Sqlite => build_sqlite_symbol_embedding_persist_sql(&row)?,
+                RelationalDialect::Postgres => build_postgres_symbol_embedding_persist_sql(&row)?,
+            };
+            push_shared_statement(
+                &mut embedding_statements,
+                &mut remote_embedding_statements,
+                shared_sql,
+            );
             if let Some(current_input) = current_by_artefact.get(&row.artefact_id) {
                 embedding_statements.push(build_current_symbol_embedding_persist_sql(
                     current_input,
@@ -412,20 +432,8 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
                     &row,
                 )?);
             }
-            if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-                remote_embedding_statements
-                    .push(build_postgres_symbol_embedding_persist_sql(&row)?);
+            if shared_writes_remote {
                 postgres_index_dimensions.insert(row.dimension);
-                if let Some(current_input) = current_by_artefact.get(&row.artefact_id) {
-                    remote_embedding_statements.push(
-                        build_postgres_current_symbol_embedding_persist_sql(
-                            current_input,
-                            &current_input.path,
-                            &current_input.blob_sha,
-                            &row,
-                        )?,
-                    );
-                }
             }
         }
         for dimension in sqlite_vec_dimensions {
@@ -434,14 +442,10 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             );
         }
         embedding_statements.extend(sqlite_vec_upsert_statements);
-        if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
+        if shared_writes_remote {
             for dimension in postgres_index_dimensions {
                 remote_embedding_statements.push(build_postgres_pgvector_partial_index_sql(
                     "symbol_embeddings",
-                    dimension,
-                ));
-                remote_embedding_statements.push(build_postgres_pgvector_partial_index_sql(
-                    "symbol_embeddings_current",
                     dimension,
                 ));
             }
@@ -451,19 +455,12 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     }
 
     let mut setup_statements = Vec::new();
-    let mut remote_setup_statements = Vec::new();
     let setup_started = Instant::now();
     if upserted_any {
         setup_statements.push(build_active_embedding_setup_persist_sql(
             &batch.repo_id,
             &ActiveEmbeddingRepresentationState::new(batch.representation_kind, setup.clone()),
         ));
-        if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
-            remote_setup_statements.push(build_active_embedding_setup_persist_sql(
-                &batch.repo_id,
-                &ActiveEmbeddingRepresentationState::new(batch.representation_kind, setup.clone()),
-            ));
-        }
     }
     let setup_ms = elapsed_ms(setup_started);
 

@@ -51,12 +51,7 @@ impl<'a> SemanticVectorBackend<'a> {
     }
 
     pub(crate) async fn ensure_schema(&self) -> Result<()> {
-        match self.kind {
-            SemanticVectorBackendKind::SqliteVec => {
-                ensure_sqlite_current_vec_tables_for_existing_rows(self.relational).await
-            }
-            SemanticVectorBackendKind::PostgresPgvector => Ok(()),
-        }
+        ensure_sqlite_current_vec_tables_for_existing_rows(self.relational).await
     }
 
     pub(crate) async fn sync_historical_row(
@@ -76,14 +71,7 @@ impl<'a> SemanticVectorBackend<'a> {
         path: &str,
         row: &embeddings::SymbolEmbeddingRow,
     ) -> Result<()> {
-        match self.kind {
-            SemanticVectorBackendKind::SqliteVec => {
-                sync_sqlite_current_symbol_embedding_row(self.relational, path, row).await
-            }
-            SemanticVectorBackendKind::PostgresPgvector => {
-                ensure_postgres_pgvector_indexes_for_dimension(self.relational, row.dimension).await
-            }
-        }
+        sync_sqlite_current_symbol_embedding_row(self.relational, path, row).await
     }
 
     pub(crate) async fn delete_stale_current_rows_for_path(
@@ -93,19 +81,14 @@ impl<'a> SemanticVectorBackend<'a> {
         representation_kind: embeddings::EmbeddingRepresentationKind,
         keep_artefact_ids: &[String],
     ) -> Result<()> {
-        match self.kind {
-            SemanticVectorBackendKind::SqliteVec => {
-                delete_sqlite_stale_current_rows_for_path(
-                    self.relational,
-                    repo_id,
-                    path,
-                    representation_kind,
-                    keep_artefact_ids,
-                )
-                .await
-            }
-            SemanticVectorBackendKind::PostgresPgvector => Ok(()),
-        }
+        delete_sqlite_stale_current_rows_for_path(
+            self.relational,
+            repo_id,
+            path,
+            representation_kind,
+            keep_artefact_ids,
+        )
+        .await
     }
 
     pub(crate) async fn clear_current_rows_for_paths(
@@ -113,21 +96,11 @@ impl<'a> SemanticVectorBackend<'a> {
         repo_id: &str,
         paths: &[String],
     ) -> Result<()> {
-        match self.kind {
-            SemanticVectorBackendKind::SqliteVec => {
-                clear_sqlite_current_rows_for_paths(self.relational, repo_id, paths).await
-            }
-            SemanticVectorBackendKind::PostgresPgvector => Ok(()),
-        }
+        clear_sqlite_current_rows_for_paths(self.relational, repo_id, paths).await
     }
 
     pub(crate) async fn clear_repo_rows(&self, repo_id: &str) -> Result<()> {
-        match self.kind {
-            SemanticVectorBackendKind::SqliteVec => {
-                clear_sqlite_repo_rows(self.relational, repo_id).await
-            }
-            SemanticVectorBackendKind::PostgresPgvector => Ok(()),
-        }
+        clear_sqlite_repo_rows(self.relational, repo_id).await
     }
 
     pub(crate) async fn clear_repo_rows_for_representation(
@@ -135,32 +108,16 @@ impl<'a> SemanticVectorBackend<'a> {
         repo_id: &str,
         representation_kind: embeddings::EmbeddingRepresentationKind,
     ) -> Result<()> {
-        match self.kind {
-            SemanticVectorBackendKind::SqliteVec => {
-                clear_sqlite_repo_rows_for_representation(
-                    self.relational,
-                    repo_id,
-                    representation_kind,
-                )
-                .await
-            }
-            SemanticVectorBackendKind::PostgresPgvector => Ok(()),
-        }
+        clear_sqlite_repo_rows_for_representation(self.relational, repo_id, representation_kind)
+            .await
     }
 
     pub(crate) async fn nearest_current_candidates(
         &self,
         query: SemanticVectorQuery<'_>,
     ) -> Result<Vec<SemanticNearestCandidate>> {
-        match self.kind {
-            SemanticVectorBackendKind::SqliteVec => {
-                ensure_sqlite_current_vec_table(self.relational, query.dimension).await?;
-                load_sqlite_nearest_current_candidates(self.relational, query).await
-            }
-            SemanticVectorBackendKind::PostgresPgvector => {
-                load_postgres_nearest_current_candidates(self.relational, query).await
-            }
-        }
+        ensure_sqlite_current_vec_table(self.relational, query.dimension).await?;
+        load_sqlite_nearest_current_candidates(self.relational, query).await
     }
 }
 
@@ -369,10 +326,10 @@ pub(crate) async fn ensure_postgres_pgvector_indexes_for_dimension(
     if resolve_semantic_vector_backend(relational) != SemanticVectorBackendKind::PostgresPgvector {
         return Ok(());
     }
-    let statements = vec![
-        build_postgres_pgvector_partial_index_sql("symbol_embeddings", dimension),
-        build_postgres_pgvector_partial_index_sql("symbol_embeddings_current", dimension),
-    ];
+    let statements = vec![build_postgres_pgvector_partial_index_sql(
+        "symbol_embeddings",
+        dimension,
+    )];
     relational
         .exec_remote_batch_transactional(&statements)
         .await
@@ -715,6 +672,58 @@ mod tests {
             SemanticVectorBackend::resolve(&postgres).kind(),
             SemanticVectorBackendKind::PostgresPgvector
         );
+    }
+
+    #[tokio::test]
+    async fn postgres_primary_still_routes_current_vector_helpers_to_local_sqlite() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp.path().join("semantic.sqlite");
+        crate::host::devql::sqlite_exec_path_allow_create(
+            &sqlite_path,
+            "CREATE TABLE symbol_embeddings_current (
+                artefact_id TEXT NOT NULL,
+                repo_id TEXT NOT NULL,
+                representation_kind TEXT NOT NULL,
+                setup_fingerprint TEXT NOT NULL,
+                dimension INTEGER NOT NULL,
+                embedding TEXT NOT NULL,
+                path TEXT NOT NULL
+            );",
+        )
+        .await
+        .expect("create sqlite current embedding schema");
+        let relational = RelationalStorage::primary_backend_for_tests(
+            sqlite_path.clone(),
+            RelationalPrimaryBackend::Postgres,
+        );
+        let backend = SemanticVectorBackend::resolve(&relational);
+        let row = embeddings::SymbolEmbeddingRow {
+            artefact_id: "artefact-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            blob_sha: "blob-1".to_string(),
+            representation_kind: embeddings::EmbeddingRepresentationKind::Identity,
+            provider: "provider-a".to_string(),
+            model: "model-a".to_string(),
+            dimension: 3,
+            setup_fingerprint: "provider=provider-a|model=model-a|dimension=3".to_string(),
+            embedding_input_hash: "hash-1".to_string(),
+            embedding: vec![0.1, 0.2, 0.3],
+        };
+
+        backend
+            .sync_current_row("src/a.ts", &row)
+            .await
+            .expect("sync current sqlite vec row");
+
+        let rows = relational
+            .query_rows(
+                "SELECT artefact_id, path FROM semantic_embedding_current_vec_dim_3 ORDER BY artefact_id",
+            )
+            .await
+            .expect("query local sqlite vec helper rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["artefact_id"], "artefact-1");
+        assert_eq!(rows[0]["path"], "src/a.ts");
     }
 
     #[tokio::test]

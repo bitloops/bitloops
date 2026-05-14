@@ -4,7 +4,9 @@ use crate::config::{StoreBackendConfig, resolve_store_backend_config_for_repo};
 use crate::devql_transport::{index_repo_path_registry, load_repo_path_registry};
 use crate::graphql::loaders::LoaderMetrics;
 use crate::graphql::scope::SelectedRepository;
-use crate::graphql::types::{HealthBackendStatus, HealthStatus, Repository};
+use crate::graphql::types::{
+    HealthBackendStatus, HealthStatus, Repository, StorageAuthorityStatus,
+};
 use crate::host::devql::{
     DevqlConfig, RepoIdentity, build_capability_host, deterministic_uuid, resolve_repo_identity,
 };
@@ -158,6 +160,20 @@ impl DevqlGraphqlContext {
 
     pub(crate) async fn health_status(&self) -> HealthStatus {
         let health = self.db.health_check().await;
+        let storage_authorities = self
+            .backend_config
+            .as_ref()
+            .map(|cfg| {
+                crate::host::db_status::collect_storage_authority_rows(
+                    &self.config_root,
+                    &self.repo_root,
+                    cfg,
+                )
+                .into_iter()
+                .map(|row| StorageAuthorityStatus::new(row.family, row.authority, row.backend))
+                .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let blob = if let Some(store) = self.blob_store.as_ref() {
             let store = Arc::clone(store);
             let backend = self.blob_backend.clone();
@@ -187,6 +203,7 @@ impl DevqlGraphqlContext {
             relational: map_backend_health(self.relational_backend_name(), health.relational),
             events: map_backend_health(self.events_backend_name(), health.events),
             blob,
+            storage_authorities,
         }
     }
 
@@ -438,4 +455,71 @@ fn matches_default_repository_selector(
     repository.repo_id() == requested_name
         || repository.identity() == requested_name
         || repository.name() == requested_name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DevqlGraphqlContext;
+    use crate::api::DashboardDbPools;
+    use std::fs;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn health_status_exposes_storage_authorities_by_data_family() {
+        let temp = tempdir().expect("temp dir");
+        let config_root = temp.path().join("daemon");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&config_root).expect("create config root");
+        fs::create_dir_all(&repo_root).expect("create repo root");
+        fs::write(
+            config_root.join("config.toml"),
+            r#"
+[stores.relational]
+postgres_dsn = "postgres://bitloops:secret@postgres.internal:5432/bitloops"
+
+[stores.events]
+clickhouse_url = "http://clickhouse.internal:8123"
+clickhouse_database = "analytics"
+
+[stores.blob]
+s3_bucket = "bitloops-shared"
+s3_region = "eu-central-1"
+"#,
+        )
+        .expect("write daemon config");
+
+        let ctx = DevqlGraphqlContext::for_global_request(
+            config_root,
+            repo_root,
+            None,
+            DashboardDbPools::default(),
+        );
+
+        let health = ctx.health_status().await;
+
+        assert_eq!(health.storage_authorities.len(), 6);
+        let shared_relational = health
+            .storage_authorities
+            .iter()
+            .find(|row| row.family == "relational shared")
+            .expect("shared relational authority");
+        assert_eq!(shared_relational.authority, "shared");
+        assert_eq!(shared_relational.backend, "postgres");
+
+        let current_projection = health
+            .storage_authorities
+            .iter()
+            .find(|row| row.family == "relational current")
+            .expect("current projection authority");
+        assert_eq!(current_projection.authority, "workspace-local");
+        assert_eq!(current_projection.backend, "sqlite");
+
+        let project_blobs = health
+            .storage_authorities
+            .iter()
+            .find(|row| row.family == "blob project/knowledge")
+            .expect("project blob authority");
+        assert_eq!(project_blobs.authority, "shared");
+        assert_eq!(project_blobs.backend, "s3");
+    }
 }

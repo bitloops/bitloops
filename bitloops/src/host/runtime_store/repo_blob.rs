@@ -10,8 +10,11 @@ impl RepoSqliteRuntimeStore {
     pub(crate) fn open_repo_blob_store(&self) -> Result<crate::storage::blob::ResolvedBlobStore> {
         let cfg = resolve_bound_store_backend_config_for_repo(&self.repo_root)
             .context("resolving backend config for repo runtime metadata")?;
-        crate::storage::blob::create_blob_store_with_backend_for_repo(&cfg.blobs, &self.repo_root)
-            .context("initialising blob storage for repo runtime metadata")
+        crate::storage::blob::create_runtime_blob_store_with_backend_for_repo(
+            &cfg.blobs,
+            &self.repo_root,
+        )
+        .context("initialising runtime-local blob storage for repo runtime metadata")
     }
 
     pub(crate) fn write_runtime_blob(

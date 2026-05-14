@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use crate::config::StoreBackendConfig;
 use crate::host::capability_host::gateways::{BlobPayloadGateway, BlobPayloadRef};
-use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_repo};
+use crate::storage::blob::{BlobStore, create_project_blob_store_with_backend_for_repo};
 
 use super::models::KnowledgePayloadRef;
 
@@ -16,8 +16,8 @@ impl BlobKnowledgePayloadStore {
         repo_root: &std::path::Path,
         cfg: &StoreBackendConfig,
     ) -> Result<Self> {
-        let resolved = create_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
-            .context("initialising knowledge payload blob store")?;
+        let resolved = create_project_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
+            .context("initialising project/knowledge payload blob store")?;
         Ok(Self {
             store: resolved.store,
             backend: resolved.backend.to_string(),
@@ -126,5 +126,49 @@ mod tests {
                 .payload_exists(&payload.storage_path)
                 .expect("exists after delete")
         );
+    }
+
+    #[test]
+    fn blob_payload_store_uses_configured_remote_backend_when_present() {
+        let temp = TempDir::new().expect("temp dir");
+        let repo_root = temp.path().join("repo");
+        fs::create_dir_all(&repo_root).expect("repo root");
+        let backends = StoreBackendConfig {
+            relational: RelationalBackendConfig {
+                sqlite_path: Some(
+                    temp.path()
+                        .join("relational.db")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                postgres_dsn: None,
+            },
+            events: EventsBackendConfig {
+                duckdb_path: Some(
+                    temp.path()
+                        .join("events.duckdb")
+                        .to_string_lossy()
+                        .to_string(),
+                ),
+                clickhouse_url: None,
+                clickhouse_user: None,
+                clickhouse_password: None,
+                clickhouse_database: None,
+            },
+            blobs: BlobStorageConfig {
+                local_path: Some(temp.path().join("blobs").to_string_lossy().to_string()),
+                s3_bucket: Some("knowledge-bucket".to_string()),
+                s3_region: None,
+                s3_access_key_id: None,
+                s3_secret_access_key: None,
+                gcs_bucket: None,
+                gcs_credentials_path: None,
+            },
+        };
+
+        let store =
+            BlobKnowledgePayloadStore::from_backend_config(&repo_root, &backends).expect("store");
+
+        assert_eq!(store.backend, "s3");
     }
 }

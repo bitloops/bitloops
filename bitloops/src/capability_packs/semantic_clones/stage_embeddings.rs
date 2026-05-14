@@ -21,8 +21,9 @@ pub(crate) use self::persistence::{
     persist_active_embedding_setup,
 };
 pub(crate) use self::schema::{
-    init_postgres_semantic_embeddings_schema, init_sqlite_semantic_embeddings_schema,
-    semantic_embeddings_sqlite_schema_sql,
+    init_postgres_semantic_embeddings_schema,
+    init_sqlite_current_projection_semantic_embeddings_schema,
+    init_sqlite_semantic_embeddings_schema, semantic_embeddings_sqlite_schema_sql,
 };
 pub(crate) use self::sql::{
     build_active_embedding_setup_persist_sql, build_current_symbol_embedding_persist_sql,

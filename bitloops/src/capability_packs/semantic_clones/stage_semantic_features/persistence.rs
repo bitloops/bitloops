@@ -22,7 +22,56 @@ use crate::capability_packs::semantic_clones::{
     ensure_search_documents_schema, persist_current_search_document_row,
     persist_search_document_row,
 };
-use crate::host::devql::RelationalStorage;
+use crate::host::devql::{RelationalDialect, RelationalStorage, RelationalStorageRole};
+
+fn current_relational_dialect() -> RelationalDialect {
+    RelationalDialect::Sqlite
+}
+
+fn shared_relational_dialect(relational: &RelationalStorage) -> RelationalDialect {
+    relational.dialect_for_role(RelationalStorageRole::SharedRelational)
+}
+
+async fn exec_current_sql(relational: &RelationalStorage, sql: &str) -> Result<()> {
+    relational.exec_serialized(sql).await
+}
+
+async fn exec_current_batch_transactional(
+    relational: &RelationalStorage,
+    statements: &[String],
+) -> Result<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    relational
+        .exec_serialized_batch_transactional(statements)
+        .await
+}
+
+async fn exec_shared_sql(relational: &RelationalStorage, sql: &str) -> Result<()> {
+    exec_shared_batch_transactional(relational, &[sql.to_string()]).await
+}
+
+async fn exec_shared_batch_transactional(
+    relational: &RelationalStorage,
+    statements: &[String],
+) -> Result<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    relational
+        .exec_batch_transactional_for_role(RelationalStorageRole::SharedRelational, statements)
+        .await
+}
+
+async fn query_shared_rows(
+    relational: &RelationalStorage,
+    sql: &str,
+) -> Result<Vec<serde_json::Value>> {
+    relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, sql)
+        .await
+}
 
 pub(crate) async fn upsert_semantic_feature_rows(
     relational: &RelationalStorage,
@@ -154,12 +203,14 @@ pub(crate) async fn clear_current_semantic_feature_rows_for_path(
     path: &str,
 ) -> Result<()> {
     ensure_semantic_features_schema(relational).await?;
-    relational
-        .exec_serialized_batch_transactional(&[
+    exec_current_batch_transactional(
+        relational,
+        &[
             build_delete_current_symbol_features_sql(repo_id, path),
             build_delete_current_symbol_semantics_sql(repo_id, path),
-        ])
-        .await
+        ],
+    )
+    .await
 }
 
 pub(crate) async fn clear_current_semantic_feature_rows_for_paths(
@@ -178,18 +229,15 @@ pub(crate) async fn clear_current_semantic_feature_rows_for_paths(
     if let Some(sql) = build_delete_current_symbol_semantics_for_paths_sql(repo_id, paths) {
         statements.push(sql);
     }
-    relational
-        .exec_serialized_batch_transactional(&statements)
-        .await
+    exec_current_batch_transactional(relational, &statements).await
 }
 
 async fn load_semantic_index_state(
     relational: &RelationalStorage,
     artefact_id: &str,
 ) -> Result<semantic::SemanticFeatureIndexState> {
-    let rows = relational
-        .query_rows(&build_semantic_get_index_state_sql(artefact_id))
-        .await?;
+    let rows =
+        query_shared_rows(relational, &build_semantic_get_index_state_sql(artefact_id)).await?;
     Ok(parse_semantic_index_state_rows(&rows))
 }
 
@@ -197,36 +245,33 @@ async fn persist_semantic_feature_rows(
     relational: &RelationalStorage,
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
-    relational
-        .exec_serialized(&build_semantic_persist_rows_sql(
-            rows,
-            relational.dialect(),
-        )?)
-        .await
+    exec_shared_sql(
+        relational,
+        &build_semantic_persist_rows_sql(rows, shared_relational_dialect(relational))?,
+    )
+    .await
 }
 
 async fn persist_symbol_feature_rows(
     relational: &RelationalStorage,
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
-    relational
-        .exec_serialized(&build_symbol_feature_persist_rows_sql(
-            rows,
-            relational.dialect(),
-        )?)
-        .await
+    exec_shared_sql(
+        relational,
+        &build_symbol_feature_persist_rows_sql(rows, shared_relational_dialect(relational))?,
+    )
+    .await
 }
 
 async fn clear_current_summary_rows_for_artefact(
     relational: &RelationalStorage,
     input: &semantic::SemanticFeatureInput,
 ) -> Result<()> {
-    relational
-        .exec_serialized(&build_delete_current_symbol_semantics_for_artefact_sql(
-            &input.repo_id,
-            &input.artefact_id,
-        ))
-        .await?;
+    exec_current_sql(
+        relational,
+        &build_delete_current_symbol_semantics_for_artefact_sql(&input.repo_id, &input.artefact_id),
+    )
+    .await?;
     clear_current_search_document_rows_for_artefact(relational, &input.repo_id, &input.artefact_id)
         .await
 }
@@ -242,7 +287,7 @@ pub(crate) async fn repair_current_semantic_feature_rows_from_historical(
             &build_repair_current_semantic_projection_from_historical_sql(
                 repo_id,
                 artefact_ids,
-                relational.dialect(),
+                current_relational_dialect(),
             ),
         )
         .await
@@ -268,7 +313,7 @@ pub(super) async fn persist_existing_semantic_feature_rows_to_current_for_matchi
             &build_conditional_current_semantic_persist_existing_rows_sql(
                 input,
                 semantic_features_input_hash,
-                relational.dialect(),
+                current_relational_dialect(),
             )?,
         )
         .await
@@ -293,7 +338,7 @@ pub(super) async fn persist_current_semantic_feature_rows_for_matching_input(
         .exec_serialized(&build_conditional_current_semantic_persist_rows_sql(
             rows,
             input,
-            relational.dialect(),
+            current_relational_dialect(),
         )?)
         .await
     {
@@ -317,7 +362,7 @@ pub(super) async fn persist_current_symbol_feature_rows_for_matching_input(
         .exec_serialized(&build_conditional_current_symbol_feature_persist_rows_sql(
             rows,
             input,
-            relational.dialect(),
+            current_relational_dialect(),
         )?)
         .await
     {
@@ -340,15 +385,17 @@ async fn persist_current_semantic_feature_rows(
     content_id: &str,
     rows: &semantic::SemanticFeatureRows,
 ) -> Result<()> {
-    relational
-        .exec_serialized(&build_current_semantic_persist_rows_sql(
+    exec_current_sql(
+        relational,
+        &build_current_semantic_persist_rows_sql(
             rows,
             symbol_id,
             path,
             content_id,
-            relational.dialect(),
-        )?)
-        .await
+            current_relational_dialect(),
+        )?,
+    )
+    .await
 }
 
 async fn persist_current_symbol_feature_rows(
@@ -358,15 +405,17 @@ async fn persist_current_symbol_feature_rows(
     content_id: &str,
     rows: &impl semantic::HashedFeatureRows,
 ) -> Result<()> {
-    relational
-        .exec_serialized(&build_current_symbol_feature_persist_rows_sql(
+    exec_current_sql(
+        relational,
+        &build_current_symbol_feature_persist_rows_sql(
             rows,
             symbol_id,
             path,
             content_id,
-            relational.dialect(),
-        )?)
-        .await
+            current_relational_dialect(),
+        )?,
+    )
+    .await
 }
 
 fn missing_current_projection_schema_error(message: &str) -> bool {

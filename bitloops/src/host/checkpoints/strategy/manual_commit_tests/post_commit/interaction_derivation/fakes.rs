@@ -243,6 +243,18 @@ impl InteractionSpool for FakeInteractionSpool {
         Ok(())
     }
 
+    fn refresh_turn_local_only(&self, turn: &InteractionTurn) -> Result<()> {
+        self.operations
+            .lock()
+            .expect("lock spool operations")
+            .push("spool.refresh_turn_local_only");
+        self.turns
+            .lock()
+            .expect("lock spool turns")
+            .insert(turn.turn_id.clone(), turn.clone());
+        Ok(())
+    }
+
     fn record_event(&self, _event: &InteractionEvent) -> Result<()> {
         Ok(())
     }

@@ -25,8 +25,30 @@ impl HealthBackendStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub struct StorageAuthorityStatus {
+    pub family: String,
+    pub authority: String,
+    pub backend: String,
+}
+
+impl StorageAuthorityStatus {
+    pub fn new(
+        family: impl Into<String>,
+        authority: impl Into<String>,
+        backend: impl Into<String>,
+    ) -> Self {
+        Self {
+            family: family.into(),
+            authority: authority.into(),
+            backend: backend.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
 pub struct HealthStatus {
     pub relational: HealthBackendStatus,
     pub events: HealthBackendStatus,
     pub blob: HealthBackendStatus,
+    pub storage_authorities: Vec<StorageAuthorityStatus>,
 }

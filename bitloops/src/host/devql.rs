@@ -58,7 +58,7 @@ mod sqlite_schema_once;
 mod sqlite_write_actor;
 #[path = "devql/sync/mod.rs"]
 pub(crate) mod sync;
-mod types;
+pub(crate) mod types;
 
 pub(crate) use self::analytics::{
     AnalyticsRepoScope, execute_analytics_sql, format_analytics_sql_result_table,
@@ -123,7 +123,8 @@ pub use self::query_dsl_compiler::compile_devql_query_to_graphql;
 pub(crate) use self::sqlite_schema_once::ensure_sqlite_schema_once;
 pub use self::sync::types::SyncMode;
 pub use self::types::{
-    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalStorage, RepoIdentity,
+    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalRoleBackend,
+    RelationalStorage, RelationalStorageRole, RepoIdentity,
 };
 pub(crate) use identity::deterministic_uuid;
 pub mod watch;

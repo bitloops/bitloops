@@ -26,7 +26,7 @@ use crate::graphql::types::{
 };
 use crate::graphql::{DevqlGraphqlContext, ResolverScope, backend_error, bad_user_input_error};
 use crate::host::devql::artefact_sql::build_filtered_artefacts_cte_sql;
-use crate::host::devql::{RelationalStorage, esc_pg, sql_string_list_pg};
+use crate::host::devql::{RelationalStorage, RelationalStorageRole, esc_pg, sql_string_list_pg};
 use crate::host::inference::EmbeddingInputType;
 use crate::vector_search::{VectorSearchMode, normalized_cosine_similarity};
 
@@ -293,23 +293,26 @@ async fn load_primary_active_embedding_setup(
     >,
 > {
     let rows = relational
-        .query_rows_primary(&format!(
-            "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
+        .query_rows_for_role(
+            RelationalStorageRole::CurrentProjection,
+            &format!(
+                "SELECT representation_kind, provider, model, dimension, setup_fingerprint \
              FROM semantic_clone_embedding_setup_state \
              WHERE repo_id = '{repo_id}' AND {representation_predicate}",
-            repo_id = esc_pg(repo_id),
-            representation_predicate = match representation_kind {
-                SemanticEmbeddingRepresentationKind::Code => {
-                    "representation_kind IN ('code', 'baseline', 'enriched')".to_string()
-                }
-                SemanticEmbeddingRepresentationKind::Summary => {
-                    "representation_kind IN ('summary')".to_string()
-                }
-                SemanticEmbeddingRepresentationKind::Identity => {
-                    "representation_kind IN ('identity', 'locator')".to_string()
-                }
-            },
-        ))
+                repo_id = esc_pg(repo_id),
+                representation_predicate = match representation_kind {
+                    SemanticEmbeddingRepresentationKind::Code => {
+                        "representation_kind IN ('code', 'baseline', 'enriched')".to_string()
+                    }
+                    SemanticEmbeddingRepresentationKind::Summary => {
+                        "representation_kind IN ('summary')".to_string()
+                    }
+                    SemanticEmbeddingRepresentationKind::Identity => {
+                        "representation_kind IN ('identity', 'locator')".to_string()
+                    }
+                },
+            ),
+        )
         .await?;
     Ok(rows.into_iter().find_map(|row| {
         let provider = row.get("provider").and_then(Value::as_str)?.to_string();
@@ -422,7 +425,9 @@ async fn load_semantic_candidates_for_artefact_ids(
         setup_fingerprint = esc_pg(&query_setup.setup_fingerprint),
         dimension = query_setup.dimension,
     );
-    let rows = relational.query_rows_primary(&sql).await?;
+    let rows = relational
+        .query_rows_for_role(RelationalStorageRole::CurrentProjection, &sql)
+        .await?;
     rows.into_iter().map(candidate_from_row).collect()
 }
 

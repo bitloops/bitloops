@@ -6,15 +6,60 @@ use serde_json::Value;
 use crate::capability_packs::semantic_clones::RepoEmbeddingSyncAction;
 use crate::capability_packs::semantic_clones::embeddings;
 use crate::capability_packs::semantic_clones::features as semantic;
-use crate::host::devql::RelationalStorage;
+use crate::host::devql::{RelationalStorage, RelationalStorageRole};
 
 use super::ensure_semantic_embeddings_schema;
 use super::sql::{
-    build_active_embedding_setup_lookup_sql, build_current_repo_embedding_states_sql,
-    build_current_repo_semantic_clone_coverage_sql, build_current_semantic_summary_lookup_sql,
+    build_active_embedding_setup_lookup_sql, build_current_repo_semantic_clone_coverage_sql,
     build_semantic_summary_lookup_sql, build_symbol_embedding_index_state_sql,
-    build_symbol_embedding_index_states_sql,
+    build_symbol_embedding_index_states_sql, representation_kind_sql_predicate,
 };
+
+async fn query_current_rows(relational: &RelationalStorage, sql: &str) -> Result<Vec<Value>> {
+    relational
+        .query_rows_for_role(RelationalStorageRole::CurrentProjection, sql)
+        .await
+}
+
+async fn query_shared_rows(relational: &RelationalStorage, sql: &str) -> Result<Vec<Value>> {
+    relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, sql)
+        .await
+}
+
+fn build_current_only_repo_embedding_states_sql(
+    repo_id: &str,
+    representation_kind: Option<embeddings::EmbeddingRepresentationKind>,
+) -> String {
+    let representation_filter = representation_kind
+        .map(|kind| {
+            format!(
+                "AND {}",
+                representation_kind_sql_predicate("e.representation_kind", kind)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "SELECT e.representation_kind AS representation_kind, \
+                e.provider AS provider, \
+                e.model AS model, \
+                e.dimension AS dimension, \
+                e.setup_fingerprint AS setup_fingerprint \
+         FROM artefacts_current a \
+         JOIN symbol_embeddings_current e \
+           ON e.repo_id = a.repo_id \
+          AND e.artefact_id = a.artefact_id \
+          AND e.content_id = a.content_id \
+         WHERE a.repo_id = '{repo_id}' {representation_filter} \
+         ORDER BY representation_kind, provider, model, dimension, setup_fingerprint",
+        repo_id = crate::host::devql::esc_pg(repo_id),
+        representation_filter = representation_filter,
+    )
+}
+
+fn build_current_local_semantic_summary_lookup_sql(artefact_ids: &[String]) -> String {
+    build_semantic_summary_lookup_sql(artefact_ids, "symbol_semantics_current")
+}
 
 pub(crate) async fn load_active_embedding_setup(
     relational: &RelationalStorage,
@@ -22,12 +67,11 @@ pub(crate) async fn load_active_embedding_setup(
     representation_kind: embeddings::EmbeddingRepresentationKind,
 ) -> Result<Option<embeddings::ActiveEmbeddingRepresentationState>> {
     ensure_semantic_embeddings_schema(relational).await?;
-    let rows = relational
-        .query_rows(&build_active_embedding_setup_lookup_sql(
-            repo_id,
-            representation_kind,
-        ))
-        .await?;
+    let rows = query_current_rows(
+        relational,
+        &build_active_embedding_setup_lookup_sql(repo_id, representation_kind),
+    )
+    .await?;
     Ok(parse_active_embedding_state_rows(&rows).into_iter().next())
 }
 
@@ -75,12 +119,11 @@ pub(crate) async fn load_current_repo_embedding_states(
     repo_id: &str,
     representation_kind: Option<embeddings::EmbeddingRepresentationKind>,
 ) -> Result<Vec<embeddings::ActiveEmbeddingRepresentationState>> {
-    let rows = relational
-        .query_rows(&build_current_repo_embedding_states_sql(
-            repo_id,
-            representation_kind,
-        ))
-        .await?;
+    let rows = query_current_rows(
+        relational,
+        &build_current_only_repo_embedding_states_sql(repo_id, representation_kind),
+    )
+    .await?;
     Ok(parse_active_embedding_state_rows(&rows))
 }
 
@@ -90,14 +133,16 @@ pub(crate) async fn load_symbol_embedding_index_state(
     representation_kind: embeddings::EmbeddingRepresentationKind,
     setup_fingerprint: &str,
 ) -> Result<embeddings::SymbolEmbeddingIndexState> {
-    let rows = relational
-        .query_rows(&build_symbol_embedding_index_state_sql(
+    let rows = query_shared_rows(
+        relational,
+        &build_symbol_embedding_index_state_sql(
             artefact_id,
             "symbol_embeddings",
             representation_kind,
             setup_fingerprint,
-        ))
-        .await?;
+        ),
+    )
+    .await?;
     Ok(parse_symbol_embedding_index_state_rows(&rows))
 }
 
@@ -110,14 +155,16 @@ pub(crate) async fn load_symbol_embedding_index_states(
     if artefact_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows = relational
-        .query_rows(&build_symbol_embedding_index_states_sql(
+    let rows = query_shared_rows(
+        relational,
+        &build_symbol_embedding_index_states_sql(
             artefact_ids,
             "symbol_embeddings",
             representation_kind,
             setup_fingerprint,
-        ))
-        .await?;
+        ),
+    )
+    .await?;
     Ok(parse_symbol_embedding_index_state_map_rows(&rows))
 }
 
@@ -130,14 +177,16 @@ pub(crate) async fn load_current_symbol_embedding_index_states(
     if artefact_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows = relational
-        .query_rows(&build_symbol_embedding_index_states_sql(
+    let rows = query_current_rows(
+        relational,
+        &build_symbol_embedding_index_states_sql(
             artefact_ids,
             "symbol_embeddings_current",
             representation_kind,
             setup_fingerprint,
-        ))
-        .await?;
+        ),
+    )
+    .await?;
     Ok(parse_symbol_embedding_index_state_map_rows(&rows))
 }
 
@@ -147,14 +196,16 @@ pub(crate) async fn load_current_symbol_embedding_index_state(
     representation_kind: embeddings::EmbeddingRepresentationKind,
     setup_fingerprint: &str,
 ) -> Result<embeddings::SymbolEmbeddingIndexState> {
-    let rows = relational
-        .query_rows(&build_symbol_embedding_index_state_sql(
+    let rows = query_current_rows(
+        relational,
+        &build_symbol_embedding_index_state_sql(
             artefact_id,
             "symbol_embeddings_current",
             representation_kind,
             setup_fingerprint,
-        ))
-        .await?;
+        ),
+    )
+    .await?;
     Ok(parse_symbol_embedding_index_state_rows(&rows))
 }
 
@@ -182,15 +233,43 @@ pub(crate) async fn load_current_semantic_summary_map(
         return Ok(HashMap::new());
     }
 
-    let current = load_semantic_summary_map_from_sql(
+    let current = query_current_rows(
         relational,
-        artefact_ids,
-        build_current_semantic_summary_lookup_sql(artefact_ids),
-        representation_kind,
+        &build_current_local_semantic_summary_lookup_sql(artefact_ids),
     )
-    .await;
+    .await
+    .map(|rows| {
+        let mut out = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(summary) = resolve_embedding_summary(&row) {
+                out.insert(artefact_id.to_string(), summary);
+            }
+        }
+        out
+    });
     match current {
-        Ok(summary_map) => Ok(summary_map),
+        Ok(mut summary_map) => {
+            let missing_ids = artefact_ids
+                .iter()
+                .filter(|artefact_id| !summary_map.contains_key(*artefact_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing_ids.is_empty() {
+                summary_map.extend(
+                    load_semantic_summary_map_from_table(
+                        relational,
+                        &missing_ids,
+                        "symbol_semantics",
+                        representation_kind,
+                    )
+                    .await?,
+                );
+            }
+            Ok(summary_map)
+        }
         Err(err) if missing_current_summary_projection_table(&err) => {
             load_semantic_summary_map_from_table(
                 relational,
@@ -246,13 +325,11 @@ async fn current_repo_semantic_clone_rows_are_complete(
     representation_kind: embeddings::EmbeddingRepresentationKind,
     setup: &embeddings::EmbeddingSetup,
 ) -> Result<bool> {
-    let rows = relational
-        .query_rows(&build_current_repo_semantic_clone_coverage_sql(
-            repo_id,
-            representation_kind,
-            setup,
-        ))
-        .await?;
+    let rows = query_current_rows(
+        relational,
+        &build_current_repo_semantic_clone_coverage_sql(repo_id, representation_kind, setup),
+    )
+    .await?;
     let Some(row) = rows.first() else {
         return Ok(true);
     };
@@ -296,7 +373,7 @@ async fn load_semantic_summary_map_from_sql(
         return Ok(HashMap::new());
     }
 
-    let rows = relational.query_rows(&sql).await?;
+    let rows = query_shared_rows(relational, &sql).await?;
     let mut out = HashMap::with_capacity(rows.len());
     for row in rows {
         let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
@@ -449,8 +526,13 @@ fn resolve_embedding_summary(row: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use tempfile::tempdir;
 
-    use super::missing_current_summary_projection_table;
+    use super::{load_current_semantic_summary_map, missing_current_summary_projection_table};
+    use crate::capability_packs::semantic_clones::embeddings;
+    use crate::host::devql::{
+        RelationalPrimaryBackend, RelationalStorage, sqlite_exec_path_allow_create,
+    };
 
     #[test]
     fn summary_projection_missing_postgres_relation_falls_back() {
@@ -467,5 +549,52 @@ mod tests {
         );
 
         assert!(!missing_current_summary_projection_table(&err));
+    }
+
+    #[tokio::test]
+    async fn current_summary_map_reads_local_projection_even_when_primary_is_postgres() {
+        let temp = tempdir().expect("temp dir");
+        let sqlite_path = temp.path().join("semantic.sqlite");
+        sqlite_exec_path_allow_create(
+            &sqlite_path,
+            "CREATE TABLE symbol_semantics_current (
+                artefact_id TEXT PRIMARY KEY,
+                repo_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                content_id TEXT NOT NULL,
+                symbol_id TEXT,
+                docstring_summary TEXT,
+                llm_summary TEXT,
+                template_summary TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                source_model TEXT
+            );
+            INSERT INTO symbol_semantics_current (
+                artefact_id, repo_id, path, content_id, symbol_id,
+                docstring_summary, llm_summary, template_summary, summary, source_model
+            ) VALUES (
+                'artefact-1', 'repo-1', 'src/lib.rs', 'blob-1', 'sym-1',
+                NULL, 'Current summary.', 'Current template.', 'Current summary.', 'test:model'
+            );",
+        )
+        .await
+        .expect("seed current semantic summary rows");
+        let relational = RelationalStorage::primary_backend_for_tests(
+            sqlite_path,
+            RelationalPrimaryBackend::Postgres,
+        );
+
+        let summaries = load_current_semantic_summary_map(
+            &relational,
+            &["artefact-1".to_string()],
+            embeddings::EmbeddingRepresentationKind::Summary,
+        )
+        .await
+        .expect("load current semantic summary map");
+
+        assert_eq!(
+            summaries.get("artefact-1").map(String::as_str),
+            Some("Current summary.")
+        );
     }
 }

@@ -25,6 +25,7 @@ fn execute_summary_commit_reports_substage_timings_on_success() {
             repo: test_repo_context(temp.path()),
             lease_token: "lease-1".to_string(),
             semantic_statements: Vec::new(),
+            remote_semantic_statements: Vec::new(),
             embedding_follow_ups: vec![SemanticEmbeddingMailboxItemInsert::new(
                 None,
                 EmbeddingRepresentationKind::Summary.to_string(),
@@ -67,6 +68,7 @@ fn execute_summary_commit_reports_embedding_upsert_failure_before_runtime_store_
             repo: test_repo_context(temp.path()),
             lease_token: "lease-1".to_string(),
             semantic_statements: Vec::new(),
+            remote_semantic_statements: Vec::new(),
             embedding_follow_ups: vec![SemanticEmbeddingMailboxItemInsert::new(
                 None,
                 EmbeddingRepresentationKind::Summary.to_string(),
@@ -105,6 +107,7 @@ fn execute_summary_commit_reports_delete_failure_after_runtime_store_write() {
             repo: test_repo_context(temp.path()),
             lease_token: "lease-1".to_string(),
             semantic_statements: Vec::new(),
+            remote_semantic_statements: Vec::new(),
             embedding_follow_ups: vec![SemanticEmbeddingMailboxItemInsert::new(
                 None,
                 EmbeddingRepresentationKind::Summary.to_string(),
