@@ -413,6 +413,11 @@ namespace MyApp.Services
                 && artefact.name == "System"
         }));
         assert!(artefacts.iter().any(|artefact| {
+            artefact.language_kind == LanguageKind::csharp(CSharpKind::Namespace)
+                && artefact.name == "MyApp.Services"
+                && artefact.canonical_kind.as_deref() == Some("namespace")
+        }));
+        assert!(artefacts.iter().any(|artefact| {
             artefact.language_kind == LanguageKind::csharp(CSharpKind::Constructor)
                 && artefact.name == "UserService"
                 && artefact.parent_symbol_fqn.is_some()
@@ -456,6 +461,7 @@ public record UserService
             namespace.symbol_fqn,
             "src/UserService.cs::ns::MyApp.Services"
         );
+        assert_eq!(namespace.canonical_kind.as_deref(), Some("namespace"));
 
         let record = artefacts
             .iter()
