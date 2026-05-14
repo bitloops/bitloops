@@ -1,31 +1,103 @@
-use async_graphql::{ID, SimpleObject};
+use std::path::PathBuf;
+
+use async_graphql::{ID, Object, Result, SimpleObject};
 
 use super::init_session::RuntimeInitSessionObject;
 use super::util::{summary_bootstrap_action_name, to_graphql_i32, to_graphql_i64};
 use crate::daemon::{
     CapabilityEventQueueStatus, CapabilityEventRunRecord, EmbeddingsBootstrapGateStatus,
-    InitRuntimeSnapshot, InitRuntimeWorkplaneMailboxSnapshot, InitRuntimeWorkplanePoolSnapshot,
-    InitRuntimeWorkplaneSnapshot, SummaryBootstrapResultRecord, SummaryBootstrapRunRecord,
+    InitRuntimeOverviewSnapshot, InitRuntimeWorkplaneMailboxSnapshot,
+    InitRuntimeWorkplanePoolSnapshot, InitRuntimeWorkplaneSnapshot, SummaryBootstrapResultRecord,
+    SummaryBootstrapRunRecord,
 };
-use crate::graphql::TaskQueueStatusObject;
+use crate::graphql::{TaskQueueStatusObject, graphql_error};
+use crate::host::devql::DevqlConfig;
 
-#[derive(Debug, Clone, SimpleObject)]
+#[derive(Clone)]
 pub(crate) struct RuntimeSnapshotObject {
+    repo_id: String,
+    daemon_config_root: PathBuf,
+    repo_root: PathBuf,
+    task_queue: TaskQueueStatusObject,
+    current_state_consumer: RuntimeCurrentStateConsumerObject,
+    workplane: RuntimeWorkplaneObject,
+    blocked_mailboxes: Vec<RuntimeBlockedMailboxObject>,
+    embeddings_readiness_gate: Option<RuntimeEmbeddingsReadinessGateObject>,
+    summaries_bootstrap: Option<RuntimeSummaryBootstrapRunObject>,
+}
+
+impl RuntimeSnapshotObject {
+    pub(crate) fn from_overview(cfg: DevqlConfig, value: InitRuntimeOverviewSnapshot) -> Self {
+        Self {
+            daemon_config_root: cfg.daemon_config_root,
+            repo_root: cfg.repo_root,
+            repo_id: value.repo_id,
+            task_queue: value.task_queue.into(),
+            current_state_consumer: value.current_state_consumer.into(),
+            workplane: value.workplane.into(),
+            blocked_mailboxes: value
+                .blocked_mailboxes
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            embeddings_readiness_gate: value.embeddings_readiness_gate.map(Into::into),
+            summaries_bootstrap: value.summaries_bootstrap.map(Into::into),
+        }
+    }
+}
+
+#[Object]
+impl RuntimeSnapshotObject {
     #[graphql(name = "repoId")]
-    pub repo_id: String,
+    async fn repo_id(&self) -> String {
+        self.repo_id.clone()
+    }
+
     #[graphql(name = "taskQueue")]
-    pub task_queue: TaskQueueStatusObject,
+    async fn task_queue(&self) -> TaskQueueStatusObject {
+        self.task_queue.clone()
+    }
+
     #[graphql(name = "currentStateConsumer")]
-    pub current_state_consumer: RuntimeCurrentStateConsumerObject,
-    pub workplane: RuntimeWorkplaneObject,
+    async fn current_state_consumer(&self) -> RuntimeCurrentStateConsumerObject {
+        self.current_state_consumer.clone()
+    }
+
+    async fn workplane(&self) -> RuntimeWorkplaneObject {
+        self.workplane.clone()
+    }
+
     #[graphql(name = "blockedMailboxes")]
-    pub blocked_mailboxes: Vec<RuntimeBlockedMailboxObject>,
+    async fn blocked_mailboxes(&self) -> Vec<RuntimeBlockedMailboxObject> {
+        self.blocked_mailboxes.clone()
+    }
+
     #[graphql(name = "embeddingsReadinessGate")]
-    pub embeddings_readiness_gate: Option<RuntimeEmbeddingsReadinessGateObject>,
+    async fn embeddings_readiness_gate(&self) -> Option<RuntimeEmbeddingsReadinessGateObject> {
+        self.embeddings_readiness_gate.clone()
+    }
+
     #[graphql(name = "summariesBootstrap")]
-    pub summaries_bootstrap: Option<RuntimeSummaryBootstrapRunObject>,
+    async fn summaries_bootstrap(&self) -> Option<RuntimeSummaryBootstrapRunObject> {
+        self.summaries_bootstrap.clone()
+    }
+
     #[graphql(name = "currentInitSession")]
-    pub current_init_session: Option<RuntimeInitSessionObject>,
+    async fn current_init_session(&self) -> Result<Option<RuntimeInitSessionObject>> {
+        crate::daemon::shared_init_runtime_coordinator()
+            .current_session_for_repo_roots(
+                &self.daemon_config_root,
+                &self.repo_root,
+                &self.repo_id,
+            )
+            .map(|session| session.map(Into::into))
+            .map_err(|err| {
+                graphql_error(
+                    "internal",
+                    format!("failed to load current init session: {err:#}"),
+                )
+            })
+    }
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -223,25 +295,6 @@ pub(crate) struct RuntimeSummaryBootstrapResultObject {
     #[graphql(name = "modelName")]
     pub model_name: Option<String>,
     pub message: String,
-}
-
-impl From<InitRuntimeSnapshot> for RuntimeSnapshotObject {
-    fn from(value: InitRuntimeSnapshot) -> Self {
-        Self {
-            repo_id: value.repo_id,
-            task_queue: value.task_queue.into(),
-            current_state_consumer: value.current_state_consumer.into(),
-            workplane: value.workplane.into(),
-            blocked_mailboxes: value
-                .blocked_mailboxes
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            embeddings_readiness_gate: value.embeddings_readiness_gate.map(Into::into),
-            summaries_bootstrap: value.summaries_bootstrap.map(Into::into),
-            current_init_session: value.current_init_session.map(Into::into),
-        }
-    }
 }
 
 impl From<CapabilityEventQueueStatus> for RuntimeCurrentStateConsumerObject {

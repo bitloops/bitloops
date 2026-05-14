@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
@@ -42,8 +42,8 @@ use super::tasks::{
     summary_run_from_task_ref, summary_status_is_failed, task_status_is_failed,
 };
 use super::types::{
-    InitRuntimeLaneView, InitRuntimeSessionView, InitRuntimeSnapshot, InitSessionHandle,
-    RuntimeEventRecord,
+    InitRuntimeLaneView, InitRuntimeOverviewSnapshot, InitRuntimeSessionView, InitRuntimeSnapshot,
+    InitSessionHandle, RuntimeEventRecord,
 };
 use super::workplane::{repo_blocked_mailboxes, workplane_snapshot_from_mailboxes};
 
@@ -261,7 +261,10 @@ impl InitRuntimeCoordinator {
         Ok(())
     }
 
-    pub(crate) fn snapshot_for_repo(&self, cfg: &DevqlConfig) -> Result<InitRuntimeSnapshot> {
+    pub(crate) fn overview_snapshot_for_repo(
+        &self,
+        cfg: &DevqlConfig,
+    ) -> Result<InitRuntimeOverviewSnapshot> {
         let repo_store =
             RepoSqliteRuntimeStore::open_for_roots(&cfg.daemon_config_root, &cfg.repo_root)?;
         let repo_id = cfg.repo.repo_id.clone();
@@ -290,9 +293,8 @@ impl InitRuntimeCoordinator {
                 vec![cfg.daemon_config_root.clone()],
             )?;
         let summaries_bootstrap = self.current_summary_bootstrap_run(&repo_id)?;
-        let current_session = self.current_session_view(cfg, &repo_store)?;
 
-        Ok(InitRuntimeSnapshot {
+        Ok(InitRuntimeOverviewSnapshot {
             repo_id,
             task_queue,
             current_state_consumer,
@@ -300,6 +302,42 @@ impl InitRuntimeCoordinator {
             blocked_mailboxes,
             embeddings_readiness_gate,
             summaries_bootstrap,
+        })
+    }
+
+    pub(crate) fn current_session_for_repo(
+        &self,
+        cfg: &DevqlConfig,
+    ) -> Result<Option<InitRuntimeSessionView>> {
+        self.current_session_for_repo_roots(
+            &cfg.daemon_config_root,
+            &cfg.repo_root,
+            &cfg.repo.repo_id,
+        )
+    }
+
+    pub(crate) fn current_session_for_repo_roots(
+        &self,
+        daemon_config_root: &Path,
+        repo_root: &Path,
+        repo_id: &str,
+    ) -> Result<Option<InitRuntimeSessionView>> {
+        let repo_store = RepoSqliteRuntimeStore::open_for_roots(daemon_config_root, repo_root)?;
+        self.current_session_view(repo_root, repo_id, &repo_store)
+    }
+
+    pub(crate) fn snapshot_for_repo(&self, cfg: &DevqlConfig) -> Result<InitRuntimeSnapshot> {
+        let overview = self.overview_snapshot_for_repo(cfg)?;
+        let current_session = self.current_session_for_repo(cfg)?;
+
+        Ok(InitRuntimeSnapshot {
+            repo_id: overview.repo_id,
+            task_queue: overview.task_queue,
+            current_state_consumer: overview.current_state_consumer,
+            workplane: overview.workplane,
+            blocked_mailboxes: overview.blocked_mailboxes,
+            embeddings_readiness_gate: overview.embeddings_readiness_gate,
+            summaries_bootstrap: overview.summaries_bootstrap,
             current_init_session: current_session,
         })
     }
@@ -321,7 +359,8 @@ impl InitRuntimeCoordinator {
 
     fn current_session_view(
         &self,
-        cfg: &DevqlConfig,
+        repo_root: &Path,
+        repo_id: &str,
         repo_store: &RepoSqliteRuntimeStore,
     ) -> Result<Option<InitRuntimeSessionView>> {
         let state = self
@@ -331,18 +370,14 @@ impl InitRuntimeCoordinator {
         let Some(session) = state
             .sessions
             .into_iter()
-            .filter(|session| session.repo_id == cfg.repo.repo_id)
+            .filter(|session| session.repo_id == repo_id)
             .max_by_key(|session| (session.updated_at_unix, session.submitted_at_unix))
         else {
             return Ok(None);
         };
 
-        let stats = load_session_workplane_stats(
-            &cfg.repo_root,
-            repo_store,
-            &cfg.repo.repo_id,
-            &session.init_session_id,
-        )?;
+        let stats =
+            load_session_workplane_stats(repo_root, repo_store, repo_id, &session.init_session_id)?;
         let summary_task = load_summary_task_by_id(session.summary_bootstrap_task_id.as_deref())?;
         let summary_run = summary_task.as_ref().and_then(summary_run_from_task_ref);
         let initial_sync = load_task_by_id(session.initial_sync_task_id.as_deref())?;
@@ -350,10 +385,10 @@ impl InitRuntimeCoordinator {
         let follow_up_sync = load_task_by_id(session.follow_up_sync_task_id.as_deref())?;
         let embeddings_task = load_task_by_id(session.embeddings_bootstrap_task_id.as_deref())?;
         let summary_in_memory_completed =
-            self.summary_in_memory_completed(&cfg.repo.repo_id, &session.init_session_id);
+            self.summary_in_memory_completed(repo_id, &session.init_session_id);
         let lane_progress = match load_runtime_lane_progress(
-            &cfg.repo_root,
-            &cfg.repo.repo_id,
+            repo_root,
+            repo_id,
             &session,
             &stats,
             summary_in_memory_completed,
@@ -362,7 +397,7 @@ impl InitRuntimeCoordinator {
             Err(err) => {
                 log::debug!(
                     "failed to load runtime lane progress for repo `{}`: {err:#}",
-                    cfg.repo.repo_id
+                    repo_id
                 );
                 RuntimeLaneProgressState::default()
             }
@@ -427,7 +462,7 @@ impl InitRuntimeCoordinator {
             &selected_workplane,
         );
         let warning_failures = selected_workplane.warning_failed_jobs_total;
-        let selected_lane_warning = selected_lanes_have_warning_status(&[
+        let selected_lanes = [
             (
                 session.selections.run_code_embeddings,
                 &code_embeddings_lane,
@@ -437,7 +472,9 @@ impl InitRuntimeCoordinator {
                 session.selections.run_summary_embeddings,
                 &summary_embeddings_lane,
             ),
-        ]);
+        ];
+        let selected_lane_warning = selected_lanes_have_warning_status(&selected_lanes);
+        let selected_lane_blocking_reason = selected_lane_waiting_reason(&selected_lanes);
         let has_warnings = warning_failures > 0 || selected_lane_warning;
         let semantic_bootstraps_terminal =
             semantic_bootstraps_terminal(&session, embeddings_task.as_ref(), summary_run.as_ref());
@@ -486,7 +523,7 @@ impl InitRuntimeCoordinator {
         } else if !semantic_bootstraps_terminal {
             Some("waiting_for_bootstrap".to_string())
         } else {
-            None
+            selected_lane_blocking_reason.clone()
         };
 
         let completed = !has_fatal_failure
@@ -500,7 +537,8 @@ impl InitRuntimeCoordinator {
             && selected_workplane.summary_jobs.pending == 0
             && selected_workplane.summary_jobs.running == 0
             && blocked_embedding.is_none()
-            && blocked_summary.is_none();
+            && blocked_summary.is_none()
+            && selected_lane_blocking_reason.is_none();
         let terminal_failed = has_fatal_failure && !has_remaining_work;
         let status = derive_session_status(
             has_fatal_failure,
@@ -803,6 +841,30 @@ pub(super) fn selected_lanes_have_warning_status(
     selected_lanes
         .iter()
         .any(|(selected, lane)| *selected && lane.status.eq_ignore_ascii_case("warning"))
+}
+
+pub(super) fn selected_lane_waiting_reason(
+    selected_lanes: &[(bool, &InitRuntimeLaneView)],
+) -> Option<String> {
+    selected_lanes.iter().find_map(|(selected, lane)| {
+        if !*selected {
+            return None;
+        }
+        if lane.status.eq_ignore_ascii_case("waiting") {
+            return Some(
+                lane.waiting_reason
+                    .as_deref()
+                    .filter(|reason| reason.starts_with("waiting"))
+                    .unwrap_or("waiting_for_workplane")
+                    .to_string(),
+            );
+        }
+        if lane.status.eq_ignore_ascii_case("queued") || lane.status.eq_ignore_ascii_case("running")
+        {
+            return Some("waiting_for_workplane".to_string());
+        }
+        None
+    })
 }
 
 fn task_terminal_snapshot(task: &DevqlTaskRecord) -> Option<InitSessionTaskTerminalSnapshot> {

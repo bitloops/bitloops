@@ -77,6 +77,24 @@ impl PostgresSyncConnection {
         })
     }
 
+    pub fn with_client_timeout<T>(
+        &self,
+        timeout: Duration,
+        operation: impl for<'a> FnOnce(
+            &'a mut tokio_postgres::Client,
+        ) -> Pin<Box<dyn Future<Output = Result<T>> + 'a>>,
+    ) -> Result<T> {
+        self.block_on(async {
+            let mut client = connect_postgres_client(&self.dsn).await?;
+            run_postgres_operation_with_timeout(
+                timeout,
+                operation(&mut client),
+                "Postgres client operation",
+            )
+            .await
+        })
+    }
+
     fn block_on<T>(&self, future: impl Future<Output = Result<T>>) -> Result<T> {
         with_postgres_runtime(|runtime| runtime.block_on(future))
     }
@@ -122,13 +140,44 @@ fn with_postgres_runtime<T>(operation: impl FnOnce(&Runtime) -> Result<T>) -> Re
     })
 }
 
+async fn run_postgres_operation_with_timeout<T>(
+    timeout: Duration,
+    operation: impl Future<Output = Result<T>>,
+    label: &str,
+) -> Result<T> {
+    tokio::time::timeout(timeout, operation)
+        .await
+        .with_context(|| format!("{label} timeout after {}ms", timeout.as_millis()))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn postgres_sync_connection_rejects_empty_dsn() {
         let result = PostgresSyncConnection::connect("   ");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn postgres_client_operation_timeout_errors_when_future_runs_too_long() {
+        let err = with_postgres_runtime(|runtime| {
+            runtime.block_on(run_postgres_operation_with_timeout(
+                Duration::from_millis(10),
+                async {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    Ok::<(), anyhow::Error>(())
+                },
+                "test Postgres operation",
+            ))
+        })
+        .expect_err("long-running operation should time out");
+
+        assert!(
+            err.to_string()
+                .contains("test Postgres operation timeout after 10ms")
+        );
     }
 }

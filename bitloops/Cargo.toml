@@ -184,12 +184,13 @@ terminal_size = "0.4.4"
 tokio-postgres = "0.7"
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json", "blocking"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+sqlite-vec = "0.1.9"
 semver = "1"
 tar = "0.4"
 xz2 = "0.1"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 zstd = "0.13"
-duckdb = { version = "=1.10502.0", default-features = false }
+duckdb = { version = "1", default-features = false }
 object_store = { version = "0.13.2", features = ["aws", "gcp"] }
 walkdir = "2.5"
 chrono = { version = "0.4", default-features = true, features = ["clock"] }

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use async_graphql::Result as GraphqlResult;
+use serde_json::json;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::graphql::fuzzy_artefact_name::select_fuzzy_named_artefacts;
@@ -45,6 +47,25 @@ pub(crate) async fn select_search_artefacts(
         ));
     }
 
+    if matches!(
+        mode,
+        SearchMode::Identity | SearchMode::Code | SearchMode::Summary
+    ) {
+        let representation_kind = match mode {
+            SearchMode::Identity => EmbeddingRepresentationKind::Identity,
+            SearchMode::Code => EmbeddingRepresentationKind::Code,
+            SearchMode::Summary => EmbeddingRepresentationKind::Summary,
+            SearchMode::Auto | SearchMode::Lexical => unreachable!("guarded above"),
+        };
+        let semantic_hits =
+            semantic_hits_for_mode(context, scope, trimmed_query, representation_kind).await?;
+        return Ok(SearchArtefactBundle {
+            unified: finalize_hits(&semantic_hits, SEARCH_RESULT_LIMIT),
+            breakdown: None,
+        });
+    }
+
+    let list_artefacts_started = Instant::now();
     let artefacts = context
         .list_artefacts(None, None, scope)
         .await
@@ -53,6 +74,14 @@ pub(crate) async fn select_search_artefacts(
                 "failed to resolve selected artefacts by search: {err:#}"
             ))
         })?;
+    crate::devql_timing::record_current_stage(
+        "search.select_artefacts.list_artefacts",
+        list_artefacts_started.elapsed(),
+        json!({
+            "mode": format!("{mode:?}"),
+            "artefactCount": artefacts.len(),
+        }),
+    );
     if artefacts.is_empty() {
         return Ok(SearchArtefactBundle {
             unified: Vec::new(),
@@ -81,6 +110,7 @@ pub(crate) async fn select_search_artefacts(
         .collect::<HashMap<_, _>>();
     let repo_root = context.repo_root_for_scope(scope).ok();
 
+    let open_relational_started = Instant::now();
     let relational = context
         .open_relational_storage("GraphQL hybrid artefact search")
         .await
@@ -89,6 +119,14 @@ pub(crate) async fn select_search_artefacts(
                 "failed to open relational storage for search selection: {err:#}"
             ))
         })?;
+    crate::devql_timing::record_current_stage(
+        "search.select_artefacts.open_relational_storage",
+        open_relational_started.elapsed(),
+        json!({
+            "mode": format!("{mode:?}"),
+        }),
+    );
+    let load_features_started = Instant::now();
     let features_by_id = load_search_features(&relational, &repo_id, &artefact_ids)
         .await
         .map_err(|err| {
@@ -96,6 +134,16 @@ pub(crate) async fn select_search_artefacts(
                 "failed to load lexical search features for search selection: {err:#}"
             ))
         })?;
+    crate::devql_timing::record_current_stage(
+        "search.select_artefacts.load_search_features",
+        load_features_started.elapsed(),
+        json!({
+            "mode": format!("{mode:?}"),
+            "artefactCount": artefact_ids.len(),
+            "loadedFeatureCount": features_by_id.len(),
+        }),
+    );
+    let load_documents_started = Instant::now();
     let documents_by_id = load_search_documents(&relational, &repo_id, &artefact_ids)
         .await
         .map_err(|err| {
@@ -103,6 +151,15 @@ pub(crate) async fn select_search_artefacts(
                 "failed to load full-text search documents for search selection: {err:#}"
             ))
         })?;
+    crate::devql_timing::record_current_stage(
+        "search.select_artefacts.load_search_documents",
+        load_documents_started.elapsed(),
+        json!({
+            "mode": format!("{mode:?}"),
+            "artefactCount": artefact_ids.len(),
+            "loadedDocumentCount": documents_by_id.len(),
+        }),
+    );
     let lexical_storage = LexicalSearchStorageContext {
         relational: &relational,
         repo_id: &repo_id,
@@ -111,7 +168,8 @@ pub(crate) async fn select_search_artefacts(
     };
 
     let lexical_hits = if matches!(mode, SearchMode::Auto | SearchMode::Lexical) {
-        build_lexical_hits(
+        let build_lexical_started = Instant::now();
+        let hits = build_lexical_hits(
             trimmed_query,
             &artefacts,
             &artefacts_by_id,
@@ -119,7 +177,16 @@ pub(crate) async fn select_search_artefacts(
             &documents_by_id,
             &lexical_storage,
         )
-        .await?
+        .await?;
+        crate::devql_timing::record_current_stage(
+            "search.select_artefacts.build_lexical_hits",
+            build_lexical_started.elapsed(),
+            json!({
+                "mode": format!("{mode:?}"),
+                "hitCount": hits.len(),
+            }),
+        );
+        hits
     } else {
         Vec::new()
     };

@@ -13,13 +13,23 @@ pub(crate) struct EmbeddingFreshnessState {
     pub(crate) fresh_summary_artefact_ids: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct EmbeddingFreshnessCountSelection {
+    pub(crate) code_lane: bool,
+    pub(crate) summary_embeddings: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct EmbeddingFreshnessCounts {
+    pub(crate) eligible: u64,
+    pub(crate) code_lane_completed: u64,
+    pub(crate) fresh_summary: u64,
+}
+
 impl EmbeddingFreshnessState {
+    #[cfg(test)]
     pub(crate) fn code_lane_completed_count(&self) -> u64 {
         self.code_lane_ready_artefact_ids().len() as u64
-    }
-
-    pub(crate) fn summary_embeddings_completed_count(&self) -> u64 {
-        self.fresh_summary_artefact_ids.len() as u64
     }
 
     pub(crate) fn outstanding_work_item_count(
@@ -58,6 +68,7 @@ impl EmbeddingFreshnessState {
                 .contains(artefact_id)
     }
 
+    #[cfg(test)]
     fn code_lane_ready_artefact_ids(&self) -> BTreeSet<String> {
         // The init code lane is only complete once both code and identity views are current.
         self.eligible_artefact_ids
@@ -100,6 +111,41 @@ pub(crate) fn load_embedding_freshness_state(
             relational,
             &fresh_embedding_artefacts_sql(repo_id, EmbeddingRepresentationKind::Summary),
         )?,
+    })
+}
+
+pub(crate) fn load_embedding_freshness_counts(
+    relational: &DefaultRelationalStore,
+    repo_id: &str,
+    selection: EmbeddingFreshnessCountSelection,
+) -> Result<EmbeddingFreshnessCounts> {
+    let eligible_sql = eligible_current_artefacts_sql(repo_id);
+    let fresh_code_sql = selection
+        .code_lane
+        .then(|| fresh_embedding_artefacts_sql(repo_id, EmbeddingRepresentationKind::Code));
+    let fresh_identity_sql = selection
+        .code_lane
+        .then(|| fresh_embedding_artefacts_sql(repo_id, EmbeddingRepresentationKind::Identity));
+    let fresh_summary_sql = selection
+        .summary_embeddings
+        .then(|| fresh_embedding_artefacts_sql(repo_id, EmbeddingRepresentationKind::Summary));
+
+    let code_lane_completed = match (fresh_code_sql.as_deref(), fresh_identity_sql.as_deref()) {
+        (Some(code_sql), Some(identity_sql)) => query_progress_count(
+            relational,
+            &fresh_code_and_identity_count_sql(code_sql, identity_sql),
+        )?,
+        _ => 0,
+    };
+    let fresh_summary = match fresh_summary_sql.as_deref() {
+        Some(sql) => query_progress_count(relational, &count_sql(sql))?,
+        None => 0,
+    };
+
+    Ok(EmbeddingFreshnessCounts {
+        eligible: query_progress_count(relational, &count_sql(&eligible_sql))?,
+        code_lane_completed,
+        fresh_summary,
     })
 }
 
@@ -205,6 +251,30 @@ fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<
     }
 }
 
+pub(crate) fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {
+    let sqlite = relational.local_sqlite_pool()?;
+    let count =
+        sqlite.with_connection(|conn| Ok(conn.query_row(sql, [], |row| row.get::<_, i64>(0))?));
+    match count {
+        Ok(value) => Ok(u64::try_from(value).unwrap_or_default()),
+        Err(err) if missing_progress_table(&err) => Ok(0),
+        Err(err) => Err(err),
+    }
+}
+
+fn count_sql(inner: &str) -> String {
+    format!("SELECT COUNT(*) AS total FROM ({inner}) progress_rows")
+}
+
+fn fresh_code_and_identity_count_sql(fresh_code_sql: &str, fresh_identity_sql: &str) -> String {
+    format!(
+        "SELECT COUNT(*) AS total \
+         FROM ({fresh_code_sql}) code_rows \
+         JOIN ({fresh_identity_sql}) identity_rows \
+           ON identity_rows.artefact_id = code_rows.artefact_id"
+    )
+}
+
 fn missing_progress_table(err: &anyhow::Error) -> bool {
     let message = err.to_string();
     message.contains("no such table:") || message.contains("does not exist")
@@ -212,4 +282,28 @@ fn missing_progress_table(err: &anyhow::Error) -> bool {
 
 fn escape_sql_string(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_sql_wraps_distinct_progress_query() {
+        assert_eq!(
+            count_sql("SELECT DISTINCT artefact_id FROM artefacts_current"),
+            "SELECT COUNT(*) AS total FROM (SELECT DISTINCT artefact_id FROM artefacts_current) progress_rows"
+        );
+    }
+
+    #[test]
+    fn fresh_code_and_identity_count_sql_intersects_by_artefact_id() {
+        let sql = fresh_code_and_identity_count_sql(
+            "SELECT DISTINCT artefact_id FROM code_rows",
+            "SELECT DISTINCT artefact_id FROM identity_rows",
+        );
+
+        assert!(sql.contains("identity_rows.artefact_id = code_rows.artefact_id"));
+        assert!(sql.contains("SELECT COUNT(*) AS total"));
+    }
 }

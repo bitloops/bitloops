@@ -25,7 +25,7 @@ use crate::host::relational_store::DefaultRelationalStore;
 use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 
 use super::coordinator::InitRuntimeCoordinator;
-use super::coordinator::selected_lanes_have_warning_status;
+use super::coordinator::{selected_lane_waiting_reason, selected_lanes_have_warning_status};
 use super::embedding_freshness::EmbeddingFreshnessState;
 use super::lanes::{
     derive_code_embeddings_lane, derive_ingest_lane, derive_session_status, derive_summaries_lane,
@@ -44,7 +44,7 @@ use super::stats::{
     SessionMailboxStats, SessionWorkplaneStats, StatusCounts, SummaryFreshnessState,
     is_summary_mailbox,
 };
-use super::types::InitRuntimeLaneProgressView;
+use super::types::{InitRuntimeLaneProgressView, InitRuntimeLaneQueueView, InitRuntimeLaneView};
 use tempfile::tempdir;
 
 fn completed_sync_task(task_id: &str, completed_at_unix: u64) -> DevqlTaskRecord {
@@ -390,6 +390,32 @@ fn test_init_runtime_coordinator() -> InitRuntimeCoordinator {
             .expect("opening test init runtime store"),
         subscription_hub: Mutex::new(None),
         summary_in_memory_batches: Mutex::new(BTreeMap::new()),
+    }
+}
+
+fn test_runtime_lane(
+    status: &str,
+    waiting_reason: Option<&str>,
+    progress: Option<InitRuntimeLaneProgressView>,
+) -> InitRuntimeLaneView {
+    InitRuntimeLaneView {
+        status: status.to_string(),
+        waiting_reason: waiting_reason.map(str::to_string),
+        detail: None,
+        activity_label: None,
+        task_id: None,
+        run_id: None,
+        progress,
+        queue: InitRuntimeLaneQueueView {
+            queued: 0,
+            running: 0,
+            failed: 0,
+        },
+        warnings: Vec::new(),
+        pending_count: 0,
+        running_count: 0,
+        failed_count: 0,
+        completed_count: 0,
     }
 }
 
@@ -2380,4 +2406,50 @@ fn session_status_only_becomes_failed_after_claimed_work_drains() {
         derive_session_status(false, false, true, None, true),
         "completed_with_warnings"
     );
+}
+
+#[test]
+fn selected_lane_waiting_reason_keeps_session_waiting_until_summary_embeddings_catch_up() {
+    let completed_lane = test_runtime_lane("completed", None, None);
+    let waiting_lane = test_runtime_lane(
+        "waiting",
+        Some("waiting_for_workplane"),
+        Some(InitRuntimeLaneProgressView {
+            completed: 24,
+            in_memory_completed: 0,
+            total: 40,
+            remaining: 16,
+        }),
+    );
+
+    let waiting_reason =
+        selected_lane_waiting_reason(&[(true, &completed_lane), (true, &waiting_lane)]);
+
+    assert_eq!(waiting_reason.as_deref(), Some("waiting_for_workplane"));
+    assert_eq!(
+        derive_session_status(
+            false,
+            false,
+            waiting_reason.is_none(),
+            waiting_reason.as_deref(),
+            false,
+        ),
+        "waiting"
+    );
+}
+
+#[test]
+fn selected_lane_waiting_reason_ignores_warning_lanes() {
+    let warning_lane = test_runtime_lane(
+        "warning",
+        None,
+        Some(InitRuntimeLaneProgressView {
+            completed: 38,
+            in_memory_completed: 0,
+            total: 40,
+            remaining: 2,
+        }),
+    );
+
+    assert_eq!(selected_lane_waiting_reason(&[(true, &warning_lane)]), None);
 }

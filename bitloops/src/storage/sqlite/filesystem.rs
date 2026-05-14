@@ -70,6 +70,8 @@ pub(super) fn create_sqlite_file_if_missing(db_path: &Path) -> Result<()> {
         return Ok(());
     }
 
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for SQLite creation")?;
     let conn = rusqlite::Connection::open(db_path)
         .with_context(|| format!("creating SQLite database at {}", db_path.display()))?;
     configure_sqlite_connection(&conn)?;
@@ -89,6 +91,8 @@ pub(super) fn ensure_sqlite_file_exists(db_path: &Path) -> Result<()> {
 
 pub(super) fn open_sqlite_connection(db_path: &Path) -> Result<rusqlite::Connection> {
     ensure_sqlite_file_exists(db_path)?;
+    crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
+        .context("registering sqlite-vec auto-extension for SQLite open")?;
     let conn =
         rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
