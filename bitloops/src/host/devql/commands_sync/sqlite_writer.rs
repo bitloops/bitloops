@@ -818,7 +818,7 @@ pub(crate) fn sync_prepare_worker_count() -> usize {
     std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(2)
-        .clamp(2, 4)
+        .clamp(2, 8)
 }
 
 #[cfg(test)]
