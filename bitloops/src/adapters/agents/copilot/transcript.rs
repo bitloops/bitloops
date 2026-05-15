@@ -289,17 +289,24 @@ pub fn calculate_token_usage_from_events(events: &[CopilotEvent]) -> TokenUsage 
 /// publish a single canonical field for this, so try the documented and
 /// observed locations and return the first non-empty string.
 fn extract_copilot_tool_name(data: &Value) -> Option<String> {
+    // Real Copilot `tool.execution_complete` payloads observed in practice
+    // populate `toolTelemetry.properties.command` (values like `view`, `edit`,
+    // `report_intent`). The other field names below are kept as best-effort
+    // fallbacks in case Copilot's schema shifts; `command` is the load-bearing
+    // one for today's transcripts.
     let candidates: &[&[&str]] = &[
         &["name"],
         &["toolName"],
         &["tool_name"],
         &["tool"],
         &["kind"],
+        &["toolTelemetry", "properties", "command"],
         &["toolTelemetry", "properties", "toolName"],
         &["toolTelemetry", "properties", "name"],
         &["toolTelemetry", "properties", "tool"],
         &["toolTelemetry", "properties", "kind"],
         &["toolTelemetry", "properties", "type"],
+        &["toolTelemetry", "properties", "viewType"],
     ];
     for path in candidates {
         let mut current = data;
@@ -326,21 +333,57 @@ fn extract_copilot_tool_name(data: &Value) -> Option<String> {
 }
 
 /// Best-effort extraction of a short input summary for a Copilot
-/// `tool.execution_complete` event. Currently surfaces `filePaths` from the
-/// tool telemetry, which is the field Copilot consistently populates for
-/// file-touching tools. Returns the empty string when nothing useful is
+/// `tool.execution_complete` event.
+///
+/// Copilot publishes file paths in one of two locations depending on the
+/// tool: the `view` family uses `toolTelemetry.properties.filePaths`,
+/// whereas the `edit` family uses `toolTelemetry.restrictedProperties.filePaths`
+/// (because edit paths are privacy-classified). Probe both and return the
+/// first non-empty hit. Returns the empty string when nothing useful is
 /// available.
 fn extract_copilot_tool_input_summary(data: &Value) -> String {
-    if let Some(text) = data
-        .pointer("/toolTelemetry/properties/filePaths")
-        .and_then(Value::as_str)
-    {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return format!("files: {trimmed}");
+    let paths = [
+        "/toolTelemetry/properties/filePaths",
+        "/toolTelemetry/restrictedProperties/filePaths",
+    ];
+    for pointer in paths {
+        if let Some(text) = data.pointer(pointer).and_then(Value::as_str) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return format!("files: {trimmed}");
+            }
         }
     }
     String::new()
+}
+
+/// Best-effort extraction of the human-readable tool result for a Copilot
+/// `tool.execution_complete` event.
+///
+/// Copilot publishes the short, LLM-facing summary at `data.result.content`
+/// (e.g. `"Intent logged"`, `"File README.md updated with changes."`). For
+/// view-style tools that field can carry the full content of a viewed file
+/// — fine for the dashboard, but it can be megabytes long. Cap it to a
+/// reasonable display length. Falls back to the literal `"Tool completed"`
+/// only when no result text is available.
+fn extract_copilot_tool_result(data: &Value) -> String {
+    const MAX_RESULT_CHARS: usize = 2000;
+    if let Some(text) = data.pointer("/result/content").and_then(Value::as_str) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return truncate_with_ellipsis(trimmed, MAX_RESULT_CHARS);
+        }
+    }
+    "Tool completed".to_string()
+}
+
+fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push('…');
+    out
 }
 
 impl TranscriptEntryDeriver for CopilotCliAgent {
@@ -430,6 +473,13 @@ pub fn derive_transcript_entries(
                 // locations for the actual tool name instead.
                 let tool_kind = extract_copilot_tool_name(&event.data);
                 let input_summary = extract_copilot_tool_input_summary(&event.data);
+                let result_text = extract_copilot_tool_result(&event.data);
+                let is_error = event
+                    .data
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .map(|s| !s)
+                    .unwrap_or(false);
 
                 let tool_use_id =
                     make_derived_tool_use_id(session_id, &scope, tool_call_index);
@@ -467,10 +517,10 @@ pub fn derive_transcript_entries(
                     actor: TranscriptActor::System,
                     variant: TranscriptVariant::ToolResult,
                     source: TranscriptSource::Transcript,
-                    text: "Tool completed".to_string(),
+                    text: result_text,
                     tool_use_id: Some(tool_use_id),
                     tool_kind,
-                    is_error: false,
+                    is_error,
                 });
                 order += 1;
             }
@@ -681,6 +731,10 @@ not-json
 
     #[test]
     fn tool_execution_complete_emits_paired_tool_use_and_tool_result() {
+        // This fixture intentionally has neither a tool-name field nor a
+        // `result.content`. The deriver should fall back to a generic tool
+        // label and the legacy "Tool completed" result string, but still emit
+        // the proper paired entries.
         let fragment = r#"{"type":"tool.execution_complete","data":{"model":"gpt-5","toolTelemetry":{"properties":{"filePaths":"[\"hello.txt\"]"}}}}
 "#;
         let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
@@ -691,20 +745,82 @@ not-json
 
         assert_eq!(tool_use.variant, TranscriptVariant::ToolUse);
         assert_eq!(tool_use.actor, TranscriptActor::System);
-        assert_eq!(tool_use.tool_kind.as_deref(), Some("gpt-5"));
+        // No `command` / `toolName` / `name` field, so tool_kind is None.
+        assert!(tool_use.tool_kind.is_none());
         assert_eq!(
             tool_use.tool_use_id.as_deref(),
             Some("derived:sess-1:turn-1:0")
         );
-        assert!(tool_use.text.contains("\"model\":\"gpt-5\""));
+        // Falls back to "tool" with the file-paths summary appended.
+        assert_eq!(
+            tool_use.text,
+            "Tool: tool\nfiles: [\"hello.txt\"]"
+        );
         assert!(!tool_use.is_error);
 
         assert_eq!(tool_result.variant, TranscriptVariant::ToolResult);
         assert_eq!(tool_result.actor, TranscriptActor::System);
         assert_eq!(tool_result.tool_use_id, tool_use.tool_use_id);
-        assert_eq!(tool_result.tool_kind.as_deref(), Some("gpt-5"));
+        // tool_kind on the result mirrors the tool_use (None here).
+        assert!(tool_result.tool_kind.is_none());
+        // No `data.result.content` → fall back to the legacy literal.
         assert_eq!(tool_result.text, "Tool completed");
         assert!(!tool_result.is_error);
+    }
+
+    #[test]
+    fn tool_execution_complete_uses_command_field_for_tool_kind() {
+        // Real Copilot payload (lightly trimmed): `toolTelemetry.properties.command`
+        // is the canonical tool-name field, and `result.content` holds the
+        // human-readable result string.
+        let fragment = r#"{"type":"tool.execution_complete","data":{"toolCallId":"call_X","model":"gpt-5-mini","success":true,"result":{"content":"File README.md updated with changes.","detailedContent":"diff --git ..."},"toolTelemetry":{"properties":{"command":"edit","options":"{}","inputs":"[]","fileExtension":"[\".md\"]"},"restrictedProperties":{"filePaths":"[\"/repo/README.md\"]"}}}}
+"#;
+        let entries = derive_transcript_entries("sess-2", Some("turn-2"), fragment)
+            .expect("derive entries");
+        assert_eq!(entries.len(), 2);
+        let tool_use = &entries[0];
+        let tool_result = &entries[1];
+
+        assert_eq!(tool_use.tool_kind.as_deref(), Some("edit"));
+        assert_eq!(
+            tool_use.text,
+            "Tool: edit\nfiles: [\"/repo/README.md\"]"
+        );
+
+        assert_eq!(tool_result.tool_kind.as_deref(), Some("edit"));
+        assert_eq!(tool_result.text, "File README.md updated with changes.");
+        assert!(!tool_result.is_error);
+    }
+
+    #[test]
+    fn tool_execution_complete_marks_is_error_when_success_is_false() {
+        let fragment = r#"{"type":"tool.execution_complete","data":{"toolCallId":"call_E","success":false,"result":{"content":"Command failed: permission denied"},"toolTelemetry":{"properties":{"command":"bash"}}}}
+"#;
+        let entries = derive_transcript_entries("sess-3", Some("turn-3"), fragment)
+            .expect("derive entries");
+        assert_eq!(entries.len(), 2);
+        let tool_result = &entries[1];
+        assert_eq!(tool_result.tool_kind.as_deref(), Some("bash"));
+        assert_eq!(tool_result.text, "Command failed: permission denied");
+        assert!(tool_result.is_error);
+    }
+
+    #[test]
+    fn tool_execution_complete_truncates_long_result_content() {
+        // A tool whose result.content exceeds the dashboard cap — e.g. `view`
+        // returning a large file — should be capped to MAX_RESULT_CHARS + 1
+        // (one trailing ellipsis char).
+        let long = "x".repeat(5000);
+        let fragment = format!(
+            r#"{{"type":"tool.execution_complete","data":{{"toolCallId":"c1","result":{{"content":"{long}"}},"toolTelemetry":{{"properties":{{"command":"view"}}}}}}}}{}"#,
+            "\n"
+        );
+        let entries = derive_transcript_entries("sess-4", Some("turn-4"), &fragment)
+            .expect("derive entries");
+        let tool_result = &entries[1];
+        // 2000 cap + 1 ellipsis char.
+        assert_eq!(tool_result.text.chars().count(), 2001);
+        assert!(tool_result.text.ends_with('…'));
     }
 
     #[test]

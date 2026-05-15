@@ -29,6 +29,11 @@ pub(super) fn seed_graphql_devql_repo() -> TempDir {
         .join(".bitloops")
         .join("stores")
         .join("graphql.sqlite");
+    let events_duckdb_path = repo_root
+        .join(".bitloops")
+        .join("stores")
+        .join("event")
+        .join(crate::utils::paths::EVENTS_DB_FILE_NAME);
     crate::storage::init::init_database(&sqlite_path, false, &commit_sha)
         .expect("initialise GraphQL sqlite store");
     write_envelope_config(
@@ -37,6 +42,9 @@ pub(super) fn seed_graphql_devql_repo() -> TempDir {
             "stores": {
                 "relational": {
                     "sqlite_path": sqlite_path.to_string_lossy()
+                },
+                "events": {
+                    "duckdb_path": events_duckdb_path.to_string_lossy()
                 }
             }
         }),

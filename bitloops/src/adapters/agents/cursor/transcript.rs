@@ -1,12 +1,13 @@
 //! Cursor canonical transcript entry derivation.
 //!
-//! Cursor has no agent-specific transcript parser yet. To still produce
-//! canonical `TranscriptEntry` rows for Cursor sessions, we walk the
-//! transcript line by line using the host-level role/content helpers, emit
-//! one `USER/CHAT` or `ASSISTANT/CHAT` per detected message in source order,
-//! and strip the `<user_query>` wrapper tags Cursor applies to user prompts.
-//!
-//! Tool traces are deferred until Cursor-specific fixtures exist.
+//! Cursor's canonical timeline is **chat-only by design**: we emit one
+//! `USER/CHAT` or `ASSISTANT/CHAT` per detected message in source order, strip
+//! `<user_query>` wrapper tags from user prompts, and ignore `tool_use` items
+//! embedded in assistant messages. Cursor tool calls surface separately under
+//! the dashboard's Tools tab (fed by the `interaction_tool_uses` table via the
+//! `TranscriptToolEventDeriver` path), so omitting them here is intentional —
+//! not a deferred feature. Do not add `TOOL_USE` / `TOOL_RESULT` emission to
+//! this deriver without first confirming the UX decision has changed.
 
 use anyhow::Result;
 use serde_json::Value;
@@ -96,6 +97,7 @@ fn push_entry_from_value(
     };
     let raw_text = content_to_text(content);
     let cleaned = strip_user_query_tags(&raw_text);
+    let cleaned = strip_redacted_markers(&cleaned);
     let text = cleaned.trim();
     if text.is_empty() {
         return false;
@@ -171,9 +173,44 @@ fn strip_user_query_tags(text: &str) -> String {
     out
 }
 
+/// Strip Cursor's opaque `[REDACTED]` placeholders from a piece of text.
+///
+/// Cursor injects literal `[REDACTED]` tokens into assistant messages where
+/// upstream content (e.g., thinking, system context, internal tool plumbing)
+/// has been removed before persisting the transcript. These add no signal for
+/// the dashboard reader, so we drop them:
+///
+/// * A line whose entire content is `[REDACTED]` produces an empty string and
+///   gets filtered by the caller's `text.is_empty()` check.
+/// * Trailing `\n\n[REDACTED]` after real content is removed cleanly.
+/// * Mid-text occurrences are removed and any resulting run of 3+ newlines is
+///   collapsed back to a single blank-line paragraph break.
+fn strip_redacted_markers(text: &str) -> String {
+    if !text.contains("[REDACTED]") {
+        return text.to_string();
+    }
+    let stripped = text.replace("[REDACTED]", "");
+    // Collapse runs of 3+ consecutive newlines down to 2 (one blank line),
+    // which is what you'd get if the marker had simply not been there.
+    let mut out = String::with_capacity(stripped.len());
+    let mut newline_run = 0;
+    for ch in stripped.chars() {
+        if ch == '\n' {
+            newline_run += 1;
+            if newline_run <= 2 {
+                out.push(ch);
+            }
+        } else {
+            newline_run = 0;
+            out.push(ch);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::derive_transcript_entries;
+    use super::{derive_transcript_entries, strip_redacted_markers};
     use crate::host::interactions::transcript_entry::{
         TranscriptActor, TranscriptSource, TranscriptVariant,
     };
@@ -276,5 +313,72 @@ mod tests {
                 entry.entry_id
             );
         }
+    }
+
+    #[test]
+    fn strip_redacted_markers_is_noop_when_marker_absent() {
+        let input = "no redactions here";
+        assert_eq!(strip_redacted_markers(input), input);
+    }
+
+    #[test]
+    fn strip_redacted_markers_removes_standalone_marker() {
+        // A line whose entire text is just the marker collapses to empty,
+        // which the caller filters out via `text.is_empty()`.
+        assert_eq!(strip_redacted_markers("[REDACTED]"), "");
+    }
+
+    #[test]
+    fn strip_redacted_markers_strips_trailing_marker_block() {
+        // Pattern from the real Cursor JSONL: real content, blank line, marker.
+        let input =
+            "The README top-level heading is now `# cursor` (it was `# gem`).\n\n[REDACTED]";
+        let out = strip_redacted_markers(input);
+        let trimmed = out.trim();
+        assert_eq!(
+            trimmed,
+            "The README top-level heading is now `# cursor` (it was `# gem`)."
+        );
+    }
+
+    #[test]
+    fn strip_redacted_markers_collapses_triple_newlines_left_by_mid_text_strip() {
+        let input = "before\n\n[REDACTED]\n\nafter";
+        // After replacing the marker we get "before\n\n\n\nafter"; collapse to "before\n\nafter".
+        assert_eq!(strip_redacted_markers(input), "before\n\nafter");
+    }
+
+    #[test]
+    fn assistant_chat_entry_drops_trailing_redacted_block() {
+        // Mirrors a single line from a real Cursor JSONL session: real summary
+        // text followed by a blank line and the [REDACTED] placeholder.
+        let fragment = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"The README top-level heading is now `# cursor` (it was `# gem`).\\n\\n[REDACTED]\"}]}}\n";
+        let entries = derive_transcript_entries("sess-r", Some("turn-r"), fragment)
+            .expect("derive entries");
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.actor, TranscriptActor::Assistant);
+        assert_eq!(entry.variant, TranscriptVariant::Chat);
+        assert_eq!(entry.source, TranscriptSource::Transcript);
+        assert_eq!(
+            entry.text,
+            "The README top-level heading is now `# cursor` (it was `# gem`)."
+        );
+        assert!(!entry.text.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn assistant_entry_whose_only_text_is_redacted_is_skipped() {
+        // Some Cursor assistant lines carry only a `[REDACTED]` text item
+        // alongside a tool_use. `content_to_text` already ignores tool_use, and
+        // the remaining text is the marker alone — the entry must not be
+        // emitted (it would otherwise render as an empty assistant bubble).
+        let fragment = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"[REDACTED]\"},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{}}]}}\n";
+        let entries = derive_transcript_entries("sess-r", Some("turn-r"), fragment)
+            .expect("derive entries");
+        assert!(
+            entries.is_empty(),
+            "redacted-only assistant entries should be filtered, got {entries:?}"
+        );
     }
 }

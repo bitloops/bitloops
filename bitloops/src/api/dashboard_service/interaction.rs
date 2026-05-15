@@ -17,7 +17,7 @@ use crate::host::interactions::transcript_entry::{TranscriptActor, TranscriptEnt
 use crate::host::interactions::types::InteractionTurn;
 use crate::host::interactions::{
     derive_session_transcript_entries, derive_turn_transcript_entries,
-    partition_session_entries_to_turns, read_session_transcript_text,
+    partition_session_entries_to_turns, read_session_transcript_text, strip_user_query_tags,
 };
 
 use super::repository::resolve_dashboard_repo_root;
@@ -230,6 +230,91 @@ pub(in crate::api) async fn load_dashboard_interaction_session(
     Ok(dashboard_detail)
 }
 
+/// Drop "phantom" duplicate turn rows before the dashboard renders them.
+///
+/// When two lifecycle paths both write turn rows for the same prompt (e.g.,
+/// Cursor's `before-submit-prompt` fires once and a Claude-style hook also
+/// fires on the same session), the spool ends up with two `interaction_turns`
+/// rows sharing the same normalized prompt. One is "complete" (has
+/// `transcript_offset_end`, `ended_at`, and/or `transcript_fragment`), the
+/// other is an orphan that never closed. The complete row carries the
+/// assistant response; the orphan, if left in, becomes a duplicate
+/// prompt-only turn on the timeline.
+///
+/// This filter is conservative: it only drops a turn when *another turn in
+/// the same session* covers the same normalized prompt (post-`<user_query>`
+/// strip, trim, lowercase) AND the dropped turn has zero transcript signal.
+/// In-flight turns at the tail of a session — where no sibling exists — are
+/// preserved.
+fn dedupe_phantom_turns(
+    mut detail: query::InteractionSessionDetail,
+) -> query::InteractionSessionDetail {
+    use std::collections::{HashMap, HashSet};
+
+    fn is_orphan(turn: &InteractionTurn) -> bool {
+        let no_end_offset = turn.transcript_offset_end.unwrap_or(0) <= 0;
+        let no_ended_at = turn
+            .ended_at
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty();
+        let no_fragment = turn.transcript_fragment.trim().is_empty();
+        no_end_offset && no_ended_at && no_fragment
+    }
+
+    let normalize = |prompt: &str| -> String {
+        strip_user_query_tags(prompt).trim().to_lowercase()
+    };
+
+    if detail.turns.len() <= 1 {
+        return detail;
+    }
+
+    let mut by_prompt: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, summary) in detail.turns.iter().enumerate() {
+        let key = normalize(&summary.turn.prompt);
+        if key.is_empty() {
+            continue;
+        }
+        by_prompt.entry(key).or_default().push(idx);
+    }
+
+    let mut drop_idx: HashSet<usize> = HashSet::new();
+    for indices in by_prompt.values() {
+        if indices.len() <= 1 {
+            continue;
+        }
+        let any_complete = indices
+            .iter()
+            .any(|&i| !is_orphan(&detail.turns[i].turn));
+        if !any_complete {
+            // No row in this group is complete — keep them all so we don't
+            // hide an in-flight conversation. (At most one of these will be
+            // the current live turn.)
+            continue;
+        }
+        for &i in indices {
+            if is_orphan(&detail.turns[i].turn) {
+                drop_idx.insert(i);
+            }
+        }
+    }
+
+    if drop_idx.is_empty() {
+        return detail;
+    }
+
+    detail.turns = detail
+        .turns
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| !drop_idx.contains(idx))
+        .map(|(_, summary)| summary)
+        .collect();
+    detail
+}
+
 /// Convert a domain `InteractionSessionDetail` into the dashboard response,
 /// enriching it with canonical transcript entries derived from the session's
 /// agent. Reads the transcript file from disk **once** and slices it per turn
@@ -238,6 +323,7 @@ pub(in crate::api) async fn load_dashboard_interaction_session(
 fn enrich_session_detail_with_transcript_entries(
     detail: query::InteractionSessionDetail,
 ) -> DashboardInteractionSessionDetail {
+    let detail = dedupe_phantom_turns(detail);
     let agent_type = detail.summary.session.agent_type.clone();
     let session_id_str = detail.summary.session.session_id.clone();
     let transcript_path = detail.summary.session.transcript_path.clone();
@@ -471,4 +557,190 @@ pub(in crate::api) async fn search_dashboard_interaction_turns(
                 .collect()
         })
         .map_err(|err| ApiError::internal(format!("failed to search interaction turns: {err:#}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::interactions::InteractionSession;
+    use crate::host::interactions::query::{
+        InteractionSessionDetail, InteractionSessionSummary, InteractionTurnSummary,
+    };
+
+    fn make_summary() -> InteractionSessionSummary {
+        InteractionSessionSummary {
+            session: InteractionSession {
+                session_id: "04ca51b0".to_string(),
+                ..InteractionSession::default()
+            },
+            turn_count: 0,
+            turn_ids: Vec::new(),
+            checkpoint_count: 0,
+            checkpoint_ids: Vec::new(),
+            token_usage: None,
+            file_paths: Vec::new(),
+            tool_uses: Vec::new(),
+            subagent_runs: Vec::new(),
+            linked_checkpoints: Vec::new(),
+            latest_commit_author: None,
+        }
+    }
+
+    fn make_turn(
+        turn_id: &str,
+        prompt: &str,
+        agent_type: &str,
+        started_at: &str,
+        offset_end: Option<i64>,
+        ended_at: Option<&str>,
+    ) -> InteractionTurnSummary {
+        InteractionTurnSummary {
+            turn: InteractionTurn {
+                turn_id: turn_id.to_string(),
+                session_id: "04ca51b0".to_string(),
+                prompt: prompt.to_string(),
+                agent_type: agent_type.to_string(),
+                started_at: started_at.to_string(),
+                transcript_offset_start: Some(0),
+                transcript_offset_end: offset_end,
+                ended_at: ended_at.map(str::to_string),
+                ..InteractionTurn::default()
+            },
+            tool_uses: Vec::new(),
+            subagent_runs: Vec::new(),
+            linked_checkpoints: Vec::new(),
+            latest_commit_author: None,
+        }
+    }
+
+    /// Fixture mirrors the real interaction_turns rows captured for Cursor
+    /// session 04ca51b0: four claude-code rows with `<user_query>` wrappers and
+    /// populated offsets/ended_at, plus one cursor row for "thanks" with no
+    /// offsets and no ended_at — the phantom that produced the duplicate.
+    #[test]
+    fn dedupe_phantom_turns_drops_orphan_sharing_prompt_with_complete_sibling() {
+        let detail = InteractionSessionDetail {
+            summary: make_summary(),
+            turns: vec![
+                make_turn(
+                    "a0201f30a07b",
+                    "<user_query>\nupdate readme title to cursor\n</user_query>",
+                    "claude-code",
+                    "2026-05-14T15:39:38Z",
+                    Some(4),
+                    Some("2026-05-14T15:39:43Z"),
+                ),
+                make_turn(
+                    "56c9b0c09525",
+                    "<user_query>\nis it ok now\n</user_query>",
+                    "claude-code",
+                    "2026-05-14T15:40:26Z",
+                    Some(7),
+                    Some("2026-05-14T15:40:33Z"),
+                ),
+                make_turn(
+                    "c0ed66e5e4af",
+                    "<user_query>\nthanks\n</user_query>",
+                    "claude-code",
+                    "2026-05-14T15:40:53Z",
+                    Some(9),
+                    Some("2026-05-14T15:40:56Z"),
+                ),
+                make_turn(
+                    "9f37164ed13a",
+                    "thanks",
+                    "cursor",
+                    "2026-05-14T15:40:53Z",
+                    None,
+                    None,
+                ),
+                make_turn(
+                    "32440f6813dc",
+                    "<user_query>\nREVERT\n</user_query>",
+                    "claude-code",
+                    "2026-05-14T16:09:33Z",
+                    Some(12),
+                    Some("2026-05-14T16:09:35Z"),
+                ),
+            ],
+            raw_events: Vec::new(),
+        };
+
+        let deduped = dedupe_phantom_turns(detail);
+        let kept_ids: Vec<&str> = deduped
+            .turns
+            .iter()
+            .map(|t| t.turn.turn_id.as_str())
+            .collect();
+        assert_eq!(
+            kept_ids,
+            vec![
+                "a0201f30a07b",
+                "56c9b0c09525",
+                "c0ed66e5e4af",
+                "32440f6813dc",
+            ],
+            "expected the orphan cursor row 9f37164ed13a to be dropped"
+        );
+    }
+
+    #[test]
+    fn dedupe_phantom_turns_preserves_lone_orphan_with_no_complete_sibling() {
+        // An in-flight turn at the tail of a session has no offsets and no
+        // ended_at, but it should NOT be hidden — the user is still typing.
+        let detail = InteractionSessionDetail {
+            summary: make_summary(),
+            turns: vec![
+                make_turn(
+                    "complete-1",
+                    "<user_query>first prompt</user_query>",
+                    "cursor",
+                    "2026-05-14T10:00:00Z",
+                    Some(4),
+                    Some("2026-05-14T10:00:10Z"),
+                ),
+                make_turn(
+                    "in-flight",
+                    "second prompt",
+                    "cursor",
+                    "2026-05-14T10:01:00Z",
+                    None,
+                    None,
+                ),
+            ],
+            raw_events: Vec::new(),
+        };
+
+        let before = detail.turns.len();
+        let deduped = dedupe_phantom_turns(detail);
+        assert_eq!(deduped.turns.len(), before, "no sibling means keep both");
+    }
+
+    #[test]
+    fn dedupe_phantom_turns_is_noop_when_all_prompts_unique() {
+        let detail = InteractionSessionDetail {
+            summary: make_summary(),
+            turns: vec![
+                make_turn(
+                    "t1",
+                    "first",
+                    "cursor",
+                    "2026-05-14T10:00:00Z",
+                    Some(2),
+                    Some("2026-05-14T10:00:05Z"),
+                ),
+                make_turn(
+                    "t2",
+                    "second",
+                    "cursor",
+                    "2026-05-14T10:01:00Z",
+                    Some(5),
+                    Some("2026-05-14T10:01:10Z"),
+                ),
+            ],
+            raw_events: Vec::new(),
+        };
+        let deduped = dedupe_phantom_turns(detail);
+        assert_eq!(deduped.turns.len(), 2);
+    }
 }

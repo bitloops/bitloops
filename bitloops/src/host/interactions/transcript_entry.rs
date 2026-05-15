@@ -256,7 +256,7 @@ mod tests {
             TranscriptActor::System,
         ] {
             let s = actor.as_str();
-            let json = serde_json::to_value(&actor).unwrap();
+            let json = serde_json::to_value(actor).unwrap();
             assert_eq!(json, json!(s));
         }
 
@@ -267,13 +267,13 @@ mod tests {
             TranscriptVariant::ToolResult,
         ] {
             let s = variant.as_str();
-            let json = serde_json::to_value(&variant).unwrap();
+            let json = serde_json::to_value(variant).unwrap();
             assert_eq!(json, json!(s));
         }
 
         for source in [TranscriptSource::Transcript, TranscriptSource::PromptFallback] {
             let s = source.as_str();
-            let json = serde_json::to_value(&source).unwrap();
+            let json = serde_json::to_value(source).unwrap();
             assert_eq!(json, json!(s));
         }
     }

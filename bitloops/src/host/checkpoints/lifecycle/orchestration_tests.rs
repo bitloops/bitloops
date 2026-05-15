@@ -1,6 +1,5 @@
 //! Tests for lifecycle orchestration: capture pre-prompt state, turn-end metadata extraction,
-//! and token usage. These tests are written against the intended behavior and will fail until
-//! the corresponding orchestration is implemented.
+//! and token usage.
 
 use super::adapters::GeminiCliLifecycleAdapter;
 use super::{
@@ -37,7 +36,6 @@ fn setup_git_repo(dir: &tempfile::TempDir) {
     run(&["commit", "-m", "initial"]);
 }
 
-/// Fails until capture_pre_prompt_state uses the agent's get_transcript_position and persists it.
 #[test]
 fn capture_pre_prompt_state_persists_transcript_position_from_agent() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -71,8 +69,7 @@ fn capture_pre_prompt_state_persists_transcript_position_from_agent() {
 
         assert_eq!(
             state.transcript_offset, 3,
-            "capture_pre_prompt_state should persist transcript position from agent (3 messages); \
-             currently stub saves 0"
+            "capture_pre_prompt_state should persist transcript position from agent (3 messages)"
         );
     });
 }

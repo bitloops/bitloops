@@ -18,7 +18,7 @@ pub use transcript_entry::{
 pub use transcript_pipeline::{
     derive_session_transcript_entries, derive_turn_transcript_entries,
     partition_session_entries_to_turns, read_session_transcript_text,
-    synthesize_prompt_fallback_entries,
+    strip_user_query_tags, synthesize_prompt_fallback_entries,
 };
 pub use types::{
     InteractionEvent, InteractionEventFilter, InteractionEventType, InteractionMutation,

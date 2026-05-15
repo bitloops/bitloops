@@ -39,7 +39,20 @@ pub fn read_session_transcript_text(transcript_path: &str) -> String {
     if transcript_path.trim().is_empty() {
         return String::new();
     }
-    fs::read_to_string(transcript_path).unwrap_or_default()
+    match fs::read_to_string(transcript_path) {
+        Ok(content) => content,
+        Err(err) => {
+            // Non-empty path but unreadable file (permissions, stale path
+            // recorded in `interaction_sessions.transcript_path`, file pruned
+            // by the agent). Log so operators can correlate empty-timeline
+            // sessions with the underlying I/O failure; downstream still
+            // degrades gracefully via prompt fallback.
+            log::warn!(
+                "transcript read failed for path {transcript_path:?}: {err}"
+            );
+            String::new()
+        }
+    }
 }
 
 /// Derive canonical transcript entries for the whole session from a
@@ -60,9 +73,21 @@ pub fn derive_session_transcript_entries(
     let Some(deriver) = agent.as_transcript_entry_deriver() else {
         return Vec::new();
     };
-    deriver
-        .derive_transcript_entries(session_id, None, full_transcript)
-        .unwrap_or_default()
+    match deriver.derive_transcript_entries(session_id, None, full_transcript) {
+        Ok(entries) => entries,
+        Err(err) => {
+            // Deriver bailed on the transcript — usually a malformed JSONL
+            // line that serde rejected wholesale. Log so we don't silently
+            // hand the dashboard an empty timeline. Callers still degrade
+            // via prompt-fallback synthesis per turn.
+            log::warn!(
+                "transcript entry derivation failed for session {session_id} \
+                 (agent={}): {err:#}",
+                agent.agent_type()
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Derive entries for a single turn by slicing the full transcript at the
@@ -100,7 +125,19 @@ pub fn derive_turn_transcript_entries(
 
     match deriver.derive_transcript_entries(session_id, Some(&turn.turn_id), &slice) {
         Ok(entries) if !entries.is_empty() => entries,
-        _ => synthesize_prompt_fallback_entries(session_id, turn),
+        Ok(_) => synthesize_prompt_fallback_entries(session_id, turn),
+        Err(err) => {
+            // Per-turn deriver failure (usually a malformed JSONL line in the
+            // sliced range). Log so we can correlate a turn falling back to
+            // PROMPT_FALLBACK with the upstream parse error.
+            log::warn!(
+                "per-turn transcript derivation failed for session {session_id} \
+                 turn {turn_id} (agent={agent_type}, offsets={start}..{end}): {err:#}",
+                turn_id = turn.turn_id,
+                agent_type = agent.agent_type(),
+            );
+            synthesize_prompt_fallback_entries(session_id, turn)
+        }
     }
 }
 
@@ -253,7 +290,7 @@ pub fn synthesize_prompt_fallback_entries(
 /// with these tags; the dashboard renders the plain prompt without them.
 /// Returns the original string verbatim when no tag markers are present
 /// (hot-path optimization for the common case).
-fn strip_user_query_tags(text: &str) -> String {
+pub fn strip_user_query_tags(text: &str) -> String {
     if text.is_empty() {
         return String::new();
     }
@@ -427,5 +464,227 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].text, "backup prompt");
         assert_eq!(entries[0].source, TranscriptSource::PromptFallback);
+    }
+
+    // ── partition_session_entries_to_turns ──────────────────────────────────
+    //
+    // The three branches under test:
+    //   * USER/CHAT segmentation with pre-first-user preamble merging into
+    //     the first segment so nothing is dropped.
+    //   * Surplus segments (segments > turns) overflow onto the last turn.
+    //   * Surplus turns (turns > segments) get `PROMPT_FALLBACK` synthesis
+    //     from their `turn.prompt`.
+
+    fn make_entry(
+        actor: TranscriptActor,
+        variant: TranscriptVariant,
+        text: &str,
+        order: i32,
+    ) -> TranscriptEntry {
+        TranscriptEntry {
+            entry_id: format!("e-{order}"),
+            session_id: "sess-1".to_string(),
+            turn_id: None,
+            order,
+            timestamp: None,
+            actor,
+            variant,
+            source: TranscriptSource::Transcript,
+            text: text.to_string(),
+            tool_use_id: None,
+            tool_kind: None,
+            is_error: false,
+        }
+    }
+
+    fn make_turn(turn_id: &str, turn_number: u32, prompt: &str) -> InteractionTurn {
+        InteractionTurn {
+            turn_id: turn_id.to_string(),
+            session_id: "sess-1".to_string(),
+            repo_id: "repo-1".to_string(),
+            turn_number,
+            prompt: prompt.to_string(),
+            started_at: format!("2026-04-04T10:0{turn_number}:00Z"),
+            ..InteractionTurn::default()
+        }
+    }
+
+    #[test]
+    fn partition_segments_on_user_chat_boundaries_and_merges_preamble() {
+        // Stream: SYSTEM preamble → USER/CHAT turn-1 → ASSISTANT/CHAT
+        //         → USER/CHAT turn-2 → ASSISTANT/CHAT.
+        // The SYSTEM preamble must NOT be dropped — it should prepend to the
+        // first user-anchored segment so it ends up under turn-1.
+        let entries = vec![
+            make_entry(
+                TranscriptActor::System,
+                TranscriptVariant::Chat,
+                "session prelude",
+                0,
+            ),
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 1", 1),
+            make_entry(
+                TranscriptActor::Assistant,
+                TranscriptVariant::Chat,
+                "answer 1",
+                2,
+            ),
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 2", 3),
+            make_entry(
+                TranscriptActor::Assistant,
+                TranscriptVariant::Chat,
+                "answer 2",
+                4,
+            ),
+        ];
+        let t1 = make_turn("turn-1", 1, "ask 1");
+        let t2 = make_turn("turn-2", 2, "ask 2");
+        let turns: Vec<&InteractionTurn> = vec![&t1, &t2];
+
+        let partitioned = partition_session_entries_to_turns("sess-1", &entries, &turns);
+        assert_eq!(partitioned.len(), 2);
+
+        // turn-1 owns the preamble + its own USER/ASSISTANT pair.
+        let texts_t1: Vec<&str> = partitioned[0].iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts_t1, vec!["session prelude", "ask 1", "answer 1"]);
+        // All entries assigned to turn-1 carry its turn_id (retag pass).
+        assert!(
+            partitioned[0]
+                .iter()
+                .all(|e| e.turn_id.as_deref() == Some("turn-1"))
+        );
+
+        // turn-2 owns just its own USER/ASSISTANT pair.
+        let texts_t2: Vec<&str> = partitioned[1].iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts_t2, vec!["ask 2", "answer 2"]);
+        assert!(
+            partitioned[1]
+                .iter()
+                .all(|e| e.turn_id.as_deref() == Some("turn-2"))
+        );
+    }
+
+    #[test]
+    fn partition_overflow_segments_append_to_last_turn() {
+        // Three user-anchored segments but only two turns. The third segment
+        // is overflow and must append onto the last turn (turn-2) rather than
+        // being dropped.
+        let entries = vec![
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 1", 0),
+            make_entry(
+                TranscriptActor::Assistant,
+                TranscriptVariant::Chat,
+                "answer 1",
+                1,
+            ),
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 2", 2),
+            make_entry(
+                TranscriptActor::Assistant,
+                TranscriptVariant::Chat,
+                "answer 2",
+                3,
+            ),
+            // Third segment — no matching turn record exists.
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 3", 4),
+            make_entry(
+                TranscriptActor::Assistant,
+                TranscriptVariant::Chat,
+                "answer 3",
+                5,
+            ),
+        ];
+        let t1 = make_turn("turn-1", 1, "ask 1");
+        let t2 = make_turn("turn-2", 2, "ask 2");
+        let turns: Vec<&InteractionTurn> = vec![&t1, &t2];
+
+        let partitioned = partition_session_entries_to_turns("sess-1", &entries, &turns);
+        assert_eq!(partitioned.len(), 2);
+
+        let texts_t1: Vec<&str> = partitioned[0].iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts_t1, vec!["ask 1", "answer 1"]);
+
+        // turn-2 gets its own segment *and* the overflow segment.
+        let texts_t2: Vec<&str> = partitioned[1].iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts_t2, vec!["ask 2", "answer 2", "ask 3", "answer 3"]);
+        // Overflow rows are retagged with the last turn's turn_id.
+        assert!(
+            partitioned[1]
+                .iter()
+                .all(|e| e.turn_id.as_deref() == Some("turn-2"))
+        );
+    }
+
+    #[test]
+    fn partition_surplus_turns_get_prompt_fallback_synthesis() {
+        // One user-anchored segment but three turns. Turns 2 and 3 have no
+        // corresponding segment and must be filled in with PROMPT_FALLBACK
+        // entries synthesised from each turn's stored `prompt`.
+        let entries = vec![
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 1", 0),
+            make_entry(
+                TranscriptActor::Assistant,
+                TranscriptVariant::Chat,
+                "answer 1",
+                1,
+            ),
+        ];
+        let t1 = make_turn("turn-1", 1, "ask 1");
+        let t2 = make_turn("turn-2", 2, "fallback prompt 2");
+        let t3 = make_turn("turn-3", 3, "fallback prompt 3");
+        let turns: Vec<&InteractionTurn> = vec![&t1, &t2, &t3];
+
+        let partitioned = partition_session_entries_to_turns("sess-1", &entries, &turns);
+        assert_eq!(partitioned.len(), 3);
+
+        // turn-1 gets the only real segment, source = Transcript.
+        assert_eq!(partitioned[0].len(), 2);
+        assert!(
+            partitioned[0]
+                .iter()
+                .all(|e| e.source == TranscriptSource::Transcript)
+        );
+
+        // turn-2 and turn-3 get one PROMPT_FALLBACK USER/CHAT each, sourced
+        // from the turn's stored prompt.
+        for (idx, (turn_id, expected_text)) in [
+            ("turn-2", "fallback prompt 2"),
+            ("turn-3", "fallback prompt 3"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let entries = &partitioned[idx + 1];
+            assert_eq!(entries.len(), 1, "{turn_id} should have 1 synthesised entry");
+            let entry = &entries[0];
+            assert_eq!(entry.actor, TranscriptActor::User);
+            assert_eq!(entry.variant, TranscriptVariant::Chat);
+            assert_eq!(entry.source, TranscriptSource::PromptFallback);
+            assert_eq!(entry.text, *expected_text);
+            assert_eq!(entry.turn_id.as_deref(), Some(*turn_id));
+        }
+    }
+
+    #[test]
+    fn partition_preserves_input_order_even_when_turns_arrive_out_of_order() {
+        // The function sorts turns by turn_number internally for segment
+        // assignment but must return the result vec indexed in the SAME
+        // order as the input slice. Verify by passing turns reversed.
+        let entries = vec![
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 1", 0),
+            make_entry(TranscriptActor::User, TranscriptVariant::Chat, "ask 2", 1),
+        ];
+        let t1 = make_turn("turn-1", 1, "ask 1");
+        let t2 = make_turn("turn-2", 2, "ask 2");
+        // Input order: t2 first, t1 second.
+        let turns: Vec<&InteractionTurn> = vec![&t2, &t1];
+
+        let partitioned = partition_session_entries_to_turns("sess-1", &entries, &turns);
+        assert_eq!(partitioned.len(), 2);
+        // Slot 0 is t2 (turn_number=2), so it gets segment 2 = "ask 2".
+        assert_eq!(partitioned[0][0].text, "ask 2");
+        assert_eq!(partitioned[0][0].turn_id.as_deref(), Some("turn-2"));
+        // Slot 1 is t1 (turn_number=1), so it gets segment 1 = "ask 1".
+        assert_eq!(partitioned[1][0].text, "ask 1");
+        assert_eq!(partitioned[1][0].turn_id.as_deref(), Some("turn-1"));
     }
 }
