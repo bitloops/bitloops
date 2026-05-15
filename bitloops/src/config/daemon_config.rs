@@ -20,6 +20,6 @@ pub use file::{
 };
 pub(crate) use install::{
     prepare_daemon_embeddings_install, prepare_daemon_inference_install,
-    prepare_daemon_platform_embeddings_install,
+    prepare_daemon_local_embeddings_profile_install, prepare_daemon_platform_embeddings_install,
 };
-pub(crate) use plans::DaemonEmbeddingsInstallMode;
+pub(crate) use plans::{DaemonEmbeddingsInstallMode, DaemonEmbeddingsInstallPlan};

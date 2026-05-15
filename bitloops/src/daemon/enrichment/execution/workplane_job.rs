@@ -31,7 +31,6 @@ use crate::host::runtime_store::WorkplaneJobRecord;
 use super::super::JobExecutionOutcome;
 use super::super::workplane::repo_identity_from_runtime_metadata;
 use super::follow_ups::clone_edges_rebuild_follow_up_from_workplane;
-use super::helpers::clear_embedding_outputs;
 use super::loaders::{load_workplane_embedding_refresh_inputs, load_workplane_job_inputs};
 use super::workplane_plan::{
     build_embedding_refresh_workplane_plan, build_summary_refresh_workplane_plan,
@@ -128,6 +127,20 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
                     job.mailbox_name
                 ));
             };
+            if matches!(
+                representation_kind,
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    | crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Identity
+            ) && !mailbox_intent.code_embeddings_active
+            {
+                return JobExecutionOutcome::ok();
+            }
+            if representation_kind
+                == crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
+                && !mailbox_intent.summary_embeddings_active
+            {
+                return JobExecutionOutcome::ok();
+            }
             let (scope, path, content_id, inputs) =
                 match load_workplane_embedding_refresh_inputs(&relational, job).await {
                     Ok(inputs) => inputs,
@@ -187,7 +200,13 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
             }
         }
         SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => {
-            execute_clone_edges_rebuild_workplane_job(&capability_host, &relational, job).await
+            execute_clone_edges_rebuild_workplane_job(
+                &capability_host,
+                &relational,
+                job,
+                mailbox_intent.clone_rebuild_active,
+            )
+            .await
         }
         mailbox_name => {
             let Some(registration) =
@@ -224,11 +243,17 @@ async fn execute_clone_edges_rebuild_workplane_job(
     capability_host: &crate::host::capability_host::DevqlCapabilityHost,
     relational: &RelationalStorage,
     job: &WorkplaneJobRecord,
+    clone_rebuild_active: bool,
 ) -> JobExecutionOutcome {
     let semantic_clones =
         resolve_semantic_clones_config(&capability_host.config_view(SEMANTIC_CLONES_CAPABILITY_ID));
-    if !embeddings_enabled(&semantic_clones) {
-        return match clear_embedding_outputs(relational, &job.repo_id).await {
+    if !clone_rebuild_active || !embeddings_enabled(&semantic_clones) {
+        return match crate::capability_packs::semantic_clones::pipeline::delete_repo_current_symbol_clone_edges(
+            relational,
+            &job.repo_id,
+        )
+        .await
+        {
             Ok(()) => JobExecutionOutcome::ok(),
             Err(err) => JobExecutionOutcome::failed(err),
         };

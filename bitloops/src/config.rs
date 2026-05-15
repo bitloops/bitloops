@@ -21,9 +21,9 @@ pub use daemon_config::{
     persist_daemon_cli_settings, persist_dashboard_tls_hint, update_daemon_telemetry_consent,
 };
 pub(crate) use daemon_config::{
-    DaemonEmbeddingsInstallMode, prepare_daemon_embeddings_install,
-    prepare_daemon_inference_install, prepare_daemon_platform_embeddings_install,
-    validate_daemon_config_text,
+    DaemonEmbeddingsInstallMode, DaemonEmbeddingsInstallPlan, prepare_daemon_embeddings_install,
+    prepare_daemon_inference_install, prepare_daemon_local_embeddings_profile_install,
+    prepare_daemon_platform_embeddings_install, validate_daemon_config_text,
 };
 pub(crate) use repo_policy::validate_repo_policy_text;
 pub use repo_policy::{
@@ -48,6 +48,11 @@ pub use resolve::{
 };
 pub(crate) use resolve::{
     resolve_preferred_daemon_config_path_for_repo, resolve_semantic_clones_worker_settings_for_repo,
+};
+pub(crate) use settings::restore_repo_semantic_embedding_policy;
+pub use settings::{
+    RepoSemanticEmbeddingPolicy, repo_semantic_embedding_policy,
+    repo_semantic_embedding_policy_from_policy, set_repo_semantic_embedding_policy,
 };
 pub use types::{
     ArchitectureConfig, ArchitectureInferenceBindings, AtlassianProviderConfig, BlobStorageConfig,

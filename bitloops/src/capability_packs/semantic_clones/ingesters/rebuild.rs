@@ -10,7 +10,9 @@ use crate::host::capability_host::registrar::{
 use super::super::types::{
     SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
 };
-use crate::capability_packs::semantic_clones::runtime_config::resolve_semantic_clones_config;
+use crate::capability_packs::semantic_clones::runtime_config::{
+    embeddings_enabled, resolve_semantic_clones_config,
+};
 
 pub struct SymbolCloneEdgesRebuildIngester;
 
@@ -30,6 +32,24 @@ impl IngesterHandler for SymbolCloneEdgesRebuildIngester {
                 &ctx.config_view(SEMANTIC_CLONES_CAPABILITY_ID)
                     .context("loading semantic_clones config view")?,
             );
+            if !embeddings_enabled(&config) {
+                crate::capability_packs::semantic_clones::pipeline::delete_repo_current_symbol_clone_edges(
+                    relational, &repo_id,
+                )
+                .await
+                .context("clearing current clone edges while clone rebuild is disabled")?;
+                return Ok(IngestResult::new(
+                    json!({
+                        "symbol_clone_edges_upserted": 0,
+                        "symbol_clone_sources_scored": 0,
+                        "current_symbol_clone_edges_upserted": 0,
+                        "current_symbol_clone_sources_scored": 0,
+                        "embeddings_enabled": false,
+                        "current_symbol_clone_edges_deleted": true,
+                    }),
+                    "skipped clone edge rebuild because semantic embeddings are disabled",
+                ));
+            }
             let options = clone_rebuild_scoring_options(&config);
             let build = crate::capability_packs::semantic_clones::pipeline::rebuild_symbol_clone_edges_with_options(
                 relational,

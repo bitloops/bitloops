@@ -13,8 +13,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use toml_edit::{DocumentMut, Item};
 
+use crate::config::settings::settings_local_path;
 use crate::config::{
-    prepare_daemon_platform_embeddings_install, resolve_daemon_config_path_for_repo,
+    RepoSemanticEmbeddingPolicy, prepare_daemon_platform_embeddings_install,
+    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
+    set_repo_semantic_embedding_policy,
 };
 use crate::host::inference::BITLOOPS_PLATFORM_EMBEDDINGS_RUNTIME_ID;
 use crate::utils::platform_dirs::bitloops_data_dir;
@@ -89,7 +92,8 @@ pub(crate) fn install_or_configure_platform_embeddings(
     gateway_url: Option<&str>,
     api_key_env: &str,
 ) -> Result<Vec<String>> {
-    let config_path = resolve_daemon_config_path_for_repo(repo_root)?;
+    let config_path = resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| resolve_daemon_config_path_for_repo(repo_root))?;
     let plan = prepare_daemon_platform_embeddings_install(&config_path, gateway_url, api_key_env)?;
     plan.apply()?;
 
@@ -103,6 +107,10 @@ pub(crate) fn install_or_configure_platform_embeddings(
     let apply_result = plan.apply_with_managed_runtime_path(&install.binary_path);
     match apply_result {
         Ok(()) => {
+            set_repo_semantic_embedding_policy(
+                &settings_local_path(repo_root),
+                &RepoSemanticEmbeddingPolicy::enabled_with_profile(&plan.profile_name),
+            )?;
             let mut lines = vec![format!(
                 "Configured platform embeddings in {}.",
                 config_path.display()

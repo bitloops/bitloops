@@ -19,6 +19,8 @@ pub(super) fn ensure_child_table<'a>(table: &'a mut Table, key: &str) -> &'a mut
         .expect("TOML item should be a table after initialisation")
 }
 
+/// Reads legacy daemon-global semantic embedding bindings for migration and
+/// warm-existing installer behavior.
 pub(super) fn selected_inference_profile_name(doc: &DocumentMut) -> Option<String> {
     let inference = doc
         .as_table()

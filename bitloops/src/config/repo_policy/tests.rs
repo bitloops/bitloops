@@ -91,6 +91,101 @@ config_path = "/tmp/daemon-b/config.toml"
 }
 
 #[test]
+fn semantic_clones_policy_merges_shared_and_local_values() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+    std::fs::write(
+        temp.path().join(REPO_POLICY_FILE_NAME),
+        r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+ann_neighbors = 7
+
+[semantic_clones.inference]
+code_embeddings = "shared_code"
+summary_embeddings = "shared_summary"
+"#,
+    )
+    .expect("write shared policy");
+    std::fs::write(
+        temp.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+        r#"
+[semantic_clones]
+embedding_mode = "off"
+
+[semantic_clones.inference]
+summary_embeddings = "local_summary"
+"#,
+    )
+    .expect("write local policy");
+
+    let snapshot = discover_repo_policy(temp.path()).expect("discover policy");
+
+    assert_eq!(
+        snapshot.semantic_clones.get("embedding_mode"),
+        Some(&serde_json::json!("off"))
+    );
+    assert_eq!(
+        snapshot.semantic_clones.get("ann_neighbors"),
+        Some(&serde_json::json!(7))
+    );
+    assert_eq!(
+        snapshot
+            .semantic_clones
+            .get("inference")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|inference| inference.get("code_embeddings")),
+        Some(&serde_json::json!("shared_code"))
+    );
+    assert_eq!(
+        snapshot
+            .semantic_clones
+            .get("inference")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|inference| inference.get("summary_embeddings")),
+        Some(&serde_json::json!("local_summary"))
+    );
+}
+
+#[test]
+fn semantic_clones_policy_changes_repo_policy_fingerprint() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
+    let policy_path = temp.path().join(REPO_POLICY_FILE_NAME);
+    std::fs::write(
+        &policy_path,
+        r#"
+[capture]
+enabled = true
+
+[semantic_clones]
+embedding_mode = "off"
+"#,
+    )
+    .expect("write first policy");
+    let first = discover_repo_policy(temp.path())
+        .expect("discover first policy")
+        .fingerprint;
+
+    std::fs::write(
+        &policy_path,
+        r#"
+[capture]
+enabled = true
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+"#,
+    )
+    .expect("write second policy");
+    let second = discover_repo_policy(temp.path())
+        .expect("discover second policy")
+        .fingerprint;
+
+    assert_ne!(first, second);
+}
+
+#[test]
 fn local_scope_exclusions_replace_shared_values() {
     let temp = tempfile::tempdir().expect("temp dir");
     std::fs::create_dir_all(temp.path().join(".git")).expect("create .git");
