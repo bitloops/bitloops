@@ -24,10 +24,12 @@ Bitloops prefers daemon config and repo policy over environment variables. The l
 
 ## Inference Configuration
 
-Configure embeddings and text generation through the daemon config:
+Configure inference runtimes and profiles through the daemon config, and repo semantic embedding intent through project policy:
 
-- `[semantic_clones]` for capability policy such as `summary_mode` and `embedding_mode`
-- `[semantic_clones.inference]` for slot bindings such as `summary_generation`, `code_embeddings`, and `summary_embeddings`
+- daemon `[semantic_clones]` for capability policy such as `summary_mode`
+- daemon `[semantic_clones.inference]` for daemon-owned slot bindings such as `summary_generation`
+- repo `.bitloops.local.toml` or `.bitloops.toml` `[semantic_clones]` for `embedding_mode`
+- repo `[semantic_clones.inference]` for `code_embeddings` and `summary_embeddings` profile bindings
 - `[inference.runtimes.<name>]` for executable-backed runtimes such as the standalone `bitloops-local-embeddings`, `bitloops-platform-embeddings`, and `bitloops-inference` binaries
 - `[inference.profiles.<name>]` for embeddings and text-generation profiles
 

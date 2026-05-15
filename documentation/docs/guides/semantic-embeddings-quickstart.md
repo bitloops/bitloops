@@ -67,7 +67,7 @@ bitloops embeddings install --runtime platform --gateway-url https://gateway.exa
 
 ## Config Location And Targeting
 
-Inference runtimes, profiles, and semantic-clones slot bindings live in the Bitloops daemon config.
+Inference runtimes and profiles live in the Bitloops daemon config. Each repo opts into semantic embeddings through project policy (`.bitloops.local.toml` or `.bitloops.toml`) by binding those daemon profile names under `[semantic_clones.inference]`.
 
 Typical macOS location, for example:
 
@@ -91,13 +91,9 @@ That same resolved path is used for both config mutation and runtime bootstrap.
 
 ## Default Local Embeddings Config
 
-When Bitloops auto-configures embeddings, it writes the minimum profile required for the default local setup:
+When Bitloops auto-configures embeddings, it writes the minimum daemon profile required for the default local setup and a repo-local opt-in:
 
 ```toml
-[semantic_clones.inference]
-code_embeddings = "local_code"
-summary_embeddings = "local_code"
-
 [inference.runtimes.bitloops_local_embeddings]
 command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-local-embeddings/bitloops-local-embeddings"
 args = []
@@ -111,6 +107,15 @@ runtime = "bitloops_local_embeddings"
 model = "bge-m3"
 ```
 
+```toml title=".bitloops.local.toml"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+```
+
 Notes:
 
 - `local_code` is the default auto-created local embeddings profile name.
@@ -118,19 +123,14 @@ Notes:
 - `bge-m3` is the default auto-created local embeddings model.
 - When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above.
 - Use `command = "bitloops-local-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
-- If an active embedding profile already exists, Bitloops does not overwrite it.
-- If that existing active profile is local, Bitloops still runs the normal warm/bootstrap path for it.
-- If that existing active profile is hosted or otherwise non-local, Bitloops treats embeddings as already enabled and skips local runtime bootstrap.
+- Existing legacy daemon embedding bindings are preserved by migrating the profile names into repo policy.
+- New installs do not write repo embedding opt-in into the daemon config.
 
 ## Hosted Platform Embeddings Config
 
-The hosted gateway path writes a separate runtime and profile:
+The hosted gateway path writes a separate daemon runtime/profile and repo-local opt-in:
 
 ```toml
-[semantic_clones.inference]
-code_embeddings = "platform_code"
-summary_embeddings = "platform_code"
-
 [inference.runtimes.bitloops_platform_embeddings]
 command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-platform-embeddings/bitloops-platform-embeddings"
 args = ["--gateway-url", "https://gateway.example/v1/embeddings", "--api-key-env", "BITLOOPS_PLATFORM_GATEWAY_TOKEN"]
@@ -142,6 +142,15 @@ task = "embeddings"
 driver = "bitloops_embeddings_ipc"
 runtime = "bitloops_platform_embeddings"
 model = "bge-m3"
+```
+
+```toml title=".bitloops.local.toml"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "platform_code"
+summary_embeddings = "platform_code"
 ```
 
 The hosted runtime keeps the same daemon-facing IPC contract as the local runtime. Only the implementation behind the runtime command changes.
@@ -176,7 +185,7 @@ Notes:
 - `summary_generation` is optional when `summary_mode = "auto"`. If it is unset or unavailable, Bitloops falls back to deterministic summaries.
 - `task = "text_generation"` profiles must declare `runtime`, `temperature`, and `max_output_tokens`, and `driver` is interpreted by `bitloops-inference`.
 - `bitloops inference install` installs or repairs the managed summary runtime. Interactive `bitloops enable` and `bitloops init --install-default-daemon` can bind summaries to a local Ollama model automatically when it is available, using `http://127.0.0.1:11434/api/chat`.
-- `code_embeddings` and `summary_embeddings` can point at the same embeddings profile or at different ones.
+- Repo-policy `code_embeddings` and `summary_embeddings` can point at the same daemon embeddings profile or at different profiles.
 - For platform-specific config paths, use the configuration reference alongside your OS defaults.
 
 ## Warm The Local Model

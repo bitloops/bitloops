@@ -9,13 +9,23 @@ use super::managed::install::{
     install_managed_embeddings_binary_from_release_bytes, managed_embeddings_asset_spec_for,
 };
 use super::{
-    EmbeddingsCommand, EmbeddingsInstallState, EmbeddingsRuntime,
-    ManagedEmbeddingsBinaryInstallOutcome, clear_cache_for_profile, doctor_profile,
+    EmbeddingsArgs, EmbeddingsCommand, EmbeddingsInstallArgs, EmbeddingsInstallState,
+    EmbeddingsRuntime, ManagedEmbeddingsBinaryInstallOutcome,
+    ManagedPlatformEmbeddingsBinaryInstallOutcome, clear_cache_for_profile, doctor_profile,
     inspect_embeddings_install_state, install_or_bootstrap_embeddings,
-    platform_embeddings_gateway_url_override, pull_profile, with_managed_embeddings_install_hook,
+    install_or_configure_platform_embeddings, platform_embeddings_gateway_url_override,
+    pull_profile, with_managed_embeddings_install_hook,
+    with_managed_platform_embeddings_install_hook,
 };
 use crate::cli::Cli;
-use crate::config::{BITLOOPS_CONFIG_RELATIVE_PATH, resolve_embedding_capability_config_for_repo};
+use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
+use crate::cli::telemetry_consent::with_test_assume_daemon_running;
+use crate::config::{
+    BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_LOCAL_FILE_NAME,
+    resolve_embedding_capability_config_for_repo,
+};
+use crate::daemon::DevqlTaskSpec;
+use crate::host::runtime_store::DaemonSqliteRuntimeStore;
 use crate::test_support::process_state::{enter_process_state, with_env_vars};
 use clap::Parser;
 use std::fs;
@@ -349,6 +359,43 @@ request_timeout_secs = 5
         ),
     )
     .expect("write runtime-only config");
+}
+
+fn completed_embeddings_bootstrap_task_json(
+    task_id: &str,
+    profile_name: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "taskId": task_id,
+        "repoId": "repo-1",
+        "repoName": "repo",
+        "repoIdentity": "local/repo",
+        "kind": "EMBEDDINGS_BOOTSTRAP",
+        "source": "manual_cli",
+        "status": "COMPLETED",
+        "submittedAtUnix": 1,
+        "startedAtUnix": 2,
+        "updatedAtUnix": 3,
+        "completedAtUnix": 4,
+        "queuePosition": serde_json::Value::Null,
+        "tasksAhead": serde_json::Value::Null,
+        "error": serde_json::Value::Null,
+        "syncSpec": serde_json::Value::Null,
+        "ingestSpec": serde_json::Value::Null,
+        "embeddingsBootstrapSpec": {
+            "configPath": "/tmp/bitloops-test-config.toml",
+            "profileName": profile_name,
+        },
+        "summaryBootstrapSpec": serde_json::Value::Null,
+        "syncProgress": serde_json::Value::Null,
+        "ingestProgress": serde_json::Value::Null,
+        "embeddingsBootstrapProgress": serde_json::Value::Null,
+        "summaryBootstrapProgress": serde_json::Value::Null,
+        "syncResult": serde_json::Value::Null,
+        "ingestResult": serde_json::Value::Null,
+        "embeddingsBootstrapResult": serde_json::Value::Null,
+        "summaryBootstrapResult": serde_json::Value::Null,
+    })
 }
 
 #[test]
@@ -802,8 +849,13 @@ fn install_or_bootstrap_embeddings_writes_local_profile_and_warms_runtime() {
             let managed_command =
                 raw_managed_runtime_command(&repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH))
                     .expect("read managed runtime command");
+            let repo_policy = fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                .expect("read local repo policy");
 
-            assert!(config.contains("code_embeddings = \"local_code\""));
+            assert!(!config.contains("code_embeddings = \"local_code\""));
+            assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
+            assert!(repo_policy.contains("code_embeddings = \"local_code\""));
+            assert!(repo_policy.contains("summary_embeddings = \"local_code\""));
             assert!(config.contains("[inference.profiles.local_code]"));
             assert!(config.contains("driver = \"bitloops_embeddings_ipc\""));
             assert!(
@@ -843,6 +895,384 @@ fn install_or_bootstrap_embeddings_writes_local_profile_and_warms_runtime() {
             );
         },
     );
+}
+
+#[test]
+fn install_or_configure_platform_embeddings_persists_repo_policy() {
+    let repo = TempDir::new().expect("tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    write_runtime_only_config(repo.path(), "bitloops-platform-embeddings", &[]);
+
+    with_managed_platform_embeddings_install_hook(
+        {
+            let repo_root = repo.path().to_path_buf();
+            move || {
+                Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                    version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                    binary_path: repo_root.join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                    freshly_installed: true,
+                })
+            }
+        },
+        || {
+            install_or_configure_platform_embeddings(
+                repo.path(),
+                Some("https://gateway.example/v1/embeddings"),
+                "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+            )
+            .expect("install platform embeddings");
+
+            let config = fs::read_to_string(repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH))
+                .expect("read daemon config");
+            let repo_policy = fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                .expect("read local repo policy");
+
+            assert!(!config.contains("code_embeddings = \"platform_code\""));
+            assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
+            assert!(repo_policy.contains("code_embeddings = \"platform_code\""));
+            assert!(repo_policy.contains("summary_embeddings = \"platform_code\""));
+        },
+    );
+}
+
+#[test]
+fn install_or_configure_platform_embeddings_uses_repo_bound_daemon_config() {
+    let repo = TempDir::new().expect("tempdir");
+    let app_dirs = TempDir::new().expect("app tempdir");
+    let bound = TempDir::new().expect("bound config tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    let bound_config_path = bound.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    if let Some(parent) = bound_config_path.parent() {
+        fs::create_dir_all(parent).expect("create bound config parent");
+    }
+    fs::write(
+        &bound_config_path,
+        r#"
+[runtime]
+local_dev = false
+"#,
+    )
+    .expect("write bound daemon config");
+    fs::write(
+        repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+        format!(
+            r#"
+[daemon]
+config_path = "{}"
+"#,
+            bound_config_path.display()
+        ),
+    )
+    .expect("write repo daemon binding");
+
+    let config_root = app_dirs.path().join("config-root");
+    let data_root = app_dirs.path().join("data-root");
+    let cache_root = app_dirs.path().join("cache-root");
+    let state_root = app_dirs.path().join("state-root");
+    let config_root_value = config_root.to_string_lossy().into_owned();
+    let data_root_value = data_root.to_string_lossy().into_owned();
+    let cache_root_value = cache_root.to_string_lossy().into_owned();
+    let state_root_value = state_root.to_string_lossy().into_owned();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[
+            (
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+                Some(data_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+                Some(cache_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_value.as_str()),
+            ),
+        ],
+    );
+
+    with_managed_platform_embeddings_install_hook(
+        {
+            let repo_root = repo.path().to_path_buf();
+            move || {
+                Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                    version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                    binary_path: repo_root.join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                    freshly_installed: true,
+                })
+            }
+        },
+        || {
+            install_or_configure_platform_embeddings(
+                repo.path(),
+                Some("https://gateway.example/v1/embeddings"),
+                "BITLOOPS_PLATFORM_GATEWAY_TOKEN",
+            )
+            .expect("install platform embeddings");
+
+            let bound_config = fs::read_to_string(&bound_config_path).expect("read bound config");
+            assert!(bound_config.contains("[inference.profiles.platform_code]"));
+            assert!(bound_config.contains("runtime = \"bitloops_platform_embeddings\""));
+            assert!(!bound_config.contains("code_embeddings = \"platform_code\""));
+
+            let default_config_path = config_root.join("bitloops/config.toml");
+            if default_config_path.exists() {
+                let default_config =
+                    fs::read_to_string(default_config_path).expect("read default config");
+                assert!(
+                    !default_config.contains("[inference.profiles.platform_code]"),
+                    "platform profile should be written to the repo-bound daemon config"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn embeddings_install_local_persists_repo_policy_before_queueing_bootstrap() {
+    let repo = TempDir::new().expect("tempdir");
+    let app_dirs = TempDir::new().expect("app tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    fs::write(
+        repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "platform_code"
+summary_embeddings = "platform_code"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "bitloops-platform-embeddings"
+args = []
+
+[inference.profiles.platform_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+"#,
+    )
+    .expect("write config");
+
+    let config_root = app_dirs.path().join("config-root");
+    let data_root = app_dirs.path().join("data-root");
+    let cache_root = app_dirs.path().join("cache-root");
+    let state_root = app_dirs.path().join("state-root");
+    let config_root_value = config_root.to_string_lossy().into_owned();
+    let data_root_value = data_root.to_string_lossy().into_owned();
+    let cache_root_value = cache_root.to_string_lossy().into_owned();
+    let state_root_value = state_root.to_string_lossy().into_owned();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[
+            (
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+                Some(data_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+                Some(cache_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_value.as_str()),
+            ),
+        ],
+    );
+
+    with_test_assume_daemon_running(true, || {
+        with_ingest_daemon_bootstrap_hook(
+            |_repo_root| Ok(()),
+            || {
+                with_graphql_executor_hook(
+                    |_repo_root, _query, variables| {
+                        let task_id = variables["id"].as_str().unwrap_or("embeddings-task-1");
+                        Ok(serde_json::json!({
+                            "task": completed_embeddings_bootstrap_task_json(
+                                task_id,
+                                "local_code"
+                            )
+                        }))
+                    },
+                    || {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("runtime");
+                        runtime
+                            .block_on(super::run_async(EmbeddingsArgs {
+                                command: Some(EmbeddingsCommand::Install(EmbeddingsInstallArgs {
+                                    runtime: EmbeddingsRuntime::Local,
+                                    gateway_url: None,
+                                    api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                })),
+                            }))
+                            .expect("run embeddings install");
+
+                        let repo_policy =
+                            fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                                .expect("read local repo policy");
+                        assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
+                        assert!(repo_policy.contains("code_embeddings = \"local_code\""));
+                        assert!(repo_policy.contains("summary_embeddings = \"local_code\""));
+
+                        let daemon_config =
+                            fs::read_to_string(repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH))
+                                .expect("read daemon config");
+                        assert!(
+                            daemon_config
+                                .contains("[inference.runtimes.bitloops_local_embeddings]")
+                        );
+                        assert!(daemon_config.contains("[inference.profiles.local_code]"));
+                        assert!(daemon_config.contains("runtime = \"bitloops_local_embeddings\""));
+
+                        let state = DaemonSqliteRuntimeStore::open()
+                            .expect("open daemon store")
+                            .load_devql_task_queue_state()
+                            .expect("load task queue")
+                            .expect("task queue state");
+                        let task = state.tasks.last().expect("queued embeddings task");
+                        let DevqlTaskSpec::EmbeddingsBootstrap(spec) = &task.spec else {
+                            panic!("expected embeddings bootstrap task, got {:?}", task.spec);
+                        };
+                        assert_eq!(spec.profile_name, "local_code");
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn embeddings_install_local_rolls_back_policy_and_profile_when_watch_fails() {
+    let repo = TempDir::new().expect("tempdir");
+    let app_dirs = TempDir::new().expect("app tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    let original_config = r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "platform_code"
+summary_embeddings = "platform_code"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "bitloops-platform-embeddings"
+args = []
+
+[inference.profiles.platform_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+"#;
+    fs::write(
+        repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        original_config,
+    )
+    .expect("write config");
+
+    let config_root = app_dirs.path().join("config-root");
+    let data_root = app_dirs.path().join("data-root");
+    let cache_root = app_dirs.path().join("cache-root");
+    let state_root = app_dirs.path().join("state-root");
+    let config_root_value = config_root.to_string_lossy().into_owned();
+    let data_root_value = data_root.to_string_lossy().into_owned();
+    let cache_root_value = cache_root.to_string_lossy().into_owned();
+    let state_root_value = state_root.to_string_lossy().into_owned();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[
+            (
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+                Some(data_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+                Some(cache_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_value.as_str()),
+            ),
+        ],
+    );
+
+    with_test_assume_daemon_running(true, || {
+        with_ingest_daemon_bootstrap_hook(
+            |_repo_root| Ok(()),
+            || {
+                with_graphql_executor_hook(
+                    |_repo_root, _query, _variables| anyhow::bail!("simulated task watch failure"),
+                    || {
+                        let runtime = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("runtime");
+                        let err = runtime
+                            .block_on(super::run_async(EmbeddingsArgs {
+                                command: Some(EmbeddingsCommand::Install(EmbeddingsInstallArgs {
+                                    runtime: EmbeddingsRuntime::Local,
+                                    gateway_url: None,
+                                    api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                })),
+                            }))
+                            .expect_err("watch failure should fail local install");
+
+                        assert!(
+                            format!("{err:#}").contains("simulated task watch failure"),
+                            "unexpected error: {err:#}"
+                        );
+                        let daemon_config =
+                            fs::read_to_string(repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH))
+                                .expect("read daemon config");
+                        assert_eq!(daemon_config, original_config);
+                        let repo_policy =
+                            fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                                .unwrap_or_default();
+                        assert!(
+                            !repo_policy.contains("[semantic_clones]"),
+                            "repo embedding policy should be restored after failed install:\n{repo_policy}"
+                        );
+                    },
+                );
+            },
+        );
+    });
 }
 
 #[test]

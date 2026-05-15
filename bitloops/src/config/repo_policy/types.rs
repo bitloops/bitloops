@@ -18,6 +18,8 @@ pub struct RepoPolicySnapshot {
     pub scope: Value,
     pub contexts: Value,
     pub agents: Value,
+    pub semantic_clones: Value,
+    pub semantic_clones_present: bool,
     pub knowledge_import_paths: Vec<String>,
     pub imported_knowledge: Vec<ImportedKnowledgeConfig>,
     pub fingerprint: String,
@@ -52,6 +54,8 @@ pub(super) struct RepoPolicyFingerprintInputs<'a> {
     pub(super) scope_exclusions: &'a RepoPolicyScopeExclusions,
     pub(super) contexts: &'a Value,
     pub(super) agents: &'a Value,
+    pub(super) semantic_clones: &'a Value,
+    pub(super) semantic_clones_present: bool,
     pub(super) knowledge_import_paths: &'a [String],
     pub(super) imported_knowledge: &'a [ImportedKnowledgeConfig],
 }
@@ -77,6 +81,8 @@ pub(super) struct RepoPolicyTomlFile {
     pub(super) contexts: Option<Value>,
     #[serde(default)]
     pub(super) agents: Option<Value>,
+    #[serde(default)]
+    pub(super) semantic_clones: Option<Value>,
     #[serde(default)]
     pub(super) daemon: RepoPolicyDaemon,
     #[serde(default)]

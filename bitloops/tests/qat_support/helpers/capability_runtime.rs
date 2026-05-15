@@ -52,6 +52,21 @@ fn append_scenario_capability_config(world: &QatWorld, config: &str) -> Result<(
     Ok(())
 }
 
+fn write_scenario_repo_semantic_clone_policy(world: &QatWorld) -> Result<()> {
+    let policy_path = settings_local_path(world.repo_dir());
+    let policy = RepoSemanticEmbeddingPolicy {
+        present: true,
+        embedding_mode: Some(SemanticCloneEmbeddingMode::Deterministic),
+        inference: SemanticClonesInferenceBindings {
+            summary_generation: None,
+            code_embeddings: Some("fake".to_string()),
+            summary_embeddings: Some("fake".to_string()),
+        },
+    };
+    set_repo_semantic_embedding_policy(&policy_path, &policy)
+        .with_context(|| format!("writing {}", policy_path.display()))
+}
+
 #[cfg(unix)]
 fn fake_embeddings_runtime_command_and_args(
     world: &QatWorld,
@@ -536,6 +551,7 @@ pub fn configure_semantic_clones_with_guide_aligned_fake_runtime(
         &summary_args,
     );
     write_scenario_capability_config(world, &config)?;
+    write_scenario_repo_semantic_clone_policy(world)?;
     append_world_log(
         world,
         &format!(

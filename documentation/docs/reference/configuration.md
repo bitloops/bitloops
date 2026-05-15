@@ -37,9 +37,12 @@ The daemon config owns:
 
 - Store backends and custom store paths
 - Provider credentials
-- Inference runtimes, profiles, and capability bindings
+- Inference runtimes and profiles
+- Daemon-owned capability bindings such as semantic summary generation
 - Dashboard defaults
 - Daemon runtime defaults such as `local_dev`, logging, and telemetry
+
+Repo semantic embedding intent is project policy, not daemon policy. The daemon may define a `local_code` or `platform_code` profile, but each repo opts into or out of using that profile in `.bitloops.local.toml` or `.bitloops.toml`.
 
 Example:
 
@@ -73,14 +76,11 @@ token = "${ATLASSIAN_TOKEN}"
 
 [semantic_clones]
 summary_mode = "auto"
-embedding_mode = "semantic_aware_once"
 ann_neighbors = 5
 enrichment_workers = 1
 
 [semantic_clones.inference]
 summary_generation = "summary_llm"
-code_embeddings = "local_code"
-summary_embeddings = "local_code"
 
 [context_guidance.inference]
 guidance_generation = "guidance_llm"
@@ -210,13 +210,9 @@ That means:
 
 ### Default Embeddings Enablement
 
-When Bitloops auto-enables the default local embeddings profile through `bitloops enable --install-embeddings`, interactive `bitloops enable`, or `bitloops init --install-default-daemon` after you choose `Local runtime`, it creates the minimum daemon config needed for that local profile only when no active profile is already configured:
+When Bitloops auto-enables the default local embeddings profile through `bitloops enable --install-embeddings`, interactive `bitloops enable`, `bitloops embeddings install`, or `bitloops init --install-default-daemon` after you choose `Local runtime`, it creates the minimum daemon config needed for that local profile and writes the repo opt-in to project policy:
 
 ```toml
-[semantic_clones.inference]
-code_embeddings = "local_code"
-summary_embeddings = "local_code"
-
 [inference.runtimes.bitloops_local_embeddings]
 command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-local-embeddings/bitloops-local-embeddings"
 args = []
@@ -230,6 +226,15 @@ runtime = "bitloops_local_embeddings"
 model = "bge-m3"
 ```
 
+```toml title=".bitloops.local.toml"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+```
+
 Notes:
 
 - `local_code` is the default auto-created local embeddings profile name.
@@ -238,18 +243,14 @@ Notes:
 - `bge-m3` is the default auto-created local model.
 - When Bitloops installs the managed runtime, it writes an absolute path under the Bitloops data directory, as shown above.
 - Use `command = "bitloops-local-embeddings"` only when you are managing that standalone binary yourself on `PATH`.
-- Existing active embedding profiles are preserved. Bitloops does not overwrite an already configured non-local active profile.
+- Existing legacy daemon embedding bindings are preserved by migrating their profile names into repo policy; new installs do not write repo opt-in into daemon config.
 - The same runtime warm/bootstrap path used by `bitloops embeddings pull local_code` is reused for local-profile setup.
 
 ### Platform Embeddings Enablement
 
-When you select the hosted gateway path, Bitloops writes a separate managed runtime and profile:
+When you select the hosted gateway path, Bitloops writes a separate managed runtime/profile and repo opt-in:
 
 ```toml
-[semantic_clones.inference]
-code_embeddings = "platform_code"
-summary_embeddings = "platform_code"
-
 [inference.runtimes.bitloops_platform_embeddings]
 command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-platform-embeddings/bitloops-platform-embeddings"
 args = ["--gateway-url", "https://gateway.example/v1/embeddings", "--api-key-env", "BITLOOPS_PLATFORM_GATEWAY_TOKEN"]
@@ -261,6 +262,15 @@ task = "embeddings"
 driver = "bitloops_embeddings_ipc"
 runtime = "bitloops_platform_embeddings"
 model = "bge-m3"
+```
+
+```toml title=".bitloops.local.toml"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "platform_code"
+summary_embeddings = "platform_code"
 ```
 
 Notes:
@@ -381,6 +391,7 @@ The current repo-policy surface is:
 - `watch`
 - `scope`
 - `agents`
+- `semantic_clones`
 - `imports`
 
 Example shared policy:
@@ -422,6 +433,13 @@ strategy = "manual-commit"
 [agents]
 supported = ["claude-code"]
 devql_guidance_enabled = true
+
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
 ```
 
 Example local override layered on top of a shared project file:
@@ -443,6 +461,8 @@ Notes:
 - `bitloops init --disable-devql-guidance` writes `devql_guidance_enabled = false` and skips installing repo-local DevQL guidance surfaces.
 - `bitloops enable --devql-guidance` reinstalls those repo-local DevQL guidance surfaces without changing capture state.
 - `bitloops disable --devql-guidance` removes those repo-local DevQL guidance surfaces without changing capture state.
+- `[semantic_clones].embedding_mode = "off"` disables repo code embeddings, identity embeddings, summary embeddings, and clone rebuild work even when the daemon defines embedding profiles.
+- When `[semantic_clones]` is present, `code_embeddings` and `summary_embeddings` are repo-owned profile bindings. The named profiles must still be defined under `[inference.profiles]` in the effective daemon config.
 
 ### Scope Exclusions
 

@@ -8,7 +8,8 @@ use crate::config::BITLOOPS_CONFIG_RELATIVE_PATH;
 use crate::config::unified_config::resolve_embedding_capability_from_unified;
 use crate::config::{
     EmbeddingCapabilityConfig, EmbeddingProfileConfig, InferenceTask, load_daemon_settings,
-    resolve_daemon_config_path_for_repo,
+    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
+    resolve_embedding_capability_config_for_repo,
 };
 use crate::host::inference::{
     BITLOOPS_EMBEDDINGS_IPC_DRIVER, BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID,
@@ -47,15 +48,15 @@ pub(crate) struct PulledEmbeddingProfileOutcome {
 }
 
 pub(crate) fn inspect_embeddings_install_state(repo_root: &Path) -> EmbeddingsInstallState {
-    let Ok(config_path) = resolve_daemon_config_path_for_repo(repo_root) else {
+    let Ok(config_path) = resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| resolve_daemon_config_path_for_repo(repo_root))
+    else {
         return EmbeddingsInstallState::NotConfigured;
     };
     if !config_path.is_file() {
         return EmbeddingsInstallState::NotConfigured;
     }
-    let Ok(capability) = embedding_capability_for_config_path(&config_path) else {
-        return EmbeddingsInstallState::NotConfigured;
-    };
+    let capability = resolve_embedding_capability_config_for_repo(repo_root);
     let Some(profile_name) = selected_inference_profile_name(&capability).map(ToOwned::to_owned)
     else {
         return EmbeddingsInstallState::NotConfigured;

@@ -6,8 +6,9 @@ use bitloops::adapters::agents::{
 };
 use bitloops::config::settings::{load_settings, set_devql_producer_settings, settings_local_path};
 use bitloops::config::{
+    RepoSemanticEmbeddingPolicy, SemanticCloneEmbeddingMode, SemanticClonesInferenceBindings,
     resolve_duckdb_db_path_for_repo, resolve_sqlite_db_path_for_repo,
-    resolve_store_backend_config_for_repo,
+    resolve_store_backend_config_for_repo, set_repo_semantic_embedding_policy,
 };
 use bitloops::daemon::resolve_daemon_config;
 use bitloops::daemon::{DevqlTaskKind, DevqlTaskSource, DevqlTaskStatus};

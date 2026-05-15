@@ -21,6 +21,19 @@ use super::toml::{
 pub(crate) fn prepare_daemon_embeddings_install(
     config_path: &Path,
 ) -> Result<DaemonEmbeddingsInstallPlan> {
+    prepare_daemon_embeddings_install_with_mode(config_path, true)
+}
+
+pub(crate) fn prepare_daemon_local_embeddings_profile_install(
+    config_path: &Path,
+) -> Result<DaemonEmbeddingsInstallPlan> {
+    prepare_daemon_embeddings_install_with_mode(config_path, false)
+}
+
+fn prepare_daemon_embeddings_install_with_mode(
+    config_path: &Path,
+    respect_selected_profile: bool,
+) -> Result<DaemonEmbeddingsInstallPlan> {
     const DEFAULT_LOCAL_PROFILE: &str = "local_code";
     const DEFAULT_LOCAL_MODEL: &str = "bge-m3";
 
@@ -43,7 +56,7 @@ pub(crate) fn prepare_daemon_embeddings_install(
         None => DocumentMut::new(),
     };
 
-    if let Some(profile_name) = selected_inference_profile_name(&doc) {
+    if respect_selected_profile && let Some(profile_name) = selected_inference_profile_name(&doc) {
         let profile_driver = inference_driver_for_profile(&doc, &profile_name);
         let profile_runtime = inference_runtime_for_profile(&doc, &profile_name);
         let mode = if profile_driver.as_deref() == Some(BITLOOPS_EMBEDDINGS_IPC_DRIVER)
@@ -72,31 +85,15 @@ pub(crate) fn prepare_daemon_embeddings_install(
             "cannot install default local embeddings because profile `{DEFAULT_LOCAL_PROFILE}` already exists with driver `{kind}`"
         );
     }
-
-    let mut modified = false;
+    if let Some(runtime) = inference_runtime_for_profile(&doc, DEFAULT_LOCAL_PROFILE)
+        && runtime != BITLOOPS_LOCAL_EMBEDDINGS_RUNTIME_ID
     {
-        let semantic_clones = ensure_table(&mut doc, "semantic_clones");
-        let inference = ensure_child_table(semantic_clones, "inference");
-        if inference
-            .get("code_embeddings")
-            .and_then(Item::as_value)
-            .and_then(|value| value.as_str())
-            != Some(DEFAULT_LOCAL_PROFILE)
-        {
-            inference["code_embeddings"] = Item::Value(DEFAULT_LOCAL_PROFILE.into());
-            modified = true;
-        }
-        if inference
-            .get("summary_embeddings")
-            .and_then(Item::as_value)
-            .and_then(|value| value.as_str())
-            != Some(DEFAULT_LOCAL_PROFILE)
-        {
-            inference["summary_embeddings"] = Item::Value(DEFAULT_LOCAL_PROFILE.into());
-            modified = true;
-        }
+        bail!(
+            "cannot install default local embeddings because profile `{DEFAULT_LOCAL_PROFILE}` already exists with runtime `{runtime}`"
+        );
     }
 
+    let mut modified = false;
     {
         let inference = ensure_table(&mut doc, "inference");
 
@@ -235,27 +232,6 @@ pub(crate) fn prepare_daemon_platform_embeddings_install(
             .with_context(|| format!("parsing Bitloops daemon config {}", config_path.display()))?,
         None => DocumentMut::new(),
     };
-
-    {
-        let semantic_clones = ensure_table(&mut doc, "semantic_clones");
-        let inference = ensure_child_table(semantic_clones, "inference");
-        if inference
-            .get("code_embeddings")
-            .and_then(Item::as_value)
-            .and_then(|value| value.as_str())
-            != Some(DEFAULT_PLATFORM_PROFILE)
-        {
-            inference["code_embeddings"] = Item::Value(DEFAULT_PLATFORM_PROFILE.into());
-        }
-        if inference
-            .get("summary_embeddings")
-            .and_then(Item::as_value)
-            .and_then(|value| value.as_str())
-            != Some(DEFAULT_PLATFORM_PROFILE)
-        {
-            inference["summary_embeddings"] = Item::Value(DEFAULT_PLATFORM_PROFILE.into());
-        }
-    }
 
     {
         let inference = ensure_table(&mut doc, "inference");

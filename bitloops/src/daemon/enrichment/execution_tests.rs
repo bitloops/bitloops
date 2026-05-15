@@ -336,6 +336,25 @@ fn remove_summary_embedding_slot(repo_root: &Path, profile_name: &str) {
         .expect("write daemon code-only embedding config");
 }
 
+fn activate_summary_embedding_slot_for_workplane(repo_root: &Path) {
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    let config = fs::read_to_string(&config_path).expect("read daemon embedding config");
+    let config = config.replace("summary_mode = \"off\"", "summary_mode = \"auto\"");
+    let config = config.replace(
+        "[semantic_clones.inference]\n",
+        "[semantic_clones.inference]\nsummary_generation = \"summary_generation_for_tests\"\n",
+    );
+    fs::write(config_path, config).expect("write summary embedding active daemon config");
+}
+
+fn write_repo_embedding_policy_off(repo_root: &Path) {
+    crate::config::set_repo_semantic_embedding_policy(
+        &crate::config::settings::settings_local_path(repo_root),
+        &crate::config::RepoSemanticEmbeddingPolicy::disabled(),
+    )
+    .expect("write repo embedding policy off");
+}
+
 #[test]
 fn fake_runtime_scripts_bake_runtime_metadata_without_process_env() {
     let repo = TempDir::new().expect("temp dir");
@@ -703,6 +722,55 @@ fn load_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
         |row| row.get(0),
     )
     .expect("count clone edges")
+}
+
+fn load_historical_clone_edge_count(sqlite_path: &Path, repo_id: &str) -> i64 {
+    let conn = rusqlite::Connection::open(sqlite_path).expect("open sqlite db");
+    conn.query_row(
+        "SELECT COUNT(*) FROM symbol_clone_edges WHERE repo_id = ?1",
+        [repo_id],
+        |row| row.get(0),
+    )
+    .expect("count historical clone edges")
+}
+
+fn workplane_repo_backfill_job(
+    cfg: &DevqlConfig,
+    job_id: &str,
+    mailbox_name: &str,
+    work_item_count: u64,
+) -> WorkplaneJobRecord {
+    WorkplaneJobRecord {
+        job_id: job_id.to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name: mailbox_name.to_string(),
+        init_session_id: None,
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                mailbox_name,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(work_item_count),
+                artefact_ids: None,
+            },
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    }
 }
 
 fn hash_by_symbol(rows: &[CurrentEmbeddingRow]) -> BTreeMap<String, String> {
@@ -1511,6 +1579,115 @@ async fn workplane_embedding_repo_backfill_job_processes_current_repo_inputs() {
 }
 
 #[tokio::test]
+async fn workplane_embedding_job_skips_when_repo_policy_disables_embeddings() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "off-policy-workplane-model",
+        "3",
+    )
+    .await;
+    write_repo_embedding_policy_off(repo.path());
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-off-policy-embedding".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+                .to_string(),
+        init_session_id: None,
+        dedupe_key: Some(
+            crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+            ),
+        ),
+        payload: serde_json::to_value(
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::RepoBackfill {
+                work_item_count: Some(2),
+                artefact_ids: None,
+            },
+        )
+        .expect("serialize repo backfill payload"),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+
+    assert!(outcome.error.is_none());
+    assert!(outcome.follow_ups.is_empty());
+    assert!(load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty());
+    assert!(
+        fake_embedding_request_lines(repo.path()).is_empty(),
+        "off-policy queued workplane embedding job must not invoke the provider"
+    );
+}
+
+#[tokio::test]
+async fn workplane_inactive_summary_embedding_job_noops_without_clone_rebuild_follow_up() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "inactive-summary-workplane-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let selected = inputs
+        .iter()
+        .find(|input| input.path == "src/invoice.ts")
+        .expect("invoice artefact input");
+    let job = WorkplaneJobRecord {
+        job_id: "workplane-inactive-summary-job".to_string(),
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        capability_id: SEMANTIC_CLONES_CAPABILITY_ID.to_string(),
+        mailbox_name:
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+                .to_string(),
+        init_session_id: None,
+        dedupe_key: Some(selected.artefact_id.clone()),
+        payload: serde_json::json!({ "artefact_id": selected.artefact_id }),
+        status: WorkplaneJobStatus::Pending,
+        attempts: 0,
+        available_at_unix: 1,
+        submitted_at_unix: 1,
+        started_at_unix: None,
+        updated_at_unix: 1,
+        completed_at_unix: None,
+        lease_owner: None,
+        lease_expires_at_unix: None,
+        last_error: None,
+    };
+
+    let outcome = execute_workplane_job(&job).await;
+
+    assert!(outcome.error.is_none());
+    assert!(outcome.follow_ups.is_empty());
+    assert!(load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty());
+    assert!(
+        fake_embedding_request_lines(repo.path()).is_empty(),
+        "inactive summary embedding workplane job must not invoke the provider"
+    );
+}
+
+#[tokio::test]
 async fn prepare_embedding_mailbox_batch_with_explicit_repo_backfill_ids_skips_unrelated_current_paths()
  {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
@@ -1588,6 +1765,131 @@ WHERE repo_id = '{}' AND path = '{}'",
     assert!(
         !prepared.commit.embedding_statements.is_empty(),
         "requested artefact should still produce embedding work"
+    );
+}
+
+#[tokio::test]
+async fn prepare_embedding_mailbox_batch_acks_when_repo_policy_disables_embeddings() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "off-policy-mailbox-model",
+        "3",
+    )
+    .await;
+    write_repo_embedding_policy_off(repo.path());
+    let selected = inputs.first().expect("at least one current semantic input");
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code,
+        lease_token: "off-policy-mailbox-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "off-policy-mailbox-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(selected.artefact_id.clone()),
+            payload_json: None,
+            dedupe_key: Some(selected.artefact_id.clone()),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("off-policy-mailbox-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("off-policy batch should ack without retrying");
+
+    assert_eq!(prepared.expanded_count, 0);
+    assert!(prepared.commit.embedding_statements.is_empty());
+    assert!(prepared.commit.setup_statements.is_empty());
+    assert!(prepared.commit.clone_rebuild_signal.is_none());
+    assert_eq!(
+        prepared.commit.acked_item_ids,
+        vec!["off-policy-mailbox-item".to_string()]
+    );
+    assert!(
+        fake_embedding_request_lines(repo.path()).is_empty(),
+        "off-policy legacy mailbox batch must not invoke the provider"
+    );
+}
+
+#[tokio::test]
+async fn prepare_summary_embedding_mailbox_batch_acks_when_summary_embeddings_inactive() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "inactive-summary-mailbox-model",
+        "3",
+    )
+    .await;
+    let selected = inputs.first().expect("at least one current semantic input");
+    let batch = super::super::workplane::ClaimedEmbeddingMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        representation_kind:
+            crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary,
+        lease_token: "inactive-summary-mailbox-lease".to_string(),
+        items: vec![SemanticEmbeddingMailboxItemRecord {
+            item_id: "inactive-summary-mailbox-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            representation_kind:
+                crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
+                    .to_string(),
+            item_kind: SemanticMailboxItemKind::Artefact,
+            artefact_id: Some(selected.artefact_id.clone()),
+            payload_json: None,
+            dedupe_key: Some(selected.artefact_id.clone()),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("inactive-summary-mailbox-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_embedding_mailbox_batch(&batch)
+        .await
+        .expect("inactive summary batch should ack without retrying");
+
+    assert_eq!(prepared.expanded_count, 0);
+    assert!(prepared.commit.embedding_statements.is_empty());
+    assert!(prepared.commit.setup_statements.is_empty());
+    assert!(prepared.commit.clone_rebuild_signal.is_none());
+    assert_eq!(
+        prepared.commit.acked_item_ids,
+        vec!["inactive-summary-mailbox-item".to_string()]
+    );
+    assert!(
+        fake_embedding_request_lines(repo.path()).is_empty(),
+        "inactive summary legacy mailbox batch must not invoke the provider"
     );
 }
 
@@ -2677,6 +2979,138 @@ async fn workplane_clone_rebuild_job_populates_current_clone_edges() {
 }
 
 #[tokio::test]
+async fn workplane_clone_rebuild_job_cleans_up_when_repo_policy_disables_embeddings() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, _relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "clone-rebuild-off-policy-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let embedding_job = workplane_repo_backfill_job(
+        &cfg,
+        "workplane-off-policy-rebuild-embedding",
+        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        2,
+    );
+    let clone_rebuild_job = workplane_repo_backfill_job(
+        &cfg,
+        "workplane-off-policy-rebuild",
+        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+        1,
+    );
+
+    let embedding_outcome = execute_workplane_job(&embedding_job).await;
+    assert!(embedding_outcome.error.is_none());
+    let rebuild_outcome = execute_workplane_job(&clone_rebuild_job).await;
+    assert!(rebuild_outcome.error.is_none());
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "test setup should populate current clone edges before policy disables rebuild"
+    );
+    assert!(
+        !load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty(),
+        "test setup should populate current embeddings before policy disables rebuild"
+    );
+
+    write_repo_embedding_policy_off(repo.path());
+    let cleanup_outcome = execute_workplane_job(&clone_rebuild_job).await;
+
+    assert!(cleanup_outcome.error.is_none());
+    assert!(cleanup_outcome.follow_ups.is_empty());
+    assert_eq!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id), 0);
+    assert!(
+        !load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty(),
+        "off-policy clone rebuild cleanup should not purge cached current embeddings"
+    );
+    assert!(
+        load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).is_some(),
+        "off-policy clone rebuild cleanup should not purge active embedding setup"
+    );
+}
+
+#[tokio::test]
+async fn direct_clone_rebuild_ingester_cleans_up_when_repo_policy_disables_embeddings() {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let (cfg, relational, _inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "direct-rebuild-off-policy-model",
+        "3",
+    )
+    .await;
+    let sqlite_path = daemon_relational_sqlite_path(repo.path());
+    let embedding_job = workplane_repo_backfill_job(
+        &cfg,
+        "direct-off-policy-rebuild-embedding",
+        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+        2,
+    );
+    let clone_rebuild_job = workplane_repo_backfill_job(
+        &cfg,
+        "direct-off-policy-rebuild-setup",
+        crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+        1,
+    );
+
+    let embedding_outcome = execute_workplane_job(&embedding_job).await;
+    assert!(embedding_outcome.error.is_none());
+    let rebuild_outcome = execute_workplane_job(&clone_rebuild_job).await;
+    assert!(rebuild_outcome.error.is_none());
+    assert!(
+        load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id) > 0,
+        "test setup should populate current clone edges before direct ingester cleanup"
+    );
+    let historical_clone_edges_before =
+        load_historical_clone_edge_count(&sqlite_path, &cfg.repo.repo_id);
+    assert!(
+        historical_clone_edges_before > 0,
+        "test setup should populate historical clone edges before direct ingester cleanup"
+    );
+    assert!(
+        !load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty(),
+        "test setup should populate current embeddings before direct ingester cleanup"
+    );
+
+    write_repo_embedding_policy_off(repo.path());
+    let repo_identity =
+        resolve_repo_identity(repo.path()).expect("resolve repo identity for direct rebuild");
+    let capability_host =
+        build_capability_host(repo.path(), repo_identity).expect("build capability host");
+    let result = capability_host
+        .invoke_ingester_with_relational(
+            SEMANTIC_CLONES_CAPABILITY_ID,
+            crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CLONE_EDGES_REBUILD_INGESTER_ID,
+            serde_json::json!({}),
+            Some(&relational),
+        )
+        .await
+        .expect("direct clone rebuild ingester should clean up without rebuilding");
+
+    assert_eq!(
+        result.payload["embeddings_enabled"],
+        serde_json::json!(false)
+    );
+    assert_eq!(load_clone_edge_count(&sqlite_path, &cfg.repo.repo_id), 0);
+    assert_eq!(
+        load_historical_clone_edge_count(&sqlite_path, &cfg.repo.repo_id),
+        historical_clone_edges_before
+    );
+    assert!(
+        !load_current_embedding_rows(&sqlite_path, &cfg.repo.repo_id).is_empty(),
+        "direct disabled clone rebuild should not purge cached current embeddings"
+    );
+    assert!(
+        load_active_setup_row(&sqlite_path, &cfg.repo.repo_id).is_some(),
+        "direct disabled clone rebuild should not purge active embedding setup"
+    );
+}
+
+#[tokio::test]
 async fn workplane_clone_rebuild_populates_edges_when_feature_projection_was_missing_before_embedding()
  {
     let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
@@ -2785,6 +3219,7 @@ async fn workplane_summary_embedding_mailbox_job_enqueues_clone_rebuild_follow_u
         "3",
     )
     .await;
+    activate_summary_embedding_slot_for_workplane(repo.path());
     let selected = inputs
         .iter()
         .find(|input| input.path == "src/invoice.ts")

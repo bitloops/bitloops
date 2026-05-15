@@ -22,7 +22,7 @@ use crate::cli::terminal_picker::with_single_select_hook;
 use crate::cli::{Cli, Commands};
 use crate::config::{
     BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_FILE_NAME, REPO_POLICY_LOCAL_FILE_NAME,
-    ensure_daemon_config_exists,
+    default_daemon_config_path, ensure_daemon_config_exists,
 };
 use crate::test_support::process_state::{with_env_vars, with_process_state};
 use crate::utils::platform_dirs::{TestPlatformDirOverrides, with_test_platform_dir_overrides};
@@ -44,6 +44,22 @@ fn setup_git_repo(dir: &TempDir) {
 
 fn write_repo_policy(dir: &TempDir, file_name: &str, content: &str) {
     std::fs::write(dir.path().join(file_name), content).expect("write repo policy");
+}
+
+fn assert_repo_embedding_policy(repo: &TempDir, profile_name: &str) {
+    assert_repo_embedding_policy_bindings(repo, profile_name, profile_name);
+}
+
+fn assert_repo_embedding_policy_bindings(
+    repo: &TempDir,
+    code_profile_name: &str,
+    summary_profile_name: &str,
+) {
+    let policy = std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+        .expect("read local policy");
+    assert!(policy.contains("embedding_mode = \"semantic_aware_once\""));
+    assert!(policy.contains(&format!("code_embeddings = \"{code_profile_name}\"")));
+    assert!(policy.contains(&format!("summary_embeddings = \"{summary_profile_name}\"")));
 }
 
 fn strip_ansi_escape_sequences(text: &str) -> String {
@@ -376,6 +392,31 @@ while (($line = $stdin.ReadLine()) -ne $null) {
             script_path.display().to_string(),
         ],
     )
+}
+
+#[cfg(unix)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    std::path::PathBuf::from(&args[0])
+}
+
+#[cfg(windows)]
+fn fake_managed_runtime_path(repo_root: &Path) -> std::path::PathBuf {
+    let script_dir = repo_root.join(".bitloops/test-bin");
+    std::fs::create_dir_all(&script_dir).expect("create managed runtime dir");
+    let powershell_script = script_dir.join("fake-managed-bitloops-local-embeddings.ps1");
+    let launcher = script_dir.join("fake-managed-bitloops-local-embeddings.cmd");
+    let (_, args) = fake_runtime_command_and_args(repo_root);
+    std::fs::copy(&args[4], &powershell_script).expect("copy managed powershell script");
+    std::fs::write(
+        &launcher,
+        format!(
+            "@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+            powershell_script.display()
+        ),
+    )
+    .expect("write managed runtime launcher");
+    launcher
 }
 
 fn write_runtime_only_daemon_config(config_path: &Path, command: &str, args: &[String]) {
@@ -1320,7 +1361,7 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -1407,7 +1448,7 @@ fn run_init_with_repeated_agent_flags_normalizes_and_deduplicates_explicit_agent
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -1467,7 +1508,7 @@ keep = true
                 backfill: None,
                 exclude: vec!["docs/**".to_string(), "**/third_party/**".to_string()],
                 exclude_from: vec![".bitloopsignore".to_string()],
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -1527,7 +1568,7 @@ fn run_init_binds_repo_to_running_daemon_config() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -1598,7 +1639,7 @@ fn run_init_requests_daemon_watcher_reconcile_when_sync_is_disabled() {
                         backfill: None,
                         exclude: Vec::new(),
                         exclude_from: Vec::new(),
-                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
                         context_guidance_runtime: None,
@@ -1793,7 +1834,7 @@ fn run_init_surfaces_daemon_watcher_reconcile_failures() {
                         backfill: None,
                         exclude: Vec::new(),
                         exclude_from: Vec::new(),
-                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
                         context_guidance_runtime: None,
@@ -1955,7 +1996,7 @@ fn run_init_requests_nested_repo_daemon_watcher_reconcile_when_sync_is_disabled(
                         backfill: None,
                         exclude: Vec::new(),
                         exclude_from: Vec::new(),
-                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
                         context_guidance_runtime: None,
@@ -2025,7 +2066,7 @@ fn run_init_does_not_request_daemon_watcher_reconcile_when_repo_setup_fails() {
                         backfill: None,
                         exclude: Vec::new(),
                         exclude_from: Vec::new(),
-                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
                         context_guidance_runtime: None,
@@ -2083,7 +2124,7 @@ fn run_init_rejects_exclude_from_paths_outside_repo_policy_root() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: vec![outside_path.display().to_string()],
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -2139,7 +2180,7 @@ fn run_init_rewrites_existing_daemon_binding() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -2203,7 +2244,7 @@ fn run_init_with_agent_flag_installs_requested_hooks_when_skip_baseline_is_reque
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -2263,7 +2304,7 @@ fn run_init_with_codex_agent_writes_project_local_codex_config_and_hooks() {
                         backfill: None,
                         exclude: Vec::new(),
                         exclude_from: Vec::new(),
-                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        embeddings_runtime: None,
                         no_embeddings: false,
                         no_summaries: false,
                         context_guidance_runtime: None,
@@ -2324,7 +2365,7 @@ fn run_init_with_gemini_agent_installs_repo_skill_and_root_import() {
                     backfill: None,
                     exclude: Vec::new(),
                     exclude_from: Vec::new(),
-                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                    embeddings_runtime: None,
                     no_embeddings: false,
                     no_summaries: false,
                     context_guidance_runtime: None,
@@ -2378,7 +2419,7 @@ fn run_init_with_copilot_agent_installs_hooks_and_repo_skill() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -2429,7 +2470,7 @@ fn run_init_with_opencode_agent_installs_plugin_and_repo_skill() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -2487,7 +2528,7 @@ fn run_init_with_disable_devql_guidance_keeps_hooks_and_skips_repo_prompt_surfac
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -2609,7 +2650,7 @@ fn run_init_with_bitloops_skill_installs_repo_prompt_surfaces_and_enables_sessio
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -2689,7 +2730,7 @@ fn run_init_with_invalid_explicit_agent_errors() {
                 backfill: None,
                 exclude: Vec::new(),
                 exclude_from: Vec::new(),
-                embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                embeddings_runtime: None,
                 no_embeddings: false,
                 no_summaries: false,
                 context_guidance_runtime: None,
@@ -3068,9 +3109,7 @@ fn run_init_prompts_for_unresolved_existing_telemetry_consent() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: Some(
-                                crate::cli::embeddings::EmbeddingsRuntime::Local,
-                            ),
+                            embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
                             context_guidance_runtime: None,
@@ -3134,9 +3173,7 @@ fn run_init_noninteractive_existing_telemetry_requires_explicit_flag() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: Some(
-                                crate::cli::embeddings::EmbeddingsRuntime::Local,
-                            ),
+                            embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
                             context_guidance_runtime: None,
@@ -3420,9 +3457,7 @@ fn run_init_without_install_default_daemon_leaves_embeddings_unconfigured() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: Some(
-                                crate::cli::embeddings::EmbeddingsRuntime::Local,
-                            ),
+                            embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
                             context_guidance_runtime: None,
@@ -3501,9 +3536,7 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                                     backfill: None,
                                     exclude: Vec::new(),
                                     exclude_from: Vec::new(),
-                                    embeddings_runtime: Some(
-                                        crate::cli::embeddings::EmbeddingsRuntime::Local,
-                                    ),
+                                    embeddings_runtime: None,
                                     no_embeddings: false,
                                     no_summaries: false,
                                     context_guidance_runtime: None,
@@ -3538,6 +3571,154 @@ fn run_init_interactive_without_install_default_daemon_skips_daemon_setup_prompt
                             !daemon_config.contains("summary_generation = "),
                             "plain init should not configure semantic summaries:\n{daemon_config}"
                         );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_without_install_default_daemon_explicit_local_persists_repo_policy() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    write_repo_policy(
+        &repo,
+        REPO_POLICY_LOCAL_FILE_NAME,
+        &format!(
+            "[daemon]\nconfig_path = {:?}\n",
+            config_path.to_string_lossy()
+        ),
+    );
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).expect("create daemon config parent");
+    }
+    write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        with_managed_embeddings_install_hook(
+            move |repo_root| {
+                Ok(
+                    crate::cli::embeddings::ManagedEmbeddingsBinaryInstallOutcome {
+                        version: "v1.2.3".to_string(),
+                        binary_path: fake_managed_runtime_path(repo_root),
+                        freshly_installed: true,
+                    },
+                )
+            },
+            || {
+                let mut out = Vec::new();
+                run_with_writer_for_project_root(
+                    InitArgs {
+                        command: None,
+                        install_default_daemon: false,
+                        force: false,
+                        disable_devql_guidance: false,
+                        agent: vec![DEFAULT_AGENT.to_string()],
+                        telemetry: Some(false),
+                        no_telemetry: false,
+                        skip_baseline: false,
+                        sync: Some(false),
+                        ingest: Some(false),
+                        backfill: None,
+                        exclude: Vec::new(),
+                        exclude_from: Vec::new(),
+                        embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                        no_embeddings: false,
+                        no_summaries: false,
+                        context_guidance_runtime: None,
+                        no_context_guidance: false,
+                        context_guidance_gateway_url: None,
+                        context_guidance_api_key_env: None,
+                        embeddings_gateway_url: None,
+                        embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                    },
+                    repo.path(),
+                    &mut out,
+                    None,
+                )
+                .expect("run init");
+
+                assert_repo_embedding_policy(&repo, "local_code");
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_without_install_default_daemon_explicit_platform_persists_repo_policy() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    write_repo_policy(
+        &repo,
+        REPO_POLICY_LOCAL_FILE_NAME,
+        &format!(
+            "[daemon]\nconfig_path = {:?}\n",
+            config_path.to_string_lossy()
+        ),
+    );
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).expect("create daemon config parent");
+    }
+    write_runtime_only_daemon_config(&config_path, "bitloops-platform-embeddings", &[]);
+
+    with_temp_app_dirs(&app_dirs, false, true, || {
+        with_ensure_logged_in_hook(
+            || Ok(fake_logged_in_session()),
+            || {
+                with_managed_platform_embeddings_install_hook(
+                    {
+                        let repo_root = repo.path().to_path_buf();
+                        move || {
+                            Ok(ManagedPlatformEmbeddingsBinaryInstallOutcome {
+                                version: "v0.2.0".to_string(),
+                                binary_path: repo_root
+                                    .join(".bitloops/test-bin/bitloops-platform-embeddings"),
+                                freshly_installed: true,
+                            })
+                        }
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        run_with_writer_for_project_root(
+                            InitArgs {
+                                command: None,
+                                install_default_daemon: false,
+                                force: false,
+                                disable_devql_guidance: false,
+                                agent: vec![DEFAULT_AGENT.to_string()],
+                                telemetry: Some(false),
+                                no_telemetry: false,
+                                skip_baseline: false,
+                                sync: Some(false),
+                                ingest: Some(false),
+                                backfill: None,
+                                exclude: Vec::new(),
+                                exclude_from: Vec::new(),
+                                embeddings_runtime: Some(
+                                    crate::cli::embeddings::EmbeddingsRuntime::Platform,
+                                ),
+                                no_embeddings: false,
+                                no_summaries: false,
+                                context_guidance_runtime: None,
+                                no_context_guidance: false,
+                                context_guidance_gateway_url: None,
+                                context_guidance_api_key_env: None,
+                                embeddings_gateway_url: None,
+                                embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                    .to_string(),
+                            },
+                            repo.path(),
+                            &mut out,
+                            None,
+                        )
+                        .expect("run init");
+
+                        assert_repo_embedding_policy(&repo, "platform_code");
                     },
                 );
             },
@@ -4292,6 +4473,495 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
 }
 
 #[test]
+fn explicit_no_embeddings_wins_over_existing_daemon_embeddings() {
+    let repo = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    let config_path = repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::write(
+        &config_path,
+        r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+summary_embeddings = "local_code"
+
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+args = []
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "bge-m3"
+"#,
+    )
+    .expect("write daemon config");
+
+    let mut out = Vec::new();
+    let mut input = Cursor::new("");
+    let selection = should_install_embeddings_during_init(
+        repo.path(),
+        &InitArgs {
+            command: None,
+            install_default_daemon: true,
+            force: false,
+            disable_devql_guidance: false,
+            agent: Vec::new(),
+            telemetry: Some(false),
+            no_telemetry: false,
+            skip_baseline: false,
+            sync: Some(false),
+            ingest: Some(false),
+            backfill: None,
+            exclude: Vec::new(),
+            exclude_from: Vec::new(),
+            embeddings_runtime: None,
+            no_embeddings: true,
+            no_summaries: false,
+            context_guidance_runtime: None,
+            no_context_guidance: false,
+            context_guidance_gateway_url: None,
+            context_guidance_api_key_env: None,
+            embeddings_gateway_url: None,
+            embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+        },
+        &mut out,
+        &mut input,
+    )
+    .expect("select embeddings setup");
+
+    assert_eq!(selection, InitEmbeddingsSetupSelection::Skip);
+}
+
+#[test]
+fn run_init_no_embeddings_persists_repo_embedding_policy_off() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                write_runtime_only_daemon_config(&config_path, "bitloops-local-embeddings", &[]);
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    command: None,
+                                    install_default_daemon: true,
+                                    force: false,
+                                    disable_devql_guidance: false,
+                                    agent: vec![DEFAULT_AGENT.to_string()],
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime: None,
+                                    no_embeddings: true,
+                                    no_summaries: false,
+                                    context_guidance_runtime: None,
+                                    no_context_guidance: false,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
+
+                        let policy =
+                            std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                                .expect("read local policy");
+                        assert!(policy.contains("[semantic_clones]"));
+                        assert!(policy.contains("embedding_mode = \"off\""));
+                        assert!(!policy.contains("code_embeddings = "));
+                        assert!(!policy.contains("summary_embeddings = "));
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_explicit_local_persists_local_policy_when_daemon_legacy_binding_is_platform() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    let repo_id = test_repo_id(repo.path());
+    let session_id = "init-session-explicit-local-over-platform";
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                std::fs::write(
+                    &config_path,
+                    r#"
+[runtime]
+local_dev = false
+
+[semantic_clones.inference]
+code_embeddings = "platform_code"
+summary_embeddings = "platform_code"
+
+[inference.runtimes.bitloops_platform_embeddings]
+command = "bitloops-platform-embeddings"
+args = []
+
+[inference.profiles.platform_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_platform_embeddings"
+model = "bge-m3"
+"#,
+                )
+                .expect("write daemon config");
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        with_graphql_executor_hook(
+                            {
+                                let repo_id = repo_id.clone();
+                                move |_repo_root, query, variables| {
+                                    if query.contains("startInit(") {
+                                        assert_eq!(variables["repoId"], repo_id);
+                                        assert_eq!(
+                                            variables["input"]["embeddingsBootstrap"]["profileName"],
+                                            json!("local_code")
+                                        );
+                                        return Ok(runtime_start_init_result_json(session_id));
+                                    }
+
+                                    if query.contains("runtimeSnapshot(") {
+                                        return Ok(runtime_snapshot_json(
+                                            repo_id.as_str(),
+                                            session_id,
+                                            RuntimeSessionSnapshotFixture {
+                                                status: "COMPLETED",
+                                                ..RuntimeSessionSnapshotFixture::default()
+                                            },
+                                        ));
+                                    }
+
+                                    panic!("unexpected repo-scoped query: {query}");
+                                }
+                            },
+                            || {
+                                let mut out = Vec::new();
+                                let mut input = Cursor::new("");
+                                let runtime = test_runtime();
+                                runtime
+                                    .block_on(run_with_io_async_for_project_root(
+                                        InitArgs {
+                                            command: None,
+                                            install_default_daemon: true,
+                                            force: false,
+                                            disable_devql_guidance: false,
+                                            agent: vec![DEFAULT_AGENT.to_string()],
+                                            telemetry: Some(false),
+                                            no_telemetry: false,
+                                            skip_baseline: false,
+                                            sync: Some(false),
+                                            ingest: Some(false),
+                                            backfill: None,
+                                            exclude: Vec::new(),
+                                            exclude_from: Vec::new(),
+                                            embeddings_runtime: Some(
+                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
+                                            ),
+                                            no_embeddings: false,
+                                            no_summaries: false,
+                                            context_guidance_runtime: None,
+                                            no_context_guidance: false,
+                                            context_guidance_gateway_url: None,
+                                            context_guidance_api_key_env: None,
+                                            embeddings_gateway_url: None,
+                                            embeddings_api_key_env:
+                                                "BITLOOPS_PLATFORM_GATEWAY_TOKEN".to_string(),
+                                        },
+                                        repo.path(),
+                                        &mut out,
+                                        &mut input,
+                                        None,
+                                    ))
+                                    .expect("run init");
+                                std::mem::forget(runtime);
+
+                                assert_repo_embedding_policy(&repo, "local_code");
+                                let config_path =
+                                    default_daemon_config_path().expect("default daemon config");
+                                let daemon_config = std::fs::read_to_string(config_path)
+                                    .expect("read daemon config");
+                                assert!(
+                                    daemon_config
+                                        .contains("[inference.runtimes.bitloops_local_embeddings]")
+                                );
+                                assert!(daemon_config.contains("[inference.profiles.local_code]"));
+                                assert!(
+                                    daemon_config
+                                        .contains("runtime = \"bitloops_local_embeddings\"")
+                                );
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_existing_selection_preserves_distinct_repo_embedding_bindings() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    write_repo_policy(
+        &repo,
+        REPO_POLICY_LOCAL_FILE_NAME,
+        r#"
+[semantic_clones]
+embedding_mode = "semantic_aware_once"
+
+[semantic_clones.inference]
+code_embeddings = "code_profile"
+summary_embeddings = "summary_profile"
+"#,
+    );
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                std::fs::write(
+                    &config_path,
+                    r#"
+[runtime]
+local_dev = false
+
+[inference.profiles.code_profile]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-large"
+
+[inference.profiles.summary_profile]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-small"
+"#,
+                )
+                .expect("write daemon config");
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    command: None,
+                                    install_default_daemon: true,
+                                    force: false,
+                                    disable_devql_guidance: false,
+                                    agent: vec![DEFAULT_AGENT.to_string()],
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime: None,
+                                    no_embeddings: false,
+                                    no_summaries: false,
+                                    context_guidance_runtime: None,
+                                    no_context_guidance: false,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
+
+                        assert_repo_embedding_policy_bindings(
+                            &repo,
+                            "code_profile",
+                            "summary_profile",
+                        );
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
+fn run_init_existing_selection_preserves_distinct_legacy_daemon_embedding_bindings() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                let config_path =
+                    ensure_daemon_config_exists().expect("create default daemon config");
+                std::fs::write(
+                    &config_path,
+                    r#"
+[runtime]
+local_dev = false
+
+[semantic_clones]
+embedding_mode = "refresh_on_upgrade"
+
+[semantic_clones.inference]
+code_embeddings = "daemon_code_profile"
+summary_embeddings = "daemon_summary_profile"
+
+[inference.profiles.daemon_code_profile]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-large"
+
+[inference.profiles.daemon_summary_profile]
+task = "embeddings"
+driver = "openai"
+model = "text-embedding-3-small"
+"#,
+                )
+                .expect("write daemon config");
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    command: None,
+                                    install_default_daemon: true,
+                                    force: false,
+                                    disable_devql_guidance: false,
+                                    agent: vec![DEFAULT_AGENT.to_string()],
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime: None,
+                                    no_embeddings: false,
+                                    no_summaries: false,
+                                    context_guidance_runtime: None,
+                                    no_context_guidance: false,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
+
+                        let policy =
+                            std::fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                                .expect("read local policy");
+                        assert!(policy.contains("embedding_mode = \"refresh_on_upgrade\""));
+                        assert!(policy.contains("code_embeddings = \"daemon_code_profile\""));
+                        assert!(policy.contains("summary_embeddings = \"daemon_summary_profile\""));
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
 fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gateway_env() {
     let repo = tempfile::tempdir().unwrap();
     let app_dirs = tempfile::tempdir().unwrap();
@@ -4401,6 +5071,24 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                                     variables["input"]["summariesBootstrap"],
                                                                     serde_json::Value::Null
                                                                 );
+                                                                let config_path =
+                                                                    default_daemon_config_path()
+                                                                        .expect("default daemon config path");
+                                                                let daemon_config =
+                                                                    std::fs::read_to_string(config_path)
+                                                                        .expect("read daemon config before init queue");
+                                                                assert!(
+                                                                    daemon_config.contains(
+                                                                        "[inference.profiles.platform_code]"
+                                                                    ),
+                                                                    "platform profile should exist before init queues bootstrap:\n{daemon_config}"
+                                                                );
+                                                                assert!(
+                                                                    !daemon_config.contains(
+                                                                        "code_embeddings = \"platform_code\""
+                                                                    ),
+                                                                    "platform setup should not write repo-owned bindings into daemon config:\n{daemon_config}"
+                                                                );
                                                                 return Ok(
                                                                     runtime_start_init_result_json(
                                                                         session_id,
@@ -4481,6 +5169,10 @@ fn run_init_with_install_default_daemon_can_configure_cloud_embeddings_from_gate
                                                         assert!(!rendered.contains(
                                                             "Installed managed standalone `bitloops-platform-embeddings` runtime"
                                                         ));
+                                                        assert_repo_embedding_policy(
+                                                            &repo,
+                                                            "platform_code",
+                                                        );
                                                     },
                                                 );
                                             },
@@ -5032,6 +5724,7 @@ fn run_init_with_install_default_daemon_starts_runtime_session_for_sync_ingest_a
                                             !rendered.contains("Starting initial DevQL sync...")
                                         );
                                         assert!(rendered.contains("Embeddings"));
+                                        assert_repo_embedding_policy(&repo, "local_code");
                                     },
                                 )
                             },
@@ -5572,9 +6265,7 @@ fn run_init_with_explicit_telemetry_choice_persists_without_prompt() {
                             backfill: None,
                             exclude: Vec::new(),
                             exclude_from: Vec::new(),
-                            embeddings_runtime: Some(
-                                crate::cli::embeddings::EmbeddingsRuntime::Local,
-                            ),
+                            embeddings_runtime: None,
                             no_embeddings: false,
                             no_summaries: false,
                             context_guidance_runtime: None,
@@ -5918,7 +6609,7 @@ fn run_init_noninteractive_requires_explicit_sync_and_ingest_choices() {
                     backfill: None,
                     exclude: Vec::new(),
                     exclude_from: Vec::new(),
-                    embeddings_runtime: Some(crate::cli::embeddings::EmbeddingsRuntime::Local),
+                    embeddings_runtime: None,
                     no_embeddings: false,
                     no_summaries: false,
                     context_guidance_runtime: None,
@@ -6044,9 +6735,7 @@ fn run_init_triggers_repo_scoped_ingest_when_enabled() {
                                             backfill: None,
                                             exclude: Vec::new(),
                                             exclude_from: Vec::new(),
-                                            embeddings_runtime: Some(
-                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
-                                            ),
+                                            embeddings_runtime: None,
                                             no_embeddings: false,
                                             no_summaries: false,
                                             context_guidance_runtime: None,
@@ -6195,9 +6884,7 @@ fn run_init_uses_explicit_backfill_for_repo_scoped_ingest() {
                                             backfill: Some(10),
                                             exclude: Vec::new(),
                                             exclude_from: Vec::new(),
-                                            embeddings_runtime: Some(
-                                                crate::cli::embeddings::EmbeddingsRuntime::Local,
-                                            ),
+                                            embeddings_runtime: None,
                                             no_embeddings: false,
                                             no_summaries: false,
                                             context_guidance_runtime: None,

@@ -13,6 +13,8 @@ pub(super) fn fingerprint_repo_policy(inputs: RepoPolicyFingerprintInputs<'_>) -
         scope_exclusions,
         contexts,
         agents,
+        semantic_clones,
+        semantic_clones_present,
         knowledge_import_paths,
         imported_knowledge,
     } = inputs;
@@ -82,6 +84,14 @@ pub(super) fn fingerprint_repo_policy(inputs: RepoPolicyFingerprintInputs<'_>) -
     );
     root.insert("contexts".into(), canonicalize_value(contexts));
     root.insert("agents".into(), canonicalize_value(agents));
+    root.insert(
+        "semantic_clones_present".into(),
+        Value::Bool(semantic_clones_present),
+    );
+    root.insert(
+        "semantic_clones".into(),
+        canonicalize_value(semantic_clones),
+    );
     root.insert(
         "imports".into(),
         Value::Object(Map::from_iter([(

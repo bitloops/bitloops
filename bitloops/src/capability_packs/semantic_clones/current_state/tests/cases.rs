@@ -10,8 +10,9 @@ use crate::host::capability_host::{
 };
 
 use super::super::super::types::{
-    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use super::super::consumer::SemanticClonesCurrentStateConsumer;
 use super::super::projection::current_repo_backfill_artefact_ids;
@@ -413,6 +414,67 @@ async fn reconcile_with_pipeline_disabled_clears_clone_edges_without_enqueuing_j
         ),
         0
     );
+    assert_eq!(metrics["enqueued_clone_rebuild"], json!(0));
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconcile_embedding_mode_off_does_not_enqueue_embedding_or_clone_rebuild_jobs()
+-> Result<()> {
+    let repo = tempdir().expect("temp repo");
+    let repo_id = "repo-policy-off";
+    let request = request(
+        repo.path(),
+        repo_id,
+        ReconcileMode::FullReconcile,
+        Vec::new(),
+        Vec::new(),
+        vec![ChangedArtefact {
+            artefact_id: "artefact-policy-off".to_string(),
+            symbol_id: "symbol-policy-off".to_string(),
+            path: "src/policy_off.ts".to_string(),
+            canonical_kind: Some("function".to_string()),
+            name: "policyOff".to_string(),
+        }],
+        Vec::new(),
+    );
+    let workplane = CapturingWorkplaneGateway::with_status(BTreeMap::from([
+        (
+            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX.to_string(),
+            crate::host::capability_host::gateways::CapabilityMailboxStatus {
+                intent_active: true,
+                ..Default::default()
+            },
+        ),
+        (
+            SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX.to_string(),
+            crate::host::capability_host::gateways::CapabilityMailboxStatus {
+                intent_active: true,
+                ..Default::default()
+            },
+        ),
+    ]));
+    let mut config = config_root(Some("summary"), Some("code"), Some("summary-embed"));
+    config[SEMANTIC_CLONES_CAPABILITY_ID]["embedding_mode"] = json!("off");
+    let ctx = test_context(config, workplane, request).await?;
+    seed_current_artefact_ids(&ctx.sqlite_path, repo_id, 2).await;
+
+    let result = SemanticClonesCurrentStateConsumer
+        .reconcile(&ctx.request, &ctx.context)
+        .await?;
+    let jobs = ctx.workplane.jobs();
+    let metrics = metrics_map(&result);
+
+    assert_eq!(
+        jobs.iter()
+            .filter(|job| job.mailbox_name == SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX)
+            .count(),
+        1
+    );
+    assert_eq!(metrics["enqueued_summary_jobs"], json!(1));
+    assert_eq!(metrics["enqueued_code_embedding_jobs"], json!(0));
+    assert_eq!(metrics["enqueued_identity_embedding_jobs"], json!(0));
+    assert_eq!(metrics["enqueued_summary_embedding_jobs"], json!(0));
     assert_eq!(metrics["enqueued_clone_rebuild"], json!(0));
     Ok(())
 }
