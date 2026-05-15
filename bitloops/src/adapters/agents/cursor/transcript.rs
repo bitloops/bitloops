@@ -36,13 +36,20 @@ impl TranscriptEntryDeriver for CursorAgent {
 
 /// Derive canonical chat entries for a Cursor transcript.
 ///
-/// Walks the transcript line by line, classifies each line by role
-/// (user vs assistant) using the host-level helpers, and emits a `USER/CHAT`
-/// or `ASSISTANT/CHAT` per message in *source order*. Strips the
-/// `<user_query>` wrapper Cursor applies to user prompts.
+/// Resolution order:
+///   1. If `transcript` parses as a single JSON document containing a
+///      `messages` array (older fixtures and tests), walk that array and
+///      emit one entry per message.
+///   2. Otherwise treat `transcript` as JSONL — walk it line by line,
+///      classifying each line by role (user vs assistant) via the host-level
+///      helpers and emitting a `USER/CHAT` or `ASSISTANT/CHAT` in source
+///      order.
 ///
-/// Falls back to the JSON-document shape (older fixtures and tests) when no
-/// JSONL lines are recognised.
+/// The JSON-document path runs first so a pretty-printed document whose
+/// inner message lines parse as valid JSON in isolation can't be silently
+/// truncated by the JSONL pass (which would otherwise skip any message that
+/// spans multiple lines). Strips the `<user_query>` wrapper Cursor applies
+/// to user prompts.
 pub fn derive_transcript_entries(
     session_id: &str,
     turn_id: Option<&str>,
@@ -55,7 +62,21 @@ pub fn derive_transcript_entries(
     let mut entries: Vec<TranscriptEntry> = Vec::new();
     let mut order: i32 = 0;
 
-    let mut pushed_any = false;
+    // Try the JSON-document shape *first* — it's a definitive shape check
+    // and avoids the trap where a pretty-printed JSON document with each
+    // message on its own line would be partially picked up by the JSONL
+    // scan below (an inner `{"role":"user","content":"…"}` line parses as
+    // valid JSON in isolation), silently truncating any message whose
+    // representation spans multiple lines.
+    if let Ok(value) = serde_json::from_str::<Value>(transcript)
+        && let Some(messages) = value.get("messages").and_then(Value::as_array)
+    {
+        for message in messages {
+            push_entry_from_value(session_id, &scope, &mut entries, &mut order, message);
+        }
+        return Ok(entries);
+    }
+
     for line in transcript.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -65,18 +86,7 @@ pub fn derive_transcript_entries(
             Ok(v) => v,
             Err(_) => continue,
         };
-        if push_entry_from_value(session_id, &scope, &mut entries, &mut order, &value) {
-            pushed_any = true;
-        }
-    }
-
-    if !pushed_any
-        && let Ok(value) = serde_json::from_str::<Value>(transcript)
-        && let Some(messages) = value.get("messages").and_then(Value::as_array)
-    {
-        for message in messages {
-            push_entry_from_value(session_id, &scope, &mut entries, &mut order, message);
-        }
+        push_entry_from_value(session_id, &scope, &mut entries, &mut order, &value);
     }
 
     Ok(entries)
@@ -379,5 +389,32 @@ mod tests {
             entries.is_empty(),
             "redacted-only assistant entries should be filtered, got {entries:?}"
         );
+    }
+
+    #[test]
+    fn pretty_printed_json_document_with_multi_line_message_is_parsed_in_full() {
+        // Regression guard: a pretty-printed JSON document whose inner
+        // messages span multiple lines must be parsed via the JSON-document
+        // path. The previous implementation tried JSONL line-by-line first,
+        // picked up only the messages that happened to fit on a single line,
+        // and silently dropped the rest. The fix is to try the JSON-document
+        // shape first.
+        let transcript = r#"{
+  "messages": [
+    {"role": "user", "content": "first prompt"},
+    {
+      "role": "assistant",
+      "content": "long\nresponse spanning\nmultiple lines"
+    }
+  ]
+}"#;
+
+        let entries = derive_transcript_entries("sess-d", Some("turn-d"), transcript)
+            .expect("derive entries");
+        assert_eq!(entries.len(), 2, "expected both messages, got {entries:?}");
+        assert_eq!(entries[0].actor, TranscriptActor::User);
+        assert_eq!(entries[0].text, "first prompt");
+        assert_eq!(entries[1].actor, TranscriptActor::Assistant);
+        assert_eq!(entries[1].text, "long\nresponse spanning\nmultiple lines");
     }
 }

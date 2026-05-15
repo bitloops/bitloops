@@ -293,8 +293,43 @@ fn dedupe_phantom_turns(
             // the current live turn.)
             continue;
         }
+        // Distinguish "concurrent phantom" (a duplicate row written by a
+        // competing lifecycle path at the same time as the real turn) from
+        // "legitimate in-flight repeat" (the user resubmitted the same
+        // prompt later, and that new turn hasn't closed yet).
+        //
+        // A phantom is started at or before the completed sibling finished;
+        // an in-flight repeat is started strictly after. Use the latest
+        // completed sibling's `ended_at` (falling back to its `started_at`
+        // when the sibling is still in progress but has captured offsets)
+        // as the threshold. Orphans whose `started_at` is *strictly greater*
+        // than the threshold are preserved.
+        let threshold = indices
+            .iter()
+            .copied()
+            .filter(|&i| !is_orphan(&detail.turns[i].turn))
+            .map(|i| {
+                let t = &detail.turns[i].turn;
+                t.ended_at
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(t.started_at.as_str())
+                    .to_string()
+            })
+            .max();
+        let Some(threshold) = threshold else {
+            continue;
+        };
         for &i in indices {
-            if is_orphan(&detail.turns[i].turn) {
+            let t = &detail.turns[i].turn;
+            if !is_orphan(t) {
+                continue;
+            }
+            // Strictly-greater check: an orphan whose `started_at` equals the
+            // threshold (typical concurrent-phantom case where both rows hit
+            // the spool within the same second) gets dropped.
+            if t.started_at.as_str() <= threshold.as_str() {
                 drop_idx.insert(i);
             }
         }
@@ -745,5 +780,99 @@ mod tests {
         };
         let deduped = dedupe_phantom_turns(detail);
         assert_eq!(deduped.turns.len(), 2);
+    }
+
+    #[test]
+    fn dedupe_phantom_turns_preserves_latest_orphan_when_user_repeats_prompt() {
+        // A user resubmits the same prompt later in the session. The earlier
+        // turn completed normally; the newer turn is still in flight (no end
+        // offset, no `ended_at`). We MUST NOT hide the in-flight turn just
+        // because its prompt matches a completed sibling.
+        let detail = InteractionSessionDetail {
+            summary: make_summary(),
+            turns: vec![
+                make_turn(
+                    "completed-earlier",
+                    "do the thing",
+                    "claude-code",
+                    "2026-05-14T15:30:00Z",
+                    Some(9),
+                    Some("2026-05-14T15:30:10Z"),
+                ),
+                make_turn(
+                    "in-flight-now",
+                    "do the thing",
+                    "claude-code",
+                    "2026-05-14T16:00:00Z",
+                    None,
+                    None,
+                ),
+            ],
+            raw_events: Vec::new(),
+        };
+
+        let deduped = dedupe_phantom_turns(detail);
+        let kept_ids: Vec<&str> = deduped
+            .turns
+            .iter()
+            .map(|t| t.turn.turn_id.as_str())
+            .collect();
+        assert!(
+            kept_ids.contains(&"in-flight-now"),
+            "expected the live in-flight turn to be preserved, got {kept_ids:?}"
+        );
+        assert!(
+            kept_ids.contains(&"completed-earlier"),
+            "the completed sibling must also remain, got {kept_ids:?}"
+        );
+    }
+
+    #[test]
+    fn dedupe_phantom_turns_drops_older_orphan_when_multiple_orphans_share_prompt() {
+        // Two orphans share a prompt with a completed sibling. The OLDER
+        // orphan was the phantom (the one we want to hide); the NEWER orphan
+        // is the live in-flight turn. Only the older orphan should be dropped.
+        let detail = InteractionSessionDetail {
+            summary: make_summary(),
+            turns: vec![
+                make_turn(
+                    "completed",
+                    "repeat me",
+                    "cursor",
+                    "2026-05-14T10:00:00Z",
+                    Some(5),
+                    Some("2026-05-14T10:00:05Z"),
+                ),
+                make_turn(
+                    "older-orphan",
+                    "repeat me",
+                    "cursor",
+                    "2026-05-14T10:00:00Z",
+                    None,
+                    None,
+                ),
+                make_turn(
+                    "live-orphan",
+                    "repeat me",
+                    "cursor",
+                    "2026-05-14T12:00:00Z",
+                    None,
+                    None,
+                ),
+            ],
+            raw_events: Vec::new(),
+        };
+
+        let deduped = dedupe_phantom_turns(detail);
+        let kept_ids: Vec<&str> = deduped
+            .turns
+            .iter()
+            .map(|t| t.turn.turn_id.as_str())
+            .collect();
+        assert_eq!(
+            kept_ids,
+            vec!["completed", "live-orphan"],
+            "expected only the older orphan to be dropped"
+        );
     }
 }
