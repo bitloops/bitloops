@@ -132,7 +132,9 @@ async fn serialised_writer_applies_concurrent_requests_on_one_connection() -> Re
 
     let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
     let count = conn
-        .query_row("SELECT COUNT(*) FROM sample", [], |row| row.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM sample", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .expect("count rows");
     assert_eq!(count, 16);
     Ok(())
@@ -158,14 +160,18 @@ async fn serialised_writer_rolls_back_failed_batches() -> Result<()> {
 
     let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
     let count = conn
-        .query_row("SELECT COUNT(*) FROM sample", [], |row| row.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM sample", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .expect("count rows");
     assert_eq!(count, 0);
 
     sqlite_exec_serialized_path(&db_path, "INSERT INTO sample (value) VALUES (3);").await?;
     let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite after recovery");
     let count = conn
-        .query_row("SELECT COUNT(*) FROM sample", [], |row| row.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM sample", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .expect("count rows after recovery");
     assert_eq!(count, 1);
     Ok(())
