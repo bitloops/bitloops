@@ -27,7 +27,7 @@
 </div>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=hb8EAWlRjt8">
+  <a href="https://www.youtube.com/watch?v=hb8EAWlRjt8" target="_blank">
     <img src="assets/bitloops_getting_started.png" alt="Bitloops Getting Started" width="640" />
   </a>
 </p>

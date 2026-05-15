@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Fixed
 
 - **Architecture-graph current-table replacement now writes through smaller batches to reduce RAM pressure**: architecture-graph replacement still runs atomically inside one serialized SQLite transaction, but node and edge inserts are now executed in smaller 250-row chunks instead of one larger uninterrupted write pass. This reduces architecture-specific allocation pressure during heavy reconciliations without changing general DevQL sync worker fan-out.
+### Changed
+
+- **README getting-started video now opens in a new tab**: updated the hero thumbnail link target so the getting-started video opens in a separate browser tab instead of navigating away from the repository page.
 
 ## [0.0.26] - 2026-05-14
 
