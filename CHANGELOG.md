@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- **README getting-started video now opens in a new tab**: updated the hero thumbnail link target so the getting-started video opens in a separate browser tab instead of navigating away from the repository page.
+
 ## [0.0.26] - 2026-05-14
 
 ### Added
