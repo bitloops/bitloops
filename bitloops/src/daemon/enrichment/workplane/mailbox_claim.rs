@@ -17,7 +17,7 @@ use crate::host::runtime_store::{
     SemanticMailboxItemStatus, SemanticSummaryMailboxItemRecord,
 };
 
-use super::super::EnrichmentControlState;
+use super::super::{EnrichmentControlState, effective_worker_budgets};
 use super::mailbox_persistence::{
     load_embedding_mailbox_items_by_ids, load_summary_mailbox_items_by_ids,
 };
@@ -100,6 +100,8 @@ pub(crate) fn claim_embedding_mailbox_batch(
     }
     workplane_store.with_connection(|conn| {
         let candidates = load_embedding_mailbox_repo_candidates(conn, unix_timestamp_now())?;
+        let candidates =
+            prioritize_embedding_mailbox_repo_candidates(conn, workplane_store, candidates)?;
         let mut readiness_cache = BTreeMap::new();
         for candidate in candidates {
             let EmbeddingMailboxRepoCandidate {
@@ -234,26 +236,129 @@ fn load_embedding_mailbox_repo_candidates(
     for row in rows {
         values.push(row?);
     }
-    let mut prioritized = Vec::new();
-    let mut fallback = Vec::new();
+    Ok(values)
+}
+
+fn prioritize_embedding_mailbox_repo_candidates(
+    conn: &rusqlite::Connection,
+    workplane_store: &DaemonSqliteRuntimeStore,
+    values: Vec<EmbeddingMailboxRepoCandidate>,
+) -> Result<Vec<EmbeddingMailboxRepoCandidate>> {
+    if values.is_empty() {
+        return Ok(values);
+    }
+    let has_summary_candidates = values
+        .iter()
+        .any(|candidate| candidate.representation_kind == EmbeddingRepresentationKind::Summary);
     let has_summary_overlap_candidates = values.iter().any(|candidate| {
         candidate.representation_kind == EmbeddingRepresentationKind::Summary
             && repo_has_active_summary_refresh_work(conn, &candidate.repo_id).unwrap_or(false)
     });
-    if !has_summary_overlap_candidates {
-        return Ok(values);
-    }
+    let has_non_summary_candidates = values
+        .iter()
+        .any(|candidate| candidate.representation_kind != EmbeddingRepresentationKind::Summary);
+    let can_prioritize_summary = if has_summary_candidates && has_non_summary_candidates {
+        let fallback_config_root = values
+            .first()
+            .map(|candidate| candidate.config_root.as_path())
+            .expect("checked non-empty candidates");
+        let summary_priority_worker_limit = summary_embedding_priority_worker_limit(
+            workplane_store,
+            fallback_config_root,
+            has_summary_overlap_candidates,
+        )?;
+        let leased_summary_batches =
+            leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Summary)?;
+        leased_summary_batches < summary_priority_worker_limit
+    } else {
+        false
+    };
+    let preferred_non_summary_kind = preferred_non_summary_representation_kind(conn, &values)?;
+
+    let mut prioritized_summary = Vec::new();
+    let mut preferred_non_summary = Vec::new();
+    let mut fallback = Vec::new();
+    let mut deferred_summary = Vec::new();
     for candidate in values {
-        let prioritise = candidate.representation_kind == EmbeddingRepresentationKind::Summary
-            && repo_has_active_summary_refresh_work(conn, &candidate.repo_id)?;
-        if prioritise {
-            prioritized.push(candidate);
+        let is_summary_candidate =
+            candidate.representation_kind == EmbeddingRepresentationKind::Summary;
+        if is_summary_candidate {
+            if can_prioritize_summary {
+                prioritized_summary.push(candidate);
+            } else {
+                deferred_summary.push(candidate);
+            }
+        } else if preferred_non_summary_kind
+            .is_some_and(|kind| candidate.representation_kind == kind)
+        {
+            preferred_non_summary.push(candidate);
         } else {
             fallback.push(candidate);
         }
     }
-    prioritized.extend(fallback);
-    Ok(prioritized)
+
+    prioritized_summary.extend(preferred_non_summary);
+    prioritized_summary.extend(fallback);
+    prioritized_summary.extend(deferred_summary);
+    Ok(prioritized_summary)
+}
+
+fn summary_embedding_priority_worker_limit(
+    workplane_store: &DaemonSqliteRuntimeStore,
+    fallback_config_root: &std::path::Path,
+    has_active_summary_overlap: bool,
+) -> Result<usize> {
+    let embeddings = effective_worker_budgets(workplane_store, fallback_config_root)?.embeddings;
+    if embeddings <= 1 {
+        return Ok(0);
+    }
+    if has_active_summary_overlap {
+        return Ok(embeddings / 2);
+    }
+    Ok(1)
+}
+
+fn preferred_non_summary_representation_kind(
+    conn: &rusqlite::Connection,
+    values: &[EmbeddingMailboxRepoCandidate],
+) -> Result<Option<EmbeddingRepresentationKind>> {
+    let has_code = values
+        .iter()
+        .any(|candidate| candidate.representation_kind == EmbeddingRepresentationKind::Code);
+    let has_identity = values
+        .iter()
+        .any(|candidate| candidate.representation_kind == EmbeddingRepresentationKind::Identity);
+    if !has_code || !has_identity {
+        return Ok(None);
+    }
+
+    let leased_code_batches =
+        leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Code)?;
+    let leased_identity_batches =
+        leased_embedding_mailbox_batch_count(conn, EmbeddingRepresentationKind::Identity)?;
+    Ok(match leased_code_batches.cmp(&leased_identity_batches) {
+        std::cmp::Ordering::Greater => Some(EmbeddingRepresentationKind::Identity),
+        std::cmp::Ordering::Less => Some(EmbeddingRepresentationKind::Code),
+        std::cmp::Ordering::Equal => None,
+    })
+}
+
+fn leased_embedding_mailbox_batch_count(
+    conn: &rusqlite::Connection,
+    representation_kind: EmbeddingRepresentationKind,
+) -> Result<usize> {
+    let count = conn.query_row(
+        "SELECT COUNT(DISTINCT COALESCE(lease_token, item_id))
+         FROM semantic_embedding_mailbox_items
+         WHERE representation_kind = ?1
+           AND status = ?2",
+        params![
+            representation_kind.to_string(),
+            SemanticMailboxItemStatus::Leased.as_str(),
+        ],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(usize::try_from(count).unwrap_or_default())
 }
 
 fn repo_has_active_summary_refresh_work(

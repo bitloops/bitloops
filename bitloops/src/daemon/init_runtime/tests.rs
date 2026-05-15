@@ -728,6 +728,61 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
 }
 
 #[test]
+fn semantic_summary_embedding_rows_without_init_session_id_still_count_for_session_progress() {
+    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+    conn.execute_batch(
+        "CREATE TABLE semantic_embedding_mailbox_items (
+             repo_id TEXT NOT NULL,
+             init_session_id TEXT,
+             representation_kind TEXT NOT NULL,
+             status TEXT NOT NULL,
+             item_kind TEXT NOT NULL,
+             artefact_id TEXT,
+             payload_json TEXT
+         );",
+    )
+    .expect("create semantic embedding inbox table");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, NULL, 'summary', 'pending', 'artefact', 'artefact-3', NULL)",
+        ["repo-1"],
+    )
+    .expect("insert summary embedding inbox row without session");
+    conn.execute(
+        "INSERT INTO semantic_embedding_mailbox_items (
+             repo_id, init_session_id, representation_kind, status, item_kind, artefact_id, payload_json
+         ) VALUES (?1, NULL, 'code', 'pending', 'artefact', 'artefact-4', NULL)",
+        ["repo-1"],
+    )
+    .expect("insert code embedding inbox row without session");
+
+    let embedding_freshness = EmbeddingFreshnessState {
+        eligible_artefact_ids: ["artefact-3".to_string(), "artefact-4".to_string()]
+            .into_iter()
+            .collect(),
+        fresh_code_artefact_ids: Default::default(),
+        fresh_identity_artefact_ids: Default::default(),
+        fresh_summary_artefact_ids: Default::default(),
+    };
+    let mut stats = SessionWorkplaneStats::default();
+
+    load_semantic_embedding_session_mailbox_counts(
+        &conn,
+        &mut stats,
+        "repo-1",
+        "init-session-1",
+        &embedding_freshness,
+    )
+    .expect("load semantic embedding mailbox counts");
+    stats.refresh_lane_counts();
+
+    assert_eq!(stats.summary_embedding_jobs.counts.pending, 1);
+    assert_eq!(stats.code_embedding_jobs.counts.pending, 0);
+    assert_eq!(stats.embedding_jobs.pending, 1);
+}
+
+#[test]
 fn semantic_embedding_counts_only_include_unsatisfied_current_work() {
     let conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.execute_batch(
@@ -1145,7 +1200,7 @@ fn code_embeddings_lane_waits_for_follow_up_sync_after_late_embeddings_bootstrap
 }
 
 #[test]
-fn code_embeddings_lane_reports_preparing_batches_before_first_completed_work_item() {
+fn code_embeddings_lane_reports_running_when_first_embedding_batch_is_in_flight() {
     let session = embeddings_only_session();
     let initial_sync = completed_sync_task("sync-task-1", 10);
     let mut stats = SessionWorkplaneStats {
@@ -1177,11 +1232,8 @@ fn code_embeddings_lane_reports_preparing_batches_before_first_completed_work_it
         }),
     );
 
-    assert_eq!(lane.status, "waiting");
-    assert_eq!(
-        lane.waiting_reason.as_deref(),
-        Some("preparing_embedding_batches")
-    );
+    assert_eq!(lane.status, "running");
+    assert_eq!(lane.waiting_reason, None);
     assert_eq!(
         lane.activity_label.as_deref(),
         Some("Indexing first embedding batch")

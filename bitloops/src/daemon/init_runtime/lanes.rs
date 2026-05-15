@@ -309,12 +309,11 @@ pub(crate) fn derive_code_embeddings_lane(
     }
     if embedding_batches_are_preparing(stats, progress.as_ref()) {
         return runtime_lane(
-            "waiting",
+            "running",
             progress,
             stats.code_embedding_jobs.counts,
             warnings,
         )
-        .with_waiting_reason("preparing_embedding_batches")
         .with_activity_label("Indexing first embedding batch");
     }
     if stats.code_embedding_jobs.counts.pending > 0 || stats.code_embedding_jobs.counts.running > 0

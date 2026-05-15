@@ -372,7 +372,11 @@ pub(crate) fn load_semantic_embedding_session_mailbox_counts(
     let mut stmt = conn.prepare(
         "SELECT representation_kind, status, item_kind, artefact_id, payload_json
          FROM semantic_embedding_mailbox_items
-         WHERE repo_id = ?1 AND init_session_id = ?2",
+         WHERE repo_id = ?1
+           AND (
+               init_session_id = ?2
+               OR (representation_kind = 'summary' AND init_session_id IS NULL)
+           )",
     )?;
     let rows = stmt.query_map(params![repo_id, init_session_id], |row| {
         Ok((

@@ -59,6 +59,7 @@ struct WorkerBudgetSources<'a> {
     legacy_embeddings: WorkerCountSource<'a>,
     summary_remote: bool,
     embeddings_remote: bool,
+    multiple_embedding_representations_active: bool,
 }
 
 impl EnrichmentWorkerBudgets {
@@ -132,6 +133,9 @@ pub(crate) fn configured_enrichment_worker_budgets_for_repo(
         ),
         summary_remote: summary_provider_is_remote(&capability),
         embeddings_remote: embeddings_provider_is_remote(&capability),
+        multiple_embedding_representations_active: multiple_embedding_representations_active(
+            &capability,
+        ),
     })
 }
 
@@ -179,6 +183,8 @@ fn resolve_worker_budgets_from_sources(
     };
     let default_embedding_workers = if sources.embeddings_remote {
         DEFAULT_REMOTE_EMBEDDING_WORKERS
+    } else if sources.multiple_embedding_representations_active {
+        2
     } else {
         DEFAULT_SEMANTIC_CLONES_EMBEDDING_WORKERS
     };
@@ -251,6 +257,33 @@ fn embeddings_provider_is_remote(capability: &crate::config::InferenceCapability
             .get(profile_name)
             .is_some_and(embedding_profile_is_remote)
     })
+}
+
+fn multiple_embedding_representations_active(
+    capability: &crate::config::InferenceCapabilityConfig,
+) -> bool {
+    let code_embeddings_configured = capability
+        .semantic_clones
+        .inference
+        .code_embeddings
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    let summary_generation_configured = capability
+        .semantic_clones
+        .inference
+        .summary_generation
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    let summary_embeddings_configured = capability
+        .semantic_clones
+        .inference
+        .summary_embeddings
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    code_embeddings_configured && summary_generation_configured && summary_embeddings_configured
 }
 
 fn embedding_profile_is_remote(profile: &crate::config::InferenceProfileConfig) -> bool {
@@ -443,6 +476,108 @@ mod tests {
                 summary_refresh: 2,
                 embeddings: 9,
                 clone_rebuild: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_worker_budgets_promote_local_embeddings_when_code_and_summary_embeddings_are_active()
+     {
+        let temp = tempdir().expect("temp dir");
+        let config_path = temp.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config dir");
+        }
+        fs::write(
+            &config_path,
+            r#"[semantic_clones]
+
+[semantic_clones.inference]
+summary_generation = "summary_local"
+code_embeddings = "local_code"
+summary_embeddings = "local_summary"
+
+[inference.profiles.summary_local]
+task = "text_generation"
+driver = "ollama_chat"
+runtime = "bitloops_inference"
+model = "ministral-3:3b"
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "local-code"
+
+[inference.profiles.local_summary]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "local-summary"
+"#,
+        )
+        .expect("write semantic clones config with local code and summary embeddings");
+
+        let _guard = enter_process_state(
+            Some(temp.path()),
+            &[
+                (SEMANTIC_CLONES_SUMMARY_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_EMBEDDING_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_CLONE_REBUILD_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_ENRICHMENT_WORKER_COUNT_ENV, None),
+            ],
+        );
+
+        assert_eq!(
+            configured_enrichment_worker_budgets(),
+            EnrichmentWorkerBudgets {
+                summary_refresh: 1,
+                embeddings: 2,
+                clone_rebuild: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn configured_worker_budgets_keep_single_local_embedding_worker_when_only_code_embeddings_are_active()
+     {
+        let temp = tempdir().expect("temp dir");
+        let config_path = temp.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).expect("create config dir");
+        }
+        fs::write(
+            &config_path,
+            r#"[semantic_clones]
+
+[semantic_clones.inference]
+code_embeddings = "local_code"
+
+[inference.profiles.local_code]
+task = "embeddings"
+driver = "bitloops_embeddings_ipc"
+runtime = "bitloops_local_embeddings"
+model = "local-code"
+"#,
+        )
+        .expect("write semantic clones config with local code embeddings only");
+
+        let _guard = enter_process_state(
+            Some(temp.path()),
+            &[
+                (SEMANTIC_CLONES_SUMMARY_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_EMBEDDING_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_CLONE_REBUILD_WORKER_COUNT_ENV, None),
+                (SEMANTIC_CLONES_ENRICHMENT_WORKER_COUNT_ENV, None),
+            ],
+        );
+
+        assert_eq!(
+            configured_enrichment_worker_budgets(),
+            EnrichmentWorkerBudgets {
+                summary_refresh: 1,
+                embeddings: 1,
+                clone_rebuild: 1,
             }
         );
     }

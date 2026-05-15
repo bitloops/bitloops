@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -28,6 +28,49 @@ enum SemanticWriterRequest {
 #[derive(Debug)]
 pub(super) struct RepoSemanticWriterActor {
     sender: Sender<SemanticWriterRequest>,
+}
+
+#[derive(Debug, Default)]
+struct PendingSemanticWriterRequests {
+    summaries: VecDeque<SemanticWriterRequest>,
+    embeddings: VecDeque<SemanticWriterRequest>,
+    prefer_summary: bool,
+}
+
+impl PendingSemanticWriterRequests {
+    fn push(&mut self, request: SemanticWriterRequest) {
+        match request {
+            request @ SemanticWriterRequest::Summary { .. } => self.summaries.push_back(request),
+            request @ SemanticWriterRequest::Embedding { .. } => self.embeddings.push_back(request),
+        }
+    }
+
+    fn pop_next(&mut self) -> Option<SemanticWriterRequest> {
+        match (self.summaries.is_empty(), self.embeddings.is_empty()) {
+            (true, true) => None,
+            (false, true) => {
+                self.prefer_summary = false;
+                self.summaries.pop_front()
+            }
+            (true, false) => {
+                self.prefer_summary = true;
+                self.embeddings.pop_front()
+            }
+            (false, false) => {
+                if self.prefer_summary {
+                    self.prefer_summary = false;
+                    self.summaries.pop_front()
+                } else {
+                    self.prefer_summary = true;
+                    self.embeddings.pop_front()
+                }
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.summaries.is_empty() && self.embeddings.is_empty()
+    }
 }
 
 impl RepoSemanticWriterActor {
@@ -133,7 +176,20 @@ fn writer_loop(
     let mut connection = open_semantic_writer_connection(&runtime_db_path, &relational_db_path)
         .map_err(|err| format!("{err:#}"))
         .ok();
-    while let Ok(request) = receiver.recv() {
+    let mut pending = PendingSemanticWriterRequests::default();
+    loop {
+        if pending.is_empty() {
+            let Ok(request) = receiver.recv() else {
+                break;
+            };
+            pending.push(request);
+        }
+        while let Ok(request) = receiver.try_recv() {
+            pending.push(request);
+        }
+        let Some(request) = pending.pop_next() else {
+            continue;
+        };
         match (&mut connection, request) {
             (Some(connection), SemanticWriterRequest::Summary { request, response }) => {
                 let result = execute_summary_commit(connection, &request).map_err(|err| {
@@ -171,5 +227,99 @@ fn writer_loop(
                 let _ = response.send(Err("opening semantic writer connection failed".to_string()));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PendingSemanticWriterRequests, SemanticWriterRequest};
+    use crate::daemon::enrichment::semantic_writer::{
+        CommitEmbeddingBatchRequest, CommitSummaryBatchRequest, SemanticBatchRepoContext,
+    };
+    use tokio::sync::oneshot;
+
+    fn repo() -> SemanticBatchRepoContext {
+        SemanticBatchRepoContext {
+            repo_id: "repo-1".to_string(),
+            repo_root: std::path::PathBuf::from("/tmp/repo"),
+            config_root: std::path::PathBuf::from("/tmp/config"),
+        }
+    }
+
+    fn summary_request() -> SemanticWriterRequest {
+        let (response, _rx) = oneshot::channel();
+        SemanticWriterRequest::Summary {
+            request: CommitSummaryBatchRequest {
+                repo: repo(),
+                lease_token: "summary-lease".to_string(),
+                semantic_statements: Vec::new(),
+                embedding_follow_ups: Vec::new(),
+                replacement_backfill_item: None,
+                acked_item_ids: Vec::new(),
+            },
+            response,
+        }
+    }
+
+    fn embedding_request() -> SemanticWriterRequest {
+        let (response, _rx) = oneshot::channel();
+        SemanticWriterRequest::Embedding {
+            request: CommitEmbeddingBatchRequest {
+                repo: repo(),
+                lease_token: "embedding-lease".to_string(),
+                embedding_statements: Vec::new(),
+                setup_statements: Vec::new(),
+                remote_embedding_statements: Vec::new(),
+                remote_setup_statements: Vec::new(),
+                clone_rebuild_signal: None,
+                replacement_backfill_item: None,
+                acked_item_ids: Vec::new(),
+            },
+            response,
+        }
+    }
+
+    #[test]
+    fn pending_requests_alternate_between_embeddings_and_summaries() {
+        let mut pending = PendingSemanticWriterRequests::default();
+        pending.push(summary_request());
+        pending.push(embedding_request());
+        pending.push(summary_request());
+        pending.push(embedding_request());
+
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Embedding { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Embedding { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(pending.pop_next().is_none());
+    }
+
+    #[test]
+    fn pending_requests_drain_summaries_when_no_embeddings_are_waiting() {
+        let mut pending = PendingSemanticWriterRequests::default();
+        pending.push(summary_request());
+        pending.push(summary_request());
+
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(matches!(
+            pending.pop_next(),
+            Some(SemanticWriterRequest::Summary { .. })
+        ));
+        assert!(pending.pop_next().is_none());
     }
 }

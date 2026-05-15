@@ -233,7 +233,10 @@ where
                 ));
             }
             if summary_embeddings_enabled && persist_summaries {
-                embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+                embedding_follow_ups.push(summary_embedding_follow_up_for(
+                    input,
+                    artefact_session_ids.get(&input.artefact_id),
+                ));
             }
             continue;
         }
@@ -260,7 +263,10 @@ where
                 relational.dialect(),
             )?);
             if summary_embeddings_enabled {
-                embedding_follow_ups.push(summary_embedding_follow_up_for(input));
+                embedding_follow_ups.push(summary_embedding_follow_up_for(
+                    input,
+                    artefact_session_ids.get(&input.artefact_id),
+                ));
             }
         } else {
             semantic_statements.push(build_symbol_feature_persist_rows_sql(
@@ -311,9 +317,10 @@ where
 
 fn summary_embedding_follow_up_for(
     input: &SemanticFeatureInput,
+    init_session_ids: Option<&BTreeSet<String>>,
 ) -> SemanticEmbeddingMailboxItemInsert {
     SemanticEmbeddingMailboxItemInsert::new(
-        None,
+        init_session_ids.and_then(|session_ids| session_ids.iter().next().cloned()),
         EmbeddingRepresentationKind::Summary.to_string(),
         SemanticMailboxItemKind::Artefact,
         Some(input.artefact_id.clone()),
@@ -346,6 +353,54 @@ fn explicit_artefact_ids_from_batch(
     ids.sort();
     ids.dedup();
     ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summary_embedding_follow_up_for;
+    use crate::capability_packs::semantic_clones::features::SemanticFeatureInput;
+    use std::collections::BTreeSet;
+
+    fn test_input() -> SemanticFeatureInput {
+        SemanticFeatureInput {
+            repo_id: "repo-1".to_string(),
+            artefact_id: "artefact-1".to_string(),
+            path: "src/lib.rs".to_string(),
+            blob_sha: "blob-1".to_string(),
+            symbol_id: Some("symbol-1".to_string()),
+            symbol_fqn: "crate::render_invoice".to_string(),
+            canonical_kind: "function".to_string(),
+            language_kind: "function_item".to_string(),
+            language: "rust".to_string(),
+            name: "render_invoice".to_string(),
+            signature: Some("fn render_invoice(order_id: &str) -> String".to_string()),
+            modifiers: Vec::new(),
+            docstring: Some("Render an invoice.".to_string()),
+            body: "fn render_invoice(order_id: &str) -> String { order_id.to_string() }"
+                .to_string(),
+            parent_kind: None,
+            dependency_signals: Vec::new(),
+            content_hash: None,
+        }
+    }
+
+    #[test]
+    fn summary_embedding_follow_up_uses_first_init_session_id_when_available() {
+        let session_ids = ["init-session-2".to_string(), "init-session-1".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let follow_up = summary_embedding_follow_up_for(&test_input(), Some(&session_ids));
+
+        assert_eq!(follow_up.init_session_id.as_deref(), Some("init-session-1"));
+    }
+
+    #[test]
+    fn summary_embedding_follow_up_stays_sessionless_without_init_session_ids() {
+        let follow_up = summary_embedding_follow_up_for(&test_input(), None);
+
+        assert_eq!(follow_up.init_session_id, None);
+    }
 }
 
 async fn load_current_summary_backfill_artefact_ids(
