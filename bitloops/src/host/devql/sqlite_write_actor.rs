@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, limits::Limit, params_from_iter, types::Value as SqlValue};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,6 +12,9 @@ use tokio::sync::oneshot;
 use crate::capability_packs::architecture_graph::storage::ArchitectureGraphFacts;
 
 const ARCHITECTURE_GRAPH_WRITE_BATCH_SIZE: usize = 250;
+const ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH: usize = 14;
+const ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH: usize = 11;
+const SQLITE_FALLBACK_VARIABLE_LIMIT: usize = 999;
 
 #[derive(Debug)]
 enum SqliteWriteOperation {
@@ -197,6 +200,10 @@ fn execute_architecture_graph_replace(
     request: &ArchitectureGraphReplaceRequest,
 ) -> Result<()> {
     validate_architecture_graph_repo_scope(request)?;
+    let node_batch_rows =
+        architecture_graph_batch_row_count(connection, ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH);
+    let edge_batch_rows =
+        architecture_graph_batch_row_count(connection, ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH);
     let tx = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("starting architecture graph replacement transaction")?;
@@ -212,79 +219,8 @@ fn execute_architecture_graph_replace(
     .context("deleting current architecture graph nodes")?;
 
     let mut writes = 0usize;
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO architecture_graph_nodes_current (
-                    repo_id, node_id, node_kind, label, artefact_id, symbol_id, path, entry_kind,
-                    source_kind, confidence, provenance_json, evidence_json, properties_json,
-                    last_observed_generation, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))",
-            )
-            .context("preparing architecture graph node insert")?;
-        for batch in request
-            .facts
-            .nodes
-            .chunks(architecture_graph_write_batch_size())
-        {
-            for node in batch {
-                stmt.execute(rusqlite::params![
-                    request.repo_id,
-                    node.node_id,
-                    node.node_kind,
-                    node.label,
-                    node.artefact_id,
-                    node.symbol_id,
-                    node.path,
-                    node.entry_kind,
-                    node.source_kind,
-                    node.confidence,
-                    json_string(&node.provenance)?,
-                    json_string(&node.evidence)?,
-                    json_string(&node.properties)?,
-                    opt_generation(node.last_observed_generation)?,
-                ])
-                .context("inserting architecture graph node")?;
-                writes += 1;
-                maybe_fail_architecture_graph_write(request, writes)?;
-            }
-        }
-    }
-
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO architecture_graph_edges_current (
-                    repo_id, edge_id, edge_kind, from_node_id, to_node_id, source_kind, confidence,
-                    provenance_json, evidence_json, properties_json, last_observed_generation, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))",
-            )
-            .context("preparing architecture graph edge insert")?;
-        for batch in request
-            .facts
-            .edges
-            .chunks(architecture_graph_write_batch_size())
-        {
-            for edge in batch {
-                stmt.execute(rusqlite::params![
-                    request.repo_id,
-                    edge.edge_id,
-                    edge.edge_kind,
-                    edge.from_node_id,
-                    edge.to_node_id,
-                    edge.source_kind,
-                    edge.confidence,
-                    json_string(&edge.provenance)?,
-                    json_string(&edge.evidence)?,
-                    json_string(&edge.properties)?,
-                    opt_generation(edge.last_observed_generation)?,
-                ])
-                .context("inserting architecture graph edge")?;
-                writes += 1;
-                maybe_fail_architecture_graph_write(request, writes)?;
-            }
-        }
-    }
+    execute_architecture_graph_node_batches(&tx, request, node_batch_rows, &mut writes)?;
+    execute_architecture_graph_edge_batches(&tx, request, edge_batch_rows, &mut writes)?;
 
     tx.execute(
         "INSERT INTO architecture_graph_runs_current (
@@ -400,14 +336,195 @@ fn canonical_actor_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn architecture_graph_batch_row_count(connection: &Connection, columns_per_row: usize) -> usize {
+    let variable_limit = connection
+        .limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER)
+        .ok()
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap_or(SQLITE_FALLBACK_VARIABLE_LIMIT);
+    architecture_graph_batch_row_count_for_limit(
+        architecture_graph_write_batch_size(),
+        columns_per_row,
+        variable_limit,
+    )
+}
+
+fn architecture_graph_batch_row_count_for_limit(
+    max_batch_rows: usize,
+    columns_per_row: usize,
+    variable_limit: usize,
+) -> usize {
+    assert!(
+        columns_per_row > 0,
+        "columns_per_row must be greater than zero"
+    );
+    let max_rows_by_limit = variable_limit / columns_per_row;
+    max_batch_rows.min(max_rows_by_limit.max(1)).max(1)
+}
+
 fn architecture_graph_write_batch_size() -> usize {
     ARCHITECTURE_GRAPH_WRITE_BATCH_SIZE
+}
+
+fn build_architecture_graph_node_insert_sql(row_count: usize) -> String {
+    build_architecture_graph_insert_sql(
+        "architecture_graph_nodes_current",
+        "repo_id, node_id, node_kind, label, artefact_id, symbol_id, path, entry_kind, \
+         source_kind, confidence, provenance_json, evidence_json, properties_json, \
+         last_observed_generation, updated_at",
+        ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH,
+        row_count,
+    )
+}
+
+fn build_architecture_graph_edge_insert_sql(row_count: usize) -> String {
+    build_architecture_graph_insert_sql(
+        "architecture_graph_edges_current",
+        "repo_id, edge_id, edge_kind, from_node_id, to_node_id, source_kind, confidence, \
+         provenance_json, evidence_json, properties_json, last_observed_generation, updated_at",
+        ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH,
+        row_count,
+    )
+}
+
+fn build_architecture_graph_insert_sql(
+    table: &str,
+    columns_sql: &str,
+    parameter_count: usize,
+    row_count: usize,
+) -> String {
+    assert!(row_count > 0, "row_count must be greater than zero");
+    let placeholders = std::iter::repeat_n("?", parameter_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let row_sql = format!("({placeholders}, datetime('now'))");
+    let values_sql = std::iter::repeat_n(row_sql, row_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("INSERT INTO {table} ({columns_sql}) VALUES {values_sql}")
+}
+
+fn execute_architecture_graph_node_batches(
+    tx: &rusqlite::Transaction<'_>,
+    request: &ArchitectureGraphReplaceRequest,
+    batch_rows: usize,
+    writes: &mut usize,
+) -> Result<()> {
+    let full_batch_sql = build_architecture_graph_node_insert_sql(batch_rows);
+    let mut tail_batch_sql = None::<String>;
+
+    for batch in request.facts.nodes.chunks(batch_rows) {
+        let sql = if batch.len() == batch_rows {
+            full_batch_sql.as_str()
+        } else {
+            tail_batch_sql
+                .get_or_insert_with(|| build_architecture_graph_node_insert_sql(batch.len()))
+                .as_str()
+        };
+        let mut params = Vec::with_capacity(batch.len() * ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH);
+        for node in batch {
+            append_architecture_graph_node_params(&mut params, &request.repo_id, node)?;
+            *writes += 1;
+            maybe_fail_architecture_graph_write(request, *writes)?;
+        }
+        tx.execute(sql, params_from_iter(params))
+            .context("inserting architecture graph node batch")?;
+    }
+
+    Ok(())
+}
+
+fn execute_architecture_graph_edge_batches(
+    tx: &rusqlite::Transaction<'_>,
+    request: &ArchitectureGraphReplaceRequest,
+    batch_rows: usize,
+    writes: &mut usize,
+) -> Result<()> {
+    let full_batch_sql = build_architecture_graph_edge_insert_sql(batch_rows);
+    let mut tail_batch_sql = None::<String>;
+
+    for batch in request.facts.edges.chunks(batch_rows) {
+        let sql = if batch.len() == batch_rows {
+            full_batch_sql.as_str()
+        } else {
+            tail_batch_sql
+                .get_or_insert_with(|| build_architecture_graph_edge_insert_sql(batch.len()))
+                .as_str()
+        };
+        let mut params = Vec::with_capacity(batch.len() * ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH);
+        for edge in batch {
+            append_architecture_graph_edge_params(&mut params, &request.repo_id, edge)?;
+            *writes += 1;
+            maybe_fail_architecture_graph_write(request, *writes)?;
+        }
+        tx.execute(sql, params_from_iter(params))
+            .context("inserting architecture graph edge batch")?;
+    }
+
+    Ok(())
+}
+
+fn append_architecture_graph_node_params(
+    params: &mut Vec<SqlValue>,
+    repo_id: &str,
+    node: &crate::capability_packs::architecture_graph::storage::ArchitectureGraphNodeFact,
+) -> Result<()> {
+    params.push(SqlValue::Text(repo_id.to_string()));
+    params.push(SqlValue::Text(node.node_id.clone()));
+    params.push(SqlValue::Text(node.node_kind.clone()));
+    params.push(SqlValue::Text(node.label.clone()));
+    push_optional_text(params, &node.artefact_id);
+    push_optional_text(params, &node.symbol_id);
+    push_optional_text(params, &node.path);
+    push_optional_text(params, &node.entry_kind);
+    params.push(SqlValue::Text(node.source_kind.clone()));
+    params.push(SqlValue::Real(node.confidence));
+    params.push(SqlValue::Text(json_string(&node.provenance)?));
+    params.push(SqlValue::Text(json_string(&node.evidence)?));
+    params.push(SqlValue::Text(json_string(&node.properties)?));
+    push_optional_i64(params, opt_generation(node.last_observed_generation)?);
+    Ok(())
+}
+
+fn append_architecture_graph_edge_params(
+    params: &mut Vec<SqlValue>,
+    repo_id: &str,
+    edge: &crate::capability_packs::architecture_graph::storage::ArchitectureGraphEdgeFact,
+) -> Result<()> {
+    params.push(SqlValue::Text(repo_id.to_string()));
+    params.push(SqlValue::Text(edge.edge_id.clone()));
+    params.push(SqlValue::Text(edge.edge_kind.clone()));
+    params.push(SqlValue::Text(edge.from_node_id.clone()));
+    params.push(SqlValue::Text(edge.to_node_id.clone()));
+    params.push(SqlValue::Text(edge.source_kind.clone()));
+    params.push(SqlValue::Real(edge.confidence));
+    params.push(SqlValue::Text(json_string(&edge.provenance)?));
+    params.push(SqlValue::Text(json_string(&edge.evidence)?));
+    params.push(SqlValue::Text(json_string(&edge.properties)?));
+    push_optional_i64(params, opt_generation(edge.last_observed_generation)?);
+    Ok(())
+}
+
+fn push_optional_text(params: &mut Vec<SqlValue>, value: &Option<String>) {
+    match value {
+        Some(value) => params.push(SqlValue::Text(value.clone())),
+        None => params.push(SqlValue::Null),
+    }
+}
+
+fn push_optional_i64(params: &mut Vec<SqlValue>, value: Option<i64>) {
+    match value {
+        Some(value) => params.push(SqlValue::Integer(value)),
+        None => params.push(SqlValue::Null),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ArchitectureGraphReplaceRequest, RepoSqliteWriteActor, architecture_graph_write_batch_size,
+        ArchitectureGraphReplaceRequest, RepoSqliteWriteActor,
+        architecture_graph_batch_row_count_for_limit, architecture_graph_write_batch_size,
+        build_architecture_graph_edge_insert_sql, build_architecture_graph_node_insert_sql,
         short_thread_label, sqlite_exec_serialized_batch_transactional_path,
         sqlite_exec_serialized_path,
     };
@@ -591,6 +708,37 @@ mod tests {
     #[test]
     fn architecture_graph_write_batch_size_is_lowered() {
         assert_eq!(architecture_graph_write_batch_size(), 250);
+    }
+
+    #[test]
+    fn architecture_graph_batch_row_count_respects_sqlite_variable_limit() {
+        assert_eq!(
+            architecture_graph_batch_row_count_for_limit(250, 14, 999),
+            71
+        );
+        assert_eq!(
+            architecture_graph_batch_row_count_for_limit(250, 11, 999),
+            90
+        );
+        assert_eq!(architecture_graph_batch_row_count_for_limit(250, 14, 10), 1);
+    }
+
+    #[test]
+    fn architecture_graph_node_insert_sql_batches_multiple_rows() {
+        let sql = build_architecture_graph_node_insert_sql(2);
+        assert!(
+            sql.contains("VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"),
+            "expected multi-row node insert SQL, got {sql}"
+        );
+    }
+
+    #[test]
+    fn architecture_graph_edge_insert_sql_batches_multiple_rows() {
+        let sql = build_architecture_graph_edge_insert_sql(3);
+        assert!(
+            sql.contains("VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')), (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"),
+            "expected multi-row edge insert SQL, got {sql}"
+        );
     }
 
     #[tokio::test]
