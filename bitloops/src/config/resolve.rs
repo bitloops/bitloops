@@ -154,6 +154,23 @@ fn daemon_settings_for_repo(repo_root: &Path) -> Result<(PathBuf, UnifiedSetting
 }
 
 fn repo_bound_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonSettings> {
+    let policy = discover_repo_policy_optional(repo_root)?;
+
+    #[cfg(test)]
+    if let Some(ref bound_path) = policy.daemon_config_path {
+        // Parallel tests often set `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE` for one
+        // temp checkout; other temp repos must still resolve their own
+        // `REPO_POLICY_LOCAL_FILE_NAME` binding or they open the wrong runtime DB.
+        if bound_path.starts_with(repo_root) {
+            return load_strict_daemon_settings(bound_path).with_context(|| {
+                format!(
+                    "resolving repo-bound Bitloops daemon config from `{}`",
+                    REPO_POLICY_LOCAL_FILE_NAME
+                )
+            });
+        }
+    }
+
     if let Some(explicit_path) = env::var_os(ENV_DAEMON_CONFIG_PATH_OVERRIDE) {
         return load_strict_daemon_settings(Path::new(&explicit_path)).with_context(|| {
             format!(
@@ -163,7 +180,6 @@ fn repo_bound_daemon_settings_for_repo(repo_root: &Path) -> Result<LoadedDaemonS
         });
     }
 
-    let policy = discover_repo_policy_optional(repo_root)?;
     let Some(bound_path) = policy.daemon_config_path.as_deref() else {
         bail!(
             "Bitloops repo daemon binding is missing. Run `bitloops init` to bind this repo, or set `{}` to an explicit daemon config path.",

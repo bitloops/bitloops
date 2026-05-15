@@ -34,6 +34,12 @@ impl Agent for ClaudeCodeAgent {
     ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
         Some(self)
     }
+
+    fn as_transcript_entry_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+        Some(self)
+    }
 }
 
 impl TokenCalculator for ClaudeCodeAgent {

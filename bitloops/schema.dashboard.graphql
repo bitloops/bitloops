@@ -73,6 +73,12 @@ type DashboardCheckpointSessionDetail {
 	transcriptJsonl: String!
 	promptsText: String!
 	contextText: String!
+	"""
+	Canonical transcript rows for this session, derived from `transcript_jsonl`
+	by the agent's `TranscriptEntryDeriver`. Empty when the agent has no
+	deriver or the transcript could not be parsed.
+	"""
+	transcriptEntries: [DashboardTranscriptEntry!]!
 }
 
 type DashboardCommit {
@@ -229,6 +235,13 @@ type DashboardInteractionSessionDetail {
 	summary: DashboardInteractionSession!
 	turns: [DashboardInteractionTurn!]!
 	rawEvents: [DashboardInteractionEvent!]!
+	"""
+	Canonical transcript rows for the whole session, derived from the
+	session transcript file. Used by the session sidebar and tool-use tab.
+	Empty by default; populated by the resolver via
+	`host::interactions::derive_session_transcript_entries`.
+	"""
+	sessionTranscriptEntries: [DashboardTranscriptEntry!]!
 }
 
 type DashboardInteractionSessionSearchHit {
@@ -289,6 +302,13 @@ type DashboardInteractionTurn {
 	subagentRuns: [DashboardInteractionSubagentRun!]!
 	linkedCheckpoints: [DashboardInteractionCommitAuthor!]!
 	latestCommitAuthor: DashboardInteractionCommitAuthor
+	"""
+	Canonical transcript rows for this turn, derived from the per-turn
+	transcript fragment (with prompt fallback when no fragment exists).
+	Empty by default; populated by the session-detail resolver via
+	`host::interactions::derive_turn_transcript_entries`.
+	"""
+	transcriptEntries: [DashboardTranscriptEntry!]!
 }
 
 type DashboardInteractionTurnSearchHit {
@@ -367,6 +387,52 @@ type DashboardTokenUsage {
 	cacheCreationTokens: Int!
 	cacheReadTokens: Int!
 	apiCallCount: Int!
+}
+
+"""
+Who emitted a transcript entry, from the reader's perspective.
+"""
+enum DashboardTranscriptActor {
+	USER
+	ASSISTANT
+	SYSTEM
+}
+
+"""
+A single canonical transcript row. Replaces the agent-specific JSONL parsing
+that the dashboard frontend used to do for each agent.
+"""
+type DashboardTranscriptEntry {
+	entryId: String!
+	sessionId: String!
+	turnId: String
+	order: Int!
+	timestamp: String
+	actor: DashboardTranscriptActor!
+	variant: DashboardTranscriptVariant!
+	source: DashboardTranscriptSource!
+	text: String!
+	toolUseId: String
+	toolKind: String
+	isError: Boolean!
+}
+
+"""
+Where a transcript entry came from.
+"""
+enum DashboardTranscriptSource {
+	TRANSCRIPT
+	PROMPT_FALLBACK
+}
+
+"""
+The semantic kind of a transcript entry.
+"""
+enum DashboardTranscriptVariant {
+	CHAT
+	THINKING
+	TOOL_USE
+	TOOL_RESULT
 }
 
 type DashboardUser {
