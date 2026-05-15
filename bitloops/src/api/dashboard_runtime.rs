@@ -242,6 +242,11 @@ pub(super) async fn run(
         print_warning_message(&format!("Warning: failed to open default browser: {err:#}"));
     }
 
+    // Pre-warm the agent registry so its `OnceLock` initialization happens on
+    // the main runtime thread rather than racing on a tokio worker thread when
+    // dashboard resolvers (interaction.rs, checkpoint.rs) first call into it.
+    let _ = crate::adapters::agents::AgentRegistry::builtin();
+
     let state = DashboardState {
         config_path: options
             .config_path

@@ -5,6 +5,12 @@ pub(super) fn test_state(
     mode: ServeMode,
     bundle_dir: PathBuf,
 ) -> DashboardState {
+    // Pre-warm the agent registry so its `OnceLock` initialization happens on
+    // the test setup thread rather than racing on a tokio worker thread when
+    // concurrent tests call dashboard resolvers that touch the registry
+    // (interaction.rs, checkpoint.rs).
+    let _ = crate::adapters::agents::AgentRegistry::builtin();
+
     let db = crate::api::DashboardDbPools::default();
     DashboardState {
         config_path: repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH),

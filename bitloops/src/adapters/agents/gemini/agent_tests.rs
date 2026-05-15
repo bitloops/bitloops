@@ -270,6 +270,7 @@ fn TestChunkTranscript() {
                 "x".repeat(500)
             ),
             tool_calls: Vec::new(),
+            ..Default::default()
         });
     }
     let large =
@@ -310,6 +311,7 @@ fn TestChunkTranscript() {
                 r#type: "user".to_string(),
                 content: "Write a hello world program".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
             GeminiMessage {
                 id: String::new(),
@@ -323,13 +325,16 @@ fn TestChunkTranscript() {
                         Value::String("main.rs".to_string()),
                     )]),
                     status: String::new(),
+                    ..Default::default()
                 }],
+                ..Default::default()
             },
             GeminiMessage {
                 id: String::new(),
                 r#type: "user".to_string(),
                 content: "Now add a function".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
             GeminiMessage {
                 id: String::new(),
@@ -343,7 +348,9 @@ fn TestChunkTranscript() {
                         Value::String("main.rs".to_string()),
                     )]),
                     status: String::new(),
+                    ..Default::default()
                 }],
+                ..Default::default()
             },
         ],
     };
@@ -372,6 +379,7 @@ fn TestChunkTranscript() {
             r#type: "user".to_string(),
             content: "x".repeat(1000),
             tool_calls: Vec::new(),
+            ..Default::default()
         }],
     };
     let oversized = serde_json::to_vec(&oversized).expect("marshal oversized transcript");
@@ -390,24 +398,28 @@ fn TestChunkTranscript() {
                 r#type: "user".to_string(),
                 content: "msg1".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
             GeminiMessage {
                 id: String::new(),
                 r#type: "gemini".to_string(),
                 content: "msg2".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
             GeminiMessage {
                 id: String::new(),
                 r#type: "user".to_string(),
                 content: "msg3".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
             GeminiMessage {
                 id: String::new(),
                 r#type: "gemini".to_string(),
                 content: "msg4".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
         ],
     };
@@ -430,6 +442,7 @@ fn TestChunkTranscript() {
             r#type: "user".to_string(),
             content: format!("message-{idx:03}"),
             tool_calls: Vec::new(),
+            ..Default::default()
         });
     }
     let ordered = serde_json::to_vec(&GeminiTranscript {
