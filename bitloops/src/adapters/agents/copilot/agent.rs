@@ -154,7 +154,9 @@ impl Agent for CopilotCliAgent {
         format!("copilot --resume {session_id}")
     }
 
-    fn as_transcript_entry_deriver(&self) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+    fn as_transcript_entry_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
         Some(self)
     }
 }

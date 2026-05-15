@@ -80,8 +80,7 @@ fn TestExtractModifiedFiles() {
 {"type": "gemini", "content": "", "toolCalls": [{"name": "save_file", "args": {"filename": "via_filename.rs"}}]}
   ]
 }"#;
-    let files =
-        extract_modified_files(alternative).expect("extract modified files should work");
+    let files = extract_modified_files(alternative).expect("extract modified files should work");
     assert_eq!(
         files,
         vec!["via_path.rs".to_string(), "via_filename.rs".to_string()]
@@ -104,8 +103,7 @@ fn TestExtractModifiedFiles() {
 {"type": "gemini", "content": "Done!"}
   ]
 }"#;
-    let files =
-        extract_modified_files(replace_tool).expect("extract modified files should work");
+    let files = extract_modified_files(replace_tool).expect("extract modified files should work");
     assert_eq!(files, vec!["/path/to/random_letter.rb".to_string()]);
 
     let array_content = br#"{
@@ -116,8 +114,7 @@ fn TestExtractModifiedFiles() {
 {"type": "gemini", "content": "", "toolCalls": [{"name": "edit_file", "args": {"file_path": "bar.rs"}}]}
   ]
 }"#;
-    let files =
-        extract_modified_files(array_content).expect("extract modified files should work");
+    let files = extract_modified_files(array_content).expect("extract modified files should work");
     assert_eq!(files.len(), 2);
 }
 

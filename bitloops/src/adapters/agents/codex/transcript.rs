@@ -300,8 +300,7 @@ pub fn derive_transcript_entries(
                 {
                     continue;
                 }
-                let command =
-                    exec_command_string(payload.get("command").unwrap_or(&Value::Null));
+                let command = exec_command_string(payload.get("command").unwrap_or(&Value::Null));
                 if command.is_empty() {
                     continue;
                 }

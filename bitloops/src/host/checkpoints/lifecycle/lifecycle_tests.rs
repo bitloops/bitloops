@@ -28,10 +28,10 @@ use super::{
     handle_lifecycle_tool_invocation, handle_lifecycle_tool_result, handle_lifecycle_turn_end,
     handle_lifecycle_turn_start, read_and_parse_hook_input, resolve_transcript_offset,
 };
-use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
 use crate::adapters::agents::canonical::{
     CanonicalContractCompatibility, CanonicalResumableSessionState,
 };
+use crate::adapters::agents::{AGENT_NAME_CODEX, AGENT_NAME_GEMINI};
 
 use crate::host::checkpoints::session::create_session_backend_or_local;
 use crate::host::checkpoints::session::phase::SessionPhase;

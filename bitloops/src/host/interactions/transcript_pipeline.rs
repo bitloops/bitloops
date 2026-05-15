@@ -47,9 +47,7 @@ pub fn read_session_transcript_text(transcript_path: &str) -> String {
             // by the agent). Log so operators can correlate empty-timeline
             // sessions with the underlying I/O failure; downstream still
             // degrades gracefully via prompt fallback.
-            log::warn!(
-                "transcript read failed for path {transcript_path:?}: {err}"
-            );
+            log::warn!("transcript read failed for path {transcript_path:?}: {err}");
             String::new()
         }
     }
@@ -654,7 +652,11 @@ mod tests {
         .enumerate()
         {
             let entries = &partitioned[idx + 1];
-            assert_eq!(entries.len(), 1, "{turn_id} should have 1 synthesised entry");
+            assert_eq!(
+                entries.len(),
+                1,
+                "{turn_id} should have 1 synthesised entry"
+            );
             let entry = &entries[0];
             assert_eq!(entry.actor, TranscriptActor::User);
             assert_eq!(entry.variant, TranscriptVariant::Chat);

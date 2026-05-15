@@ -271,7 +271,10 @@ mod tests {
             assert_eq!(json, json!(s));
         }
 
-        for source in [TranscriptSource::Transcript, TranscriptSource::PromptFallback] {
+        for source in [
+            TranscriptSource::Transcript,
+            TranscriptSource::PromptFallback,
+        ] {
             let s = source.as_str();
             let json = serde_json::to_value(source).unwrap();
             assert_eq!(json, json!(s));

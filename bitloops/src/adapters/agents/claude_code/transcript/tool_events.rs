@@ -234,8 +234,7 @@ pub fn derive_transcript_entries(
                                 format!("Tool: {tool_kind}\n{tool_input_summary}")
                             };
 
-                            tool_kinds_by_id
-                                .insert(tool_use_id.clone(), tool_kind.to_string());
+                            tool_kinds_by_id.insert(tool_use_id.clone(), tool_kind.to_string());
 
                             entries.push(TranscriptEntry {
                                 entry_id: make_entry_id(session_id, &scope, order),

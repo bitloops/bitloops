@@ -320,9 +320,7 @@ fn extract_copilot_tool_name(data: &Value) -> Option<String> {
                 }
             }
         }
-        if found
-            && let Some(text) = current.as_str()
-        {
+        if found && let Some(text) = current.as_str() {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
@@ -481,8 +479,7 @@ pub fn derive_transcript_entries(
                     .map(|s| !s)
                     .unwrap_or(false);
 
-                let tool_use_id =
-                    make_derived_tool_use_id(session_id, &scope, tool_call_index);
+                let tool_use_id = make_derived_tool_use_id(session_id, &scope, tool_call_index);
                 tool_call_index += 1;
 
                 let kind_label = tool_kind.as_deref().unwrap_or("tool");
@@ -698,8 +695,8 @@ not-json
     fn user_message_event_produces_user_chat_entry() {
         let fragment = r#"{"type":"user.message","data":{"content":"hello copilot"}}
 "#;
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.actor, TranscriptActor::User);
@@ -718,8 +715,8 @@ not-json
     fn assistant_message_event_produces_assistant_chat_entry() {
         let fragment = r#"{"type":"assistant.message","data":{"content":"done","outputTokens":12}}
 "#;
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.actor, TranscriptActor::Assistant);
@@ -737,8 +734,8 @@ not-json
         // the proper paired entries.
         let fragment = r#"{"type":"tool.execution_complete","data":{"model":"gpt-5","toolTelemetry":{"properties":{"filePaths":"[\"hello.txt\"]"}}}}
 "#;
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         let tool_use = &entries[0];
         let tool_result = &entries[1];
@@ -752,10 +749,7 @@ not-json
             Some("derived:sess-1:turn-1:0")
         );
         // Falls back to "tool" with the file-paths summary appended.
-        assert_eq!(
-            tool_use.text,
-            "Tool: tool\nfiles: [\"hello.txt\"]"
-        );
+        assert_eq!(tool_use.text, "Tool: tool\nfiles: [\"hello.txt\"]");
         assert!(!tool_use.is_error);
 
         assert_eq!(tool_result.variant, TranscriptVariant::ToolResult);
@@ -775,17 +769,14 @@ not-json
         // human-readable result string.
         let fragment = r#"{"type":"tool.execution_complete","data":{"toolCallId":"call_X","model":"gpt-5-mini","success":true,"result":{"content":"File README.md updated with changes.","detailedContent":"diff --git ..."},"toolTelemetry":{"properties":{"command":"edit","options":"{}","inputs":"[]","fileExtension":"[\".md\"]"},"restrictedProperties":{"filePaths":"[\"/repo/README.md\"]"}}}}
 "#;
-        let entries = derive_transcript_entries("sess-2", Some("turn-2"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-2", Some("turn-2"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         let tool_use = &entries[0];
         let tool_result = &entries[1];
 
         assert_eq!(tool_use.tool_kind.as_deref(), Some("edit"));
-        assert_eq!(
-            tool_use.text,
-            "Tool: edit\nfiles: [\"/repo/README.md\"]"
-        );
+        assert_eq!(tool_use.text, "Tool: edit\nfiles: [\"/repo/README.md\"]");
 
         assert_eq!(tool_result.tool_kind.as_deref(), Some("edit"));
         assert_eq!(tool_result.text, "File README.md updated with changes.");
@@ -796,8 +787,8 @@ not-json
     fn tool_execution_complete_marks_is_error_when_success_is_false() {
         let fragment = r#"{"type":"tool.execution_complete","data":{"toolCallId":"call_E","success":false,"result":{"content":"Command failed: permission denied"},"toolTelemetry":{"properties":{"command":"bash"}}}}
 "#;
-        let entries = derive_transcript_entries("sess-3", Some("turn-3"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-3", Some("turn-3"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         let tool_result = &entries[1];
         assert_eq!(tool_result.tool_kind.as_deref(), Some("bash"));
@@ -815,8 +806,8 @@ not-json
             r#"{{"type":"tool.execution_complete","data":{{"toolCallId":"c1","result":{{"content":"{long}"}},"toolTelemetry":{{"properties":{{"command":"view"}}}}}}}}{}"#,
             "\n"
         );
-        let entries = derive_transcript_entries("sess-4", Some("turn-4"), &fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-4", Some("turn-4"), &fragment).expect("derive entries");
         let tool_result = &entries[1];
         // 2000 cap + 1 ellipsis char.
         assert_eq!(tool_result.text.chars().count(), 2001);
@@ -829,8 +820,8 @@ not-json
 {"type":"tool.execution_complete","data":{"model":"gpt-5","toolTelemetry":{"properties":{"filePaths":"[\"hello.txt\"]"}}}}
 {"type":"assistant.message","data":{"content":"Created hello.txt","outputTokens":42}}
 "#;
-        let entries = derive_transcript_entries("sess-7", Some("turn-3"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-7", Some("turn-3"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].actor, TranscriptActor::User);
         assert_eq!(entries[0].variant, TranscriptVariant::Chat);
@@ -851,8 +842,8 @@ not-json
 {"type":"session.shutdown","data":{"modelMetrics":[]}}
 {"type":"assistant.message","data":{"content":"hello"}}
 "#;
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].actor, TranscriptActor::User);
         assert_eq!(entries[0].text, "hi");

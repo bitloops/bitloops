@@ -251,7 +251,9 @@ impl Agent for GeminiCliAgent {
         format!("gemini --resume {session_id}")
     }
 
-    fn as_transcript_entry_deriver(&self) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+    fn as_transcript_entry_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
         Some(self)
     }
 
@@ -261,12 +263,7 @@ impl Agent for GeminiCliAgent {
     /// are message indices. Parse the live transcript (handles both JSONL and
     /// the legacy JSON-document shape), slice the messages array, and emit
     /// each as a JSONL line so downstream `parse_transcript` re-reads it.
-    fn slice_transcript_by_position(
-        &self,
-        transcript: &str,
-        start: usize,
-        end: usize,
-    ) -> String {
+    fn slice_transcript_by_position(&self, transcript: &str, start: usize, end: usize) -> String {
         use crate::adapters::agents::gemini::transcript::parse_transcript;
 
         if end <= start || transcript.is_empty() {

@@ -13,7 +13,9 @@ use crate::api::dashboard_types::{
 };
 use crate::api::{API_DEFAULT_PAGE_LIMIT, ApiError, ApiPage, DashboardState, paginate};
 use crate::host::interactions::query;
-use crate::host::interactions::transcript_entry::{TranscriptActor, TranscriptEntry, TranscriptSource};
+use crate::host::interactions::transcript_entry::{
+    TranscriptActor, TranscriptEntry, TranscriptSource,
+};
 use crate::host::interactions::types::InteractionTurn;
 use crate::host::interactions::{
     derive_session_transcript_entries, derive_turn_transcript_entries,
@@ -263,9 +265,8 @@ fn dedupe_phantom_turns(
         no_end_offset && no_ended_at && no_fragment
     }
 
-    let normalize = |prompt: &str| -> String {
-        strip_user_query_tags(prompt).trim().to_lowercase()
-    };
+    let normalize =
+        |prompt: &str| -> String { strip_user_query_tags(prompt).trim().to_lowercase() };
 
     if detail.turns.len() <= 1 {
         return detail;
@@ -285,9 +286,7 @@ fn dedupe_phantom_turns(
         if indices.len() <= 1 {
             continue;
         }
-        let any_complete = indices
-            .iter()
-            .any(|&i| !is_orphan(&detail.turns[i].turn));
+        let any_complete = indices.iter().any(|&i| !is_orphan(&detail.turns[i].turn));
         if !any_complete {
             // No row in this group is complete — keep them all so we don't
             // hide an in-flight conversation. (At most one of these will be
@@ -420,8 +419,7 @@ fn enrich_session_detail_with_transcript_entries(
             || (session_has_assistant && per_turn_missing_assistant));
 
     let per_turn_raw: Vec<Vec<TranscriptEntry>> = if needs_partition_fallback {
-        let turns_refs: Vec<&InteractionTurn> =
-            detail.turns.iter().map(|s| &s.turn).collect();
+        let turns_refs: Vec<&InteractionTurn> = detail.turns.iter().map(|s| &s.turn).collect();
         partition_session_entries_to_turns(&session_id_str, &session_entries_raw, &turns_refs)
     } else {
         offset_based
@@ -434,7 +432,12 @@ fn enrich_session_detail_with_transcript_entries(
 
     let per_turn_entries: Vec<Vec<DashboardTranscriptEntry>> = per_turn_raw
         .into_iter()
-        .map(|entries| entries.into_iter().map(DashboardTranscriptEntry::from).collect())
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(DashboardTranscriptEntry::from)
+                .collect()
+        })
         .collect();
 
     let mut dashboard = DashboardInteractionSessionDetail::from_domain(&detail)

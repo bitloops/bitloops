@@ -218,8 +218,8 @@ mod tests {
     #[test]
     fn claude_shape_user_message_produces_user_chat_entry() {
         let fragment = "{\"type\":\"user\",\"message\":{\"content\":\"hello cursor\"}}\n";
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         let user_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.actor == TranscriptActor::User)
@@ -245,8 +245,8 @@ mod tests {
             "{\"type\":\"user\",\"message\":{\"content\":\"please summarise\"}}\n",
             "{\"type\":\"assistant\",\"message\":{\"content\":\"all done\"}}\n",
         );
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         let assistant_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.actor == TranscriptActor::Assistant)
@@ -272,8 +272,8 @@ mod tests {
             "{\"type\":\"user\",\"message\":{\"content\":\"second\"}}\n",
             "{\"type\":\"user\",\"message\":{\"content\":\"third\"}}\n",
         );
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         let user_entries: Vec<_> = entries
             .iter()
             .filter(|e| e.actor == TranscriptActor::User)
@@ -302,8 +302,7 @@ mod tests {
             "{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n",
             "{\"type\":\"assistant\",\"message\":{\"content\":\"hi\"}}\n",
         );
-        let entries =
-            derive_transcript_entries("sess-9", None, fragment).expect("derive entries");
+        let entries = derive_transcript_entries("sess-9", None, fragment).expect("derive entries");
         assert!(!entries.is_empty());
         for entry in &entries {
             assert!(entry.turn_id.is_none());
@@ -353,8 +352,8 @@ mod tests {
         // Mirrors a single line from a real Cursor JSONL session: real summary
         // text followed by a blank line and the [REDACTED] placeholder.
         let fragment = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"The README top-level heading is now `# cursor` (it was `# gem`).\\n\\n[REDACTED]\"}]}}\n";
-        let entries = derive_transcript_entries("sess-r", Some("turn-r"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-r", Some("turn-r"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.actor, TranscriptActor::Assistant);
@@ -374,8 +373,8 @@ mod tests {
         // the remaining text is the marker alone — the entry must not be
         // emitted (it would otherwise render as an empty assistant bubble).
         let fragment = "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"[REDACTED]\"},{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{}}]}}\n";
-        let entries = derive_transcript_entries("sess-r", Some("turn-r"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-r", Some("turn-r"), fragment).expect("derive entries");
         assert!(
             entries.is_empty(),
             "redacted-only assistant entries should be filtered, got {entries:?}"

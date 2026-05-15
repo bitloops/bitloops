@@ -1,11 +1,11 @@
 use std::path::Path;
 
+use crate::adapters::agents::AgentRegistry;
 use crate::api::dashboard_file_diffs::{
     dashboard_checkpoint_file_diff_list_from_relations, dashboard_file_diff_list_from_numstat,
     dashboard_zeroed_file_diff_list,
 };
 use crate::api::dashboard_params::normalize_checkpoint_id;
-use crate::adapters::agents::AgentRegistry;
 use crate::api::dashboard_types::{
     DashboardCheckpointDetail, DashboardCheckpointSessionDetail, DashboardCommitFileDiff,
     DashboardTokenUsage, DashboardTranscriptEntry,

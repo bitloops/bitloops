@@ -497,8 +497,8 @@ mod tests {
     #[test]
     fn user_message_produces_user_chat_entry() {
         let fragment = "{\"id\":\"msg-1\",\"role\":\"user\",\"content\":\"hello world\"}\n";
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.actor, TranscriptActor::User);
@@ -520,8 +520,8 @@ mod tests {
             "{\"type\":\"text\",\"text\":\"reasoning result\"}",
             "]}\n"
         );
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].actor, TranscriptActor::Assistant);
         assert_eq!(entries[0].variant, TranscriptVariant::Chat);
@@ -535,8 +535,8 @@ mod tests {
             "{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"call_bash_1\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"ls\"},\"output\":\"a\\nb\"}}",
             "]}\n"
         );
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         let tool_use = &entries[0];
         let tool_result = &entries[1];
@@ -558,8 +558,8 @@ mod tests {
             "{\"type\":\"tool\",\"tool\":\"read\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"src/lib.rs\"},\"output\":\"loaded\"}}",
             "]}\n"
         );
-        let entries = derive_transcript_entries("sess-1", Some("turn-2"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-2"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         let id = entries[0].tool_use_id.clone().expect("tool_use_id");
         assert_eq!(id, "derived:sess-1:turn-2:0");
@@ -574,8 +574,8 @@ mod tests {
             "{\"type\":\"tool\",\"tool\":\"edit\",\"callID\":\"call_edit\",\"state\":{\"status\":\"completed\",\"input\":{\"filePath\":\"src/lib.rs\"},\"output\":\"updated\"}}",
             "]}\n"
         );
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].tool_kind.as_deref(), Some("edit"));
         assert_eq!(entries[1].tool_kind.as_deref(), Some("edit"));
@@ -590,8 +590,8 @@ mod tests {
             "{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"call_bash_2\",\"state\":{\"status\":\"completed\",\"input\":{\"command\":\"cargo test\"},\"output\":\"ok\"}}",
             "]}\n"
         );
-        let entries = derive_transcript_entries("sess-7", Some("turn-3"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-7", Some("turn-3"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 4);
         assert_eq!(entries[0].actor, TranscriptActor::User);
         assert_eq!(entries[1].actor, TranscriptActor::Assistant);
@@ -607,8 +607,7 @@ mod tests {
     #[test]
     fn top_level_content_used_as_fallback_when_no_text_parts() {
         let fragment = "{\"id\":\"msg-6\",\"role\":\"assistant\",\"content\":\"fallback assistant text\",\"parts\":[]}\n";
-        let entries =
-            derive_transcript_entries("sess-1", None, fragment).expect("derive entries");
+        let entries = derive_transcript_entries("sess-1", None, fragment).expect("derive entries");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].actor, TranscriptActor::Assistant);
         assert_eq!(entries[0].text, "fallback assistant text");
@@ -623,8 +622,8 @@ mod tests {
             "{\"type\":\"tool\",\"tool\":\"bash\",\"callID\":\"call_err\",\"state\":{\"status\":\"error\",\"input\":{\"command\":\"nope\"},\"output\":\"command not found\"}}",
             "]}\n"
         );
-        let entries = derive_transcript_entries("sess-1", Some("turn-1"), fragment)
-            .expect("derive entries");
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
         assert_eq!(entries.len(), 2);
         assert!(!entries[0].is_error);
         assert!(entries[1].is_error);

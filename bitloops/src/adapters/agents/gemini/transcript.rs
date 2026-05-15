@@ -267,8 +267,8 @@ pub fn parse_transcript(data: &[u8]) -> Result<GeminiTranscript> {
 /// upsert pattern Gemini uses (incrementally adding `toolCalls` to a message
 /// originally written with only `thoughts`) collapses to one entry.
 pub fn parse_transcript_jsonl(data: &[u8]) -> Result<GeminiTranscript> {
-    let text = std::str::from_utf8(data)
-        .map_err(|err| anyhow!("transcript is not valid UTF-8: {err}"))?;
+    let text =
+        std::str::from_utf8(data).map_err(|err| anyhow!("transcript is not valid UTF-8: {err}"))?;
 
     let mut messages: Vec<GeminiMessage> = Vec::new();
     let mut id_index: HashMap<String, usize> = HashMap::new();
