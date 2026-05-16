@@ -32,6 +32,8 @@
   </a>
 </p>
 
+https://github.com/user-attachments/assets/5051002a-d94d-409a-8694-e96f58eb96e1
+
 ## What Bitloops Gives You
 
 AI coding agents are powerful, but most of them still start every task by crawling the repository again: read files, grep for symbols, infer architecture, guess which tests matter, inspect old docs, and compress all of that into a prompt.
