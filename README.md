@@ -26,11 +26,7 @@
 [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
 </div>
 
-<p align="center">
-  <a href="https://www.youtube.com/watch?v=hb8EAWlRjt8" target="_blank">
-    <img src="assets/bitloops_getting_started.png" alt="Bitloops Getting Started" width="640" />
-  </a>
-</p>
+https://github.com/user-attachments/assets/5a2c9479-4639-4cf4-a6dd-1ef668a37edf
 
 ## What Bitloops Gives You
 
