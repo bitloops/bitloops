@@ -26,7 +26,7 @@
 [![Agent Agnostic](https://img.shields.io/badge/Agents-Agent%20Agnostic-7404e4?style=flat-square)](https://github.com/bitloops/bitloops)
 </div>
 
-https://github.com/user-attachments/assets/55c14a21-ce1b-4eeb-90a7-3e213cb209be
+https://github.com/user-attachments/assets/5a2c9479-4639-4cf4-a6dd-1ef668a37edf
 
 ## What Bitloops Gives You
 
