@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 - **Local embeddings setup now honors repo-bound daemon configs**: local managed embeddings bootstrap now writes the `local_code` runtime profile into the daemon config bound by the repo's `.bitloops.local.toml`, matching the platform embeddings path and avoiding accidental writes to an unrelated default daemon config.
 - **Plain init no longer disables embeddings implicitly**: running `bitloops init` without an embeddings flag now keeps the repo's semantic embeddings policy unchanged instead of writing `embedding_mode = "off"` into `.bitloops.local.toml`.
+- **Default-daemon init now recovers when a service exists without a live daemon runtime**: `bitloops init --install-default-daemon` now detects existing always-on service metadata and restarts through the service path instead of attempting a detached daemon start, avoiding the contradictory second-repo flow where init reported both an already-running service and a missing daemon.
 - **Repo semantic profile bindings inherit daemon mode when mode is omitted**: repo-local `code_embeddings` or `summary_embeddings` bindings now keep the daemon's active semantic embedding mode unless the repo policy explicitly overrides it.
 
 ## [0.0.27] - 2026-05-15
