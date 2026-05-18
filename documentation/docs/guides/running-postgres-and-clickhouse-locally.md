@@ -73,19 +73,6 @@ clickhouse_password = "bitloops"
 clickhouse_database = "bitloops"
 ```
 
-If you use `BITLOOPS_DAEMON_CONFIG_PATH_OVERRIDE`, or the repo has its own nearer `config.toml`, `bitloops status` shows the effective config file to edit.
-
-Bitloops' Postgres-backed semantic embedding schema requires the `vector` extension, so this local Compose stack uses a PostgreSQL image that already includes `pgvector`.
-
-If you already started an older version of this local ClickHouse stack without credentials, reset it once so the container reinitialises with the new user and database:
-
-```bash
-docker compose -f compose.db.yaml down -v
-docker compose -f compose.db.yaml up -d
-```
-
-If you also started an older version of the Postgres container from a plain `postgres:16` image, the same reset recreates it from the `pgvector` image Bitloops needs.
-
 ## 4. Reload Bitloops And Verify The Connections
 
 Restart the daemon after updating the config:
@@ -101,41 +88,15 @@ bitloops --connection-status
 bitloops status
 ```
 
-When the config is active:
-
-- relational store operations use Postgres through `stores.relational.postgres_dsn`
-- event and analytics operations use ClickHouse through `stores.events.clickhouse_*`
-- runtime SQLite remains local
-- blob storage remains whatever you already configured locally
-
 ## 5. Initialise The Repository
 
 Once the daemon has restarted with the config above, initialise the repository against that active daemon setup:
 
 ```bash
-bitloops init --sync=true
+bitloops init --install-default-daemon
 ```
 
-If you want to skip the first sync for now, use:
-
-```bash
-bitloops init --sync=false
-```
-
-`bitloops init` creates or updates `.bitloops.local.toml` for repo-local policy, but it does not replace the daemon `config.toml` storage settings from the earlier steps.
-
-## 6. Use The Stores In Bitloops
-
-After `bitloops init`, Bitloops uses the configured services automatically for repo-scoped workflows.
-
-Common follow-up flows include:
-
-- `bitloops devql tasks enqueue --kind ingest` when you also want checkpoint, commit, and event history materialised
-- `bitloops devql test-harness ...` commands when you want the test-harness storage path to use Postgres instead of the local SQLite fallback
-
-Schema initialisation for the test-harness pack is handled by Bitloops during normal startup and command flows; you do not need to create those tables manually.
-
-## 7. Stop Or Reset The Stack
+## 6. Stop Or Reset The Stack
 
 Stop the containers but keep the data:
 

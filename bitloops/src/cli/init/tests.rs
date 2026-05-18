@@ -4477,6 +4477,111 @@ fn run_init_with_install_default_daemon_can_skip_embeddings_via_flag() {
 }
 
 #[test]
+fn run_init_with_install_default_daemon_carries_forward_repo_store_backend_selection() {
+    let repo = tempfile::tempdir().unwrap();
+    let app_dirs = tempfile::tempdir().unwrap();
+    setup_git_repo(&repo);
+    std::fs::write(
+        repo.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+        r#"
+[stores.relational]
+postgres_dsn = "postgres://user:pass@localhost:5432/bitloops"
+
+[stores.events]
+clickhouse_url = "http://localhost:8123"
+clickhouse_database = "bitloops"
+"#,
+    )
+    .expect("write repo daemon config with remote stores");
+
+    with_temp_app_dirs_and_summary_configured(&app_dirs, false, true, true, || {
+        with_install_default_daemon_hook(
+            move |install_default_daemon| {
+                assert!(install_default_daemon);
+                ensure_daemon_config_exists().expect("create default daemon config");
+                Ok(())
+            },
+            || {
+                with_global_graphql_executor_hook(
+                    |_runtime_root, _query, variables| {
+                        assert_eq!(variables["telemetry"], serde_json::json!(false));
+                        Ok(serde_json::json!({
+                            "updateCliTelemetryConsent": {
+                                "telemetry": false,
+                                "needsPrompt": false
+                            }
+                        }))
+                    },
+                    || {
+                        let mut out = Vec::new();
+                        let mut input = Cursor::new("");
+                        let runtime = test_runtime();
+                        runtime
+                            .block_on(run_with_io_async_for_project_root(
+                                InitArgs {
+                                    command: None,
+                                    install_default_daemon: true,
+                                    force: false,
+                                    disable_devql_guidance: false,
+                                    agent: vec![DEFAULT_AGENT.to_string()],
+                                    telemetry: Some(false),
+                                    no_telemetry: false,
+                                    skip_baseline: false,
+                                    sync: Some(false),
+                                    ingest: Some(false),
+                                    backfill: None,
+                                    exclude: Vec::new(),
+                                    exclude_from: Vec::new(),
+                                    embeddings_runtime: None,
+                                    no_embeddings: true,
+                                    no_summaries: true,
+                                    context_guidance_runtime: None,
+                                    no_context_guidance: true,
+                                    context_guidance_gateway_url: None,
+                                    context_guidance_api_key_env: None,
+                                    embeddings_gateway_url: None,
+                                    embeddings_api_key_env: "BITLOOPS_PLATFORM_GATEWAY_TOKEN"
+                                        .to_string(),
+                                },
+                                repo.path(),
+                                &mut out,
+                                &mut input,
+                                None,
+                            ))
+                            .expect("run init");
+
+                        let daemon_config = ensure_daemon_config_exists()
+                            .expect("resolve daemon config after init");
+                        let daemon_config =
+                            std::fs::read_to_string(&daemon_config).expect("read daemon config");
+                        assert!(
+                            daemon_config.contains(
+                                "postgres_dsn = \"postgres://user:pass@localhost:5432/bitloops\""
+                            ),
+                            "init should carry forward relational remote selection:\n{daemon_config}"
+                        );
+                        assert!(
+                            daemon_config.contains("clickhouse_url = \"http://localhost:8123\""),
+                            "init should carry forward event remote selection:\n{daemon_config}"
+                        );
+                        assert!(
+                            daemon_config.contains("clickhouse_database = \"bitloops\""),
+                            "init should carry forward event database selection:\n{daemon_config}"
+                        );
+
+                        let bound =
+                            crate::config::resolve_bound_store_backend_config_for_repo(repo.path())
+                                .expect("resolve bound store backend config");
+                        assert!(bound.relational.has_postgres());
+                        assert!(bound.events.has_clickhouse());
+                    },
+                );
+            },
+        );
+    });
+}
+
+#[test]
 fn explicit_no_embeddings_wins_over_existing_daemon_embeddings() {
     let repo = tempfile::tempdir().unwrap();
     setup_git_repo(&repo);

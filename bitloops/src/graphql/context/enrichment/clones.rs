@@ -534,6 +534,7 @@ mod clone_summary_tests {
             temporal_scope,
             structural_filter: ArtefactStructuralFilter::default(),
             activity_filter: None,
+            current_activity_snapshots: None,
             pagination: None,
         }
     }

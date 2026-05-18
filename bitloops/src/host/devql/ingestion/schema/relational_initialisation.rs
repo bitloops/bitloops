@@ -12,6 +12,11 @@ enum PostgresSyncSchemaPolicy {
 }
 
 pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
+    if crate::host::devql::types::sqlite_path_uses_remote_shared_relational_authority(sqlite_path) {
+        warn_on_legacy_shared_sqlite_tables(sqlite_path)?;
+        return init_sqlite_current_projection_schema(sqlite_path).await;
+    }
+
     let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.to_path_buf())
         .context("connecting SQLite pool for current-state schema migrations")?;
     sqlite
@@ -104,6 +109,112 @@ pub(crate) async fn init_sqlite_schema(sqlite_path: &Path) -> Result<()> {
     Ok(())
 }
 
+const LEGACY_SHARED_SQLITE_TABLES: &[&str] = &[
+    "sync_state",
+    "commits",
+    "commit_ingest_ledger",
+    "file_state",
+    "artefact_snapshots",
+    "artefacts",
+    "artefact_edges",
+    "checkpoint_files",
+    "checkpoint_artefacts",
+    "checkpoint_artefact_lineage",
+    "symbol_semantics",
+    "symbol_features",
+    "symbol_embeddings",
+    "symbol_clone_edges",
+];
+
+fn warn_on_legacy_shared_sqlite_tables(sqlite_path: &Path) -> Result<()> {
+    if !sqlite_path.is_file() {
+        return Ok(());
+    }
+
+    let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path.to_path_buf())
+        .context("opening SQLite current/projection database to inspect legacy shared tables")?;
+    let legacy_tables = sqlite
+        .with_connection(detect_legacy_shared_sqlite_tables)
+        .context("inspecting SQLite for legacy shared-table mirrors")?;
+    if !legacy_tables.is_empty() {
+        log::warn!(
+            "remote shared relational authority is configured, but the local SQLite file still contains legacy shared tables that are now inert: {}",
+            legacy_tables.join(", ")
+        );
+    }
+    Ok(())
+}
+
+pub(crate) async fn init_sqlite_current_projection_schema(sqlite_path: &Path) -> Result<()> {
+    let repositories_only_sql =
+        build_schema_subset_sql(sqlite_shared_schema_sql(), &["repositories"]);
+    sqlite_exec_path_allow_create(sqlite_path, &repositories_only_sql)
+        .await
+        .context("creating SQLite local repo catalog helper table")?;
+    sqlite_exec_path_allow_create(sqlite_path, sqlite_current_projection_schema_sql())
+        .await
+        .context("creating SQLite current/projection relational tables")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::host::devql::sync::schema::sync_schema_sql(),
+    )
+    .await
+    .context("creating SQLite current/projection sync tables")?;
+    let sqlite = crate::storage::SqliteConnectionPool::connect(sqlite_path.to_path_buf())
+        .context("connecting SQLite pool for current/projection schema migrations")?;
+    let sync_tables_need_rebuild = sqlite
+        .with_connection(sync_tables_need_rebuild)
+        .context("inspecting SQLite current/projection sync table shape")?;
+    if sync_tables_need_rebuild {
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection repo_sync_state table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_project_contexts_current_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection project_contexts_current table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection current_file_state table")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_content_cache_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection content cache tables")?;
+        sqlite_exec_path_allow_create(
+            sqlite_path,
+            crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
+        )
+        .await
+        .context("rebuilding SQLite current/projection artefact tables")?;
+    }
+    crate::capability_packs::semantic_clones::init_sqlite_semantic_features_schema(sqlite_path)
+        .await
+        .context("creating SQLite current semantic feature tables")?;
+    crate::capability_packs::semantic_clones::init_sqlite_search_documents_schema(sqlite_path)
+        .await
+        .context("creating SQLite current search document tables")?;
+    crate::capability_packs::semantic_clones::init_sqlite_semantic_embeddings_schema(sqlite_path)
+        .await
+        .context("creating SQLite current semantic embedding tables")?;
+    sqlite_exec_path_allow_create(
+        sqlite_path,
+        crate::capability_packs::semantic_clones::schema::semantic_clones_sqlite_current_projection_schema_sql(),
+    )
+    .await
+    .context("creating SQLite current semantic clone tables")?;
+    Ok(())
+}
+
 fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Result<bool> {
     let columns = sqlite_table_columns(conn, "artefacts")?;
     Ok([
@@ -117,6 +228,16 @@ fn sqlite_artefacts_historical_needs_cutover(conn: &rusqlite::Connection) -> Res
     ]
     .iter()
     .any(|column| columns.iter().any(|existing| existing == column)))
+}
+
+fn detect_legacy_shared_sqlite_tables(conn: &rusqlite::Connection) -> Result<Vec<String>> {
+    let mut found = Vec::new();
+    for table in LEGACY_SHARED_SQLITE_TABLES {
+        if sqlite_table_exists(conn, table)? {
+            found.push((*table).to_string());
+        }
+    }
+    Ok(found)
 }
 
 fn sync_tables_need_rebuild(conn: &rusqlite::Connection) -> Result<bool> {
@@ -366,6 +487,20 @@ fn sqlite_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<
     Ok(columns)
 }
 
+fn sqlite_table_exists(conn: &rusqlite::Connection, table: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM sqlite_master
+            WHERE type IN ('table', 'view') AND name = ?1
+        )",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(anyhow::Error::from)
+}
+
 fn sqlite_table_pk_columns(conn: &rusqlite::Connection, table: &str) -> Result<Vec<String>> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -437,12 +572,12 @@ pub(crate) async fn init_postgres_schema_for_sync_execution(
 
 async fn init_postgres_schema_with_policy(
     pg_client: &tokio_postgres::Client,
-    policy: PostgresSyncSchemaPolicy,
+    _policy: PostgresSyncSchemaPolicy,
 ) -> Result<PostgresSyncSchemaInitOutcome> {
-    let sql = postgres_schema_sql();
+    let sql = postgres_shared_schema_sql();
     postgres_exec(pg_client, sql)
         .await
-        .context("creating Postgres DevQL tables")?;
+        .context("creating Postgres shared DevQL tables")?;
     postgres_exec(
         pg_client,
         "ALTER TABLE repositories ADD COLUMN IF NOT EXISTS metadata_json TEXT;",
@@ -470,79 +605,21 @@ async fn init_postgres_schema_with_policy(
         .await
         .context("normalising Postgres DevQL edge model values")?;
 
-    postgres_exec(
-        pg_client,
-        crate::host::devql::sync::schema::sync_schema_sql(),
-    )
-    .await
-    .context("creating Postgres DevQL sync tables")?;
-
-    let sync_tables_need_rebuild = postgres_sync_tables_need_rebuild(pg_client)
-        .await
-        .context("inspecting Postgres DevQL sync table shape")?;
-    let should_rebuild_sync_tables = match policy {
-        PostgresSyncSchemaPolicy::SafeBootstrap => {
-            sync_tables_need_rebuild
-                && postgres_sync_tables_are_empty(pg_client)
-                    .await
-                    .context("checking whether Postgres sync tables are empty")?
-        }
-        PostgresSyncSchemaPolicy::SyncExecution => sync_tables_need_rebuild,
-    };
-
-    let mut outcome = PostgresSyncSchemaInitOutcome::default();
-    if should_rebuild_sync_tables {
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_repo_sync_state_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync repo_sync_state table")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_project_contexts_current_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync project_contexts_current table")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_current_file_state_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync current_file_state table")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_content_cache_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres sync content cache tables")?;
-
-        postgres_exec(
-            pg_client,
-            crate::host::devql::sync::schema::sync_artefacts_current_migration_sql(),
-        )
-        .await
-        .context("rebuilding Postgres current-state sync tables")?;
-        outcome.rebuilt_current_state = true;
-    }
-
     crate::capability_packs::semantic_clones::init_postgres_semantic_features_schema(pg_client)
         .await
-        .context("creating Postgres semantic feature tables")?;
+        .context("creating Postgres shared semantic feature tables")?;
     crate::capability_packs::semantic_clones::init_postgres_search_documents_schema(pg_client)
         .await
-        .context("creating Postgres search document tables")?;
+        .context("creating Postgres shared search document tables")?;
     crate::capability_packs::semantic_clones::init_postgres_semantic_embeddings_schema(pg_client)
         .await
-        .context("creating Postgres semantic embedding tables")?;
-    crate::capability_packs::semantic_clones::pipeline::init_postgres_semantic_clones_schema(
+        .context("creating Postgres shared semantic embedding tables")?;
+    postgres_exec(
         pg_client,
+        crate::capability_packs::semantic_clones::schema::semantic_clones_postgres_shared_schema_sql(),
     )
     .await
-    .context("creating Postgres semantic clone tables")?;
+    .context("creating Postgres shared semantic clone tables")?;
     let checkpoint_schema_sql = checkpoint_relational_schema_sql_postgres();
     postgres_exec(pg_client, checkpoint_schema_sql)
         .await
@@ -553,360 +630,13 @@ async fn init_postgres_schema_with_policy(
         .await
         .context("adding confidence/linkage_status columns to test_links")?;
 
-    let workspace_revisions_sql = workspace_revisions_sql();
-    postgres_exec(pg_client, workspace_revisions_sql)
-        .await
-        .context("creating workspace_revisions table")?;
-
-    Ok(outcome)
-}
-
-async fn postgres_sync_tables_need_rebuild(pg_client: &tokio_postgres::Client) -> Result<bool> {
-    Ok(
-        !postgres_repo_sync_state_matches_new_shape(pg_client).await?
-            || !postgres_project_contexts_current_matches_new_shape(pg_client).await?
-            || !postgres_current_file_state_matches_new_shape(pg_client).await?
-            || !postgres_content_cache_matches_new_shape(pg_client).await?
-            || !postgres_artefacts_current_matches_new_shape(pg_client).await?
-            || !postgres_artefact_edges_current_matches_new_shape(pg_client).await?,
-    )
-}
-
-async fn postgres_sync_tables_are_empty(pg_client: &tokio_postgres::Client) -> Result<bool> {
-    for table in [
-        "repo_sync_state",
-        "current_file_state",
-        "artefacts_current",
-        "artefact_edges_current",
-    ] {
-        if postgres_table_has_rows(pg_client, table).await? {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-async fn postgres_repo_sync_state_matches_new_shape(
-    pg_client: &tokio_postgres::Client,
-) -> Result<bool> {
-    let expected_columns = [
-        "repo_id",
-        "repo_root",
-        "active_branch",
-        "head_commit_sha",
-        "head_tree_sha",
-        "parser_version",
-        "extractor_version",
-        "scope_exclusions_fingerprint",
-        "last_sync_started_at",
-        "last_sync_completed_at",
-        "last_sync_status",
-        "last_sync_reason",
-    ];
-    Ok(
-        postgres_table_columns(pg_client, "repo_sync_state").await? == expected_columns
-            && postgres_table_pk_columns(pg_client, "repo_sync_state").await?
-                == vec!["repo_id".to_string()]
-            && postgres_table_has_repo_catalog_fk(pg_client, "repo_sync_state").await?,
-    )
-}
-
-async fn postgres_current_file_state_matches_new_shape(
-    pg_client: &tokio_postgres::Client,
-) -> Result<bool> {
-    let expected_columns = [
-        "repo_id",
-        "path",
-        "analysis_mode",
-        "file_role",
-        "text_index_mode",
-        "language",
-        "resolved_language",
-        "dialect",
-        "primary_context_id",
-        "secondary_context_ids_json",
-        "frameworks_json",
-        "runtime_profile",
-        "classification_reason",
-        "context_fingerprint",
-        "extraction_fingerprint",
-        "head_content_id",
-        "index_content_id",
-        "worktree_content_id",
-        "effective_content_id",
-        "effective_source",
-        "parser_version",
-        "extractor_version",
-        "exists_in_head",
-        "exists_in_index",
-        "exists_in_worktree",
-        "last_synced_at",
-    ];
-    Ok(
-        postgres_table_columns(pg_client, "current_file_state").await? == expected_columns
-            && postgres_table_pk_columns(pg_client, "current_file_state").await?
-                == vec!["repo_id".to_string(), "path".to_string()]
-            && postgres_table_has_repo_catalog_fk(pg_client, "current_file_state").await?,
-    )
-}
-
-async fn postgres_project_contexts_current_matches_new_shape(
-    pg_client: &tokio_postgres::Client,
-) -> Result<bool> {
-    let expected_columns = [
-        "repo_id",
-        "context_id",
-        "root",
-        "kind",
-        "detection_source",
-        "frameworks_json",
-        "runtime_profile",
-        "config_files_json",
-        "config_fingerprint",
-        "source_versions_json",
-    ];
-    Ok(
-        postgres_table_columns(pg_client, "project_contexts_current").await? == expected_columns
-            && postgres_table_pk_columns(pg_client, "project_contexts_current").await?
-                == vec!["repo_id".to_string(), "context_id".to_string()]
-            && postgres_table_has_repo_catalog_fk(pg_client, "project_contexts_current").await?,
-    )
-}
-
-async fn postgres_content_cache_matches_new_shape(
-    pg_client: &tokio_postgres::Client,
-) -> Result<bool> {
-    let cache_expected = [
-        "content_id",
-        "language",
-        "extraction_fingerprint",
-        "parser_version",
-        "extractor_version",
-        "retention_class",
-        "parse_status",
-        "parsed_at",
-        "last_accessed_at",
-    ];
-    let artefacts_expected = [
-        "content_id",
-        "language",
-        "extraction_fingerprint",
-        "parser_version",
-        "extractor_version",
-        "artifact_key",
-        "canonical_kind",
-        "language_kind",
-        "name",
-        "parent_artifact_key",
-        "start_line",
-        "end_line",
-        "start_byte",
-        "end_byte",
-        "signature",
-        "modifiers",
-        "docstring",
-        "metadata",
-    ];
-    let edges_expected = [
-        "content_id",
-        "language",
-        "extraction_fingerprint",
-        "parser_version",
-        "extractor_version",
-        "edge_key",
-        "from_artifact_key",
-        "to_artifact_key",
-        "to_symbol_ref",
-        "edge_kind",
-        "start_line",
-        "end_line",
-        "metadata",
-    ];
-    Ok(
-        postgres_table_columns(pg_client, "content_cache").await? == cache_expected
-            && postgres_table_pk_columns(pg_client, "content_cache").await?
-                == vec![
-                    "content_id".to_string(),
-                    "language".to_string(),
-                    "extraction_fingerprint".to_string(),
-                    "parser_version".to_string(),
-                    "extractor_version".to_string(),
-                ]
-            && postgres_table_columns(pg_client, "content_cache_artefacts").await?
-                == artefacts_expected
-            && postgres_table_pk_columns(pg_client, "content_cache_artefacts").await?
-                == vec![
-                    "content_id".to_string(),
-                    "language".to_string(),
-                    "extraction_fingerprint".to_string(),
-                    "parser_version".to_string(),
-                    "extractor_version".to_string(),
-                    "artifact_key".to_string(),
-                ]
-            && postgres_table_columns(pg_client, "content_cache_edges").await? == edges_expected
-            && postgres_table_pk_columns(pg_client, "content_cache_edges").await?
-                == vec![
-                    "content_id".to_string(),
-                    "language".to_string(),
-                    "extraction_fingerprint".to_string(),
-                    "parser_version".to_string(),
-                    "extractor_version".to_string(),
-                    "edge_key".to_string(),
-                ],
-    )
-}
-
-async fn postgres_artefacts_current_matches_new_shape(
-    pg_client: &tokio_postgres::Client,
-) -> Result<bool> {
-    let expected_columns = [
-        "repo_id",
-        "path",
-        "content_id",
-        "symbol_id",
-        "artefact_id",
-        "language",
-        "extraction_fingerprint",
-        "canonical_kind",
-        "language_kind",
-        "symbol_fqn",
-        "parent_symbol_id",
-        "parent_artefact_id",
-        "start_line",
-        "end_line",
-        "start_byte",
-        "end_byte",
-        "signature",
-        "modifiers",
-        "docstring",
-        "updated_at",
-    ];
-    Ok(
-        postgres_table_columns(pg_client, "artefacts_current").await? == expected_columns
-            && postgres_table_pk_columns(pg_client, "artefacts_current").await?
-                == vec![
-                    "repo_id".to_string(),
-                    "path".to_string(),
-                    "symbol_id".to_string(),
-                ]
-            && postgres_table_has_repo_catalog_fk(pg_client, "artefacts_current").await?,
-    )
-}
-
-async fn postgres_artefact_edges_current_matches_new_shape(
-    pg_client: &tokio_postgres::Client,
-) -> Result<bool> {
-    let expected_columns = [
-        "repo_id",
-        "edge_id",
-        "path",
-        "content_id",
-        "from_symbol_id",
-        "from_artefact_id",
-        "to_symbol_id",
-        "to_artefact_id",
-        "to_symbol_ref",
-        "edge_kind",
-        "language",
-        "start_line",
-        "end_line",
-        "metadata",
-        "updated_at",
-    ];
-    Ok(
-        postgres_table_columns(pg_client, "artefact_edges_current").await? == expected_columns
-            && postgres_table_pk_columns(pg_client, "artefact_edges_current").await?
-                == vec!["repo_id".to_string(), "edge_id".to_string()]
-            && postgres_table_has_repo_catalog_fk(pg_client, "artefact_edges_current").await?,
-    )
-}
-
-async fn postgres_table_columns(
-    pg_client: &tokio_postgres::Client,
-    table: &str,
-) -> Result<Vec<String>> {
-    let rows = pg_client
-        .query(
-            "SELECT column_name
-             FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = $1
-             ORDER BY ordinal_position",
-            &[&table],
-        )
-        .await
-        .with_context(|| format!("querying Postgres column metadata for `{table}`"))?;
-    Ok(rows.into_iter().map(|row| row.get(0)).collect())
-}
-
-async fn postgres_table_pk_columns(
-    pg_client: &tokio_postgres::Client,
-    table: &str,
-) -> Result<Vec<String>> {
-    let rows = pg_client
-        .query(
-            "SELECT kcu.column_name
-             FROM information_schema.table_constraints tc
-             JOIN information_schema.key_column_usage kcu
-               ON tc.constraint_name = kcu.constraint_name
-              AND tc.table_schema = kcu.table_schema
-             WHERE tc.table_schema = 'public'
-               AND tc.table_name = $1
-               AND tc.constraint_type = 'PRIMARY KEY'
-             ORDER BY kcu.ordinal_position",
-            &[&table],
-        )
-        .await
-        .with_context(|| format!("querying Postgres primary key metadata for `{table}`"))?;
-    Ok(rows.into_iter().map(|row| row.get(0)).collect())
-}
-
-async fn postgres_table_has_repo_catalog_fk(
-    pg_client: &tokio_postgres::Client,
-    table: &str,
-) -> Result<bool> {
-    let rows = pg_client
-        .query(
-            "SELECT rc.delete_rule
-             FROM information_schema.table_constraints tc
-             JOIN information_schema.key_column_usage kcu
-               ON tc.constraint_name = kcu.constraint_name
-              AND tc.table_schema = kcu.table_schema
-             JOIN information_schema.constraint_column_usage ccu
-               ON ccu.constraint_name = tc.constraint_name
-              AND ccu.table_schema = tc.table_schema
-             JOIN information_schema.referential_constraints rc
-               ON rc.constraint_name = tc.constraint_name
-              AND rc.constraint_schema = tc.table_schema
-             WHERE tc.table_schema = 'public'
-               AND tc.table_name = $1
-               AND tc.constraint_type = 'FOREIGN KEY'
-               AND kcu.column_name = 'repo_id'
-               AND ccu.table_name = 'repositories'
-               AND ccu.column_name = 'repo_id'",
-            &[&table],
-        )
-        .await
-        .with_context(|| format!("querying Postgres foreign key metadata for `{table}`"))?;
-    Ok(rows
-        .into_iter()
-        .map(|row| row.get::<_, String>(0))
-        .any(|delete_rule| delete_rule.eq_ignore_ascii_case("CASCADE")))
-}
-
-async fn postgres_table_has_rows(pg_client: &tokio_postgres::Client, table: &str) -> Result<bool> {
-    let row = pg_client
-        .query_one(
-            &format!("SELECT EXISTS (SELECT 1 FROM {table} LIMIT 1)"),
-            &[],
-        )
-        .await
-        .with_context(|| format!("checking whether Postgres table `{table}` contains rows"))?;
-    Ok(row.get(0))
+    Ok(PostgresSyncSchemaInitOutcome::default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::RelationalPrimaryBackend;
     use tempfile::TempDir;
 
     #[test]
@@ -973,5 +703,110 @@ mod tests {
             .expect("count preserved current_file_state row");
 
         assert_eq!(row_count, 1);
+    }
+
+    #[tokio::test]
+    async fn init_sqlite_schema_uses_current_projection_split_when_shared_authority_is_remote() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("devql.sqlite");
+        let _relational = crate::host::devql::RelationalStorage::primary_backend_for_tests(
+            sqlite_path.clone(),
+            RelationalPrimaryBackend::Postgres,
+        );
+
+        init_sqlite_schema(&sqlite_path)
+            .await
+            .expect("initialise split SQLite current/projection schema");
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        let table_exists = |name: &str| -> bool {
+            conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type IN ('table', 'view') AND name = ?1
+                )",
+                [name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("query sqlite_master")
+                != 0
+        };
+
+        assert!(table_exists("repositories"));
+        assert!(table_exists("current_file_state"));
+        assert!(table_exists("artefacts_current"));
+        assert!(table_exists("symbol_features_current"));
+        assert!(table_exists("symbol_semantics_current"));
+        assert!(table_exists("symbol_search_documents_current"));
+        assert!(table_exists("symbol_embeddings_current"));
+        assert!(table_exists("semantic_clone_embedding_setup_state"));
+        assert!(table_exists("symbol_clone_edges_current"));
+        assert!(table_exists("workspace_revisions"));
+
+        assert!(!table_exists("commits"));
+        assert!(!table_exists("artefacts"));
+        assert!(!table_exists("symbol_features"));
+        assert!(!table_exists("symbol_semantics"));
+        assert!(!table_exists("symbol_search_documents"));
+        assert!(!table_exists("symbol_embeddings"));
+        assert!(!table_exists("semantic_embedding_setups"));
+        assert!(!table_exists("symbol_clone_edges"));
+    }
+
+    #[test]
+    fn detect_legacy_shared_sqlite_tables_reports_inert_shared_tables() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory sqlite");
+        conn.execute("CREATE TABLE sync_state(state_key TEXT)", [])
+            .expect("create sync_state");
+        conn.execute("CREATE TABLE checkpoint_files(relation_id TEXT)", [])
+            .expect("create checkpoint_files");
+
+        let detected =
+            detect_legacy_shared_sqlite_tables(&conn).expect("detect legacy shared sqlite tables");
+
+        assert!(detected.contains(&"sync_state".to_string()));
+        assert!(detected.contains(&"checkpoint_files".to_string()));
+        assert!(!detected.contains(&"repositories".to_string()));
+    }
+
+    #[tokio::test]
+    async fn init_sqlite_schema_keeps_historical_tables_when_shared_authority_is_local() {
+        let temp = TempDir::new().expect("temp dir");
+        let sqlite_path = temp.path().join("devql.sqlite");
+
+        init_sqlite_schema(&sqlite_path)
+            .await
+            .expect("initialise full local SQLite schema");
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite db");
+        let table_exists = |name: &str| -> bool {
+            conn.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type IN ('table', 'view') AND name = ?1
+                )",
+                [name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("query sqlite_master")
+                != 0
+        };
+
+        assert!(table_exists("repositories"));
+        assert!(table_exists("current_file_state"));
+        assert!(table_exists("artefacts_current"));
+        assert!(table_exists("workspace_revisions"));
+
+        assert!(table_exists("commits"));
+        assert!(table_exists("file_state"));
+        assert!(table_exists("artefacts"));
+        assert!(table_exists("symbol_features"));
+        assert!(table_exists("symbol_semantics"));
+        assert!(table_exists("symbol_search_documents"));
+        assert!(table_exists("symbol_embeddings"));
+        assert!(table_exists("semantic_embedding_setups"));
+        assert!(table_exists("symbol_clone_edges"));
     }
 }

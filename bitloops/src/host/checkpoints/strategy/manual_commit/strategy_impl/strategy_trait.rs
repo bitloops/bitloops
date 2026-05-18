@@ -3,71 +3,6 @@ use crate::capability_packs::context_guidance::enqueue_stored_history_guidance_d
 use crate::host::interactions::db_store::SqliteInteractionSpool;
 use crate::host::interactions::interaction_repository::create_interaction_repository;
 use crate::host::interactions::store::{InteractionEventRepository, InteractionSpool};
-use crate::host::interactions::types::{
-    InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn,
-};
-
-// ── Strategy trait impl ───────────────────────────────────────────────────────
-
-struct SpoolBackedInteractionRepository<'a> {
-    spool: &'a dyn InteractionSpool,
-}
-
-impl InteractionEventRepository for SpoolBackedInteractionRepository<'_> {
-    fn repo_id(&self) -> &str {
-        self.spool.repo_id()
-    }
-
-    fn upsert_session(&self, session: &InteractionSession) -> Result<()> {
-        self.spool.record_session(session)
-    }
-
-    fn upsert_turn(&self, turn: &InteractionTurn) -> Result<()> {
-        self.spool.record_turn(turn)
-    }
-
-    fn append_event(&self, event: &InteractionEvent) -> Result<()> {
-        self.spool.record_event(event)
-    }
-
-    fn assign_checkpoint_to_turns(
-        &self,
-        turn_ids: &[String],
-        checkpoint_id: &str,
-        assigned_at: &str,
-    ) -> Result<()> {
-        self.spool
-            .assign_checkpoint_to_turns(turn_ids, checkpoint_id, assigned_at)
-    }
-
-    fn list_sessions(&self, agent: Option<&str>, limit: usize) -> Result<Vec<InteractionSession>> {
-        self.spool.list_sessions(agent, limit)
-    }
-
-    fn load_session(&self, session_id: &str) -> Result<Option<InteractionSession>> {
-        self.spool.load_session(session_id)
-    }
-
-    fn list_turns_for_session(
-        &self,
-        session_id: &str,
-        limit: usize,
-    ) -> Result<Vec<InteractionTurn>> {
-        self.spool.list_turns_for_session(session_id, limit)
-    }
-
-    fn list_uncheckpointed_turns(&self) -> Result<Vec<InteractionTurn>> {
-        self.spool.list_uncheckpointed_turns()
-    }
-
-    fn list_events(
-        &self,
-        filter: &InteractionEventFilter,
-        limit: usize,
-    ) -> Result<Vec<InteractionEvent>> {
-        self.spool.list_events(filter, limit)
-    }
-}
 
 impl Strategy for ManualCommitStrategy {
     fn name(&self) -> &str {
@@ -530,26 +465,20 @@ impl ManualCommitStrategy {
                         &[],
                         Some(spool_pending_work),
                     );
-                    if spool_pending_work && let Some(spool) = interaction_spool_ref {
-                        eprintln!(
-                            "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}\n[bitloops] Warning: falling back to the local interaction spool for post_commit derivation"
-                        );
-                        (
-                            Box::new(SpoolBackedInteractionRepository { spool })
-                                as Box<dyn InteractionEventRepository>,
-                            None,
-                        )
-                    } else {
-                        eprintln!(
-                            "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
-                        );
-                        update_active_session_base_commits(
-                            self.backend.as_ref(),
-                            head,
-                            &std::collections::HashSet::new(),
-                        );
-                        return Ok(());
+                    eprintln!(
+                        "[bitloops] Warning: failed to resolve interaction event repository for post_commit ({context}): {err:#}"
+                    );
+                    if spool_pending_work {
+                        return Err(err).context(format!(
+                            "resolving interaction event repository for post_commit ({context})"
+                        ));
                     }
+                    update_active_session_base_commits(
+                        self.backend.as_ref(),
+                        head,
+                        &std::collections::HashSet::new(),
+                    );
+                    return Ok(());
                 }
             };
 
@@ -583,38 +512,7 @@ impl ManualCommitStrategy {
         interaction_repository: &dyn InteractionEventRepository,
         interaction_spool: Option<&dyn InteractionSpool>,
     ) -> Result<Option<String>> {
-        if let Err(err) =
-            flush_interaction_spool_or_fail(head, interaction_spool, interaction_repository)
-        {
-            if let Some(spool) = interaction_spool {
-                let pending_work = spool_has_pending_work(spool);
-                let context = format_post_commit_derivation_context(
-                    head,
-                    None,
-                    None,
-                    &[],
-                    Some(pending_work),
-                );
-                if pending_work {
-                    eprintln!(
-                        "[bitloops] Warning: falling back to the local interaction spool for post_commit derivation after event repository flush failure ({context})"
-                    );
-                    let spool_repository = SpoolBackedInteractionRepository { spool };
-                    return self
-                        .derive_post_commit_from_interaction_sources(
-                            head,
-                            committed_files_set,
-                            is_rebase_in_progress,
-                            &spool_repository,
-                            None,
-                        )
-                        .context(format!(
-                            "deriving post_commit from local interaction spool after event repository flush failure ({context})"
-                        ));
-                }
-            }
-            return Err(err);
-        }
+        flush_interaction_spool_or_fail(head, interaction_spool, interaction_repository)?;
 
         let uncheckpointed_turns = interaction_repository
             .list_uncheckpointed_turns()
@@ -725,9 +623,9 @@ impl ManualCommitStrategy {
                             )
                         })?;
                     if let Some(spool) = interaction_spool {
-                        spool.record_turn(&updated_turn).with_context(|| {
+                        spool.refresh_turn_local_only(&updated_turn).with_context(|| {
                             format!(
-                                "mirroring checkpoint progress for interaction turn `{}` into the local spool ({session_context})",
+                                "refreshing checkpoint progress for interaction turn `{}` in the local spool runtime view ({session_context})",
                                 updated_turn.turn_id
                             )
                         })?;
@@ -759,22 +657,6 @@ impl ManualCommitStrategy {
             condensed_sessions.clone()
         };
         update_active_session_base_commits(self.backend.as_ref(), head, &active_base_skip_sessions);
-
-        if condensed_any_session
-            && let Some(spool) = interaction_spool
-            && let Err(err) = spool.flush(interaction_repository)
-        {
-            let context = format_post_commit_derivation_context(
-                head,
-                Some(&checkpoint_id),
-                None,
-                &[],
-                Some(spool_has_pending_work(spool)),
-            );
-            eprintln!(
-                "[bitloops] Warning: failed to flush checkpoint assignments to the interaction event store ({context}): {err:#}"
-            );
-        }
 
         Ok(condensed_any_session.then_some(checkpoint_id))
     }

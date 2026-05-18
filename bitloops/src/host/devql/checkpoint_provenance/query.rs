@@ -434,7 +434,12 @@ impl<'a> CheckpointFileGateway<'a> {
             return Ok(Vec::new());
         }
         let sql = build_checkpoint_file_lookup_sql(repo_id, path, blob_sha, activity_filter, limit);
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = query_shared_checkpoint_rows_allowing_missing_tables(
+            self.relational,
+            &sql,
+            &["checkpoint_files"],
+        )
+        .await?;
         rows.into_iter()
             .map(checkpoint_match_from_row)
             .collect::<Result<Vec<_>>>()
@@ -451,7 +456,12 @@ impl<'a> CheckpointFileGateway<'a> {
             return Ok(Vec::new());
         }
         let sql = build_checkpoint_file_debug_sql(repo_id, scope, activity_filter, limit);
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = query_shared_checkpoint_rows_allowing_missing_tables(
+            self.relational,
+            &sql,
+            &["checkpoint_files"],
+        )
+        .await?;
         rows.into_iter()
             .map(checkpoint_debug_row_from_row)
             .collect()
@@ -472,7 +482,12 @@ impl<'a> CheckpointFileGateway<'a> {
             esc_pg(repo_id),
             esc_pg(checkpoint_id),
         );
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = query_shared_checkpoint_rows_allowing_missing_tables(
+            self.relational,
+            &sql,
+            &["checkpoint_files"],
+        )
+        .await?;
         rows.into_iter()
             .map(checkpoint_file_detail_from_row)
             .collect()
@@ -496,7 +511,12 @@ impl<'a> CheckpointFileGateway<'a> {
             activity_filter,
             limit,
         );
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = query_shared_checkpoint_rows_allowing_missing_tables(
+            self.relational,
+            &sql,
+            &["checkpoint_files"],
+        )
+        .await?;
         rows.into_iter()
             .map(checkpoint_copy_origin_from_row)
             .collect()
@@ -524,7 +544,12 @@ impl<'a> CheckpointFileGateway<'a> {
             esc_pg(artefact_id),
             limit,
         );
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = query_shared_checkpoint_rows_allowing_missing_tables(
+            self.relational,
+            &sql,
+            &["checkpoint_artefact_lineage"],
+        )
+        .await?;
         rows.into_iter()
             .map(checkpoint_artefact_copy_lineage_from_row)
             .collect()
@@ -571,9 +596,40 @@ impl<'a> CheckpointFileGateway<'a> {
         else {
             return Ok(Vec::new());
         };
-        let rows = self.relational.query_rows(&sql).await?;
+        let rows = query_shared_checkpoint_rows_allowing_missing_tables(
+            self.relational,
+            &sql,
+            &["checkpoint_artefacts", "checkpoint_files"],
+        )
+        .await?;
         checkpoint_selection_matches_from_rows(rows)
     }
+}
+
+async fn query_shared_checkpoint_rows_allowing_missing_tables(
+    relational: &RelationalStorage,
+    sql: &str,
+    allowed_missing_tables: &[&str],
+) -> Result<Vec<Value>> {
+    match relational
+        .query_rows_for_role(RelationalStorageRole::SharedRelational, sql)
+        .await
+    {
+        Ok(rows) => Ok(rows),
+        Err(err)
+            if allowed_missing_tables
+                .iter()
+                .any(|table| missing_checkpoint_table_error(&format!("{err:#}"), table)) =>
+        {
+            Ok(Vec::new())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn missing_checkpoint_table_error(message: &str, table: &str) -> bool {
+    message.contains(&format!("no such table: {table}"))
+        || message.contains(&format!("relation \"{table}\" does not exist"))
 }
 
 fn checkpoint_selection_matches_from_rows(

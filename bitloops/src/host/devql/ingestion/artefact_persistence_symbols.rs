@@ -107,7 +107,9 @@ pub(super) async fn persist_historical_artefact(
         extraction_fingerprint,
         record,
     );
-    relational.exec(&sql).await
+    relational
+        .exec_for_role(RelationalStorageRole::SharedRelational, &sql)
+        .await
 }
 
 pub(super) fn build_upsert_historical_artefact_sql(
@@ -119,9 +121,10 @@ pub(super) fn build_upsert_historical_artefact_sql(
     extraction_fingerprint: &str,
     record: &PersistedArtefactRecord,
 ) -> String {
+    let shared_dialect = relational.dialect_for_role(RelationalStorageRole::SharedRelational);
     let canonical_kind_sql = sql_nullable_text(record.canonical_kind.as_deref());
     let signature_sql = sql_nullable_text(record.signature.as_deref());
-    let modifiers_sql = sql_json_text_array(relational, &record.modifiers);
+    let modifiers_sql = sql_json_text_array_for_dialect(shared_dialect, &record.modifiers);
     let docstring_sql = sql_nullable_text(record.docstring.as_deref());
     format!(
         "INSERT INTO artefacts (artefact_id, symbol_id, repo_id, language, extraction_fingerprint, canonical_kind, language_kind, symbol_fqn, signature, modifiers, docstring, content_hash) \
@@ -145,6 +148,7 @@ ON CONFLICT (artefact_id) DO UPDATE SET symbol_id = EXCLUDED.symbol_id, repo_id 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::RelationalPrimaryBackend;
 
     fn sample_repo_root() -> PathBuf {
         std::env::temp_dir().join("bitloops-artefact-persistence-symbols")
@@ -210,6 +214,28 @@ mod tests {
         assert!(
             sql.contains("ON CONFLICT (artefact_id) DO UPDATE"),
             "historical builder should upsert on artefact_id"
+        );
+    }
+
+    #[test]
+    fn build_upsert_historical_artefact_sql_uses_shared_relational_dialect() {
+        let cfg = sample_cfg();
+        let relational = RelationalStorage::primary_backend_for_tests(
+            PathBuf::from("devql.sqlite"),
+            RelationalPrimaryBackend::Postgres,
+        );
+        let sql = build_upsert_historical_artefact_sql(
+            &cfg,
+            &relational,
+            "src/lib.rs",
+            "blob-sha",
+            "rust",
+            "fingerprint",
+            &sample_record(),
+        );
+        assert!(
+            sql.contains("::jsonb"),
+            "historical artefact SQL should use shared Postgres jsonb when remote shared authority is active"
         );
     }
 

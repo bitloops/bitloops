@@ -19,6 +19,7 @@ fn clone_summary_spec() -> ArtefactQuerySpec {
         temporal_scope: ArtefactTemporalScope::Current,
         structural_filter: ArtefactStructuralFilter::default(),
         activity_filter: None,
+        current_activity_snapshots: None,
         pagination: None,
     }
 }

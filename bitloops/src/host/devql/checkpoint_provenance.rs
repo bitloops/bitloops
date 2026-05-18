@@ -215,8 +215,10 @@ pub(crate) use self::query::{
 };
 pub(crate) use self::sql::{
     build_upsert_checkpoint_artefact_lineage_row_sql, build_upsert_checkpoint_artefact_row_sql,
-    build_upsert_checkpoint_file_row_sql, delete_checkpoint_artefact_lineage_rows_sql,
-    delete_checkpoint_artefact_rows_sql, delete_checkpoint_file_rows_sql,
+    build_upsert_checkpoint_file_row_sql, delete_checkpoint_artefact_lineage_rows_for_session_sql,
+    delete_checkpoint_artefact_lineage_rows_sql, delete_checkpoint_artefact_rows_for_session_sql,
+    delete_checkpoint_artefact_rows_sql, delete_checkpoint_file_rows_for_session_sql,
+    delete_checkpoint_file_rows_sql,
 };
 
 #[cfg(test)]

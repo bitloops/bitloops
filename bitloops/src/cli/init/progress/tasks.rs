@@ -6,6 +6,7 @@ use crate::capability_packs::semantic_clones::types::{
     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::devql_transport::SlimCliRepoScope;
+use crate::host::devql::RelationalStorageRole;
 use crate::host::relational_store::{DefaultRelationalStore, RelationalStore};
 use crate::host::runtime_store::RepoSqliteRuntimeStore;
 
@@ -211,7 +212,9 @@ fn current_summary_progress_sql(repo_id: &str) -> String {
 }
 
 async fn query_progress_count(relational: &DefaultRelationalStore, sql: &str) -> Result<u64> {
-    let rows = match relational.query_rows(sql).await {
+    let rows = match relational
+        .query_rows_for_role_blocking(RelationalStorageRole::CurrentProjection, sql)
+    {
         Ok(rows) => rows,
         Err(err) if missing_progress_table(&err) => return Ok(0),
         Err(err) => return Err(err),

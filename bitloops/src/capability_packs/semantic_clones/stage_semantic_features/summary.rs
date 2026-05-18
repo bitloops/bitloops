@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::storage::build_semantic_get_summary_sql;
 use crate::capability_packs::semantic_clones::features as semantic;
-use crate::host::devql::RelationalStorage;
+use crate::host::devql::{RelationalStorage, RelationalStorageRole};
 
 pub(crate) fn ensure_required_llm_summary_output(
     rows: &semantic::SemanticFeatureRows,
@@ -44,7 +44,10 @@ pub(crate) async fn load_semantic_summary_snapshot(
     artefact_id: &str,
 ) -> Result<Option<SemanticSummarySnapshot>> {
     let rows = relational
-        .query_rows(&build_semantic_get_summary_sql(artefact_id))
+        .query_rows_for_role(
+            RelationalStorageRole::SharedRelational,
+            &build_semantic_get_summary_sql(artefact_id),
+        )
         .await?;
     let Some(row) = rows.first() else {
         return Ok(None);
