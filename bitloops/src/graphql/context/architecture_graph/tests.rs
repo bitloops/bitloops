@@ -117,6 +117,71 @@ fn graph_context_available_detects_direct_selected_node() {
 }
 
 #[test]
+fn graph_context_available_sql_targets_nodes_only() {
+    let sql = graph_context_available_sql(
+        "repo-1",
+        &["artefact-main".to_string()],
+        &["symbol-main".to_string()],
+        &["src/main.rs".to_string()],
+    )
+    .expect("availability SQL for non-empty target selection");
+
+    assert!(
+        sql.contains("FROM architecture_graph_nodes_current node"),
+        "availability SQL must read graph nodes: {sql}"
+    );
+    assert!(
+        !sql.contains("architecture_graph_edges_current"),
+        "availability SQL must not read graph edges: {sql}"
+    );
+    assert!(
+        sql.contains("node.artefact_id IN ('artefact-main')"),
+        "availability SQL should match artefact ids: {sql}"
+    );
+    assert!(
+        sql.contains("node.symbol_id IN ('symbol-main')"),
+        "availability SQL should match symbol ids: {sql}"
+    );
+    assert!(
+        sql.contains("node.path IN ('src/main.rs')"),
+        "availability SQL should match paths: {sql}"
+    );
+    assert!(
+        sql.contains("LIMIT 1"),
+        "availability SQL should be an EXISTS-style lookup: {sql}"
+    );
+}
+
+#[test]
+fn graph_context_available_sql_is_empty_for_empty_target_selection() {
+    assert!(graph_context_available_sql("repo-1", &[], &[], &[]).is_none());
+}
+
+#[test]
+fn graph_context_available_sql_escapes_target_values() {
+    let sql = graph_context_available_sql(
+        "repo'1",
+        &["artefact'1".to_string()],
+        &[],
+        &["src/o'clock.rs".to_string()],
+    )
+    .expect("availability SQL for escaped values");
+
+    assert!(
+        sql.contains("node.repo_id = 'repo''1'"),
+        "repo id should be escaped: {sql}"
+    );
+    assert!(
+        sql.contains("node.artefact_id IN ('artefact''1')"),
+        "artefact id should be escaped: {sql}"
+    );
+    assert!(
+        sql.contains("node.path IN ('src/o''clock.rs')"),
+        "path should be escaped: {sql}"
+    );
+}
+
+#[test]
 fn architecture_target_overview_includes_direct_and_nearby_nodes() {
     let code = flow_code_node("code-main", "src/main.rs", "artefact-main");
     let entry = flow_entry_point("entry-main", "src/main.rs", "artefact-main");

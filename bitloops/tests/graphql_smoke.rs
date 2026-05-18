@@ -173,6 +173,55 @@ fn select_artefacts_overview_includes_architecture_stage_end_to_end() {
     assert_eq!(graph_context["nodes"][0]["id"], "test-architecture-node");
 }
 
+#[test]
+fn select_artefacts_overview_architecture_availability_does_not_load_edges() {
+    if !localhost_bind_available(
+        "select_artefacts_overview_architecture_availability_does_not_load_edges",
+    ) {
+        return;
+    }
+
+    let seeded = seeded_rust_graphql_workspace("graphql-architecture-overview-no-edge-load");
+    seed_architecture_role_for_fixture(&seeded);
+    seed_invalid_unrelated_architecture_edge(&seeded);
+
+    let graphql_query = r#"
+        {
+          selectArtefacts(by: { path: "src/repositories/user_repository.rs" }) {
+            overview
+            architectureRoles {
+              overview
+            }
+          }
+        }
+    "#;
+
+    let output = run_query_json_until(
+        &seeded,
+        &["devql", "query", "--graphql", "--compact", graphql_query],
+        "selected architecture overview without edge loading",
+        |payload| {
+            payload["selectArtefacts"]["overview"]["architecture"]["overview"]["available"]
+                .as_bool()
+                == Some(true)
+        },
+    );
+
+    let architecture = &output["selectArtefacts"]["overview"]["architecture"]["overview"];
+    assert_eq!(architecture["available"], true);
+    assert_eq!(architecture["graphContextAvailable"], true);
+    assert_eq!(architecture["roleAssignmentCount"], 1);
+    assert_eq!(
+        architecture["primaryRoles"][0]["canonicalKey"],
+        "user_repository_adapter"
+    );
+
+    let role_overview = &output["selectArtefacts"]["architectureRoles"]["overview"];
+    assert_eq!(role_overview["available"], true);
+    assert_eq!(role_overview["graphContextAvailable"], true);
+    assert_eq!(role_overview["roleAssignmentCount"], 1);
+}
+
 fn seed_architecture_role_for_fixture(seeded: &fixtures::SeededGraphqlWorkspace) {
     let conn = Connection::open(seeded.workspace.db_path()).expect("open seeded DevQL SQLite");
     let (repo_id, artefact_id, symbol_id): (String, String, String) = conn
@@ -252,6 +301,33 @@ ON CONFLICT(repo_id, node_id) DO UPDATE SET
         params![repo_id, artefact_id, symbol_id, FIXTURE_FILE_PATH],
     )
     .expect("seed architecture graph node");
+}
+
+fn seed_invalid_unrelated_architecture_edge(seeded: &fixtures::SeededGraphqlWorkspace) {
+    let conn = Connection::open(seeded.workspace.db_path()).expect("open seeded DevQL SQLite");
+    let repo_id: String = conn
+        .query_row("SELECT repo_id FROM repositories LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .expect("fixture repository row exists");
+
+    conn.execute(
+        r#"
+INSERT INTO architecture_graph_edges_current (
+  repo_id, edge_id, edge_kind, from_node_id, to_node_id, source_kind,
+  confidence, provenance_json, evidence_json, properties_json
+) VALUES (
+  ?1, 'invalid-unrelated-edge', 'NOT_A_REAL_EDGE_KIND',
+  'missing-from-node', 'missing-to-node', 'COMPUTED',
+  1.0, '{}', '[]', '{}'
+)
+ON CONFLICT(repo_id, edge_id) DO UPDATE SET
+  edge_kind = excluded.edge_kind,
+  updated_at = datetime('now')
+"#,
+        params![repo_id],
+    )
+    .expect("seed invalid unrelated architecture graph edge");
 }
 
 fn extract_file_connection_nodes(payload: &Value) -> Vec<Value> {

@@ -363,23 +363,14 @@ impl DevqlGraphqlContext {
             return Ok(false);
         }
 
-        let graph = match self.list_architecture_graph(scope, None, None, None).await {
-            Ok(graph) => graph,
-            Err(err) if is_missing_architecture_graph_table_error(&err) => return Ok(false),
-            Err(err) => return Err(err),
-        };
-
-        Ok(graph_context_available_from_graph(
-            &graph,
-            artefact_ids,
-            symbol_ids,
-            paths,
-        ))
+        let repo_id = self.repo_id_for_scope(scope)?;
+        graph_context_available_for_targets(self, &repo_id, artefact_ids, symbol_ids, paths).await
     }
 }
 
 const ARCHITECTURE_OVERVIEW_RELATED_HOPS: usize = 2;
 
+#[cfg(test)]
 fn graph_context_available_from_graph(
     graph: &ArchitectureGraph,
     artefact_ids: &[String],
