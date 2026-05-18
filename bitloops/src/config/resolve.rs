@@ -364,7 +364,19 @@ fn apply_repo_semantic_embedding_policy(
     let mut root = daemon_semantic_clones
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
-    let effective_embedding_mode = embedding_mode.unwrap_or(SemanticCloneEmbeddingMode::Off);
+    let repo_supplied_embedding_bindings = repo_inference.code_embeddings.as_ref().is_some()
+        || repo_inference.summary_embeddings.as_ref().is_some();
+    let daemon_embedding_mode = root
+        .get("embedding_mode")
+        .and_then(|value| value.as_str())
+        .map(parse_embedding_mode);
+    let effective_embedding_mode = embedding_mode
+        .or_else(|| {
+            repo_supplied_embedding_bindings
+                .then_some(daemon_embedding_mode)
+                .flatten()
+        })
+        .unwrap_or(SemanticCloneEmbeddingMode::Off);
     root.remove("embedding_mode");
     root.insert(
         "embedding_mode".to_string(),

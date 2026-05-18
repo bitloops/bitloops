@@ -404,7 +404,7 @@ summary_embeddings = "repo_summary"
 }
 
 #[test]
-fn repo_semantic_policy_without_mode_defaults_off_even_with_profile_bindings() {
+fn repo_semantic_policy_without_mode_inherits_daemon_mode_with_profile_bindings() {
     let (repo, _daemon) = create_repo_with_daemon_config(
         r#"
 [semantic_clones]
@@ -443,9 +443,16 @@ code_embeddings = "repo_code"
 
     assert_eq!(
         capability.semantic_clones.embedding_mode,
-        SemanticCloneEmbeddingMode::Off
+        SemanticCloneEmbeddingMode::SemanticAwareOnce
     );
-    assert_eq!(capability.semantic_clones.inference.code_embeddings, None);
+    assert_eq!(
+        capability
+            .semantic_clones
+            .inference
+            .code_embeddings
+            .as_deref(),
+        Some("repo_code")
+    );
     assert_eq!(
         capability.semantic_clones.inference.summary_embeddings,
         None

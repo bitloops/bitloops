@@ -235,6 +235,7 @@ pub(crate) async fn run_for_project_root(
     let embeddings_selection =
         should_install_embeddings_during_init(project_root, &args, out, input)?;
     match embeddings_selection {
+        InitEmbeddingsSetupSelection::Unchanged => {}
         InitEmbeddingsSetupSelection::Existing => {
             persist_init_embeddings_policy(
                 project_root,
@@ -561,6 +562,7 @@ fn persist_init_embeddings_policy(
     selected_profile_name: Option<&str>,
 ) -> Result<()> {
     let policy = match selection {
+        InitEmbeddingsSetupSelection::Unchanged => return Ok(()),
         InitEmbeddingsSetupSelection::Skip => RepoSemanticEmbeddingPolicy::disabled(),
         InitEmbeddingsSetupSelection::Cloud | InitEmbeddingsSetupSelection::Local => {
             RepoSemanticEmbeddingPolicy::enabled_with_profile(selected_profile_name.unwrap_or(
@@ -693,6 +695,9 @@ fn resolve_embeddings_bootstrap_request(
         .or_else(|_| crate::config::resolve_daemon_config_path_for_repo(repo_root))
         .unwrap_or_else(|_| repo_root.join(crate::config::BITLOOPS_CONFIG_RELATIVE_PATH));
     match selection {
+        InitEmbeddingsSetupSelection::Unchanged => {
+            bail!("cannot resolve embeddings bootstrap request without an embeddings decision")
+        }
         InitEmbeddingsSetupSelection::Cloud => {
             let plan = crate::config::prepare_daemon_platform_embeddings_install(
                 &config_path,

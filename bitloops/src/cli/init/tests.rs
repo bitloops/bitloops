@@ -1395,6 +1395,10 @@ fn run_init_creates_project_local_policy_and_installs_selected_agents() {
             local_policy.contains("ingest_enabled = false"),
             "expected init --ingest=false to persist ingest_enabled=false:\n{local_policy}"
         );
+        assert!(
+            !local_policy.contains("[semantic_clones]"),
+            "plain init should not persist an embeddings policy unless the user makes an embeddings choice:\n{local_policy}"
+        );
         assert_eq!(
             crate::cli::enable::initialized_agents(repo.path()),
             vec![DEFAULT_AGENT.to_string()]

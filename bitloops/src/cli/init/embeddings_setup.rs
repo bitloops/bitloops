@@ -17,6 +17,7 @@ pub(crate) const NON_INTERACTIVE_INIT_EMBEDDINGS_SELECTION_ERROR: &str = "`bitlo
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InitEmbeddingsSetupSelection {
+    Unchanged,
     Existing,
     Cloud,
     Local,
@@ -41,7 +42,7 @@ pub(crate) fn should_install_embeddings_during_init(
     }
 
     if !args.install_default_daemon {
-        return Ok(InitEmbeddingsSetupSelection::Skip);
+        return Ok(InitEmbeddingsSetupSelection::Unchanged);
     }
 
     if !matches!(
