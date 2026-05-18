@@ -141,6 +141,12 @@ enum ArtefactSelectionMode {
     DirectoryEntries,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchitectureTargetScope {
+    ExactArtefacts,
+    PathContext,
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 pub struct SearchBreakdown {
     pub lexical: Vec<Artefact>,
@@ -165,15 +171,36 @@ pub struct ArtefactSelection {
     pub(crate) search_query: Option<String>,
     #[graphql(skip)]
     pub(crate) scope: ResolverScope,
+    #[graphql(skip)]
+    architecture_target_scope: ArchitectureTargetScope,
 }
 
 pub type IntCount = i32;
 
 impl ArtefactSelection {
-    pub(crate) fn new(
+    pub(crate) fn from_exact_artefacts(artefacts: Vec<Artefact>, scope: ResolverScope) -> Self {
+        Self::new_with_architecture_target_scope(
+            artefacts,
+            Vec::new(),
+            scope,
+            ArchitectureTargetScope::ExactArtefacts,
+        )
+    }
+
+    pub(crate) fn from_path_artefacts(artefacts: Vec<Artefact>, scope: ResolverScope) -> Self {
+        Self::new_with_architecture_target_scope(
+            artefacts,
+            Vec::new(),
+            scope,
+            ArchitectureTargetScope::PathContext,
+        )
+    }
+
+    fn new_with_architecture_target_scope(
         artefacts: Vec<Artefact>,
         directory_entries: Vec<DirectoryEntry>,
         scope: ResolverScope,
+        architecture_target_scope: ArchitectureTargetScope,
     ) -> Self {
         Self {
             count: saturating_i32(artefacts.len()),
@@ -183,6 +210,7 @@ impl ArtefactSelection {
             search_breakdown: None,
             search_query: None,
             scope,
+            architecture_target_scope,
         }
     }
 
@@ -200,6 +228,7 @@ impl ArtefactSelection {
             search_breakdown,
             search_query: Some(search_query),
             scope,
+            architecture_target_scope: ArchitectureTargetScope::ExactArtefacts,
         }
     }
 
@@ -215,6 +244,7 @@ impl ArtefactSelection {
             search_breakdown: None,
             search_query: None,
             scope,
+            architecture_target_scope: ArchitectureTargetScope::ExactArtefacts,
         }
     }
 
@@ -232,6 +262,13 @@ impl ArtefactSelection {
 
     fn paths(&self) -> Vec<String> {
         dedup_strings(self.artefacts.iter().map(|artefact| artefact.path.as_str()))
+    }
+
+    fn architecture_context_paths(&self) -> Vec<String> {
+        match self.architecture_target_scope {
+            ArchitectureTargetScope::ExactArtefacts => Vec::new(),
+            ArchitectureTargetScope::PathContext => self.paths(),
+        }
     }
 }
 

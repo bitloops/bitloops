@@ -230,7 +230,7 @@ impl ArtefactSelection {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let artefact_ids = self.artefact_ids();
         let symbol_ids = self.symbol_ids();
-        let paths = self.paths();
+        let paths = self.architecture_context_paths();
         let graph_context_available = context
             .architecture_graph_context_available_for_targets(
                 &self.scope,
@@ -281,13 +281,11 @@ impl ArtefactSelection {
     ) -> Result<ArchitectureGraphContextStageResult> {
         self.ensure_artefact_selection("architectureGraphContext")?;
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
+        let artefact_ids = self.artefact_ids();
+        let symbol_ids = self.symbol_ids();
+        let paths = self.architecture_context_paths();
         let overview = context
-            .architecture_overview_for_targets(
-                &self.scope,
-                &self.artefact_ids(),
-                &self.symbol_ids(),
-                &self.paths(),
-            )
+            .architecture_overview_for_targets(&self.scope, &artefact_ids, &symbol_ids, &paths)
             .await
             .map_err(|err| {
                 backend_error(format!(
@@ -638,7 +636,7 @@ impl ArtefactSelection {
         let context = ctx.data_unchecked::<DevqlGraphqlContext>();
         let artefact_ids = self.artefact_ids();
         let symbol_ids = self.symbol_ids();
-        let paths = self.paths();
+        let paths = self.architecture_context_paths();
         let graph_context_available = context
             .architecture_graph_context_available_for_targets(
                 &self.scope,

@@ -9,7 +9,7 @@ use crate::graphql::context::{
 };
 use crate::graphql::types::{
     ArchitectureGraphEdge, ArchitectureGraphEdgeKind, ArchitectureGraphNode,
-    ArchitectureGraphNodeKind,
+    ArchitectureGraphNodeKind, Artefact, CanonicalKind, DateTimeScalar,
 };
 use crate::graphql::types::{DependencyEdge, EdgeKind, ExpandHintParameter, LineRangeInput};
 
@@ -91,6 +91,35 @@ fn test_architecture_edge(id: &str, from_node_id: &str, to_node_id: &str) -> Arc
         evidence: async_graphql::types::Json(serde_json::json!([])),
         properties: async_graphql::types::Json(serde_json::json!({})),
         annotations: Vec::new(),
+    }
+}
+
+fn test_artefact(artefact_id: &str, symbol_id: &str, symbol_fqn: &str, path: &str) -> Artefact {
+    Artefact {
+        id: async_graphql::ID::from(artefact_id),
+        symbol_id: symbol_id.to_string(),
+        path: path.to_string(),
+        language: "rust".to_string(),
+        canonical_kind: Some(CanonicalKind::Function),
+        language_kind: Some("function".to_string()),
+        symbol_fqn: Some(symbol_fqn.to_string()),
+        parent_artefact_id: None,
+        start_line: 1,
+        end_line: 3,
+        start_byte: 0,
+        end_byte: 10,
+        signature: None,
+        modifiers: Vec::new(),
+        docstring: None,
+        summary: None,
+        embedding_representations: Vec::new(),
+        content_hash: Some("content-hash".to_string()),
+        blob_sha: "blob-sha".to_string(),
+        created_at: DateTimeScalar::from_rfc3339("2026-05-18T00:00:00+00:00")
+            .expect("timestamp parses"),
+        score: None,
+        search_score: None,
+        scope: crate::graphql::ResolverScope::default(),
     }
 }
 
@@ -619,6 +648,49 @@ fn architecture_role_assignment_item_preserves_role_and_target_details() {
         Some("src/api/users_handler.rs::create_user_http_handler")
     );
     assert_eq!(item.confidence, 1.0);
+}
+
+#[test]
+fn exact_artefact_selection_omits_paths_from_architecture_context_targets() {
+    let selection = super::ArtefactSelection::from_exact_artefacts(
+        vec![test_artefact(
+            "artefact-get",
+            "symbol-get",
+            "src/api/users_handler.rs::get_user_http_handler",
+            "src/api/users_handler.rs",
+        )],
+        crate::graphql::ResolverScope::default(),
+    );
+
+    assert_eq!(selection.artefact_ids(), vec!["artefact-get"]);
+    assert_eq!(selection.symbol_ids(), vec!["symbol-get"]);
+    assert!(selection.architecture_context_paths().is_empty());
+}
+
+#[test]
+fn path_artefact_selection_keeps_paths_for_architecture_context_targets() {
+    let selection = super::ArtefactSelection::from_path_artefacts(
+        vec![
+            test_artefact(
+                "artefact-create",
+                "symbol-create",
+                "src/api/users_handler.rs::create_user_http_handler",
+                "src/api/users_handler.rs",
+            ),
+            test_artefact(
+                "artefact-get",
+                "symbol-get",
+                "src/api/users_handler.rs::get_user_http_handler",
+                "src/api/users_handler.rs",
+            ),
+        ],
+        crate::graphql::ResolverScope::default(),
+    );
+
+    assert_eq!(
+        selection.architecture_context_paths(),
+        vec!["src/api/users_handler.rs"]
+    );
 }
 
 #[test]
