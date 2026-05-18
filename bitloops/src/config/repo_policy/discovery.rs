@@ -98,6 +98,20 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         shared.as_ref().and_then(|value| value.agents.clone()),
         local.as_ref().and_then(|value| value.agents.clone()),
     );
+    let semantic_clones = merge_optional_values(
+        shared
+            .as_ref()
+            .and_then(|value| value.semantic_clones.clone()),
+        local
+            .as_ref()
+            .and_then(|value| value.semantic_clones.clone()),
+    );
+    let semantic_clones_present = shared
+        .as_ref()
+        .is_some_and(|value| value.semantic_clones.is_some())
+        || local
+            .as_ref()
+            .is_some_and(|value| value.semantic_clones.is_some());
     let knowledge_import_paths = if let Some(local) = &local {
         if !local.imports.knowledge.is_empty() {
             local.imports.knowledge.clone()
@@ -128,6 +142,8 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         scope_exclusions: &scope_exclusions,
         contexts: &contexts,
         agents: &agents,
+        semantic_clones: &semantic_clones,
+        semantic_clones_present,
         knowledge_import_paths: &knowledge_import_paths,
         imported_knowledge: &imported_knowledge,
     })?;
@@ -143,6 +159,8 @@ fn discover_repo_policy_with_mode(start: &Path, strict: bool) -> Result<RepoPoli
         scope,
         contexts,
         agents,
+        semantic_clones,
+        semantic_clones_present,
         knowledge_import_paths,
         imported_knowledge,
         fingerprint,
@@ -156,6 +174,8 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
     let scope = Value::Object(Map::new());
     let contexts = Value::Array(Vec::new());
     let agents = Value::Object(Map::new());
+    let semantic_clones = Value::Object(Map::new());
+    let semantic_clones_present = false;
     let imported_knowledge = Vec::new();
     let knowledge_import_paths = Vec::new();
     let exclusions = RepoPolicyScopeExclusions {
@@ -171,6 +191,8 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
         scope_exclusions: &exclusions,
         contexts: &contexts,
         agents: &agents,
+        semantic_clones: &semantic_clones,
+        semantic_clones_present,
         knowledge_import_paths: &knowledge_import_paths,
         imported_knowledge: &imported_knowledge,
     })
@@ -187,6 +209,8 @@ fn default_repo_policy_snapshot() -> RepoPolicySnapshot {
         scope,
         contexts,
         agents,
+        semantic_clones,
+        semantic_clones_present,
         knowledge_import_paths,
         imported_knowledge,
         fingerprint,

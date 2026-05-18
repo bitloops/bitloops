@@ -99,6 +99,16 @@ pub fn activate_embedding_pipeline_mailboxes(repo_root: &Path, source: &str) -> 
     )
 }
 
+pub fn deactivate_embedding_pipeline_mailboxes(repo_root: &Path, source: &str) -> Result<()> {
+    let store = open_workplane_store_for_repo(repo_root)?;
+    store.set_capability_workplane_mailbox_intents(
+        SEMANTIC_CLONES_CAPABILITY_ID,
+        SEMANTIC_CLONES_EMBEDDING_PIPELINE_MAILBOXES.iter().copied(),
+        false,
+        Some(source),
+    )
+}
+
 pub fn activate_selected_pipeline_mailboxes(
     repo_root: &Path,
     source: &str,
@@ -173,20 +183,23 @@ fn resolve_effective_mailbox_intent_from_status(
     };
     let summary_slot_live = resolve_selected_summary_slot(config).is_some();
     let summary_refresh_live = config.summary_mode == SemanticSummaryMode::Off || summary_slot_live;
-    let code_live = config.embedding_mode != SemanticCloneEmbeddingMode::Off
+    let embeddings_policy_enabled = config.embedding_mode != SemanticCloneEmbeddingMode::Off;
+    let code_live = embeddings_policy_enabled
         && embedding_slot_for_representation(config, EmbeddingRepresentationKind::Code).is_some();
     let summary_embedding_live = summary_slot_live
-        && config.embedding_mode != SemanticCloneEmbeddingMode::Off
+        && embeddings_policy_enabled
         && embedding_slot_for_representation(config, EmbeddingRepresentationKind::Summary)
             .is_some();
+    let stored_code_intent =
+        embeddings_policy_enabled && repo_intent(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX);
+    let stored_clone_rebuild_intent =
+        embeddings_policy_enabled && repo_intent(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX);
 
     SemanticClonesMailboxIntentState {
         summary_refresh_active: summary_refresh_live,
-        code_embeddings_active: repo_intent(SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX) || code_live,
+        code_embeddings_active: stored_code_intent || code_live,
         summary_embeddings_active: summary_embedding_live,
-        clone_rebuild_active: repo_intent(SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX)
-            || code_live
-            || summary_embedding_live,
+        clone_rebuild_active: stored_clone_rebuild_intent || code_live || summary_embedding_live,
     }
 }
 
@@ -332,6 +345,48 @@ mod tests {
 
         assert!(intent.summary_refresh_active);
         assert!(!intent.summary_embeddings_active);
+    }
+
+    #[test]
+    fn embedding_mode_off_disables_stored_embedding_and_clone_rebuild_intent() {
+        let status = BTreeMap::from([
+            (
+                SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX.to_string(),
+                CapabilityMailboxStatus {
+                    intent_active: true,
+                    ..CapabilityMailboxStatus::default()
+                },
+            ),
+            (
+                SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX.to_string(),
+                CapabilityMailboxStatus {
+                    intent_active: true,
+                    ..CapabilityMailboxStatus::default()
+                },
+            ),
+            (
+                SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX.to_string(),
+                CapabilityMailboxStatus {
+                    intent_active: true,
+                    ..CapabilityMailboxStatus::default()
+                },
+            ),
+        ]);
+        let config = SemanticClonesConfig {
+            embedding_mode: SemanticCloneEmbeddingMode::Off,
+            inference: crate::config::SemanticClonesInferenceBindings {
+                code_embeddings: Some("local_code".to_string()),
+                summary_embeddings: Some("local_code".to_string()),
+                ..crate::config::SemanticClonesInferenceBindings::default()
+            },
+            ..SemanticClonesConfig::default()
+        };
+
+        let intent = resolve_effective_mailbox_intent_from_status(&status, &config);
+
+        assert!(!intent.code_embeddings_active);
+        assert!(!intent.summary_embeddings_active);
+        assert!(!intent.clone_rebuild_active);
     }
 
     #[test]
