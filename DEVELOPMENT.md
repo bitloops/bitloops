@@ -267,12 +267,6 @@ Get the `sha256` for each tarball after a release:
 curl -sL <url-to-tar.gz> | shasum -a 256
 ```
 
-### User install
-
-```bash
-brew tap bitloops/tap
-brew install bitloops
-```
 
 ---
 
