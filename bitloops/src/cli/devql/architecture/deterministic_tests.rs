@@ -243,6 +243,9 @@ fn roles_classify_formats_json_metrics() -> Result<()> {
             assignment_history_rows: 0,
             adjudication_candidates: 0,
         },
+        architecture_embedding_selected: 0,
+        architecture_embedding_enqueued: 0,
+        architecture_embedding_deduped: 0,
         role_adjudication_selected: 0,
         role_adjudication_enqueued: 0,
         role_adjudication_deduped: 0,
@@ -276,6 +279,9 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
             assignment_history_rows: 6,
             adjudication_candidates: 1,
         },
+        architecture_embedding_selected: 2,
+        architecture_embedding_enqueued: 1,
+        architecture_embedding_deduped: 1,
         role_adjudication_selected: 1,
         role_adjudication_enqueued: 0,
         role_adjudication_deduped: 1,
@@ -287,6 +293,7 @@ fn roles_classify_formats_human_metrics_without_json() -> Result<()> {
     assert!(rendered.contains("architecture roles classified"));
     assert!(rendered.contains("roles: full_reconcile=true"));
     assert!(rendered.contains("assignments: written=6"));
+    assert!(rendered.contains("architecture embeddings: selected=2 enqueued=1 deduped=1"));
     assert!(rendered.contains("warning: classification warning"));
     Ok(())
 }
@@ -327,6 +334,9 @@ fn seed_command_output_includes_activation_and_classification_in_json() -> Resul
                 assignment_history_rows: 2,
                 adjudication_candidates: 0,
             },
+            architecture_embedding_selected: 0,
+            architecture_embedding_enqueued: 0,
+            architecture_embedding_deduped: 0,
             role_adjudication_selected: 0,
             role_adjudication_enqueued: 0,
             role_adjudication_deduped: 0,
@@ -452,6 +462,9 @@ fn bootstrap_skip_seed_formats_json_with_skipped_seed_flag() -> Result<()> {
                 assignment_history_rows: 1,
                 adjudication_candidates: 0,
             },
+            architecture_embedding_selected: 0,
+            architecture_embedding_enqueued: 0,
+            architecture_embedding_deduped: 0,
             role_adjudication_selected: 0,
             role_adjudication_enqueued: 0,
             role_adjudication_deduped: 0,

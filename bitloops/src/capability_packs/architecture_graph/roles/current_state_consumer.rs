@@ -7,10 +7,14 @@ use crate::capability_packs::architecture_graph::roles::{
 use crate::capability_packs::architecture_graph::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_CURRENT_STATE_CONSUMER_ID,
 };
+use crate::capability_packs::semantic_clones::workplane::{
+    architecture_embedding_jobs_for_artefacts, architecture_embedding_path_cleanup_jobs,
+};
 use crate::host::capability_host::{
     CurrentStateConsumer, CurrentStateConsumerContext, CurrentStateConsumerFuture,
     CurrentStateConsumerRequest, CurrentStateConsumerResult,
 };
+use crate::host::devql::{RelationalStorage, esc_pg, sql_string_list_pg};
 
 use super::classifier::{
     ArchitectureRoleClassificationInput, classify_architecture_roles_for_current_state,
@@ -60,6 +64,25 @@ impl CurrentStateConsumer for ArchitectureGraphRoleCurrentStateConsumer {
             let adjudication_request_count = outcome.adjudication_requests.len();
             let role_metrics = serde_json::to_value(&outcome.metrics)
                 .unwrap_or_else(|_| json!({ "serialization_error": true }));
+            let mut architecture_embedding_enqueue_failed = false;
+            let architecture_embedding_metrics = match enqueue_architecture_embedding_refresh(
+                &request.repo_id,
+                outcome.metrics.full_reconcile,
+                &outcome.architecture_embedding_refresh_paths,
+                &outcome.architecture_embedding_cleanup_paths,
+                context,
+            )
+            .await
+            {
+                Ok(metrics) => metrics,
+                Err(err) => {
+                    warnings.push(format!(
+                        "Architecture embedding refresh enqueue failed: {err:#}"
+                    ));
+                    architecture_embedding_enqueue_failed = true;
+                    ArchitectureEmbeddingEnqueueMetrics::default()
+                }
+            };
             let mut role_adjudication_enqueue_failed = false;
             let adjudication_metrics = match enqueue_adjudication_requests(
                 &outcome.adjudication_requests,
@@ -87,23 +110,99 @@ impl CurrentStateConsumer for ArchitectureGraphRoleCurrentStateConsumer {
                     role_metrics,
                     &adjudication_metrics,
                     role_adjudication_enqueue_failed,
+                    &architecture_embedding_metrics,
+                    architecture_embedding_enqueue_failed,
                 )),
             })
         })
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ArchitectureEmbeddingEnqueueMetrics {
+    selected: u64,
+    enqueued: u64,
+    deduped: u64,
+}
+
+async fn enqueue_architecture_embedding_refresh(
+    repo_id: &str,
+    full_reconcile: bool,
+    refresh_paths: &[String],
+    cleanup_paths: &[String],
+    context: &CurrentStateConsumerContext,
+) -> anyhow::Result<ArchitectureEmbeddingEnqueueMetrics> {
+    let artefact_ids = if full_reconcile {
+        load_current_embedding_artefact_ids(context.storage.as_ref(), repo_id, None).await?
+    } else {
+        load_current_embedding_artefact_ids(context.storage.as_ref(), repo_id, Some(refresh_paths))
+            .await?
+    };
+    let mut jobs = architecture_embedding_jobs_for_artefacts(&artefact_ids)?;
+    jobs.extend(architecture_embedding_path_cleanup_jobs(cleanup_paths)?);
+    let selected = jobs.len() as u64;
+    if jobs.is_empty() {
+        return Ok(ArchitectureEmbeddingEnqueueMetrics::default());
+    }
+    let result = context.workplane.enqueue_jobs(jobs)?;
+    Ok(ArchitectureEmbeddingEnqueueMetrics {
+        selected,
+        enqueued: result.inserted_jobs,
+        deduped: result.updated_jobs,
+    })
+}
+
+async fn load_current_embedding_artefact_ids(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    paths: Option<&[String]>,
+) -> anyhow::Result<Vec<String>> {
+    let path_filter = paths
+        .filter(|paths| !paths.is_empty())
+        .map(|paths| format!("AND current.path IN ({})", sql_string_list_pg(paths)))
+        .unwrap_or_default();
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT current.artefact_id \
+             FROM artefacts_current current \
+             JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
+             WHERE current.repo_id = '{}' \
+               {path_filter} \
+               AND state.analysis_mode = 'code' \
+               AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) <> 'import' \
+             ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.start_byte, 0), current.artefact_id",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.get("artefact_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
 fn role_current_state_metrics(
     role_metrics: serde_json::Value,
     adjudication_metrics: &RoleAdjudicationEnqueueMetrics,
     role_adjudication_enqueue_failed: bool,
+    architecture_embedding_metrics: &ArchitectureEmbeddingEnqueueMetrics,
+    architecture_embedding_enqueue_failed: bool,
 ) -> serde_json::Value {
     let mut metrics = json!({
         "roles": role_metrics,
+        "architecture_embedding_selected": architecture_embedding_metrics.selected,
+        "architecture_embedding_enqueued": architecture_embedding_metrics.enqueued,
+        "architecture_embedding_deduped": architecture_embedding_metrics.deduped,
         "role_adjudication_selected": adjudication_metrics.selected,
         "role_adjudication_enqueued": adjudication_metrics.enqueued,
         "role_adjudication_deduped": adjudication_metrics.deduped,
     });
+    if architecture_embedding_enqueue_failed {
+        metrics["architecture_embedding_enqueue_failed"] = serde_json::Value::Bool(true);
+    }
     if role_adjudication_enqueue_failed {
         metrics["role_adjudication_enqueue_failed"] = serde_json::Value::Bool(true);
     }

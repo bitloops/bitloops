@@ -374,6 +374,10 @@ pub struct ArchitectureRoleReconcileOutcome {
     pub metrics: ArchitectureRoleReconcileMetrics,
     pub warnings: Vec<String>,
     #[serde(default)]
+    pub architecture_embedding_refresh_paths: Vec<String>,
+    #[serde(default)]
+    pub architecture_embedding_cleanup_paths: Vec<String>,
+    #[serde(default)]
     pub adjudication_requests: Vec<RoleAdjudicationRequest>,
 }
 

@@ -96,6 +96,7 @@ impl ArtefactSelection {
         Ok(Some(SearchBreakdown {
             lexical: super::support::take_stage_items(&search_breakdown.lexical, first)?,
             identity: super::support::take_stage_items(&search_breakdown.identity, first)?,
+            architecture: super::support::take_stage_items(&search_breakdown.architecture, first)?,
             code: super::support::take_stage_items(&search_breakdown.code, first)?,
             summary: super::support::take_stage_items(&search_breakdown.summary, first)?,
         }))

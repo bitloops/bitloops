@@ -5,7 +5,8 @@ use anyhow::{Context, Result};
 use rusqlite::params;
 
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::unix_timestamp_now;
@@ -122,6 +123,8 @@ fn load_workplane_claim_candidates(
                    AND available_at_unix <= ?2
                  ORDER BY CASE mailbox_name
                               WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.identity' THEN 0
+                              WHEN 'semantic_clones.embedding.architecture' THEN 0
                               WHEN 'semantic_clones.embedding.summary' THEN 0
                               WHEN 'semantic_clones.summary_refresh' THEN 1
                               WHEN 'semantic_clones.clone_rebuild' THEN 2
@@ -152,10 +155,12 @@ fn load_workplane_claim_candidates(
                         lease_expires_at_unix, last_error
                  FROM capability_workplane_jobs
                  WHERE status = ?1
-                   AND mailbox_name IN (?2, ?3)
-                   AND available_at_unix <= ?4
+                   AND mailbox_name IN (?2, ?3, ?4, ?5)
+                   AND available_at_unix <= ?6
                  ORDER BY CASE mailbox_name
                               WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.identity' THEN 0
+                              WHEN 'semantic_clones.embedding.architecture' THEN 0
                               WHEN 'semantic_clones.embedding.summary' THEN 0
                               WHEN 'semantic_clones.summary_refresh' THEN 1
                               WHEN 'semantic_clones.clone_rebuild' THEN 2
@@ -163,12 +168,14 @@ fn load_workplane_claim_candidates(
                           END ASC,
                           available_at_unix ASC,
                           submitted_at_unix ASC
-                 LIMIT ?5",
+                 LIMIT ?7",
             )?;
             let rows = stmt.query_map(
                 params![
                     WorkplaneJobStatus::Pending.as_str(),
                     SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+                    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+                    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX,
                     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
                     now,
                     limit,
@@ -191,6 +198,8 @@ fn load_workplane_claim_candidates(
                    AND available_at_unix <= ?3
                  ORDER BY CASE mailbox_name
                               WHEN 'semantic_clones.embedding.code' THEN 0
+                              WHEN 'semantic_clones.embedding.identity' THEN 0
+                              WHEN 'semantic_clones.embedding.architecture' THEN 0
                               WHEN 'semantic_clones.embedding.summary' THEN 0
                               WHEN 'semantic_clones.summary_refresh' THEN 1
                               WHEN 'semantic_clones.clone_rebuild' THEN 2
@@ -262,6 +271,8 @@ fn job_is_paused_for_mailbox(state: &EnrichmentControlState, mailbox_name: &str)
     match mailbox_name {
         SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX => state.paused_semantic,
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX => state.paused_embeddings,
         _ => false,

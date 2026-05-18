@@ -2,6 +2,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::capability_packs::semantic_clones::workplane::{
+    architecture_embedding_jobs_for_artefacts, architecture_embedding_path_cleanup_jobs,
+};
 use crate::host::capability_host::{
     BoxFuture, CapabilityIngestContext, IngestRequest, IngestResult, IngesterHandler,
     IngesterRegistration,
@@ -164,6 +167,28 @@ impl IngesterHandler for ArchitectureRoleAdjudicationIngester {
                     ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_SLOT
                 )
             })?;
+            let architecture_embedding_refresh = if write_outcome.persisted {
+                match ctx.workplane() {
+                    Some(workplane) => {
+                        let jobs = architecture_embedding_refresh_jobs_for_adjudication(&payload)?;
+                        let selected = jobs.len() as u64;
+                        let result = workplane.enqueue_jobs(jobs).with_context(|| {
+                            format!(
+                                "enqueue architecture embedding refresh for adjudication scope `{}`",
+                                payload.request.scope_key()
+                            )
+                        })?;
+                        json!({
+                            "selected": selected,
+                            "enqueued": result.inserted_jobs,
+                            "deduped": result.updated_jobs,
+                        })
+                    }
+                    None => json!({ "selected": 0, "enqueued": 0, "deduped": 0 }),
+                }
+            } else {
+                json!({ "selected": 0, "enqueued": 0, "deduped": 0 })
+            };
 
             Ok(IngestResult::new(
                 json!({
@@ -173,6 +198,7 @@ impl IngesterHandler for ArchitectureRoleAdjudicationIngester {
                     "scope_key": payload.request.scope_key(),
                     "persisted": write_outcome.persisted,
                     "writer_source": write_outcome.source,
+                    "architecture_embedding_refresh": architecture_embedding_refresh,
                 }),
                 if write_outcome.persisted {
                     format!(
@@ -188,6 +214,18 @@ impl IngesterHandler for ArchitectureRoleAdjudicationIngester {
             ))
         })
     }
+}
+
+fn architecture_embedding_refresh_jobs_for_adjudication(
+    payload: &RoleAdjudicationMailboxPayload,
+) -> Result<Vec<crate::host::capability_host::gateways::CapabilityWorkplaneJob>> {
+    if let Some(artefact_id) = payload.request.artefact_id.as_ref() {
+        return architecture_embedding_jobs_for_artefacts(std::slice::from_ref(artefact_id));
+    }
+    if let Some(path) = payload.request.path.as_ref() {
+        return architecture_embedding_path_cleanup_jobs(std::slice::from_ref(path));
+    }
+    Ok(Vec::new())
 }
 
 async fn run_role_adjudication_payload(
@@ -576,6 +614,59 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("reason"));
+    }
+
+    #[test]
+    fn role_adjudication_refresh_jobs_target_architecture_embeddings() -> Result<()> {
+        let artefact_payload = RoleAdjudicationMailboxPayload {
+            request: super::super::roles::RoleAdjudicationRequest {
+                repo_id: "repo-ingester-1".to_string(),
+                generation: 301,
+                target_kind: Some("artefact".to_string()),
+                artefact_id: Some("artefact-1".to_string()),
+                symbol_id: Some("symbol-1".to_string()),
+                path: Some("src/main.rs".to_string()),
+                language: Some("rust".to_string()),
+                canonical_kind: Some("function".to_string()),
+                reason: AdjudicationReason::LowConfidence,
+                deterministic_confidence: Some(0.51),
+                candidate_role_ids: vec!["role-entrypoint".to_string()],
+                current_assignment: None,
+            },
+        };
+        let artefact_jobs =
+            architecture_embedding_refresh_jobs_for_adjudication(&artefact_payload)?;
+        assert_eq!(artefact_jobs.len(), 1);
+        assert_eq!(
+            artefact_jobs[0].target_capability_id.as_deref(),
+            Some(crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CAPABILITY_ID)
+        );
+        assert_eq!(
+            artefact_jobs[0].mailbox_name,
+            crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+        );
+        let artefact_job_payload: crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload =
+            serde_json::from_value(artefact_jobs[0].payload.clone())?;
+        assert_eq!(
+            artefact_job_payload,
+            crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::Artefact {
+                artefact_id: "artefact-1".to_string(),
+            }
+        );
+
+        let path_payload = RoleAdjudicationMailboxPayload {
+            request: super::super::roles::RoleAdjudicationRequest {
+                artefact_id: None,
+                ..artefact_payload.request
+            },
+        };
+        let path_jobs = architecture_embedding_refresh_jobs_for_adjudication(&path_payload)?;
+        assert_eq!(path_jobs.len(), 1);
+        assert_eq!(
+            path_jobs[0].dedupe_key.as_deref(),
+            Some("semantic_clones.embedding.architecture:path_cleanup:src/main.rs")
+        );
+        Ok(())
     }
 
     #[test]

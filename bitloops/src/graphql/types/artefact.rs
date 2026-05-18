@@ -64,6 +64,7 @@ impl CanonicalKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum EmbeddingRepresentationKind {
     Identity,
+    Architecture,
     Code,
     Summary,
 }

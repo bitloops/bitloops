@@ -49,10 +49,11 @@ pub(crate) async fn select_search_artefacts(
 
     if matches!(
         mode,
-        SearchMode::Identity | SearchMode::Code | SearchMode::Summary
+        SearchMode::Identity | SearchMode::Architecture | SearchMode::Code | SearchMode::Summary
     ) {
         let representation_kind = match mode {
             SearchMode::Identity => EmbeddingRepresentationKind::Identity,
+            SearchMode::Architecture => EmbeddingRepresentationKind::Architecture,
             SearchMode::Code => EmbeddingRepresentationKind::Code,
             SearchMode::Summary => EmbeddingRepresentationKind::Summary,
             SearchMode::Auto | SearchMode::Lexical => unreachable!("guarded above"),
@@ -88,6 +89,7 @@ pub(crate) async fn select_search_artefacts(
             breakdown: (mode == SearchMode::Auto).then_some(SearchBreakdown {
                 lexical: Vec::new(),
                 identity: Vec::new(),
+                architecture: Vec::new(),
                 code: Vec::new(),
                 summary: Vec::new(),
             }),
@@ -191,13 +193,14 @@ pub(crate) async fn select_search_artefacts(
         Vec::new()
     };
 
-    let (identity_hits, code_hits, summary_hits) = if mode == SearchMode::Auto {
+    let (identity_hits, architecture_hits, code_hits, summary_hits) = if mode == SearchMode::Auto {
         let semantic_hits = select_semantic_artefacts_by_representation(
             context,
             scope,
             trimmed_query,
             &[
                 EmbeddingRepresentationKind::Identity,
+                EmbeddingRepresentationKind::Architecture,
                 EmbeddingRepresentationKind::Code,
                 EmbeddingRepresentationKind::Summary,
             ],
@@ -207,6 +210,12 @@ pub(crate) async fn select_search_artefacts(
             ranked_semantic_hits(
                 semantic_hits
                     .get(&EmbeddingRepresentationKind::Identity)
+                    .cloned()
+                    .unwrap_or_default(),
+            ),
+            ranked_semantic_hits(
+                semantic_hits
+                    .get(&EmbeddingRepresentationKind::Architecture)
                     .cloned()
                     .unwrap_or_default(),
             ),
@@ -235,6 +244,17 @@ pub(crate) async fn select_search_artefacts(
         } else {
             Vec::new()
         };
+        let architecture_hits = if mode == SearchMode::Architecture {
+            semantic_hits_for_mode(
+                context,
+                scope,
+                trimmed_query,
+                EmbeddingRepresentationKind::Architecture,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         let code_hits = if mode == SearchMode::Code {
             semantic_hits_for_mode(
                 context,
@@ -257,7 +277,7 @@ pub(crate) async fn select_search_artefacts(
         } else {
             Vec::new()
         };
-        (identity_hits, code_hits, summary_hits)
+        (identity_hits, architecture_hits, code_hits, summary_hits)
     };
 
     let unified = match mode {
@@ -265,6 +285,7 @@ pub(crate) async fn select_search_artefacts(
             &merge_auto_hits(
                 &lexical_hits,
                 &identity_hits,
+                &architecture_hits,
                 &code_hits,
                 &summary_hits,
                 SEARCH_RESULT_LIMIT,
@@ -273,6 +294,7 @@ pub(crate) async fn select_search_artefacts(
         ),
         SearchMode::Lexical => finalize_hits(&lexical_hits, SEARCH_RESULT_LIMIT),
         SearchMode::Identity => finalize_hits(&identity_hits, SEARCH_RESULT_LIMIT),
+        SearchMode::Architecture => finalize_hits(&architecture_hits, SEARCH_RESULT_LIMIT),
         SearchMode::Code => finalize_hits(&code_hits, SEARCH_RESULT_LIMIT),
         SearchMode::Summary => finalize_hits(&summary_hits, SEARCH_RESULT_LIMIT),
     };
@@ -280,6 +302,7 @@ pub(crate) async fn select_search_artefacts(
     let breakdown = (mode == SearchMode::Auto).then(|| SearchBreakdown {
         lexical: finalize_hits(&lexical_hits, SEARCH_BREAKDOWN_LIMIT),
         identity: finalize_hits(&identity_hits, SEARCH_BREAKDOWN_LIMIT),
+        architecture: finalize_hits(&architecture_hits, SEARCH_BREAKDOWN_LIMIT),
         code: finalize_hits(&code_hits, SEARCH_BREAKDOWN_LIMIT),
         summary: finalize_hits(&summary_hits, SEARCH_BREAKDOWN_LIMIT),
     });
@@ -371,6 +394,7 @@ fn merge_lexical_hits(
 fn merge_auto_hits(
     lexical_hits: &[RankedSearchArtefact],
     identity_hits: &[RankedSearchArtefact],
+    architecture_hits: &[RankedSearchArtefact],
     code_hits: &[RankedSearchArtefact],
     summary_hits: &[RankedSearchArtefact],
     limit: usize,
@@ -383,6 +407,7 @@ fn merge_auto_hits(
         .chain(code_hits.iter())
         .chain(summary_hits.iter())
         .chain(identity_hits.iter())
+        .chain(architecture_hits.iter())
     {
         artefacts_by_id
             .entry(hit.artefact.id.to_string())

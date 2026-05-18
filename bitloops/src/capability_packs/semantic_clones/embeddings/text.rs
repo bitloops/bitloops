@@ -1,5 +1,6 @@
 use crate::capability_packs::semantic_clones::features::render_dependency_context;
 
+use super::architecture::build_architecture_embedding_text;
 use super::identity::{
     identity_container_raw, normalize_identity_path, normalize_identity_path_terms,
     normalize_identity_terms,
@@ -11,6 +12,7 @@ pub(super) const MAX_EMBEDDING_BODY_CHARS: usize = 8_000;
 pub fn build_symbol_embedding_text(input: &SymbolEmbeddingInput) -> String {
     match input.representation_kind {
         EmbeddingRepresentationKind::Code => build_code_embedding_text(input),
+        EmbeddingRepresentationKind::Architecture => build_architecture_embedding_text(input),
         EmbeddingRepresentationKind::Summary => build_summary_embedding_text(input),
         EmbeddingRepresentationKind::Identity => build_identity_embedding_text(input),
     }

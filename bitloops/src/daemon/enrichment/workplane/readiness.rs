@@ -9,7 +9,8 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     resolve_selected_summary_slot, resolve_semantic_clones_config,
 };
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
     SEMANTIC_CLONES_SUMMARY_GENERATION_SLOT, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::daemon::types::BlockedMailboxStatus;
@@ -170,12 +171,17 @@ fn summary_mailbox_item_as_readiness_job(
 fn embedding_mailbox_item_as_readiness_job(
     item: SemanticEmbeddingMailboxItemRecord,
 ) -> WorkplaneJobRecord {
-    let mailbox_name =
-        if item.representation_kind == EmbeddingRepresentationKind::Summary.to_string() {
-            SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
-        } else {
-            SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
-        };
+    let mailbox_name = if item.representation_kind
+        == EmbeddingRepresentationKind::Summary.to_string()
+    {
+        SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX
+    } else if item.representation_kind == EmbeddingRepresentationKind::Identity.to_string() {
+        SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+    } else if item.representation_kind == EmbeddingRepresentationKind::Architecture.to_string() {
+        SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+    } else {
+        SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
+    };
     WorkplaneJobRecord {
         job_id: item.item_id,
         repo_id: item.repo_id,

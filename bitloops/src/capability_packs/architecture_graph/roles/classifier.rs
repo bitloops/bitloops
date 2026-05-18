@@ -420,6 +420,8 @@ pub async fn classify_architecture_roles_for_current_state(
                 + unknown_or_high_impact_candidates,
         },
         warnings: Vec::new(),
+        architecture_embedding_refresh_paths: assignment_refresh_paths,
+        architecture_embedding_cleanup_paths: removed_paths,
         adjudication_requests,
     })
 }

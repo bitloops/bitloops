@@ -302,6 +302,9 @@ async fn load_primary_active_embedding_setup(
                 SemanticEmbeddingRepresentationKind::Code => {
                     "representation_kind IN ('code', 'baseline', 'enriched')".to_string()
                 }
+                SemanticEmbeddingRepresentationKind::Architecture => {
+                    "representation_kind IN ('architecture')".to_string()
+                }
                 SemanticEmbeddingRepresentationKind::Summary => {
                     "representation_kind IN ('summary')".to_string()
                 }
@@ -338,6 +341,9 @@ async fn load_primary_active_embedding_setup(
                 match representation_kind {
                     SemanticEmbeddingRepresentationKind::Code => {
                         crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Code
+                    }
+                    SemanticEmbeddingRepresentationKind::Architecture => {
+                        crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Architecture
                     }
                     SemanticEmbeddingRepresentationKind::Summary => {
                         crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind::Summary
@@ -678,6 +684,7 @@ fn parse_embedding_representation_field(
     for value in parse_string_array_field(row, key) {
         let mapped = match value.trim().to_ascii_lowercase().as_str() {
             "identity" | "locator" => Some(GraphqlEmbeddingRepresentationKind::Identity),
+            "architecture" => Some(GraphqlEmbeddingRepresentationKind::Architecture),
             "code" | "baseline" | "enriched" => Some(GraphqlEmbeddingRepresentationKind::Code),
             "summary" => Some(GraphqlEmbeddingRepresentationKind::Summary),
             _ => None,
@@ -692,8 +699,9 @@ fn parse_embedding_representation_field(
 
     parsed.sort_by_key(|kind| match kind {
         GraphqlEmbeddingRepresentationKind::Identity => 0,
-        GraphqlEmbeddingRepresentationKind::Code => 1,
-        GraphqlEmbeddingRepresentationKind::Summary => 2,
+        GraphqlEmbeddingRepresentationKind::Architecture => 1,
+        GraphqlEmbeddingRepresentationKind::Code => 2,
+        GraphqlEmbeddingRepresentationKind::Summary => 3,
     });
     parsed
 }

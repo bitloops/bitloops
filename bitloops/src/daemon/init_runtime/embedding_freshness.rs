@@ -10,6 +10,7 @@ pub(crate) struct EmbeddingFreshnessState {
     pub(crate) eligible_artefact_ids: BTreeSet<String>,
     pub(crate) fresh_code_artefact_ids: BTreeSet<String>,
     pub(crate) fresh_identity_artefact_ids: BTreeSet<String>,
+    pub(crate) fresh_architecture_artefact_ids: BTreeSet<String>,
     pub(crate) fresh_summary_artefact_ids: BTreeSet<String>,
 }
 
@@ -84,6 +85,7 @@ impl EmbeddingFreshnessState {
     ) -> &BTreeSet<String> {
         match representation_kind {
             EmbeddingRepresentationKind::Code => &self.fresh_code_artefact_ids,
+            EmbeddingRepresentationKind::Architecture => &self.fresh_architecture_artefact_ids,
             EmbeddingRepresentationKind::Summary => &self.fresh_summary_artefact_ids,
             EmbeddingRepresentationKind::Identity => &self.fresh_identity_artefact_ids,
         }
@@ -106,6 +108,10 @@ pub(crate) fn load_embedding_freshness_state(
         fresh_identity_artefact_ids: query_progress_ids(
             relational,
             &fresh_embedding_artefacts_sql(repo_id, EmbeddingRepresentationKind::Identity),
+        )?,
+        fresh_architecture_artefact_ids: query_progress_ids(
+            relational,
+            &fresh_embedding_artefacts_sql(repo_id, EmbeddingRepresentationKind::Architecture),
         )?,
         fresh_summary_artefact_ids: query_progress_ids(
             relational,
@@ -166,6 +172,13 @@ pub(crate) fn parse_embedding_representation_kind(
         .any(|value| raw.eq_ignore_ascii_case(value))
     {
         return Some(EmbeddingRepresentationKind::Summary);
+    }
+    if EmbeddingRepresentationKind::Architecture
+        .storage_values()
+        .iter()
+        .any(|value| raw.eq_ignore_ascii_case(value))
+    {
+        return Some(EmbeddingRepresentationKind::Architecture);
     }
     if EmbeddingRepresentationKind::Identity
         .storage_values()

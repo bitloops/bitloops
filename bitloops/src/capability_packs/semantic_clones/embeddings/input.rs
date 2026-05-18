@@ -38,6 +38,7 @@ pub fn build_symbol_embedding_inputs(
                 body: input.body.clone(),
                 summary,
                 dependency_signals: input.dependency_signals.clone(),
+                architecture_roles: Vec::new(),
                 parent_kind: input.parent_kind.clone(),
                 content_hash: input.content_hash.clone(),
             })

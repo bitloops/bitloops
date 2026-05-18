@@ -508,6 +508,7 @@ fn embedding_freshness_requires_identity_for_code_lane_completion() {
             .into_iter()
             .collect(),
         fresh_identity_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
+        fresh_architecture_artefact_ids: Default::default(),
         fresh_summary_artefact_ids: Default::default(),
     };
 
@@ -587,6 +588,7 @@ fn semantic_inbox_rows_contribute_to_init_session_mailbox_counts() {
         .collect(),
         fresh_code_artefact_ids: Default::default(),
         fresh_identity_artefact_ids: Default::default(),
+        fresh_architecture_artefact_ids: Default::default(),
         fresh_summary_artefact_ids: Default::default(),
     };
     let mut stats = SessionWorkplaneStats::default();
@@ -697,6 +699,7 @@ fn semantic_repo_backfill_inbox_rows_use_array_payload_sizes() {
         .collect(),
         fresh_code_artefact_ids: Default::default(),
         fresh_identity_artefact_ids: Default::default(),
+        fresh_architecture_artefact_ids: Default::default(),
         fresh_summary_artefact_ids: Default::default(),
     };
     let mut stats = SessionWorkplaneStats::default();
@@ -780,6 +783,7 @@ fn semantic_embedding_counts_only_include_unsatisfied_current_work() {
         .collect(),
         fresh_code_artefact_ids: ["artefact-1".to_string()].into_iter().collect(),
         fresh_identity_artefact_ids: Default::default(),
+        fresh_architecture_artefact_ids: Default::default(),
         fresh_summary_artefact_ids: ["artefact-3".to_string()].into_iter().collect(),
     };
 

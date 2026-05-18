@@ -9,7 +9,8 @@ use crate::capability_packs::semantic_clones::SEMANTIC_CLONES_CAPABILITY_ID;
 use crate::capability_packs::semantic_clones::embeddings::{
     ActiveEmbeddingRepresentationState, EmbeddingRepresentationKind,
     build_symbol_embedding_input_hash, build_symbol_embedding_inputs, build_symbol_embedding_rows,
-    resolve_embedding_setup, symbol_embeddings_require_reindex,
+    load_architecture_roles_for_embedding_inputs, resolve_embedding_setup,
+    symbol_embeddings_require_reindex,
 };
 use crate::capability_packs::semantic_clones::features::{
     SemanticFeatureHashKey, build_symbol_feature_rows,
@@ -236,6 +237,12 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let input_ms = elapsed_ms(input_started);
 
     let summary_started = Instant::now();
+    let path_cleanup_paths = batch
+        .items
+        .iter()
+        .filter_map(|item| item.payload_json.as_ref())
+        .filter_map(path_cleanup_path_from_payload)
+        .collect::<Vec<_>>();
     let summary_map = load_current_semantic_summary_map(
         &relational,
         &expanded_inputs
@@ -245,12 +252,29 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
         batch.representation_kind,
     )
     .await?;
-    let embedding_inputs =
+    let mut embedding_inputs =
         build_symbol_embedding_inputs(&expanded_inputs, batch.representation_kind, &summary_map);
+    if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+        let roles_by_artefact = load_architecture_roles_for_embedding_inputs(
+            &relational,
+            &batch.repo_id,
+            &expanded_inputs,
+        )
+        .await?;
+        for input in &mut embedding_inputs {
+            input.architecture_roles = roles_by_artefact
+                .get(&input.artefact_id)
+                .cloned()
+                .unwrap_or_default();
+        }
+        embedding_inputs.retain(|input| !input.architecture_roles.is_empty());
+    }
     let should_prune_stale_current_rows = batch
         .items
         .iter()
-        .all(|item| item.item_kind == SemanticMailboxItemKind::Artefact);
+        .all(|item| item.item_kind == SemanticMailboxItemKind::Artefact)
+        || (batch.representation_kind == EmbeddingRepresentationKind::Architecture
+            && !contains_repo_wide_backfill);
     let mut current_paths_by_content = BTreeSet::<(String, String)>::new();
     let mut keep_current_artefact_ids_by_path_content =
         BTreeMap::<(String, String), Vec<String>>::new();
@@ -259,18 +283,26 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             current_paths_by_content.insert((input.path.clone(), input.blob_sha.clone()));
         }
         for (path, content_id) in &current_paths_by_content {
-            keep_current_artefact_ids_by_path_content
-                .entry((path.clone(), content_id.clone()))
-                .or_default()
-                .extend(
+            let keep_artefact_ids =
+                if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+                    embedding_inputs
+                        .iter()
+                        .filter(|input| input.path == *path && input.blob_sha == *content_id)
+                        .map(|input| input.artefact_id.clone())
+                        .collect::<Vec<_>>()
+                } else {
                     load_current_embedding_artefact_ids_for_path_content(
                         &relational,
                         &batch.repo_id,
                         path,
                         content_id,
                     )
-                    .await?,
-                );
+                    .await?
+                };
+            keep_current_artefact_ids_by_path_content
+                .entry((path.clone(), content_id.clone()))
+                .or_default()
+                .extend(keep_artefact_ids);
         }
         for keep_artefact_ids in keep_current_artefact_ids_by_path_content.values_mut() {
             keep_artefact_ids.sort();
@@ -282,6 +314,31 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let mut embedding_statements = Vec::new();
     let mut remote_embedding_statements = Vec::new();
     let mut repaired_feature_projection = false;
+    if batch.representation_kind == EmbeddingRepresentationKind::Architecture {
+        for path in &path_cleanup_paths {
+            let delete_sql = build_delete_stale_current_symbol_embedding_rows_for_path_sql(
+                &batch.repo_id,
+                path,
+                "",
+                batch.representation_kind,
+                &[],
+            );
+            embedding_statements.push(delete_sql.clone());
+            embedding_statements.extend(
+                build_sqlite_stale_current_rows_for_path_delete_statements(
+                    &relational,
+                    &batch.repo_id,
+                    path,
+                    batch.representation_kind,
+                    &[],
+                )
+                .await?,
+            );
+            if relational.primary_backend() == RelationalPrimaryBackend::Postgres {
+                remote_embedding_statements.push(delete_sql);
+            }
+        }
+    }
     if batch.representation_kind == EmbeddingRepresentationKind::Code {
         let feature_hash_provider = code_feature_hash_provider
             .as_ref()
@@ -548,6 +605,15 @@ fn explicit_artefact_ids_from_batch(
     ids.sort();
     ids.dedup();
     ids
+}
+
+fn path_cleanup_path_from_payload(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("path_cleanup")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
 }
 
 async fn load_current_embedding_backfill_artefact_ids(

@@ -111,6 +111,7 @@ pub(super) fn build_current_repo_semantic_clone_coverage_sql(
 
     match representation_kind {
         embeddings::EmbeddingRepresentationKind::Code
+        | embeddings::EmbeddingRepresentationKind::Architecture
         | embeddings::EmbeddingRepresentationKind::Identity => format!(
             "SELECT \
                 (SELECT COUNT(*) \

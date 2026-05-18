@@ -11,9 +11,9 @@ use crate::capability_packs::semantic_clones::runtime_config::{
     embeddings_enabled, resolve_selected_summary_slot, resolve_semantic_clones_config,
 };
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CLONE_REBUILD_MAILBOX,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::{
     load_effective_mailbox_intent_for_repo, payload_representation_kind,
@@ -121,6 +121,7 @@ pub(crate) async fn execute_workplane_job(job: &WorkplaneJobRecord) -> JobExecut
         }
         SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX
+        | SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
         | SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
             let Some(representation_kind) = payload_representation_kind(&job.mailbox_name) else {
                 return JobExecutionOutcome::failed(anyhow::anyhow!(

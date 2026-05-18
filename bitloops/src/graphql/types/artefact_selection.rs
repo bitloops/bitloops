@@ -37,6 +37,7 @@ pub enum SearchMode {
     #[default]
     Auto,
     Identity,
+    Architecture,
     Code,
     Summary,
     Lexical,
@@ -151,6 +152,7 @@ enum ArchitectureTargetScope {
 pub struct SearchBreakdown {
     pub lexical: Vec<Artefact>,
     pub identity: Vec<Artefact>,
+    pub architecture: Vec<Artefact>,
     pub code: Vec<Artefact>,
     pub summary: Vec<Artefact>,
 }

@@ -259,6 +259,38 @@ fn insert_current_file(
     Ok(())
 }
 
+fn insert_current_artefact(
+    sqlite_path: &std::path::Path,
+    repo_id: &str,
+    path: &str,
+    artefact_id: &str,
+    symbol_id: &str,
+) -> anyhow::Result<()> {
+    let conn = rusqlite::Connection::open(sqlite_path)?;
+    conn.execute(
+        "INSERT INTO artefacts_current (
+            repo_id, path, content_id, symbol_id, artefact_id, language,
+            extraction_fingerprint, canonical_kind, language_kind, symbol_fqn,
+            parent_symbol_id, parent_artefact_id, start_line, end_line, start_byte,
+            end_byte, signature, modifiers, docstring, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, 'rust',
+            'fingerprint', 'function', 'function_item', ?6,
+            NULL, NULL, 1, 3, 0,
+            10, NULL, '[]', NULL, '2026-05-05T10:00:00Z'
+        )",
+        rusqlite::params![
+            repo_id,
+            path,
+            format!("content:{path}"),
+            symbol_id,
+            artefact_id,
+            format!("{path}::{symbol_id}"),
+        ],
+    )?;
+    Ok(())
+}
+
 async fn upsert_test_role(
     storage: &crate::host::devql::RelationalStorage,
     repo_id: &str,
@@ -480,6 +512,100 @@ async fn current_state_reconcile_includes_role_metrics() -> anyhow::Result<()> {
             .and_then(|metrics| metrics.pointer("/roles/rules_loaded"))
             .and_then(Value::as_u64),
         Some(1)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn current_state_reconcile_enqueues_architecture_embedding_job_after_classification()
+-> anyhow::Result<()> {
+    let repo_id = "repo-architecture-embedding-current-state";
+    let test = architecture_consumer_test_context(repo_id).await?;
+    insert_current_file(&test.sqlite_path, repo_id, "src/api.rs", "rust")?;
+    insert_current_artefact(
+        &test.sqlite_path,
+        repo_id,
+        "src/api.rs",
+        "artefact-api",
+        "symbol-api",
+    )?;
+    upsert_test_role(test.storage.as_ref(), repo_id, "role-api-search", "api").await?;
+    upsert_path_suffix_rule(
+        test.storage.as_ref(),
+        repo_id,
+        "role-api-search",
+        "rule-api-search",
+        "api.rs",
+        0.95,
+    )
+    .await?;
+
+    let request = CurrentStateConsumerRequest {
+        run_id: Some("run".to_string()),
+        repo_id: repo_id.to_string(),
+        repo_root: test._temp.path().to_path_buf(),
+        active_branch: Some("main".to_string()),
+        head_commit_sha: Some("abc123".to_string()),
+        from_generation_seq_exclusive: 0,
+        to_generation_seq_inclusive: 27,
+        reconcile_mode: crate::host::capability_host::ReconcileMode::MergedDelta,
+        file_upserts: Vec::new(),
+        file_removals: Vec::new(),
+        affected_paths: vec!["src/api.rs".to_string()],
+        artefact_upserts: Vec::new(),
+        artefact_removals: Vec::new(),
+    };
+
+    let result = ArchitectureGraphRoleCurrentStateConsumer
+        .reconcile(&request, &test.context)
+        .await?;
+
+    let jobs = test.workplane.jobs();
+    let architecture_jobs = jobs
+        .iter()
+        .filter(|job| {
+            job.target_capability_id.as_deref()
+                == Some(crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_CAPABILITY_ID)
+                && job.mailbox_name
+                    == crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(architecture_jobs.len(), 1);
+    assert_eq!(
+        architecture_jobs[0].dedupe_key.as_deref(),
+        Some("semantic_clones.embedding.architecture:artefact-api")
+    );
+    let payload: crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload =
+        serde_json::from_value(architecture_jobs[0].payload.clone())?;
+    assert_eq!(
+        payload,
+        crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload::Artefact {
+            artefact_id: "artefact-api".to_string(),
+        }
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("architecture_embedding_selected"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("architecture_embedding_enqueued"))
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        result
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.get("architecture_embedding_deduped"))
+            .and_then(Value::as_u64),
+        Some(0)
     );
     Ok(())
 }

@@ -1450,6 +1450,7 @@ enum EdgeKind {
 
 enum EmbeddingRepresentationKind {
 	IDENTITY
+	ARCHITECTURE
 	CODE
 	SUMMARY
 }
@@ -2277,6 +2278,7 @@ enum SaveSelector {
 type SearchBreakdown {
 	lexical: [Artefact!]!
 	identity: [Artefact!]!
+	architecture: [Artefact!]!
 	code: [Artefact!]!
 	summary: [Artefact!]!
 }
@@ -2284,6 +2286,7 @@ type SearchBreakdown {
 enum SearchMode {
 	AUTO
 	IDENTITY
+	ARCHITECTURE
 	CODE
 	SUMMARY
 	LEXICAL

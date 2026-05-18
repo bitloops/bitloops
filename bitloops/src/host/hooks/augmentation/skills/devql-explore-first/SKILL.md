@@ -32,6 +32,8 @@ Choose the most specific selector:
 - known file or file range: use `path`, optionally with `lines`
 - single concrete identifier, method name, literal, error code, path-like
   string, or copied snippet: use `searchMode: LEXICAL`
+- architecture role terms such as API endpoint, command handler, repository,
+  adapter, or boundary: use `searchMode: ARCHITECTURE`
 - multiple related terms, behavior, concept, or task keywords without one exact
   anchor: omit `searchMode` and use default `AUTO`
 

@@ -5,9 +5,9 @@ use std::path::Path;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::types::{
-    SEMANTIC_CLONES_CAPABILITY_ID, SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX,
-    SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_CAPABILITY_ID,
+    SEMANTIC_CLONES_CODE_EMBEDDING_MAILBOX, SEMANTIC_CLONES_IDENTITY_EMBEDDING_MAILBOX,
+    SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX, SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
 };
 use crate::capability_packs::semantic_clones::workplane::SemanticClonesMailboxPayload;
 use crate::host::capability_host::CapabilityMailboxRegistration;
@@ -250,6 +250,14 @@ impl CapabilityWorkplaneGateway for LocalCapabilityWorkplaneGateway {
                         )?);
                         continue;
                     }
+                    SEMANTIC_CLONES_ARCHITECTURE_EMBEDDING_MAILBOX => {
+                        embedding_items.push(embedding_mailbox_item_from_job(
+                            self.init_session_id.clone(),
+                            EmbeddingRepresentationKind::Architecture,
+                            job,
+                        )?);
+                        continue;
+                    }
                     SEMANTIC_CLONES_SUMMARY_EMBEDDING_MAILBOX => {
                         embedding_items.push(embedding_mailbox_item_from_job(
                             self.init_session_id.clone(),
@@ -374,6 +382,11 @@ fn semantic_mailbox_payload_parts(
         SemanticClonesMailboxPayload::Artefact { artefact_id } => {
             (SemanticMailboxItemKind::Artefact, Some(artefact_id), None)
         }
+        SemanticClonesMailboxPayload::PathCleanup { path } => (
+            SemanticMailboxItemKind::RepoBackfill,
+            None,
+            Some(serde_json::json!({ "path_cleanup": path })),
+        ),
         SemanticClonesMailboxPayload::RepoBackfill { artefact_ids, .. } => (
             SemanticMailboxItemKind::RepoBackfill,
             None,
@@ -381,4 +394,57 @@ fn semantic_mailbox_payload_parts(
         ),
     };
     Ok(parts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn architecture_embedding_job_maps_to_embedding_mailbox_item() -> Result<()> {
+        let jobs =
+            crate::capability_packs::semantic_clones::workplane::architecture_embedding_jobs_for_artefacts(
+                &["artefact-api".to_string()],
+            )?;
+        let item = embedding_mailbox_item_from_job(
+            Some("init-1".to_string()),
+            EmbeddingRepresentationKind::Architecture,
+            jobs.into_iter().next().expect("architecture embedding job"),
+        )?;
+
+        assert_eq!(item.init_session_id.as_deref(), Some("init-1"));
+        assert_eq!(item.representation_kind, "architecture");
+        assert_eq!(item.item_kind, SemanticMailboxItemKind::Artefact);
+        assert_eq!(item.artefact_id.as_deref(), Some("artefact-api"));
+        assert!(item.payload_json.is_none());
+        assert_eq!(
+            item.dedupe_key.as_deref(),
+            Some("semantic_clones.embedding.architecture:artefact-api")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn architecture_path_cleanup_job_maps_to_embedding_repo_backfill_item() -> Result<()> {
+        let jobs =
+            crate::capability_packs::semantic_clones::workplane::architecture_embedding_path_cleanup_jobs(
+                &["src/api.rs".to_string()],
+            )?;
+        let item = embedding_mailbox_item_from_job(
+            None,
+            EmbeddingRepresentationKind::Architecture,
+            jobs.into_iter()
+                .next()
+                .expect("architecture path cleanup job"),
+        )?;
+
+        assert_eq!(item.representation_kind, "architecture");
+        assert_eq!(item.item_kind, SemanticMailboxItemKind::RepoBackfill);
+        assert!(item.artefact_id.is_none());
+        assert_eq!(
+            item.payload_json,
+            Some(serde_json::json!({ "path_cleanup": "src/api.rs" }))
+        );
+        Ok(())
+    }
 }

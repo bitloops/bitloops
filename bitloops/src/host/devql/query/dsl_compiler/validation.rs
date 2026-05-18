@@ -620,9 +620,9 @@ fn validate_select_artefacts_selector(selector: &SelectArtefactsFilter) -> Resul
     }
     if let Some(search_mode) = search_mode {
         match search_mode.to_ascii_lowercase().as_str() {
-            "auto" | "identity" | "code" | "summary" | "lexical" => {}
+            "auto" | "identity" | "architecture" | "code" | "summary" | "lexical" => {}
             _ => bail!(
-                "selectArtefacts(search_mode:...) must be one of: auto, identity, code, summary, lexical"
+                "selectArtefacts(search_mode:...) must be one of: auto, identity, architecture, code, summary, lexical"
             ),
         }
     }

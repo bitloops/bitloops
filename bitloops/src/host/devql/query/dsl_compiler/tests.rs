@@ -998,6 +998,35 @@ fn compile_slim_select_artefacts_search_selector_with_search_mode() {
 }
 
 #[test]
+fn compile_slim_select_artefacts_search_selector_with_architecture_search_mode() {
+    let parsed = parse_devql_query(
+        r#"selectArtefacts(search:"api endpoint",search_mode:"architecture")->checkpoints()"#,
+    )
+    .expect("query parses");
+
+    let selector = parsed
+        .select_artefacts
+        .as_ref()
+        .expect("selection should be present");
+    assert_eq!(selector.search.as_deref(), Some("api endpoint"));
+    assert_eq!(selector.search_mode.as_deref(), Some("architecture"));
+
+    let graphql = compile_devql_to_graphql_with_mode(&parsed, GraphqlCompileMode::Slim)
+        .expect("slim graphql compiles");
+
+    assert_eq!(
+        graphql,
+        r#"query {
+  selectArtefacts(by: { search: "api endpoint", searchMode: ARCHITECTURE }) {
+    checkpoints {
+      overview
+    }
+  }
+}"#
+    );
+}
+
+#[test]
 fn compile_slim_select_artefacts_rejects_search_mixed_with_lines() {
     let parsed =
         parse_devql_query(r#"selectArtefacts(search:"payLater()",lines:20..25)->checkpoints()"#)

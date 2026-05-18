@@ -1,9 +1,9 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::capability_packs::architecture_graph::roles::classifier::{
     ArchitectureRoleClassificationInput, ArchitectureRoleClassificationScope,
@@ -16,25 +16,27 @@ use crate::capability_packs::architecture_graph::roles::migrations::{
     create_rule_activate_proposal, create_rule_disable_proposal, create_rule_draft_proposal,
     create_rule_edit_proposal, create_split_role_proposal, show_proposal,
 };
-use crate::capability_packs::architecture_graph::roles::storage::list_recent_role_adjudication_attempts;
 use crate::capability_packs::architecture_graph::roles::taxonomy::{
     RoleSplitSpecFile, RuleSpecFile,
 };
 use crate::capability_packs::architecture_graph::roles::{
-    ArchitectureRoleReconcileMetrics, RoleAdjudicationEnqueueMetrics,
-    RoleAdjudicationMailboxPayload, default_queue_store, enqueue_adjudication_requests,
+    ArchitectureRoleReconcileMetrics, RoleAdjudicationEnqueueMetrics, default_queue_store,
+    enqueue_adjudication_requests,
 };
+#[cfg(test)]
 use crate::capability_packs::architecture_graph::types::{
     ARCHITECTURE_GRAPH_CAPABILITY_ID, ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX,
 };
-use crate::host::capability_host::DevqlCapabilityHost;
-use crate::host::runtime_store::{
-    RepoCapabilityWorkplaneStatusReader, WorkplaneJobQuery, WorkplaneJobStatus,
+use crate::capability_packs::semantic_clones::workplane::{
+    architecture_embedding_jobs_for_artefacts, architecture_embedding_path_cleanup_jobs,
 };
+use crate::host::capability_host::DevqlCapabilityHost;
+use crate::host::devql::{RelationalStorage, esc_pg, sql_string_list_pg};
 
 use super::*;
 
 mod roles_seed;
+mod roles_status;
 mod support;
 
 use roles_seed::{
@@ -47,12 +49,17 @@ use roles_seed::{
     SeedRuleActivationSummary, SeedSummary, architecture_seed_request_diagnostics,
     ensure_seed_alias, persist_seeded_taxonomy,
 };
-use support::{
-    cli_provenance, load_json_spec, print_apply_summary, print_proposal_summary, sql_text,
-    value_json, value_str,
-};
+#[cfg(test)]
+use support::sql_text;
+use support::{cli_provenance, load_json_spec, print_apply_summary, print_proposal_summary};
 
-const ROLE_REVIEW_STATUSES: &[&str] = &["needs_review", "stale", "rejected", "unknown"];
+use roles_status::run_architecture_roles_status;
+
+#[cfg(test)]
+use roles_status::{
+    load_role_adjudication_attempt_items, load_role_review_items,
+    role_adjudication_queue_item_from_job,
+};
 
 pub(super) async fn run_architecture_command(
     scope: &SlimCliRepoScope,
@@ -259,6 +266,14 @@ async fn run_architecture_roles_command(
                     &args.proposal_id,
                 )
                 .await?;
+                let _ = enqueue_architecture_embedding_refresh(
+                    &scope.repo.repo_id,
+                    true,
+                    &[],
+                    &[],
+                    context,
+                )
+                .await?;
                 print_apply_summary(&summary);
                 Ok(())
             }
@@ -267,87 +282,15 @@ async fn run_architecture_roles_command(
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct RolesStatusOutput {
-    queue_summary: RoleAdjudicationQueueSummary,
-    queue_items: Vec<RoleAdjudicationQueueItem>,
-    review_items: Vec<RoleReviewItem>,
-    adjudication_attempt_summary: RoleAdjudicationAttemptSummary,
-    adjudication_attempts: Vec<RoleAdjudicationAttemptItem>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub(super) struct RolesClassifyOutput {
     roles: ArchitectureRoleReconcileMetrics,
+    architecture_embedding_selected: u64,
+    architecture_embedding_enqueued: u64,
+    architecture_embedding_deduped: u64,
     role_adjudication_selected: usize,
     role_adjudication_enqueued: usize,
     role_adjudication_deduped: usize,
     warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RoleAdjudicationQueueSummary {
-    total: usize,
-    by_status: BTreeMap<String, usize>,
-    by_reason: BTreeMap<String, usize>,
-    parse_errors: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RoleAdjudicationQueueItem {
-    job_id: String,
-    status: String,
-    attempts: u32,
-    updated_at_unix: u64,
-    dedupe_key: Option<String>,
-    reason: Option<String>,
-    generation: Option<u64>,
-    artefact_id: Option<String>,
-    symbol_id: Option<String>,
-    path: Option<String>,
-    canonical_kind: Option<String>,
-    deterministic_confidence: Option<f64>,
-    parse_error: Option<String>,
-    last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RoleAdjudicationAttemptSummary {
-    total: usize,
-    by_outcome: BTreeMap<String, usize>,
-    persisted_assignments: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RoleAdjudicationAttemptItem {
-    attempt_id: String,
-    scope_key: String,
-    generation: u64,
-    target_kind: Option<String>,
-    artefact_id: Option<String>,
-    symbol_id: Option<String>,
-    path: Option<String>,
-    reason: String,
-    outcome: String,
-    model_descriptor: String,
-    assignment_write_persisted: bool,
-    assignment_write_source: Option<String>,
-    failure_message: Option<String>,
-    reasoning_summary: Option<String>,
-    observed_at_unix: u64,
-    updated_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RoleReviewItem {
-    assignment_id: String,
-    artefact_id: String,
-    path: Option<String>,
-    role_id: String,
-    source_kind: String,
-    confidence: f64,
-    status: String,
-    status_reason: String,
-    updated_at: Option<String>,
 }
 
 async fn classify_architecture_roles_with_output(
@@ -397,6 +340,23 @@ async fn classify_architecture_roles_with_output(
     )
     .await?;
     let mut warnings = outcome.warnings;
+    let architecture_embedding_metrics = match enqueue_architecture_embedding_refresh(
+        &scope.repo.repo_id,
+        outcome.metrics.full_reconcile,
+        &outcome.architecture_embedding_refresh_paths,
+        &outcome.architecture_embedding_cleanup_paths,
+        context,
+    )
+    .await
+    {
+        Ok(metrics) => metrics,
+        Err(err) => {
+            warnings.push(format!(
+                "Architecture embedding refresh enqueue failed: {err:#}"
+            ));
+            ArchitectureEmbeddingEnqueueMetrics::default()
+        }
+    };
     let adjudication_metrics = if args.enqueue_adjudication {
         match enqueue_adjudication_requests(
             &outcome.adjudication_requests,
@@ -424,11 +384,80 @@ async fn classify_architecture_roles_with_output(
     };
     Ok(RolesClassifyOutput {
         roles: outcome.metrics,
+        architecture_embedding_selected: architecture_embedding_metrics.selected,
+        architecture_embedding_enqueued: architecture_embedding_metrics.enqueued,
+        architecture_embedding_deduped: architecture_embedding_metrics.deduped,
         role_adjudication_selected: adjudication_metrics.selected,
         role_adjudication_enqueued: adjudication_metrics.enqueued,
         role_adjudication_deduped: adjudication_metrics.deduped,
         warnings,
     })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ArchitectureEmbeddingEnqueueMetrics {
+    selected: u64,
+    enqueued: u64,
+    deduped: u64,
+}
+
+async fn enqueue_architecture_embedding_refresh(
+    repo_id: &str,
+    full_reconcile: bool,
+    refresh_paths: &[String],
+    cleanup_paths: &[String],
+    context: &crate::host::capability_host::CurrentStateConsumerContext,
+) -> Result<ArchitectureEmbeddingEnqueueMetrics> {
+    let artefact_ids = if full_reconcile {
+        load_current_embedding_artefact_ids(context.storage.as_ref(), repo_id, None).await?
+    } else {
+        load_current_embedding_artefact_ids(context.storage.as_ref(), repo_id, Some(refresh_paths))
+            .await?
+    };
+    let mut jobs = architecture_embedding_jobs_for_artefacts(&artefact_ids)?;
+    jobs.extend(architecture_embedding_path_cleanup_jobs(cleanup_paths)?);
+    let selected = jobs.len() as u64;
+    if jobs.is_empty() {
+        return Ok(ArchitectureEmbeddingEnqueueMetrics::default());
+    }
+    let result = context.workplane.enqueue_jobs(jobs)?;
+    Ok(ArchitectureEmbeddingEnqueueMetrics {
+        selected,
+        enqueued: result.inserted_jobs,
+        deduped: result.updated_jobs,
+    })
+}
+
+async fn load_current_embedding_artefact_ids(
+    relational: &RelationalStorage,
+    repo_id: &str,
+    paths: Option<&[String]>,
+) -> Result<Vec<String>> {
+    let path_filter = paths
+        .filter(|paths| !paths.is_empty())
+        .map(|paths| format!("AND current.path IN ({})", sql_string_list_pg(paths)))
+        .unwrap_or_default();
+    let rows = relational
+        .query_rows(&format!(
+            "SELECT current.artefact_id \
+             FROM artefacts_current current \
+             JOIN current_file_state state ON state.repo_id = current.repo_id AND state.path = current.path \
+             WHERE current.repo_id = '{}' \
+               {path_filter} \
+               AND state.analysis_mode = 'code' \
+               AND LOWER(COALESCE(current.canonical_kind, COALESCE(current.language_kind, 'symbol'))) <> 'import' \
+             ORDER BY current.path, current.start_line, current.symbol_id, COALESCE(current.start_byte, 0), current.artefact_id",
+            esc_pg(repo_id),
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.get("artefact_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
 }
 
 async fn run_architecture_roles_classify(
@@ -459,15 +488,24 @@ async fn run_architecture_roles_seed_command(
 
     let seed = seed_architecture_roles(scope, host, context).await?;
     let rule_activation = if args.activate_rules {
-        Some(
-            activate_seeded_draft_rules(
-                context.storage.as_ref(),
-                &scope.repo.repo_id,
-                &seed.profile_name,
-                cli_provenance("seed_activate_rules"),
-            )
-            .await?,
+        let activation = activate_seeded_draft_rules(
+            context.storage.as_ref(),
+            &scope.repo.repo_id,
+            &seed.profile_name,
+            cli_provenance("seed_activate_rules"),
         )
+        .await?;
+        if !args.classify {
+            let _ = enqueue_architecture_embedding_refresh(
+                &scope.repo.repo_id,
+                true,
+                &[],
+                &[],
+                context,
+            )
+            .await?;
+        }
+        Some(activation)
     } else {
         None
     };
@@ -563,367 +601,6 @@ async fn run_architecture_roles_bootstrap_command(
     .await
 }
 
-async fn run_architecture_roles_status(
-    scope: &SlimCliRepoScope,
-    relational: &crate::host::devql::RelationalStorage,
-    args: DevqlArchitectureRolesStatusArgs,
-) -> Result<()> {
-    let limit = usize::try_from(args.limit).context("converting --limit to usize")?;
-    let queue_items = load_role_adjudication_queue_items(scope, limit)?;
-    let review_items = load_role_review_items(relational, &scope.repo.repo_id, limit).await?;
-    let adjudication_attempts =
-        load_role_adjudication_attempt_items(relational, &scope.repo.repo_id, limit).await?;
-    let summary = summarise_queue_items(&queue_items);
-    let adjudication_attempt_summary = summarise_adjudication_attempts(&adjudication_attempts);
-    let output = RolesStatusOutput {
-        queue_summary: summary,
-        queue_items,
-        review_items,
-        adjudication_attempt_summary,
-        adjudication_attempts,
-    };
-
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&output)
-                .context("serialising roles status output as JSON")?
-        );
-        return Ok(());
-    }
-
-    print_roles_status_human(&output);
-    Ok(())
-}
-
-fn load_role_adjudication_queue_items(
-    scope: &SlimCliRepoScope,
-    limit: usize,
-) -> Result<Vec<RoleAdjudicationQueueItem>> {
-    let Some(reader) =
-        RepoCapabilityWorkplaneStatusReader::open(&scope.repo_root, &scope.repo.repo_id).context(
-            "opening read-only repo runtime status reader for architecture roles status",
-        )?
-    else {
-        return Ok(Vec::new());
-    };
-
-    let jobs = reader
-        .list_capability_workplane_jobs(WorkplaneJobQuery {
-            capability_id: Some(ARCHITECTURE_GRAPH_CAPABILITY_ID.to_string()),
-            mailbox_name: Some(ARCHITECTURE_GRAPH_ROLE_ADJUDICATION_MAILBOX.to_string()),
-            statuses: vec![
-                WorkplaneJobStatus::Pending,
-                WorkplaneJobStatus::Running,
-                WorkplaneJobStatus::Failed,
-            ],
-            limit: Some(limit as u64),
-        })
-        .context("loading architecture role adjudication queue jobs read-only")?;
-
-    Ok(jobs
-        .into_iter()
-        .map(role_adjudication_queue_item_from_job)
-        .collect())
-}
-
-fn role_adjudication_queue_item_from_job(
-    job: crate::host::runtime_store::WorkplaneJobRecord,
-) -> RoleAdjudicationQueueItem {
-    let mut item = RoleAdjudicationQueueItem {
-        job_id: job.job_id,
-        status: job.status.as_str().to_string(),
-        attempts: job.attempts,
-        updated_at_unix: job.updated_at_unix,
-        dedupe_key: job.dedupe_key,
-        reason: None,
-        generation: None,
-        artefact_id: None,
-        symbol_id: None,
-        path: None,
-        canonical_kind: None,
-        deterministic_confidence: None,
-        parse_error: None,
-        last_error: job.last_error,
-    };
-
-    match serde_json::from_value::<RoleAdjudicationMailboxPayload>(job.payload) {
-        Ok(payload) => {
-            item.reason = Some(payload.request.reason.as_str().to_string());
-            item.generation = Some(payload.request.generation);
-            item.artefact_id = payload.request.artefact_id;
-            item.symbol_id = payload.request.symbol_id;
-            item.path = payload.request.path;
-            item.canonical_kind = payload.request.canonical_kind;
-            item.deterministic_confidence = payload.request.deterministic_confidence;
-        }
-        Err(err) => {
-            item.parse_error = Some(err.to_string());
-        }
-    }
-
-    item
-}
-
-fn summarise_queue_items(items: &[RoleAdjudicationQueueItem]) -> RoleAdjudicationQueueSummary {
-    let mut by_status = BTreeMap::<String, usize>::new();
-    let mut by_reason = BTreeMap::<String, usize>::new();
-    let mut parse_errors = 0usize;
-    for item in items {
-        *by_status.entry(item.status.clone()).or_default() += 1;
-        if let Some(reason) = item.reason.as_ref() {
-            *by_reason.entry(reason.clone()).or_default() += 1;
-        }
-        if item.parse_error.is_some() {
-            parse_errors += 1;
-        }
-    }
-    RoleAdjudicationQueueSummary {
-        total: items.len(),
-        by_status,
-        by_reason,
-        parse_errors,
-    }
-}
-
-async fn load_role_adjudication_attempt_items(
-    relational: &crate::host::devql::RelationalStorage,
-    repo_id: &str,
-    limit: usize,
-) -> Result<Vec<RoleAdjudicationAttemptItem>> {
-    let records = list_recent_role_adjudication_attempts(relational, repo_id, limit).await?;
-    Ok(records
-        .into_iter()
-        .map(|record| RoleAdjudicationAttemptItem {
-            attempt_id: record.attempt_id,
-            scope_key: record.scope_key,
-            generation: record.generation,
-            target_kind: record.target_kind,
-            artefact_id: record.artefact_id,
-            symbol_id: record.symbol_id,
-            path: record.path,
-            reason: record.reason,
-            outcome: record.outcome,
-            model_descriptor: record.model_descriptor,
-            assignment_write_persisted: record.assignment_write_persisted,
-            assignment_write_source: record.assignment_write_source,
-            failure_message: record.failure_message,
-            reasoning_summary: record.reasoning_summary,
-            observed_at_unix: record.observed_at_unix,
-            updated_at: record.updated_at,
-        })
-        .collect())
-}
-
-fn summarise_adjudication_attempts(
-    items: &[RoleAdjudicationAttemptItem],
-) -> RoleAdjudicationAttemptSummary {
-    let mut by_outcome = BTreeMap::<String, usize>::new();
-    let mut persisted_assignments = 0usize;
-    for item in items {
-        *by_outcome.entry(item.outcome.clone()).or_default() += 1;
-        if item.assignment_write_persisted {
-            persisted_assignments += 1;
-        }
-    }
-    RoleAdjudicationAttemptSummary {
-        total: items.len(),
-        by_outcome,
-        persisted_assignments,
-    }
-}
-
-async fn load_role_review_items(
-    relational: &crate::host::devql::RelationalStorage,
-    repo_id: &str,
-    limit: usize,
-) -> Result<Vec<RoleReviewItem>> {
-    let status_filters = ROLE_REVIEW_STATUSES
-        .iter()
-        .map(|status| format!("'{}'", status.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let rows = relational
-        .query_rows(&format!(
-            "SELECT a.assignment_id, COALESCE(a.artefact_id, a.symbol_id, a.path) AS artefact_id, \
-                    a.role_id, a.source AS source_kind, a.confidence, a.status, \
-                    a.provenance_json, a.updated_at, a.path \
-             FROM architecture_role_assignments_current a \
-             WHERE a.repo_id = {repo_id} \
-               AND a.status IN ({status_filters}) \
-             ORDER BY a.updated_at DESC \
-             LIMIT {limit};",
-            repo_id = sql_text(repo_id),
-        ))
-        .await
-        .context("loading architecture role review items")?;
-
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let assignment_id = value_str(&row, "assignment_id")
-            .ok_or_else(|| anyhow!("missing `assignment_id` in architecture role review row"))?
-            .to_string();
-        let artefact_id = value_str(&row, "artefact_id")
-            .ok_or_else(|| anyhow!("missing `artefact_id` in architecture role review row"))?
-            .to_string();
-        let role_id = value_str(&row, "role_id")
-            .ok_or_else(|| anyhow!("missing `role_id` in architecture role review row"))?
-            .to_string();
-        let source_kind = value_str(&row, "source_kind")
-            .ok_or_else(|| anyhow!("missing `source_kind` in architecture role review row"))?
-            .to_string();
-        let confidence = row.get("confidence").and_then(Value::as_f64).unwrap_or(0.0);
-        let status = value_str(&row, "status")
-            .ok_or_else(|| anyhow!("missing `status` in architecture role review row"))?
-            .to_string();
-        let status_reason = value_json(&row, "provenance_json")
-            .and_then(|value| {
-                value
-                    .get("statusReason")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .unwrap_or_default();
-        let updated_at = value_str(&row, "updated_at").map(ToOwned::to_owned);
-        let path = value_str(&row, "path").map(ToOwned::to_owned);
-
-        items.push(RoleReviewItem {
-            assignment_id,
-            artefact_id,
-            path,
-            role_id,
-            source_kind,
-            confidence,
-            status,
-            status_reason,
-            updated_at,
-        });
-    }
-
-    Ok(items)
-}
-
-fn print_roles_status_human(output: &RolesStatusOutput) {
-    if output.queue_items.is_empty()
-        && output.review_items.is_empty()
-        && output.adjudication_attempts.is_empty()
-    {
-        println!("no ambiguous architecture roles found");
-        return;
-    }
-
-    println!("queue summary:");
-    println!("  total={}", output.queue_summary.total);
-    if !output.queue_summary.by_status.is_empty() {
-        let entries = output
-            .queue_summary
-            .by_status
-            .iter()
-            .map(|(status, count)| format!("{status}={count}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("  by_status: {entries}");
-    }
-    if !output.queue_summary.by_reason.is_empty() {
-        let entries = output
-            .queue_summary
-            .by_reason
-            .iter()
-            .map(|(reason, count)| format!("{reason}={count}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        println!("  by_reason: {entries}");
-    }
-    if output.queue_summary.parse_errors > 0 {
-        println!("  parse_errors={}", output.queue_summary.parse_errors);
-    }
-
-    if !output.queue_items.is_empty() {
-        println!("queue items:");
-        for item in &output.queue_items {
-            println!(
-                "  job={} status={} reason={} path={} artefact={} symbol={} generation={} confidence={} attempts={} updated_at_unix={}",
-                item.job_id,
-                item.status,
-                item.reason.as_deref().unwrap_or("<unknown>"),
-                item.path.as_deref().unwrap_or("<unknown>"),
-                item.artefact_id.as_deref().unwrap_or("<unknown>"),
-                item.symbol_id.as_deref().unwrap_or("<unknown>"),
-                item.generation
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string()),
-                item.deterministic_confidence
-                    .map(|value| format!("{value:.3}"))
-                    .unwrap_or_else(|| "<unknown>".to_string()),
-                item.attempts,
-                item.updated_at_unix
-            );
-            if let Some(parse_error) = item.parse_error.as_deref() {
-                println!("    parse_error={parse_error}");
-            }
-            if let Some(last_error) = item.last_error.as_deref() {
-                println!("    last_error={last_error}");
-            }
-        }
-    }
-
-    if !output.adjudication_attempts.is_empty() {
-        println!("recent adjudication attempts:");
-        for item in &output.adjudication_attempts {
-            println!(
-                "  attempt={} outcome={} persisted={} write_source={} reason={} path={} artefact={} symbol={} generation={} model={} observed_at_unix={}",
-                item.attempt_id,
-                item.outcome,
-                item.assignment_write_persisted,
-                item.assignment_write_source
-                    .as_deref()
-                    .unwrap_or("<unknown>"),
-                item.reason,
-                item.path.as_deref().unwrap_or("<unknown>"),
-                item.artefact_id.as_deref().unwrap_or("<unknown>"),
-                item.symbol_id.as_deref().unwrap_or("<unknown>"),
-                item.generation,
-                item.model_descriptor,
-                item.observed_at_unix,
-            );
-            if let Some(summary) = item
-                .reasoning_summary
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-            {
-                println!("    reasoning={summary}");
-            }
-            if let Some(failure) = item
-                .failure_message
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-            {
-                println!("    failure={failure}");
-            }
-        }
-    }
-
-    if !output.review_items.is_empty() {
-        println!("review items:");
-        for item in &output.review_items {
-            println!(
-                "  assignment={} status={} role={} source={} confidence={:.3} artefact={} path={} updated_at={}",
-                item.assignment_id,
-                item.status,
-                item.role_id,
-                item.source_kind,
-                item.confidence,
-                item.artefact_id,
-                item.path.as_deref().unwrap_or("<unknown>"),
-                item.updated_at.as_deref().unwrap_or("<unknown>"),
-            );
-            if !item.status_reason.trim().is_empty() {
-                println!("    reason={}", item.status_reason);
-            }
-        }
-    }
-}
-
 pub(super) fn format_roles_classify_output(
     output: &RolesClassifyOutput,
     json_output: bool,
@@ -956,6 +633,12 @@ pub(super) fn format_roles_classify_output(
             output.roles.assignments_written,
             output.roles.assignments_marked_stale,
             output.roles.assignment_history_rows,
+        ),
+        format!(
+            "architecture embeddings: selected={} enqueued={} deduped={}",
+            output.architecture_embedding_selected,
+            output.architecture_embedding_enqueued,
+            output.architecture_embedding_deduped,
         ),
         format!(
             "adjudication: candidates={} selected={} enqueued={} deduped={}",
