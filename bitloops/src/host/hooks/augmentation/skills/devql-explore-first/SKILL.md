@@ -48,6 +48,26 @@ bitloops devql query '{ selectArtefacts(by: { symbolFqn: "<symbol-fqn>" }) { cou
 bitloops devql query '{ selectArtefacts(by: { path: "<repo-relative-path>", lines: { start: <start>, end: <end> } }) { count artefacts(first: 10) { path symbolFqn canonicalKind startLine endLine score } } }'
 ```
 
+For architecture role context on a known file, use the minimal GraphQL shape and
+request role fields only unless target or rule metadata is needed:
+
+```bash
+bitloops devql query --graphql --compact '{
+  selectArtefacts(by: { path: "<repo-relative-path>" }) {
+    architectureRoles(first: 20) {
+      items(first: 20) {
+        role {
+          canonicalKey
+          displayName
+          family
+          description
+        }
+      }
+    }
+  }
+}'
+```
+
 If DevQL returns relevant paths and line ranges:
 
 - read only about 50 lines before and after those ranges
