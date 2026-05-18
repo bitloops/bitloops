@@ -554,6 +554,67 @@ fn read_runtime_state_drops_stale_file() {
 }
 
 #[test]
+fn ensure_can_start_reports_global_service_without_claiming_repo_runtime() {
+    let repo_root = TempDir::new().expect("repo root");
+    let state_root = TempDir::new().expect("state root");
+    let state_root_str = state_root.path().to_string_lossy().to_string();
+    let _guard = enter_process_state(
+        Some(repo_root.path()),
+        &[(
+            "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+            Some(state_root_str.as_str()),
+        )],
+    );
+
+    write_service_metadata(
+        &service_metadata_path(Path::new(".")),
+        &DaemonServiceMetadata {
+            version: 1,
+            config_path: repo_root.path().join(BITLOOPS_CONFIG_RELATIVE_PATH),
+            config_root: repo_root.path().to_path_buf(),
+            manager: ServiceManagerKind::Launchd,
+            service_name: GLOBAL_SUPERVISOR_SERVICE_NAME.to_string(),
+            service_file: None,
+            config: DashboardServerConfig {
+                host: None,
+                port: crate::api::DEFAULT_DASHBOARD_PORT,
+                no_open: true,
+                force_http: false,
+                recheck_local_dashboard_net: false,
+                bundle_dir: None,
+            },
+            last_url: None,
+            last_pid: None,
+        },
+    )
+    .expect("write service metadata");
+
+    write_supervisor_runtime_state(&SupervisorRuntimeState {
+        version: 1,
+        pid: std::process::id(),
+        control_url: "http://127.0.0.1:1".to_string(),
+        binary_fingerprint: "test-fingerprint".to_string(),
+        updated_at_unix: 0,
+    })
+    .expect("write supervisor runtime state");
+
+    let err =
+        ensure_can_start(repo_root.path(), false).expect_err("detached start should be blocked");
+    let message = err.to_string();
+    assert!(
+        message.contains("always-on service"),
+        "error should mention service management: {message}"
+    );
+    assert!(
+        !message.contains("for this repository"),
+        "global service guard must not claim a repo runtime is already running: {message}"
+    );
+
+    ensure_can_start(repo_root.path(), true)
+        .expect("service-managed start path should be allowed to reuse stopped service metadata");
+}
+
+#[test]
 fn resolve_daemon_config_uses_explicit_config_path_independent_of_cwd() {
     let config_root = TempDir::new().expect("temp dir");
     let other_cwd = TempDir::new().expect("temp dir");
