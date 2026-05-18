@@ -141,13 +141,16 @@ Adopt an explicit storage-authority model and remove ambiguous dual-target behav
 ### Relational ownership split
 
 - [x] Audit the main relational table families and classify them as local current/projection or shared relational authority.
-- [ ] Finish the long-tail audit for remaining pack-owned tables and helper/index tables.
+- [ ] Finish the long-tail audit for remaining pack-owned tables and helper/index tables, especially the test-harness split between local `*_current` discovery tables and shared historical coverage/test-run tables.
 - [x] Treat all `*_current` relational tables as local-only workspace projection tables.
 - [x] Treat `semantic_clone_embedding_setup_state` as local-only current/projection state.
 - [x] Treat local current-vector/index helper tables derived from current embeddings as local-only current/projection state.
 - [x] Keep `symbol_clone_edges_current` local-only and route historical `symbol_clone_edges` writes through shared relational authority in remote mode.
 - [ ] Route all non-current relational tables through shared relational authority only.
-- [ ] Stop dual-writing relational data to local SQLite and remote relational backends at the same time.
+- [x] Stop dual-writing checkpoint provenance rows (`checkpoint_files`, `checkpoint_artefacts`, `checkpoint_artefact_lineage`) between local SQLite and shared relational in remote mode.
+- [x] Decide and implement a single authority for committed checkpoint metadata tables in remote mode: `checkpoints`, `checkpoint_sessions`, and `commit_checkpoints`.
+- [x] Remove remaining local-only checkpoint mapping/session readers that still assume SQLite when remote shared relational is configured.
+- [x] Revisit pre-push history replication and either prove it is an intentional one-way publish step or remove it once shared relational is the sole historical authority.
 - [x] Stop duplicating semantic embedding state across SQLite and Postgres in remote mode: `symbol_embeddings`, `symbol_embeddings_current`, `semantic_embedding_setups`, and `semantic_clone_embedding_setup_state`.
 - [x] Move non-current semantic tables like `symbol_features` and `symbol_semantics` to shared relational authority only in remote mode.
 - [x] Move committed/history-oriented DevQL tables like `commits`, `commit_ingest_ledger`, `file_state`, `artefacts`, and `artefact_edges` to shared relational authority only in remote mode.
@@ -164,8 +167,8 @@ Adopt an explicit storage-authority model and remove ambiguous dual-target behav
 
 ### Events and blobs
 
-- [ ] Audit event-store write paths to ensure canonical event rows go only to the selected event backend.
-- [ ] Ensure no DuckDB fallback or mirror writes occur when a remote event backend is configured.
+- [x] Audit event-store write paths to ensure canonical event rows go only to the selected event backend.
+- [x] Ensure no DuckDB fallback or mirror writes occur when a remote event backend is configured.
 - [x] Preserve local interaction spool, sync queue, and enrichment queue state only as transient runtime staging.
 - [x] Split blob routing by ownership so runtime/session payloads always stay local.
 - [x] Route project/knowledge blob payloads through the configured blob backend only.

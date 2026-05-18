@@ -27,6 +27,7 @@ use crate::host::extension_host::{
     CapabilityIngestContext, CoreExtensionHost, LanguagePackContext, LanguagePackResolutionInput,
 };
 use crate::host::language_adapter::{LanguageAdapterContext, LanguageAdapterRegistry};
+use crate::storage::{EventStorageRole, StorageBackendKind, StorageRoleResolver};
 use crate::utils::terminal::print_db_status_table;
 
 #[path = "devql/analytics.rs"]
@@ -693,11 +694,18 @@ async fn initialise_devql_schema_for_command_with_mode(
     let backends = resolve_store_backend_config_for_repo(&cfg.daemon_config_root)
         .with_context(|| format!("resolving DevQL backend config for `{command}`"))?;
     let relational = RelationalStorage::connect(cfg, &backends.relational, command).await?;
+    let events_backend = StorageRoleResolver::from_events_config(&backends.events)
+        .event_backend_for(EventStorageRole::CanonicalEvents);
 
-    if backends.events.has_clickhouse() {
-        init_clickhouse_schema(cfg).await?;
-    } else {
-        init_duckdb_schema(&cfg.repo_root, &backends.events).await?;
+    match events_backend {
+        StorageBackendKind::ClickHouse => init_clickhouse_schema(cfg).await?,
+        StorageBackendKind::DuckDb => init_duckdb_schema(&cfg.repo_root, &backends.events).await?,
+        other => {
+            bail!(
+                "unsupported canonical events backend for DevQL schema initialisation: {}",
+                other.label()
+            )
+        }
     }
     let outcome = init_relational_schema_with_mode(cfg, &relational, mode).await?;
     Ok((
@@ -711,11 +719,7 @@ async fn initialise_devql_schema_for_command_with_mode(
             } else {
                 "sqlite".to_string()
             },
-            events_backend: if backends.events.has_clickhouse() {
-                "clickhouse".to_string()
-            } else {
-                "duckdb".to_string()
-            },
+            events_backend: events_backend.label().to_string(),
         },
         outcome,
     ))
@@ -733,11 +737,18 @@ pub async fn ensure_relational_and_events_schema(
     let cfg = DevqlConfig::from_roots(config_root.to_path_buf(), repo_root.to_path_buf(), repo)?;
     let relational =
         RelationalStorage::connect(&cfg, &backends.relational, "daemon schema bootstrap").await?;
+    let events_backend = StorageRoleResolver::from_events_config(&backends.events)
+        .event_backend_for(EventStorageRole::CanonicalEvents);
 
-    if backends.events.has_clickhouse() {
-        init_clickhouse_schema(&cfg).await?;
-    } else {
-        init_duckdb_schema(repo_root, &backends.events).await?;
+    match events_backend {
+        StorageBackendKind::ClickHouse => init_clickhouse_schema(&cfg).await?,
+        StorageBackendKind::DuckDb => init_duckdb_schema(repo_root, &backends.events).await?,
+        other => {
+            bail!(
+                "unsupported canonical events backend for daemon schema bootstrap: {}",
+                other.label()
+            )
+        }
     }
     init_relational_schema_with_mode(&cfg, &relational, RelationalSchemaInitMode::SafeBootstrap)
         .await?;

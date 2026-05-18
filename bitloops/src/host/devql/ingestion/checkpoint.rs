@@ -580,6 +580,7 @@ pub(super) async fn upsert_checkpoint_file_snapshot_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::EventsBackendConfig;
     use crate::test_support::git_fixtures::{git_ok, init_test_repo, write_test_daemon_config};
     use tempfile::tempdir;
 
@@ -646,5 +647,72 @@ mod tests {
         assert_eq!(row.1, cfg.repo.organization);
         assert_eq!(row.2, cfg.repo.name);
         assert_eq!(row.3, "main");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_events_store_prefers_clickhouse_without_duckdb_fallback() {
+        let repo_dir = tempdir().expect("temp dir");
+        let duckdb_path = repo_dir.path().join("fallback").join("events.duckdb");
+        let cfg = DevqlConfig {
+            daemon_config_root: repo_dir.path().to_path_buf(),
+            repo_root: repo_dir.path().to_path_buf(),
+            repo: RepoIdentity {
+                provider: "test".to_string(),
+                organization: "bitloops".to_string(),
+                name: "repo".to_string(),
+                identity: "test/bitloops/repo".to_string(),
+                repo_id: "repo-test".to_string(),
+            },
+            pg_dsn: None,
+            clickhouse_url: "http://127.0.0.1:9".to_string(),
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: "default".to_string(),
+        };
+        let events_cfg = EventsBackendConfig {
+            duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
+            clickhouse_url: Some("http://127.0.0.1:9".to_string()),
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: Some("default".to_string()),
+        };
+        let store = CheckpointEventsStore::from_config(&cfg, &events_cfg);
+
+        assert!(
+            matches!(store.inner, CheckpointEventsStoreInner::ClickHouse { .. }),
+            "canonical checkpoint events should bind to ClickHouse when remote events storage is configured"
+        );
+
+        let err = store
+            .insert_checkpoint_event(
+                &cfg.repo.repo_id,
+                &CommittedInfo {
+                    checkpoint_id: "checkpoint-1".to_string(),
+                    strategy: "manual-commit".to_string(),
+                    branch: "main".to_string(),
+                    checkpoints_count: 1,
+                    files_touched: vec!["src/lib.rs".to_string()],
+                    session_count: 1,
+                    session_id: "session-1".to_string(),
+                    agent: "codex".to_string(),
+                    created_at: "2026-05-18T09:00:00Z".to_string(),
+                    ..Default::default()
+                },
+                "event-1",
+                None,
+            )
+            .await
+            .err()
+            .expect("unreachable ClickHouse backend must fail canonical checkpoint event insert");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("ClickHouse") || message.contains("sending ClickHouse request"),
+            "expected ClickHouse connection error, got: {message}"
+        );
+        assert!(
+            !duckdb_path.exists(),
+            "canonical checkpoint event inserts should not create DuckDB fallback storage when ClickHouse is configured"
+        );
     }
 }

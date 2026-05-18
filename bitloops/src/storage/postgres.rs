@@ -47,6 +47,27 @@ impl PostgresSyncConnection {
         })
     }
 
+    pub fn execute_batch_transactional(&self, statements: &[String]) -> Result<()> {
+        if statements.is_empty() {
+            return Ok(());
+        }
+
+        let mut sql = String::from("BEGIN;");
+        for statement in statements {
+            let trimmed = statement.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            sql.push_str(trimmed);
+            if !trimmed.ends_with(';') {
+                sql.push(';');
+            }
+        }
+        sql.push_str("COMMIT;");
+
+        self.execute_batch(&sql)
+    }
+
     pub fn ping(&self) -> Result<()> {
         self.block_on(async {
             let client = connect_postgres_client(&self.dsn).await?;

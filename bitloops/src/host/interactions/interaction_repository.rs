@@ -147,3 +147,36 @@ fn ensure_repo_id(expected: &str, actual: &str, entity: &str) -> Result<()> {
     }
     bail!("repo_id mismatch for {entity}: expected `{expected}`, got `{actual}`");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::EventsBackendConfig;
+
+    #[test]
+    fn create_interaction_repository_prefers_clickhouse_without_duckdb_fallback() {
+        let repo_root = tempfile::tempdir().expect("temp dir");
+        let duckdb_path = repo_root.path().join("fallback").join("events.duckdb");
+        let events_cfg = EventsBackendConfig {
+            duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
+            clickhouse_url: Some("http://127.0.0.1:9".to_string()),
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: Some("default".to_string()),
+        };
+
+        let err = create_interaction_repository(&events_cfg, repo_root.path(), "repo-test".into())
+            .err()
+            .expect("unreachable ClickHouse backend must fail repository creation");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("ClickHouse") || message.contains("sending ClickHouse request"),
+            "expected ClickHouse connection error, got: {message}"
+        );
+        assert!(
+            !duckdb_path.exists(),
+            "canonical interaction repository selection should not create DuckDB fallback storage when ClickHouse is configured"
+        );
+    }
+}

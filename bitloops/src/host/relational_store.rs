@@ -198,6 +198,55 @@ impl DefaultRelationalStore {
         }
     }
 
+    pub fn exec_batch_transactional_for_role_blocking(
+        &self,
+        role: RelationalStorageRole,
+        statements: &[String],
+    ) -> Result<()> {
+        if statements.is_empty() {
+            return Ok(());
+        }
+
+        match self.backend_for_role(role) {
+            RelationalRoleBackend::LocalSqlite => {
+                let sqlite = self.local_sqlite_pool_allow_create()?;
+                sqlite
+                    .with_write_connection(|conn| {
+                        conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;").context(
+                            "starting transactional local SQLite batch for explicit role",
+                        )?;
+                        for statement in statements {
+                            let trimmed = statement.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            if let Err(err) = conn.execute_batch(trimmed) {
+                                let _ = conn.execute_batch("ROLLBACK;");
+                                return Err(anyhow::Error::from(err)).context(
+                                    "executing transactional local SQLite batch for explicit role",
+                                );
+                            }
+                        }
+                        conn.execute_batch("COMMIT;").context(
+                            "committing transactional local SQLite batch for explicit role",
+                        )?;
+                        Ok(())
+                    })
+                    .context("executing local transactional batch for explicit role")
+            }
+            RelationalRoleBackend::Postgres => {
+                let dsn = self.inner.remote_dsn().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "remote Postgres shared relational backend is configured without a DSN"
+                    )
+                })?;
+                PostgresSyncConnection::connect(dsn)?
+                    .execute_batch_transactional(statements)
+                    .context("executing shared relational Postgres batch for explicit role")
+            }
+        }
+    }
+
     pub fn initialise_local_devql_schema(&self) -> Result<()> {
         let sqlite = self.local_sqlite_pool_allow_create()?;
         sqlite
