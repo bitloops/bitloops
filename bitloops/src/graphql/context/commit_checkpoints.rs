@@ -161,10 +161,17 @@ impl DevqlGraphqlContext {
                 crate::host::devql::esc_pg(repo_id.as_str()),
                 crate::host::devql::esc_pg(commit_sha.as_str()),
             );
-            let checkpoint_ids = query_checkpoint_metadata_rows(&relational, &checkpoint_ids_sql)?
-                .into_iter()
-                .filter_map(|row| checkpoint_row_text(&row, "checkpoint_id"))
-                .collect::<Vec<_>>();
+            let checkpoint_ids =
+                match query_checkpoint_metadata_rows(&relational, &checkpoint_ids_sql) {
+                    Ok(rows) => rows
+                        .into_iter()
+                        .filter_map(|row| checkpoint_row_text(&row, "checkpoint_id"))
+                        .collect::<Vec<_>>(),
+                    Err(err) if is_missing_commit_checkpoints_table_error(&err) => {
+                        return Ok(Vec::new());
+                    }
+                    Err(err) => return Err(err),
+                };
 
             let mut checkpoints = Vec::new();
             for checkpoint_id in checkpoint_ids {
@@ -362,4 +369,10 @@ fn committed_checkpoint_matches_since(
 
 pub(super) fn is_missing_sqlite_store_error(err: &anyhow::Error) -> bool {
     format!("{err:#}").contains("SQLite database file not found")
+}
+
+fn is_missing_commit_checkpoints_table_error(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    message.contains("no such table: commit_checkpoints")
+        || message.contains("relation \"commit_checkpoints\" does not exist")
 }
