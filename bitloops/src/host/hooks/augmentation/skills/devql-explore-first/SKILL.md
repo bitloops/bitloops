@@ -52,20 +52,7 @@ For architecture role context on a known file, use the minimal GraphQL shape and
 request role fields only unless target or rule metadata is needed:
 
 ```bash
-bitloops devql query --graphql --compact '{
-  selectArtefacts(by: { path: "<repo-relative-path>" }) {
-    architectureRoles(first: 20) {
-      items(first: 20) {
-        role {
-          canonicalKey
-          displayName
-          family
-          description
-        }
-      }
-    }
-  }
-}'
+bitloops devql query  '{ selectArtefacts(by: { path: "<repo-relative-path>" }) { architectureRoles(first: 10) { items(first: 20) { role { canonicalKey displayName family description } } } } }'
 ```
 
 If DevQL returns relevant paths and line ranges:
