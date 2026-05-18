@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- Updated readme so that the video is inline and it doesn't open over the github page itself.
+
 ## [0.0.27] - 2026-05-15
 
 ### Fixed
