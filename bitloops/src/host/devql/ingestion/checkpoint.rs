@@ -702,8 +702,9 @@ mod tests {
                 None,
             )
             .await
-            .err()
-            .expect("unreachable ClickHouse backend must fail canonical checkpoint event insert");
+            .expect_err(
+                "unreachable ClickHouse backend must fail canonical checkpoint event insert",
+            );
         let message = err.to_string();
 
         assert!(
@@ -714,5 +715,64 @@ mod tests {
             !duckdb_path.exists(),
             "canonical checkpoint event inserts should not create DuckDB fallback storage when ClickHouse is configured"
         );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_events_store_persists_canonical_rows_in_selected_duckdb_backend() {
+        let repo_dir = tempdir().expect("temp dir");
+        let duckdb_path = repo_dir.path().join("events").join("events.duckdb");
+        let cfg = DevqlConfig {
+            daemon_config_root: repo_dir.path().to_path_buf(),
+            repo_root: repo_dir.path().to_path_buf(),
+            repo: RepoIdentity {
+                provider: "test".to_string(),
+                organization: "bitloops".to_string(),
+                name: "repo".to_string(),
+                identity: "test/bitloops/repo".to_string(),
+                repo_id: "repo-test".to_string(),
+            },
+            pg_dsn: None,
+            clickhouse_url: "http://localhost:8123".to_string(),
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: "default".to_string(),
+        };
+        let events_cfg = EventsBackendConfig {
+            duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        };
+        let checkpoint = CommittedInfo {
+            checkpoint_id: "checkpoint-1".to_string(),
+            strategy: "manual-commit".to_string(),
+            branch: "main".to_string(),
+            checkpoints_count: 1,
+            files_touched: vec!["src/lib.rs".to_string()],
+            session_count: 1,
+            session_id: "session-1".to_string(),
+            agent: "codex".to_string(),
+            created_at: "2026-05-18T09:00:00Z".to_string(),
+            ..Default::default()
+        };
+        init_duckdb_schema(repo_dir.path(), &events_cfg)
+            .await
+            .expect("initialise selected DuckDB events schema");
+
+        insert_checkpoint_event(&cfg, &events_cfg, &checkpoint, "event-1", None)
+            .await
+            .expect("insert checkpoint event into selected DuckDB backend");
+
+        let conn = duckdb::Connection::open(&duckdb_path).expect("open checkpoint events duckdb");
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM checkpoint_events WHERE repo_id = ? AND event_id = ?",
+                [cfg.repo.repo_id.as_str(), "event-1"],
+                |row| row.get(0),
+            )
+            .expect("count checkpoint_events rows");
+
+        assert_eq!(event_count, 1);
     }
 }

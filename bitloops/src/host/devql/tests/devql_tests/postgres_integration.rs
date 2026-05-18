@@ -354,6 +354,114 @@ async fn ensure_repository_row_populates_local_current_projection_catalog_when_s
 
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn remote_shared_repository_registration_allows_first_local_current_projection_sync_writes() {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let repo = TempDir::new().expect("temp dir");
+    init_test_repo(
+        repo.path(),
+        "main",
+        "Bitloops Test",
+        "bitloops-test@example.com",
+    );
+    fs::create_dir_all(repo.path().join("src")).expect("create src dir");
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn one() -> i32 {\n    1\n}\n",
+    )
+    .expect("write lib.rs");
+    git_ok(repo.path(), &["add", "."]);
+    git_ok(repo.path(), &["commit", "-m", "seed repo"]);
+    write_test_daemon_config(repo.path());
+
+    let repo_identity = resolve_repo_identity(repo.path()).expect("resolve repo identity");
+    let mut cfg = DevqlConfig::from_roots(
+        repo.path().to_path_buf(),
+        repo.path().to_path_buf(),
+        repo_identity,
+    )
+    .expect("build DevQL config");
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://remote-shared-first-local-sync-write");
+
+    let relational = postgres_relational_store(&cfg, &dsn).await;
+    init_sqlite_schema(&relational.local.path)
+        .await
+        .expect("initialise local sqlite schema");
+    init_postgres_schema(&cfg, &client)
+        .await
+        .expect("initialise postgres schema");
+
+    ensure_repository_row(&cfg, &relational)
+        .await
+        .expect("ensure repository row across both stores");
+
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO repo_sync_state (
+                repo_id, repo_root, active_branch, head_commit_sha, head_tree_sha,
+                parser_version, extractor_version, last_sync_started_at,
+                last_sync_completed_at, last_sync_status, last_sync_reason
+             ) VALUES (
+                '{repo_id}', '{repo_root}', 'main', 'commit-1', 'tree-1',
+                'parser-v1', 'extractor-v1', '2026-05-18T12:00:00Z',
+                '2026-05-18T12:01:00Z', 'completed', 'init-regression'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            repo_root = esc_pg(&repo.path().display().to_string()),
+        ))
+        .await
+        .expect("insert first local repo sync row without fk failure");
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO current_file_state (
+                repo_id, path, analysis_mode, language, head_content_id, index_content_id,
+                worktree_content_id, effective_content_id, effective_source,
+                parser_version, extractor_version, exists_in_head,
+                exists_in_index, exists_in_worktree, last_synced_at
+             ) VALUES (
+                '{repo_id}', 'src/lib.rs', 'code', 'rust', 'blob-1', 'blob-1',
+                'blob-1', 'blob-1', 'head',
+                'parser-v1', 'extractor-v1', 1, 1, 1, '2026-05-18T12:02:00Z'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("insert first local current file row without fk failure");
+
+    let local_conn = rusqlite::Connection::open(&relational.local.path).expect("open local sqlite");
+    let local_repo_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM repositories WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local repository rows");
+    let local_sync_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM repo_sync_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local repo sync rows");
+    let local_file_count: i64 = local_conn
+        .query_row(
+            "SELECT COUNT(*) FROM current_file_state WHERE repo_id = ?1",
+            rusqlite::params![cfg.repo.repo_id],
+            |row| row.get(0),
+        )
+        .expect("count local current file rows");
+    assert_eq!(local_repo_count, 1, "expected local repository row");
+    assert_eq!(local_sync_count, 1, "expected first local repo sync row");
+    assert_eq!(local_file_count, 1, "expected first local current file row");
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
 async fn summary_embedding_sync_action_uses_shared_summary_authority_without_local_historical_mirror()
  {
     let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");

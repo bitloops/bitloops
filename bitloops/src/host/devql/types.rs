@@ -416,6 +416,23 @@ mod tests {
         }
     }
 
+    async fn init_relational_sqlite(path: &Path) {
+        crate::host::devql::init_sqlite_schema(path)
+            .await
+            .expect("initialise relational sqlite schema");
+    }
+
+    async fn seed_repository_row(relational: &RelationalStorage, repo_id: &str) {
+        relational
+            .exec(&format!(
+                "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
+                 VALUES ('{repo_id}', 'github', 'bitloops', 'storage-routing', 'main')",
+                repo_id = crate::host::devql::esc_pg(repo_id),
+            ))
+            .await
+            .expect("seed repository catalog row");
+    }
+
     #[tokio::test]
     async fn connect_always_builds_local_sqlite_storage() {
         let temp = tempfile::tempdir().expect("create temp dir");
@@ -646,5 +663,137 @@ mod tests {
             .filter_map(|row| row.get("value").and_then(Value::as_i64))
             .collect::<Vec<_>>();
         assert_eq!(shared_values, vec![17, 19]);
+    }
+
+    #[tokio::test]
+    async fn remote_shared_mode_keeps_current_tables_local_and_non_current_tables_off_local_sqlite()
+    {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp
+            .path()
+            .join("stores")
+            .join("shared-remote-actual.sqlite");
+        init_relational_sqlite(&sqlite_path).await;
+
+        let relational = RelationalStorage::primary_backend_for_tests(
+            sqlite_path.clone(),
+            RelationalPrimaryBackend::Postgres,
+        );
+        seed_repository_row(&relational, "repo-routing").await;
+
+        relational
+            .exec_for_role(
+                RelationalStorageRole::CurrentProjection,
+                "INSERT INTO current_file_state (
+                    repo_id, path, analysis_mode, file_role, text_index_mode, language,
+                    resolved_language, dialect, primary_context_id, secondary_context_ids_json,
+                    frameworks_json, runtime_profile, classification_reason, context_fingerprint,
+                    extraction_fingerprint, head_content_id, index_content_id,
+                    worktree_content_id, effective_content_id, effective_source,
+                    parser_version, extractor_version, exists_in_head, exists_in_index,
+                    exists_in_worktree, last_synced_at
+                 ) VALUES (
+                    'repo-routing', 'src/lib.rs', 'code', 'source_code', 'none', 'rust',
+                    'rust', NULL, NULL, '[]', '[]', NULL, 'test', NULL,
+                    'fingerprint-1', 'head-1', 'index-1', 'worktree-1', 'effective-1',
+                    'worktree', 'parser-v1', 'extractor-v1', 1, 1, 1,
+                    '2026-05-18T10:00:00Z'
+                 )",
+            )
+            .await
+            .expect("current tables should stay local in remote-shared mode");
+
+        let err = relational
+            .exec_for_role(
+                RelationalStorageRole::SharedRelational,
+                "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('repo-routing', 'commit-1', 'src/lib.rs', 'blob-1')",
+            )
+            .await
+            .expect_err("historical tables should route remote in remote-shared mode");
+        assert!(
+            err.to_string()
+                .contains("remote Postgres storage is not configured"),
+            "expected remote routing failure, got: {err:#}"
+        );
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+        let current_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM current_file_state WHERE repo_id = 'repo-routing' AND path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count current rows");
+        let historical_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM file_state WHERE repo_id = 'repo-routing' AND path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count historical rows");
+
+        assert_eq!(current_count, 1);
+        assert_eq!(
+            historical_count, 0,
+            "remote-shared routing must not leave duplicate historical rows in local sqlite"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_only_mode_keeps_current_and_non_current_tables_local() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let sqlite_path = temp.path().join("stores").join("local-only-actual.sqlite");
+        init_relational_sqlite(&sqlite_path).await;
+
+        let relational = RelationalStorage::local_only(sqlite_path.clone());
+        seed_repository_row(&relational, "repo-routing").await;
+
+        relational
+            .exec_for_role(
+                RelationalStorageRole::CurrentProjection,
+                "INSERT INTO current_file_state (
+                    repo_id, path, analysis_mode, file_role, text_index_mode, language,
+                    resolved_language, dialect, primary_context_id, secondary_context_ids_json,
+                    frameworks_json, runtime_profile, classification_reason, context_fingerprint,
+                    extraction_fingerprint, head_content_id, index_content_id,
+                    worktree_content_id, effective_content_id, effective_source,
+                    parser_version, extractor_version, exists_in_head, exists_in_index,
+                    exists_in_worktree, last_synced_at
+                 ) VALUES (
+                    'repo-routing', 'src/lib.rs', 'code', 'source_code', 'none', 'rust',
+                    'rust', NULL, NULL, '[]', '[]', NULL, 'test', NULL,
+                    'fingerprint-1', 'head-1', 'index-1', 'worktree-1', 'effective-1',
+                    'worktree', 'parser-v1', 'extractor-v1', 1, 1, 1,
+                    '2026-05-18T10:00:00Z'
+                 )",
+            )
+            .await
+            .expect("current tables should stay local in local-only mode");
+        relational
+            .exec_for_role(
+                RelationalStorageRole::SharedRelational,
+                "INSERT INTO file_state (repo_id, commit_sha, path, blob_sha) VALUES ('repo-routing', 'commit-1', 'src/lib.rs', 'blob-1')",
+            )
+            .await
+            .expect("historical tables should stay local in local-only mode");
+
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+        let current_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM current_file_state WHERE repo_id = 'repo-routing' AND path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count current rows");
+        let historical_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM file_state WHERE repo_id = 'repo-routing' AND path = 'src/lib.rs'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count historical rows");
+
+        assert_eq!(current_count, 1);
+        assert_eq!(historical_count, 1);
     }
 }

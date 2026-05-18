@@ -184,11 +184,12 @@ Adopt an explicit storage-authority model and remove ambiguous dual-target behav
 
 ### Tests and regression coverage
 
-- [ ] Add relational tests for remote relational mode: current tables local-only, non-current tables remote-only.
-- [ ] Add relational tests for local-only mode: both current and non-current relational data remain local.
+- [x] Add relational tests for remote relational mode: current tables local-only, non-current tables remote-only.
+- [x] Add relational tests for local-only mode: both current and non-current relational data remain local.
 - [x] Add clone-edge regression tests covering remote-shared historical routing, remote-shared current local routing, local-only routing, and projection-owned SQL dialect selection.
 - [x] Add init regression tests proving repo-selected remote store settings are carried into the bound daemon config during init.
-- [ ] Add multi-workspace tests proving different branches/worktrees do not overwrite each other’s local current state.
-- [ ] Add event tests proving canonical event rows exist only in the selected event backend.
+- [x] Add a service-gated remote relational init-path regression test proving the local `repositories` catalog row exists before the first local current/projection sync writes.
+- [x] Add multi-workspace tests proving different branches/worktrees do not overwrite each other’s local current state.
+- [x] Add event tests proving canonical event rows exist only in the selected event backend.
 - [x] Add blob tests proving runtime/session payloads stay local while project/knowledge payloads follow the configured blob backend.
-- [ ] Add regression tests ensuring no duplicate canonical writes remain across relational and event backends when a remote backend is configured.
+- [x] Add regression tests ensuring no duplicate canonical writes remain across relational and event backends when a remote backend is configured.

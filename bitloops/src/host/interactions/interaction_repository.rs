@@ -152,6 +152,123 @@ fn ensure_repo_id(expected: &str, actual: &str, entity: &str) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::EventsBackendConfig;
+    use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
+    use crate::host::interactions::types::{
+        InteractionEvent, InteractionEventType, InteractionSession, InteractionTurn,
+    };
+
+    fn sample_session(repo_id: &str) -> InteractionSession {
+        InteractionSession {
+            session_id: "sess-1".into(),
+            repo_id: repo_id.into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            first_prompt: "hello".into(),
+            transcript_path: "/tmp/transcript.jsonl".into(),
+            worktree_path: "/tmp/repo".into(),
+            worktree_id: "main".into(),
+            started_at: "2026-04-05T10:00:00Z".into(),
+            last_event_at: "2026-04-05T10:00:01Z".into(),
+            updated_at: "2026-04-05T10:00:01Z".into(),
+            ..Default::default()
+        }
+    }
+
+    fn sample_turn(repo_id: &str) -> InteractionTurn {
+        InteractionTurn {
+            turn_id: "turn-1".into(),
+            session_id: "sess-1".into(),
+            repo_id: repo_id.into(),
+            turn_number: 1,
+            prompt: "ship it".into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            started_at: "2026-04-05T10:00:01Z".into(),
+            ended_at: Some("2026-04-05T10:00:02Z".into()),
+            token_usage: Some(TokenUsageMetadata {
+                input_tokens: 11,
+                output_tokens: 7,
+                ..Default::default()
+            }),
+            summary: "completed main change".into(),
+            prompt_count: 2,
+            transcript_offset_start: Some(1),
+            transcript_offset_end: Some(3),
+            transcript_fragment: "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n".into(),
+            files_modified: vec!["src/main.rs".into()],
+            updated_at: "2026-04-05T10:00:02Z".into(),
+            ..Default::default()
+        }
+    }
+
+    fn sample_event(repo_id: &str) -> InteractionEvent {
+        InteractionEvent {
+            event_id: "evt-1".into(),
+            session_id: "sess-1".into(),
+            turn_id: Some("turn-1".into()),
+            repo_id: repo_id.into(),
+            event_type: InteractionEventType::TurnEnd,
+            event_time: "2026-04-05T10:00:02Z".into(),
+            agent_type: "codex".into(),
+            model: "gpt-5.4".into(),
+            payload: serde_json::json!({"token_usage": {"input_tokens": 11}}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn create_interaction_repository_persists_canonical_rows_in_selected_duckdb_backend() {
+        let repo_root = tempfile::tempdir().expect("temp dir");
+        let duckdb_path = repo_root.path().join("events").join("events.duckdb");
+        let events_cfg = EventsBackendConfig {
+            duckdb_path: Some(duckdb_path.to_string_lossy().to_string()),
+            clickhouse_url: None,
+            clickhouse_user: None,
+            clickhouse_password: None,
+            clickhouse_database: None,
+        };
+        let repo_id = "repo-test";
+        let repository =
+            create_interaction_repository(&events_cfg, repo_root.path(), repo_id.to_string())
+                .expect("create DuckDB-backed interaction repository");
+
+        repository
+            .upsert_session(&sample_session(repo_id))
+            .expect("upsert session");
+        repository
+            .upsert_turn(&sample_turn(repo_id))
+            .expect("upsert turn");
+        repository
+            .append_event(&sample_event(repo_id))
+            .expect("append event");
+
+        let conn = ::duckdb::Connection::open(&duckdb_path).expect("open canonical events duckdb");
+        let session_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_sessions WHERE repo_id = ?",
+                [repo_id],
+                |row| row.get(0),
+            )
+            .expect("count interaction_sessions rows");
+        let turn_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_turns WHERE repo_id = ?",
+                [repo_id],
+                |row| row.get(0),
+            )
+            .expect("count interaction_turns rows");
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM interaction_events WHERE repo_id = ?",
+                [repo_id],
+                |row| row.get(0),
+            )
+            .expect("count interaction_events rows");
+
+        assert_eq!(session_count, 1);
+        assert_eq!(turn_count, 1);
+        assert_eq!(event_count, 1);
+    }
 
     #[test]
     fn create_interaction_repository_prefers_clickhouse_without_duckdb_fallback() {

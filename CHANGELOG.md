@@ -9,12 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ### Changed
 
 - **Semantic embeddings are now opt-in per repo policy instead of daemon-global intent**: repo policy files (`.bitloops.toml` / `.bitloops.local.toml`) now own `semantic_clones` embedding mode and profile bindings, while the daemon `config.toml` owns the available inference runtimes and profiles. `bitloops init`, `--no-embeddings`, and local/platform embeddings setup now persist the selected repo's intent without silently enabling embeddings for every repo that shares the same daemon.
+- **Storage ownership is now more explicit across local and remote backends**: Bitloops now follows a clearer split between local runtime/current projection data and shared remote historical/event/project data, reducing ambiguous routing across SQLite, Postgres, ClickHouse, and blob backends.
 
 ### Fixed
 
 - **Local embeddings setup now honors repo-bound daemon configs**: local managed embeddings bootstrap now writes the `local_code` runtime profile into the daemon config bound by the repo's `.bitloops.local.toml`, matching the platform embeddings path and avoiding accidental writes to an unrelated default daemon config.
 - **Plain init no longer disables embeddings implicitly**: running `bitloops init` without an embeddings flag now keeps the repo's semantic embeddings policy unchanged instead of writing `embedding_mode = "off"` into `.bitloops.local.toml`.
 - **Repo semantic profile bindings inherit daemon mode when mode is omitted**: repo-local `code_embeddings` or `summary_embeddings` bindings now keep the daemon's active semantic embedding mode unless the repo policy explicitly overrides it.
+- **Remote relational mode no longer mixes current and shared ownership during init/sync**: Bitloops now preserves the intended local-vs-remote relational split during bootstrap and sync, avoiding misplaced writes and the SQLite foreign-key failures that could happen when initializing repos with remote relational/event backends.
+- **Shared storage reads and writes now follow the owning backend more consistently**: historical relational data, checkpoint provenance, semantic state, event data, and blob payload families now avoid the previous local/remote mirroring behavior and use their configured authority more consistently.
 
 ## [0.0.27] - 2026-05-15
 
