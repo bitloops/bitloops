@@ -748,6 +748,10 @@ pub fn documented_increment(value: u32) -> u32 {
     assert_eq!(suites[0].name, "docs::doctests");
     assert_eq!(suites[0].scenarios.len(), 1);
     assert_eq!(
+        suites[0].scenarios[0].name, "documented_increment",
+        "doctest scenario identity should not encode source line numbers"
+    );
+    assert_eq!(
         suites[0].scenarios[0].discovery_source,
         ScenarioDiscoverySource::Doctest
     );
@@ -770,10 +774,7 @@ fn parses_enumerated_doctest_output() {
 
     assert_eq!(scenarios.len(), 1);
     assert_eq!(scenarios[0].relative_path, "crates/sample/src/lib.rs");
-    assert_eq!(
-        scenarios[0].scenario_name,
-        "sample::documented_increment[doctest:12]"
-    );
+    assert_eq!(scenarios[0].scenario_name, "sample::documented_increment");
     assert!(
         scenarios[0]
             .reference_candidates
@@ -786,21 +787,89 @@ fn parses_enumerated_doctest_output() {
 }
 
 #[test]
-fn enumerated_doctests_preserve_line_identity_for_duplicate_items() {
+fn enumerated_doctests_keep_semantic_names_for_duplicate_items() {
     let scenarios = parse_enumerated_doctests(
         r#"crates/sample/src/lib.rs - sample::documented_increment (line 12): test
 crates/sample/src/lib.rs - sample::documented_increment (line 24): test"#,
     );
 
     assert_eq!(scenarios.len(), 2);
+    assert_eq!(scenarios[0].scenario_name, "sample::documented_increment");
+    assert_eq!(scenarios[1].scenario_name, "sample::documented_increment");
+    assert_eq!(scenarios[0].start_line, 12);
+    assert_eq!(scenarios[1].start_line, 24);
+}
+
+#[test]
+fn rust_duplicate_doctests_keep_symbol_ids_when_lines_shift() {
+    let original = duplicate_rust_doctest_symbol_ids("");
+    let shifted = duplicate_rust_doctest_symbol_ids("// inserted header comment\n\n");
+
+    assert_eq!(original, shifted);
+    assert_eq!(original.len(), 3, "expected one suite and two doctests");
     assert_eq!(
-        scenarios[0].scenario_name,
-        "sample::documented_increment[doctest:12]"
+        original
+            .iter()
+            .filter(|(kind, _, _)| kind == "test_scenario")
+            .count(),
+        2
+    );
+    assert!(
+        original
+            .iter()
+            .all(|(_, name, _)| !name.contains("doctest:")),
+        "semantic doctest names should not encode source lines"
     );
     assert_eq!(
-        scenarios[1].scenario_name,
-        "sample::documented_increment[doctest:24]"
+        original
+            .iter()
+            .map(|(_, _, symbol_id)| symbol_id.as_str())
+            .collect::<HashSet<_>>()
+            .len(),
+        original.len()
     );
+}
+
+fn duplicate_rust_doctest_symbol_ids(prefix: &str) -> Vec<(String, String, String)> {
+    let temp = TempDir::new().expect("failed creating temp repo");
+    let repo_root = temp.path();
+    fs::create_dir_all(repo_root.join("src")).expect("failed creating src directory");
+    fs::write(
+        repo_root.join("src/docs.rs"),
+        format!(
+            r#"{prefix}/// ```rust
+/// assert_eq!(documented_increment(1), 2);
+/// ```
+///
+/// ```rust
+/// assert_eq!(documented_increment(2), 3);
+/// ```
+pub fn documented_increment(value: u32) -> u32 {{
+    value + 1
+}}
+"#
+        ),
+    )
+    .expect("failed writing duplicate doctest Rust file");
+
+    let gateway = SourceOnlyLanguageServicesGateway {
+        support: Arc::new(SourceOnlyRustSupport),
+    };
+    let output = execute("repo-1", repo_root, "commit-1", &[], &gateway)
+        .expect("mapping execution should discover Rust doctests");
+    let mut artefact_identities = output
+        .test_artefacts
+        .iter()
+        .map(|artefact| {
+            (
+                artefact.canonical_kind.clone(),
+                artefact.name.clone(),
+                artefact.symbol_id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    artefact_identities.sort();
+    artefact_identities
 }
 
 #[test]
@@ -967,6 +1036,95 @@ describe('resolveBuildOutputs', () => {
         .map(|artefact| artefact.symbol_id.as_str())
         .collect();
     assert_eq!(symbol_ids.len(), output.test_artefacts.len());
+
+    assert_eq!(
+        output
+            .test_artefacts
+            .iter()
+            .filter(|artefact| artefact.canonical_kind == "test_suite")
+            .count(),
+        2,
+        "source-discovered duplicate suite blocks are collapsed into one logical suite"
+    );
+    assert_eq!(
+        output
+            .test_artefacts
+            .iter()
+            .filter(|artefact| artefact.canonical_kind == "test_scenario")
+            .count(),
+        4,
+        "duplicate scenarios remain separate artefacts"
+    );
+}
+
+#[test]
+fn typescript_duplicate_names_keep_symbol_ids_when_lines_shift() {
+    let original = duplicate_typescript_tests_symbol_ids("");
+    let shifted = duplicate_typescript_tests_symbol_ids(
+        "// inserted header comment\n// another inserted header comment\n",
+    );
+
+    assert_eq!(original, shifted);
+}
+
+fn duplicate_typescript_tests_symbol_ids(
+    prefix: &str,
+) -> Vec<(String, Option<String>, String, String)> {
+    let temp = TempDir::new().expect("failed creating temp repo");
+    let repo_root = temp.path();
+    fs::create_dir_all(repo_root.join("tests")).expect("failed creating tests directory");
+    fs::write(
+        repo_root.join("tests/dupes.spec.ts"),
+        format!(
+            r#"{prefix}
+import {{ describe, expect, it }} from 'vitest'
+
+describe('parse positives', () => {{
+  it('options with multilines', () => {{
+    expect(1).toBe(1)
+  }})
+
+  it('options with multilines', () => {{
+    expect(2).toBe(2)
+  }})
+}})
+
+describe('resolveBuildOutputs', () => {{
+  it('resolves outputs correctly', () => {{
+    expect(1).toBe(1)
+  }})
+}})
+
+describe('resolveBuildOutputs', () => {{
+  it('default format: one entry', () => {{
+    expect(1).toBe(1)
+  }})
+}})
+"#
+        ),
+    )
+    .expect("failed writing duplicate TypeScript tests");
+
+    let gateway = SourceOnlyLanguageServicesGateway {
+        support: ts_js_test_support(),
+    };
+    let output = execute("repo-1", repo_root, "commit-1", &[], &gateway)
+        .expect("mapping execution should discover TypeScript tests");
+
+    let mut artefact_identities = output
+        .test_artefacts
+        .iter()
+        .map(|artefact| {
+            (
+                artefact.canonical_kind.clone(),
+                artefact.symbol_fqn.clone(),
+                artefact.name.clone(),
+                artefact.symbol_id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    artefact_identities.sort();
+    artefact_identities
 }
 
 #[test]

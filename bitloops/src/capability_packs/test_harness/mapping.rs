@@ -1,4 +1,5 @@
 mod file_discovery;
+pub(crate) mod identity_resolution;
 pub(crate) mod linker;
 pub(crate) mod materialize;
 pub(crate) mod model;
@@ -13,7 +14,12 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 
+use crate::capability_packs::test_harness::event_handlers::ExistingTestArtefactIdentityRow;
 use crate::capability_packs::test_harness::mapping::file_discovery::discover_test_files;
+use crate::capability_packs::test_harness::mapping::identity_resolution::{
+    DraftTestArtefact, DraftTestArtefactId, DraftTestEdge, ResolvedTestIdentityOutput,
+    resolve_test_identities,
+};
 use crate::capability_packs::test_harness::mapping::linker::build_production_index;
 use crate::capability_packs::test_harness::mapping::materialize::{
     MaterializationContext, materialize_enumerated_scenarios, materialize_source_discovery,
@@ -23,7 +29,7 @@ use crate::capability_packs::test_harness::mapping::model::{
 };
 use crate::host::capability_host::gateways::LanguageServicesGateway;
 use crate::host::language_adapter::{LanguageAdapterContext, LanguageTestSupport};
-use crate::models::ProductionArtefact;
+use crate::models::{ProductionArtefact, TestArtefactCurrentRecord, TestArtefactEdgeCurrentRecord};
 
 pub(crate) fn execute(
     repo_id: &str,
@@ -31,6 +37,17 @@ pub(crate) fn execute(
     commit_sha: &str,
     production: &[ProductionArtefact],
     languages: &dyn LanguageServicesGateway,
+) -> Result<StructuralMappingOutput> {
+    execute_with_existing(repo_id, repo_dir, commit_sha, production, languages, &[])
+}
+
+pub(crate) fn execute_with_existing(
+    repo_id: &str,
+    repo_dir: &Path,
+    commit_sha: &str,
+    production: &[ProductionArtefact],
+    languages: &dyn LanguageServicesGateway,
+    existing_test_artefacts: &[ExistingTestArtefactIdentityRow],
 ) -> Result<StructuralMappingOutput> {
     let production_index = build_production_index(production);
     let supports = languages.test_supports();
@@ -117,14 +134,113 @@ pub(crate) fn execute(
         materialize_enumerated_scenarios(&mut materialization, &reconciled.enumerated_scenarios);
     }
 
-    Ok(StructuralMappingOutput {
+    let resolved = resolve_materialized_output(
+        repo_id,
+        existing_test_artefacts,
+        production,
         test_artefacts,
         test_edges,
+    );
+    stats.test_artefacts = resolved.test_artefacts.len();
+    stats.test_edges = resolved.test_edges.len();
+
+    Ok(StructuralMappingOutput {
+        test_artefacts: resolved.test_artefacts,
+        test_edges: resolved.test_edges,
         stats,
         enumeration_status,
         enumeration_notes,
         issues: discovery_batch.issues,
     })
+}
+
+pub(crate) fn resolve_materialized_output(
+    repo_id: &str,
+    existing_test_artefacts: &[ExistingTestArtefactIdentityRow],
+    production: &[ProductionArtefact],
+    test_artefacts: Vec<TestArtefactCurrentRecord>,
+    test_edges: Vec<TestArtefactEdgeCurrentRecord>,
+) -> ResolvedTestIdentityOutput {
+    resolve_test_identities(
+        repo_id,
+        existing_test_artefacts,
+        materialized_drafts(&test_artefacts),
+        materialized_draft_edges(&test_artefacts, &test_edges, production),
+    )
+}
+
+fn materialized_drafts(test_artefacts: &[TestArtefactCurrentRecord]) -> Vec<DraftTestArtefact> {
+    let parent_by_symbol_id = test_artefacts
+        .iter()
+        .enumerate()
+        .filter(|(_, artefact)| artefact.canonical_kind == "test_suite")
+        .map(|(index, artefact)| (artefact.symbol_id.as_str(), DraftTestArtefactId(index)))
+        .collect::<HashMap<_, _>>();
+
+    test_artefacts
+        .iter()
+        .enumerate()
+        .map(|(index, artefact)| DraftTestArtefact {
+            draft_id: DraftTestArtefactId(index),
+            parent_draft_id: artefact
+                .parent_symbol_id
+                .as_deref()
+                .and_then(|parent_symbol_id| parent_by_symbol_id.get(parent_symbol_id))
+                .copied(),
+            record: artefact.clone(),
+        })
+        .collect()
+}
+
+fn materialized_draft_edges(
+    test_artefacts: &[TestArtefactCurrentRecord],
+    test_edges: &[TestArtefactEdgeCurrentRecord],
+    production: &[ProductionArtefact],
+) -> Vec<DraftTestEdge> {
+    let draft_id_by_edge_key = test_artefacts
+        .iter()
+        .enumerate()
+        .map(|(index, artefact)| {
+            (
+                (
+                    artefact.path.as_str(),
+                    artefact.symbol_id.as_str(),
+                    artefact.start_line,
+                    artefact.end_line,
+                ),
+                DraftTestArtefactId(index),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let production_by_symbol_id = production
+        .iter()
+        .map(|artefact| (artefact.symbol_id.as_str(), artefact))
+        .collect::<HashMap<_, _>>();
+
+    test_edges
+        .iter()
+        .filter_map(|edge| {
+            let start_line = edge.start_line?;
+            let end_line = edge.end_line?;
+            let from_symbol_id = edge.from_symbol_id.as_str();
+            let from_draft_id = draft_id_by_edge_key.get(&(
+                edge.path.as_str(),
+                from_symbol_id,
+                start_line,
+                end_line,
+            ))?;
+            let to_symbol_id = edge.to_symbol_id.as_deref()?;
+            let production = production_by_symbol_id.get(to_symbol_id)?;
+
+            Some(DraftTestEdge {
+                from_draft_id: *from_draft_id,
+                production: (*production).clone(),
+                path: edge.path.clone(),
+                content_id: edge.content_id.clone(),
+                language: edge.language.clone(),
+            })
+        })
+        .collect()
 }
 
 fn find_language_support<'a>(

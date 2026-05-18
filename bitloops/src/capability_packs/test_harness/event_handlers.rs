@@ -5,6 +5,8 @@ mod persistence;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use self::persistence::ExistingTestArtefactIdentityRow;
+
 use crate::host::capability_host::{
     CurrentStateConsumer, CurrentStateConsumerContext, CurrentStateConsumerFuture,
     CurrentStateConsumerRequest, CurrentStateConsumerResult, ReconcileMode,

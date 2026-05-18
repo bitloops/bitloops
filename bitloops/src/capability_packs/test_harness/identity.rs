@@ -16,7 +16,7 @@ fn normalize_identity_fragment(input: &str) -> String {
 }
 
 /// Stable logical identity for a test artefact (suite or scenario).
-pub fn test_structural_symbol_id(
+pub fn stable_test_identity_key(
     path: &str,
     canonical_kind: &str,
     language_kind: Option<&str>,
@@ -27,7 +27,7 @@ pub fn test_structural_symbol_id(
     let normalized_signature = signature
         .map(normalize_identity_fragment)
         .unwrap_or_default();
-    crate::host::devql::deterministic_uuid(&format!(
+    format!(
         "{}|{}|{}|{}|{}|{}",
         path,
         canonical_kind,
@@ -35,7 +35,55 @@ pub fn test_structural_symbol_id(
         parent_symbol_id.unwrap_or(""),
         normalize_identity_fragment(name),
         normalized_signature,
+    )
+}
+
+/// Stable logical identity for a test artefact (suite or scenario).
+pub fn test_structural_symbol_id(
+    path: &str,
+    canonical_kind: &str,
+    language_kind: Option<&str>,
+    parent_symbol_id: Option<&str>,
+    name: &str,
+    signature: Option<&str>,
+) -> String {
+    crate::host::devql::deterministic_uuid(&stable_test_identity_key(
+        path,
+        canonical_kind,
+        language_kind,
+        parent_symbol_id,
+        name,
+        signature,
     ))
+}
+
+/// Stable logical identity with an explicit disambiguator for duplicate tests.
+pub fn test_duplicate_aware_symbol_id(
+    path: &str,
+    canonical_kind: &str,
+    language_kind: Option<&str>,
+    parent_symbol_id: Option<&str>,
+    name: &str,
+    signature: Option<&str>,
+    duplicate_token: Option<&str>,
+) -> String {
+    let base_key = stable_test_identity_key(
+        path,
+        canonical_kind,
+        language_kind,
+        parent_symbol_id,
+        name,
+        signature,
+    );
+
+    match duplicate_token {
+        Some(token) => crate::host::devql::deterministic_uuid(&format!(
+            "{}|{}",
+            base_key,
+            normalize_identity_fragment(token)
+        )),
+        None => crate::host::devql::deterministic_uuid(&base_key),
+    }
 }
 
 /// Revision-specific identity for a test artefact.
@@ -102,6 +150,80 @@ mod tests {
         assert_eq!(
             test_edge_id("repo", "from", "tests", "to-symbol"),
             test_edge_id("repo", "from", "tests", "to-symbol")
+        );
+    }
+
+    #[test]
+    fn duplicate_symbol_id_preserves_base_symbol_when_no_duplicate_token() {
+        let base = test_structural_symbol_id(
+            "tests/example.spec.ts",
+            "test_scenario",
+            Some("it"),
+            Some("parent"),
+            "options with multilines",
+            Some("options with multilines"),
+        );
+
+        assert_eq!(
+            base,
+            super::test_duplicate_aware_symbol_id(
+                "tests/example.spec.ts",
+                "test_scenario",
+                Some("it"),
+                Some("parent"),
+                "options with multilines",
+                Some("options with multilines"),
+                None,
+            )
+        );
+    }
+
+    #[test]
+    fn duplicate_symbol_id_changes_only_when_duplicate_token_is_present() {
+        let base = test_structural_symbol_id(
+            "tests/example.spec.ts",
+            "test_scenario",
+            Some("it"),
+            Some("parent"),
+            "options with multilines",
+            Some("options with multilines"),
+        );
+        let duplicate = super::test_duplicate_aware_symbol_id(
+            "tests/example.spec.ts",
+            "test_scenario",
+            Some("it"),
+            Some("parent"),
+            "options with multilines",
+            Some("options with multilines"),
+            Some("duplicate:1"),
+        );
+
+        assert_ne!(base, duplicate);
+        assert_eq!(
+            duplicate,
+            crate::host::devql::deterministic_uuid(&format!(
+                "{}|duplicate:1",
+                super::stable_test_identity_key(
+                    "tests/example.spec.ts",
+                    "test_scenario",
+                    Some("it"),
+                    Some("parent"),
+                    "options with multilines",
+                    Some("options with multilines"),
+                )
+            ))
+        );
+        assert_eq!(
+            duplicate,
+            super::test_duplicate_aware_symbol_id(
+                "tests/example.spec.ts",
+                "test_scenario",
+                Some("it"),
+                Some("parent"),
+                "options with multilines",
+                Some("options with multilines"),
+                Some("duplicate:1"),
+            )
         );
     }
 }

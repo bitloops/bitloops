@@ -112,8 +112,11 @@ pub(crate) fn materialize_source_discovery(
                     scenario,
                 ) {
                     let link_key = format!(
-                        "{}::{}::tests",
-                        scenario_record.symbol_id, production_artefact.symbol_id
+                        "{}::{}-{}::{}::tests",
+                        scenario_record.symbol_id,
+                        scenario_record.start_line,
+                        scenario_record.end_line,
+                        production_artefact.symbol_id
                     );
                     if !context.link_keys.insert(link_key) {
                         continue;
@@ -233,8 +236,11 @@ pub(crate) fn materialize_enumerated_scenarios(
             &synthetic_scenario,
         ) {
             let link_key = format!(
-                "{}::{}::tests",
-                scenario_record.symbol_id, production_artefact.symbol_id
+                "{}::{}-{}::{}::tests",
+                scenario_record.symbol_id,
+                scenario_record.start_line,
+                scenario_record.end_line,
+                production_artefact.symbol_id
             );
             if !context.link_keys.insert(link_key) {
                 continue;
@@ -258,14 +264,13 @@ fn build_test_artefact_current_record(
     context: &RecordContext<'_>,
     spec: &TestArtefactSpec<'_>,
 ) -> TestArtefactCurrentRecord {
-    let identity_signature = test_identity_signature(spec);
     let symbol_id = test_structural_symbol_id(
         context.path,
         spec.canonical_kind,
         spec.language_kind,
         spec.parent_symbol_id,
         spec.name,
-        Some(&identity_signature),
+        spec.signature,
     );
     let artefact_id = test_revision_artefact_id(context.repo_id, context.content_id, &symbol_id);
 
@@ -291,11 +296,6 @@ fn build_test_artefact_current_record(
         docstring: None,
         discovery_source: spec.discovery_source.as_str().to_string(),
     }
-}
-
-fn test_identity_signature(spec: &TestArtefactSpec<'_>) -> String {
-    let base = spec.signature.unwrap_or(spec.name);
-    format!("{base}@lines:{}-{}", spec.start_line, spec.end_line)
 }
 
 fn build_test_artefact_edge_current_record(
