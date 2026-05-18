@@ -21,7 +21,7 @@ use crate::cli::Cli;
 use crate::cli::devql::graphql::{with_graphql_executor_hook, with_ingest_daemon_bootstrap_hook};
 use crate::cli::telemetry_consent::with_test_assume_daemon_running;
 use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, REPO_POLICY_LOCAL_FILE_NAME,
+    BITLOOPS_CONFIG_RELATIVE_PATH, ENV_DAEMON_CONFIG_PATH_OVERRIDE, REPO_POLICY_LOCAL_FILE_NAME,
     resolve_embedding_capability_config_for_repo,
 };
 use crate::daemon::DevqlTaskSpec;
@@ -893,6 +893,127 @@ fn install_or_bootstrap_embeddings_writes_local_profile_and_warms_runtime() {
                     .any(|line| line.contains("Pulled embedding profile `local_code`")),
                 "expected warmup line, got: {lines:?}"
             );
+        },
+    );
+}
+
+#[test]
+fn install_or_bootstrap_embeddings_uses_repo_bound_daemon_config() {
+    let repo = TempDir::new().expect("tempdir");
+    let app_dirs = TempDir::new().expect("app tempdir");
+    let bound = TempDir::new().expect("bound config tempdir");
+    crate::test_support::git_fixtures::init_test_repo(
+        repo.path(),
+        "main",
+        "Alice",
+        "alice@example.com",
+    );
+    let bound_config_path = bound.path().join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    if let Some(parent) = bound_config_path.parent() {
+        fs::create_dir_all(parent).expect("create bound config parent");
+    }
+    fs::write(
+        &bound_config_path,
+        r#"
+[runtime]
+local_dev = false
+
+[inference.runtimes.bitloops_local_embeddings]
+command = "bitloops-local-embeddings"
+args = ["--stale"]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+"#,
+    )
+    .expect("write bound daemon config");
+    fs::write(
+        repo.path().join(REPO_POLICY_LOCAL_FILE_NAME),
+        format!(
+            r#"
+[daemon]
+config_path = "{}"
+"#,
+            bound_config_path.display()
+        ),
+    )
+    .expect("write repo daemon binding");
+
+    let config_root = app_dirs.path().join("config-root");
+    let data_root = app_dirs.path().join("data-root");
+    let cache_root = app_dirs.path().join("cache-root");
+    let state_root = app_dirs.path().join("state-root");
+    let config_root_value = config_root.to_string_lossy().into_owned();
+    let data_root_value = data_root.to_string_lossy().into_owned();
+    let cache_root_value = cache_root.to_string_lossy().into_owned();
+    let state_root_value = state_root.to_string_lossy().into_owned();
+    let _guard = enter_process_state(
+        Some(repo.path()),
+        &[
+            (ENV_DAEMON_CONFIG_PATH_OVERRIDE, None),
+            (
+                "BITLOOPS_TEST_CONFIG_DIR_OVERRIDE",
+                Some(config_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_DATA_DIR_OVERRIDE",
+                Some(data_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_CACHE_DIR_OVERRIDE",
+                Some(cache_root_value.as_str()),
+            ),
+            (
+                "BITLOOPS_TEST_STATE_DIR_OVERRIDE",
+                Some(state_root_value.as_str()),
+            ),
+        ],
+    );
+
+    with_managed_embeddings_install_hook(
+        move |repo_root| {
+            Ok(ManagedEmbeddingsBinaryInstallOutcome {
+                version: TEST_MANAGED_EMBEDDINGS_VERSION.to_string(),
+                binary_path: fake_managed_runtime_path(repo_root),
+                freshly_installed: true,
+            })
+        },
+        || {
+            let lines = install_or_bootstrap_embeddings(repo.path())
+                .expect("install embeddings via managed runtime");
+            let bound_config = fs::read_to_string(&bound_config_path).expect("read bound config");
+            let repo_policy = fs::read_to_string(repo.path().join(REPO_POLICY_LOCAL_FILE_NAME))
+                .expect("read local repo policy");
+
+            assert!(bound_config.contains("[inference.profiles.local_code]"));
+            assert!(bound_config.contains("driver = \"bitloops_embeddings_ipc\""));
+            assert!(
+                bound_config.contains("args = []"),
+                "expected managed runtime args to be reset:\n{bound_config}"
+            );
+            assert!(
+                !bound_config.contains("\"--stale\""),
+                "expected stale runtime args to be removed:\n{bound_config}"
+            );
+            assert!(!bound_config.contains("code_embeddings = \"local_code\""));
+            assert!(repo_policy.contains("config_path ="));
+            assert!(repo_policy.contains("embedding_mode = \"semantic_aware_once\""));
+            assert!(repo_policy.contains("code_embeddings = \"local_code\""));
+            assert!(
+                lines
+                    .iter()
+                    .any(|line| line.contains(&bound_config_path.display().to_string())),
+                "expected report to mention bound config path, got: {lines:?}"
+            );
+
+            let default_config_path = config_root.join("bitloops/config.toml");
+            if default_config_path.exists() {
+                let default_config =
+                    fs::read_to_string(default_config_path).expect("read default config");
+                assert!(
+                    !default_config.contains("[inference.profiles.local_code]"),
+                    "local profile should be written to the repo-bound daemon config"
+                );
+            }
         },
     );
 }

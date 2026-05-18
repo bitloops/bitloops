@@ -14,7 +14,8 @@ use std::rc::Rc;
 use crate::config::settings::settings_local_path;
 use crate::config::{
     DaemonEmbeddingsInstallMode, RepoSemanticEmbeddingPolicy, prepare_daemon_embeddings_install,
-    resolve_daemon_config_path_for_repo, set_repo_semantic_embedding_policy,
+    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
+    set_repo_semantic_embedding_policy,
 };
 
 use super::super::profiles::{embedding_capability_for_config_path, pull_profile_with_config_path};
@@ -168,7 +169,8 @@ fn format_managed_embeddings_runtime_lines(
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn install_or_bootstrap_embeddings(repo_root: &Path) -> Result<Vec<String>> {
-    let config_path = resolve_daemon_config_path_for_repo(repo_root)?;
+    let config_path = resolve_bound_daemon_config_path_for_repo(repo_root)
+        .or_else(|_| resolve_daemon_config_path_for_repo(repo_root))?;
     let plan = prepare_daemon_embeddings_install(&config_path)?;
 
     match plan.mode {
