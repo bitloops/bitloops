@@ -32,20 +32,44 @@ fn default_daemon_server_config() -> crate::api::DashboardServerConfig {
     }
 }
 
-#[cfg(not(test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefaultDaemonBootstrapMode {
+    AlreadyRunning,
+    ServiceManaged,
+    Detached,
+}
+
+fn choose_default_daemon_bootstrap_mode(
+    runtime: Option<&crate::daemon::DaemonRuntimeState>,
+    service: Option<&crate::daemon::DaemonServiceMetadata>,
+) -> DefaultDaemonBootstrapMode {
+    if runtime.is_some() {
+        DefaultDaemonBootstrapMode::AlreadyRunning
+    } else if service.is_some() {
+        DefaultDaemonBootstrapMode::ServiceManaged
+    } else {
+        DefaultDaemonBootstrapMode::Detached
+    }
+}
+
 fn daemon_server_config_from_status(
     runtime: Option<&crate::daemon::DaemonRuntimeState>,
+    service: Option<&crate::daemon::DaemonServiceMetadata>,
 ) -> crate::api::DashboardServerConfig {
-    runtime.map_or_else(default_daemon_server_config, |runtime| {
-        crate::api::DashboardServerConfig {
+    if let Some(runtime) = runtime {
+        return crate::api::DashboardServerConfig {
             host: Some(runtime.host.clone()),
             port: runtime.port,
             no_open: true,
             force_http: runtime.url.starts_with("http://"),
             recheck_local_dashboard_net: false,
             bundle_dir: Some(runtime.bundle_dir.clone()),
-        }
-    })
+        };
+    }
+
+    service
+        .map(|metadata| metadata.config.clone())
+        .unwrap_or_else(default_daemon_server_config)
 }
 
 pub(crate) async fn maybe_install_default_daemon(
@@ -62,16 +86,29 @@ pub(crate) async fn maybe_install_default_daemon(
     }
 
     let _guard = DefaultDaemonBootstrapLock::acquire()?;
-    if crate::daemon::runtime_state()?.is_some() {
-        return Ok(());
-    }
+    let runtime = crate::daemon::runtime_state()?;
+    let service = crate::daemon::service_metadata()?;
+    let bootstrap_mode = choose_default_daemon_bootstrap_mode(runtime.as_ref(), service.as_ref());
 
-    let config_path = bootstrap_default_daemon_environment()?;
-    let daemon_config = crate::daemon::resolve_daemon_config(Some(config_path.as_path()))?;
-    let _ =
-        crate::daemon::start_detached(&daemon_config, default_daemon_server_config(), telemetry)
-            .await?;
-    Ok(())
+    match bootstrap_mode {
+        DefaultDaemonBootstrapMode::AlreadyRunning => Ok(()),
+        DefaultDaemonBootstrapMode::ServiceManaged | DefaultDaemonBootstrapMode::Detached => {
+            let config_path = bootstrap_default_daemon_environment()?;
+            let daemon_config = crate::daemon::resolve_daemon_config(Some(config_path.as_path()))?;
+            let config = daemon_server_config_from_status(runtime.as_ref(), service.as_ref());
+            match bootstrap_mode {
+                DefaultDaemonBootstrapMode::ServiceManaged => {
+                    let _ = crate::daemon::start_service(&daemon_config, config, telemetry).await?;
+                }
+                DefaultDaemonBootstrapMode::Detached => {
+                    let _ =
+                        crate::daemon::start_detached(&daemon_config, config, telemetry).await?;
+                }
+                DefaultDaemonBootstrapMode::AlreadyRunning => {}
+            }
+            Ok(())
+        }
+    }
 }
 
 struct DefaultDaemonBootstrapLock {
@@ -155,7 +192,7 @@ pub(crate) async fn maybe_enable_default_daemon_service(
             return Ok(());
         }
 
-        let config = daemon_server_config_from_status(runtime.as_ref());
+        let config = daemon_server_config_from_status(runtime.as_ref(), service.as_ref());
         if runtime.is_some() {
             crate::daemon::stop().await?;
         }
@@ -228,4 +265,109 @@ pub(crate) fn with_enable_default_daemon_service_hook<T>(
         },
     );
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    fn dashboard_config(port: u16, force_http: bool) -> crate::api::DashboardServerConfig {
+        crate::api::DashboardServerConfig {
+            host: Some("127.0.0.1".to_string()),
+            port,
+            no_open: true,
+            force_http,
+            recheck_local_dashboard_net: false,
+            bundle_dir: Some(PathBuf::from("/tmp/bitloops-dashboard-service")),
+        }
+    }
+
+    fn daemon_runtime_state() -> crate::daemon::DaemonRuntimeState {
+        crate::daemon::DaemonRuntimeState {
+            version: 1,
+            config_path: PathBuf::from("/tmp/bitloops/config.toml"),
+            config_root: PathBuf::from("/tmp/bitloops"),
+            pid: 12345,
+            mode: crate::daemon::DaemonMode::Service,
+            service_name: Some("com.bitloops.daemon".to_string()),
+            url: "http://127.0.0.1:5667".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 5667,
+            bundle_dir: PathBuf::from("/tmp/bitloops-dashboard-runtime"),
+            relational_db_path: PathBuf::from("/tmp/bitloops/relational.db"),
+            events_db_path: PathBuf::from("/tmp/bitloops/events.db"),
+            blob_store_path: PathBuf::from("/tmp/bitloops/blob-store"),
+            repo_registry_path: PathBuf::from("/tmp/bitloops/repos.json"),
+            binary_fingerprint: "test-fingerprint".to_string(),
+            updated_at_unix: 1,
+        }
+    }
+
+    fn daemon_service_metadata() -> crate::daemon::DaemonServiceMetadata {
+        crate::daemon::DaemonServiceMetadata {
+            version: 1,
+            config_path: PathBuf::from("/tmp/bitloops/config.toml"),
+            config_root: PathBuf::from("/tmp/bitloops"),
+            manager: crate::daemon::ServiceManagerKind::Launchd,
+            service_name: "com.bitloops.daemon".to_string(),
+            service_file: Some(PathBuf::from("/tmp/com.bitloops.daemon.plist")),
+            config: dashboard_config(5777, false),
+            last_url: Some("http://127.0.0.1:5777".to_string()),
+            last_pid: None,
+        }
+    }
+
+    #[test]
+    fn default_daemon_bootstrap_mode_uses_service_when_metadata_exists_without_runtime() {
+        assert_eq!(
+            super::choose_default_daemon_bootstrap_mode(None, None),
+            super::DefaultDaemonBootstrapMode::Detached
+        );
+
+        let service = daemon_service_metadata();
+        assert_eq!(
+            super::choose_default_daemon_bootstrap_mode(None, Some(&service)),
+            super::DefaultDaemonBootstrapMode::ServiceManaged
+        );
+
+        let runtime = daemon_runtime_state();
+        assert_eq!(
+            super::choose_default_daemon_bootstrap_mode(Some(&runtime), Some(&service)),
+            super::DefaultDaemonBootstrapMode::AlreadyRunning
+        );
+    }
+
+    #[test]
+    fn daemon_server_config_prefers_runtime_then_service_then_defaults() {
+        let runtime = daemon_runtime_state();
+        let service = daemon_service_metadata();
+
+        let from_runtime = super::daemon_server_config_from_status(Some(&runtime), Some(&service));
+        assert_eq!(from_runtime.port, 5667);
+        assert_eq!(from_runtime.bundle_dir, Some(runtime.bundle_dir.clone()));
+        assert!(from_runtime.force_http);
+
+        let from_service = super::daemon_server_config_from_status(None, Some(&service));
+        assert_eq!(from_service.port, 5777);
+        assert_eq!(from_service.bundle_dir, service.config.bundle_dir.clone());
+        assert!(!from_service.force_http);
+
+        let defaulted = super::daemon_server_config_from_status(None, None);
+        assert_eq!(defaulted.port, crate::api::DEFAULT_DASHBOARD_PORT);
+        assert!(defaulted.bundle_dir.is_none());
+    }
+
+    #[test]
+    fn default_daemon_bootstrap_mode_matches_second_repo_stale_service_state() {
+        let service = daemon_service_metadata();
+
+        let runtime_absent = None;
+        let service_present = Some(&service);
+
+        assert_eq!(
+            super::choose_default_daemon_bootstrap_mode(runtime_absent, service_present),
+            super::DefaultDaemonBootstrapMode::ServiceManaged,
+            "when the supervisor service is installed but no daemon runtime is attached, init bootstrap must use the service path rather than detached start"
+        );
+    }
 }
