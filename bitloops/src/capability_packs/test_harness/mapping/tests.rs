@@ -15,7 +15,8 @@ use crate::adapters::languages::rust::test_support::macros::extract_rust_macro_i
 use crate::adapters::languages::rust::test_support::rust_source_contains_doctest_markers;
 use crate::adapters::languages::rust::test_support::scenarios::collect_rust_suites;
 use crate::adapters::languages::ts_js::test_support::{
-    collect_typescript_suites, extract_import_specifier, resolve_import_to_repo_path, unquote,
+    collect_typescript_suites, extract_import_specifier, resolve_import_to_repo_path,
+    ts_js_test_support, unquote,
 };
 
 use tempfile::TempDir;
@@ -910,6 +911,62 @@ describe("outer", () => {
         "expected exactly one inner scenario"
     );
     assert_eq!(inner.scenarios[0].name, "inner test");
+}
+
+#[test]
+fn typescript_duplicate_suite_and_case_names_materialize_unique_ids() {
+    let temp = TempDir::new().expect("failed creating temp repo");
+    let repo_root = temp.path();
+    fs::create_dir_all(repo_root.join("tests")).expect("failed creating tests directory");
+    fs::write(
+        repo_root.join("tests/dupes.spec.ts"),
+        r#"
+import { describe, expect, it } from 'vitest'
+
+describe('parse positives', () => {
+  it('options with multilines', () => {
+    expect(1).toBe(1)
+  })
+
+  it('options with multilines', () => {
+    expect(2).toBe(2)
+  })
+})
+
+describe('resolveBuildOutputs', () => {
+  it('resolves outputs correctly', () => {
+    expect(1).toBe(1)
+  })
+})
+
+describe('resolveBuildOutputs', () => {
+  it('default format: one entry', () => {
+    expect(1).toBe(1)
+  })
+})
+"#,
+    )
+    .expect("failed writing duplicate TypeScript tests");
+
+    let gateway = SourceOnlyLanguageServicesGateway {
+        support: ts_js_test_support(),
+    };
+    let output = execute("repo-1", repo_root, "commit-1", &[], &gateway)
+        .expect("mapping execution should discover TypeScript tests");
+
+    let artefact_ids: HashSet<&str> = output
+        .test_artefacts
+        .iter()
+        .map(|artefact| artefact.artefact_id.as_str())
+        .collect();
+    assert_eq!(artefact_ids.len(), output.test_artefacts.len());
+
+    let symbol_ids: HashSet<&str> = output
+        .test_artefacts
+        .iter()
+        .map(|artefact| artefact.symbol_id.as_str())
+        .collect();
+    assert_eq!(symbol_ids.len(), output.test_artefacts.len());
 }
 
 #[test]

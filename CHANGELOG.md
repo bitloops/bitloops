@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Fixed
+
+- **DevQL sync now handles Vite's package fixtures and duplicate Vitest names** (`CLI-1858`): project-aware classification now accepts `package.json` files with a leading UTF-8 BOM and reports the package path on parse failures. Test-harness materialization also distinguishes duplicate suite or case names by source line span, preventing legal repeated Vitest `describe`/`it` names from collapsing to the same test artefact ID during current-state sync.
+
 ## [0.0.28] - 2026-05-18
 
 ### Changed

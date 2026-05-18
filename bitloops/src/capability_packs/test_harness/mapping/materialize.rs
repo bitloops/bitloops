@@ -258,13 +258,14 @@ fn build_test_artefact_current_record(
     context: &RecordContext<'_>,
     spec: &TestArtefactSpec<'_>,
 ) -> TestArtefactCurrentRecord {
+    let identity_signature = test_identity_signature(spec);
     let symbol_id = test_structural_symbol_id(
         context.path,
         spec.canonical_kind,
         spec.language_kind,
         spec.parent_symbol_id,
         spec.name,
-        spec.signature,
+        Some(&identity_signature),
     );
     let artefact_id = test_revision_artefact_id(context.repo_id, context.content_id, &symbol_id);
 
@@ -290,6 +291,11 @@ fn build_test_artefact_current_record(
         docstring: None,
         discovery_source: spec.discovery_source.as_str().to_string(),
     }
+}
+
+fn test_identity_signature(spec: &TestArtefactSpec<'_>) -> String {
+    let base = spec.signature.unwrap_or(spec.name);
+    format!("{base}@lines:{}-{}", spec.start_line, spec.end_line)
 }
 
 fn build_test_artefact_edge_current_record(
