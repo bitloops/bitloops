@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Added
+
+- **Architecture role intelligence for DevQL**: added repository-scoped architecture role taxonomy, detection rules, extracted facts, rule signals, current assignments, assignment history, role-change proposals, assignment migrations, and adjudication attempts inside the `architecture_graph` capability. DevQL sync now classifies current files and artefacts into architecture roles, supports deterministic rule assignments, marks removed targets stale, and can queue ambiguous or high-impact classifications for structured-generation adjudication.
+- **CLI management for architecture roles**: added `bitloops devql architecture roles ...` commands to seed/bootstrap role taxonomies, classify current state, inspect role/adjudication status, rename/deprecate/remove/merge/split roles, create aliases, manage detection rules, and show/apply role proposals.
+- **Architecture role context in slim DevQL GraphQL**: `selectArtefacts(...)` now exposes `architectureRoles` and `architectureGraphContext`, and selection `overview` includes architecture-role summary data plus follow-up query hints.
+- **Architecture-aware semantic search**: semantic embeddings now support an `architecture` representation based on assigned architecture roles. `selectArtefacts(by: { search: "...", searchMode: ARCHITECTURE })` and `AUTO` search can use architecture-role signals alongside lexical, identity, code, and summary retrieval.
+
+### Changed
+
+- **Architecture graph capability work now uses dedicated background workplane lanes**: role classification runs as a current-state consumer, role adjudication runs through its own mailbox, and role assignment changes enqueue targeted architecture embedding refresh/cleanup jobs.
+- **Structured-generation configuration now documents architecture slots and CLI-agent thinking levels**: the configuration reference covers `[architecture.inference].fact_synthesis`, `[architecture.inference].role_adjudication`, and optional `thinking_level` values for local CLI-agent drivers.
+- **Repo-local DevQL guidance now includes architecture search patterns**: managed guidance surfaces mention `searchMode: ARCHITECTURE` and compact architecture-role query shapes.
+
+### Fixed
+
+- **Architecture role status can inspect runtime queue state read-only**: `bitloops devql architecture roles status` reads queued adjudication jobs and review items without requiring current-state classification context.
+
 ## [0.0.28] - 2026-05-18
 
 ### Changed
