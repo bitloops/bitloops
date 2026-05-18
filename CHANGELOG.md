@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+### Changed
+
+- **Semantic embeddings are now opt-in per repo policy instead of daemon-global intent**: repo policy files (`.bitloops.toml` / `.bitloops.local.toml`) now own `semantic_clones` embedding mode and profile bindings, while daemon `config.toml` only owns the available inference runtimes and profiles. `bitloops init`, `--no-embeddings`, and local/platform embeddings setup now persist the selected repo's intent without silently enabling embeddings for every repo that shares the same daemon.
+
+### Fixed
+
+- **Local embeddings setup now honors repo-bound daemon configs**: local managed embeddings bootstrap now writes the `local_code` runtime profile into the daemon config bound by the repo's `.bitloops.local.toml`, matching the platform embeddings path and avoiding accidental writes to an unrelated default daemon config.
+
 ## [0.0.27] - 2026-05-15
 
 ### Fixed
