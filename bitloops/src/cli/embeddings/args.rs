@@ -4,12 +4,18 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::capability_packs::semantic_clones::workplane::activate_embedding_pipeline_mailboxes;
+use crate::capability_packs::semantic_clones::workplane::{
+    activate_embedding_pipeline_mailboxes, deactivate_embedding_pipeline_mailboxes,
+};
 use crate::cli::enable::find_repo_root;
 use crate::cli::telemetry_consent;
+use crate::config::settings::settings_local_path;
 use crate::config::{
-    BITLOOPS_CONFIG_RELATIVE_PATH, resolve_bound_daemon_config_path_for_repo,
-    resolve_daemon_config_path_for_repo, resolve_embedding_capability_config_for_repo,
+    BITLOOPS_CONFIG_RELATIVE_PATH, RepoSemanticEmbeddingPolicy,
+    prepare_daemon_local_embeddings_profile_install, repo_semantic_embedding_policy,
+    resolve_bound_daemon_config_path_for_repo, resolve_daemon_config_path_for_repo,
+    resolve_embedding_capability_config_for_repo, restore_repo_semantic_embedding_policy,
+    set_repo_semantic_embedding_policy,
 };
 use crate::daemon::DevqlTaskSource;
 use crate::devql_transport::{SlimCliRepoScope, discover_slim_cli_repo_scope};
@@ -108,23 +114,67 @@ pub(crate) async fn run_async(args: EmbeddingsArgs) -> Result<()> {
     match command {
         EmbeddingsCommand::Install(args) => match args.runtime {
             EmbeddingsRuntime::Local => {
-                activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_install").context(
-                    "activating semantic clones embedding mailboxes for embeddings install",
-                )?;
-                let (scope, queued) =
-                    enqueue_embeddings_bootstrap_task(&repo_root, None, DevqlTaskSource::ManualCli)
-                        .await?;
-                if let Some(task) = crate::cli::devql::graphql::watch_task_id_via_graphql(
-                    &scope,
-                    &queued.task.task_id,
-                    false,
-                )
-                .await?
-                {
-                    println!(
-                        "{}",
-                        crate::cli::devql::format_task_completion_summary(&task)
-                    );
+                let previous_policy = repo_semantic_embedding_policy(&repo_root)?;
+                let config_path = resolve_bound_daemon_config_path_for_repo(&repo_root)
+                    .or_else(|_| resolve_daemon_config_path_for_repo(&repo_root))
+                    .unwrap_or_else(|_| repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH));
+                let local_plan = prepare_daemon_local_embeddings_profile_install(&config_path)?;
+                local_plan.apply()?;
+                let install_result = async {
+                    set_repo_semantic_embedding_policy(
+                        &settings_local_path(&repo_root),
+                        &RepoSemanticEmbeddingPolicy::enabled_with_profile("local_code"),
+                    )?;
+                    activate_embedding_pipeline_mailboxes(&repo_root, "embeddings_install")
+                        .context(
+                            "activating semantic clones embedding mailboxes for embeddings install",
+                        )?;
+                    let (scope, queued) = enqueue_embeddings_bootstrap_task(
+                        &repo_root,
+                        Some("local_code"),
+                        DevqlTaskSource::ManualCli,
+                    )
+                    .await?;
+                    if let Some(task) = crate::cli::devql::graphql::watch_task_id_via_graphql(
+                        &scope,
+                        &queued.task.task_id,
+                        false,
+                    )
+                    .await?
+                    {
+                        println!(
+                            "{}",
+                            crate::cli::devql::format_task_completion_summary(&task)
+                        );
+                    }
+                    Ok::<(), anyhow::Error>(())
+                }
+                .await;
+                if let Err(err) = install_result {
+                    local_plan.rollback().with_context(|| {
+                        format!(
+                            "rolling back daemon config after failed embeddings install: {err:#}"
+                        )
+                    })?;
+                    restore_repo_semantic_embedding_policy(
+                        &settings_local_path(&repo_root),
+                        &previous_policy,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "restoring repo embedding policy after failed embeddings install: {err:#}"
+                        )
+                    })?;
+                    deactivate_embedding_pipeline_mailboxes(
+                        &repo_root,
+                        "embeddings_install_rollback",
+                    )
+                    .with_context(|| {
+                        format!(
+                            "deactivating embedding mailboxes after failed embeddings install: {err:#}"
+                        )
+                    })?;
+                    return Err(err);
                 }
                 Ok(())
             }

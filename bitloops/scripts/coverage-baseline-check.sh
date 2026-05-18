@@ -16,7 +16,7 @@ fi
 BASELINE_FILE_JSONL="$PROJECT_ROOT/.coverage-baseline.jsonl"
 COVERAGE_FILE="$PROJECT_ROOT/target/llvm-cov.info"
 # Match run_coverage() / duckdb_no_bundle_flags (bundled mode omits --no-default-features).
-CANONICAL_CMD="cargo llvm-cov --workspace --no-default-features --all-targets --no-fail-fast --lcov --output-path target/llvm-cov.info"
+CANONICAL_CMD="cargo llvm-cov nextest --workspace --no-default-features --all-targets --lcov --output-path target/llvm-cov.info"
 EPSILON="0.5"
 
 sanitize_git_env() {
@@ -46,9 +46,17 @@ ensure_llvm_cov() {
   fi
 }
 
+ensure_nextest() {
+  if ! cargo nextest --version >/dev/null 2>&1; then
+    echo "cargo-nextest is not installed."
+    echo "Install it once with: brew install cargo-nextest or cargo install cargo-nextest --locked"
+    exit 1
+  fi
+}
+
 run_coverage() {
   rm -f "$COVERAGE_FILE"
-  cargo llvm-cov --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --lcov --output-path "$COVERAGE_FILE"
+  cargo llvm-cov nextest --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --lcov --output-path "$COVERAGE_FILE"
   if [[ ! -f "$COVERAGE_FILE" ]]; then
     echo "Coverage file was not generated: $COVERAGE_FILE"
     exit 1
@@ -234,10 +242,12 @@ main() {
       ;;
     check)
       ensure_llvm_cov
+      ensure_nextest
       check_mode
       ;;
     update)
       ensure_llvm_cov
+      ensure_nextest
       update_mode
       ;;
     *)

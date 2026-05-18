@@ -28,6 +28,18 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Evidence-Driven Development',
+      items: [
+        'evidence-driven-development/index',
+        'evidence-driven-development/manifesto',
+        'evidence-driven-development/foundational-essay',
+        'evidence-driven-development/methodology',
+        'evidence-driven-development/technical-model',
+        'evidence-driven-development/adoption-playbook',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Guides',
       items: [
         'guides/end-to-end-workflow',
