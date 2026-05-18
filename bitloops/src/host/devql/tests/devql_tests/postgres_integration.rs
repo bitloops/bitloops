@@ -1,4 +1,7 @@
 use super::*;
+use crate::capability_packs::semantic_clones::{
+    RepoEmbeddingSyncAction, determine_repo_embedding_sync_action, embeddings,
+};
 
 #[tokio::test]
 #[ignore = "requires BITLOOPS_TEST_PG_DSN"]
@@ -347,6 +350,128 @@ async fn ensure_repository_row_populates_local_current_projection_catalog_when_s
         .expect("count remote repository rows")
         .get(0);
     assert_eq!(remote_count, 1, "expected remote shared repository row");
+}
+
+#[tokio::test]
+#[ignore = "requires BITLOOPS_TEST_PG_DSN"]
+async fn summary_embedding_sync_action_uses_shared_summary_authority_without_local_historical_mirror()
+ {
+    let dsn = env::var("BITLOOPS_TEST_PG_DSN").expect("BITLOOPS_TEST_PG_DSN must be set");
+    let (client, connection) = tokio_postgres::connect(&dsn, NoTls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let mut cfg = test_cfg();
+    cfg.pg_dsn = Some(dsn.clone());
+    cfg.repo.repo_id = deterministic_uuid("repo://summary-embedding-shared-authority");
+    init_postgres_schema(&cfg, &client).await.unwrap();
+    let relational = postgres_relational_store(&cfg, &dsn).await;
+    init_sqlite_schema(&relational.local.path)
+        .await
+        .expect("initialise local sqlite schema");
+    ensure_repository_row(&cfg, &relational)
+        .await
+        .expect("ensure repository row across both stores");
+
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO current_file_state (
+                repo_id, path, analysis_mode, language, head_content_id, index_content_id,
+                worktree_content_id, effective_content_id, effective_source,
+                parser_version, extractor_version, exists_in_head,
+                exists_in_index, exists_in_worktree, last_synced_at
+             ) VALUES (
+                '{repo_id}', 'src/lib.rs', 'code', 'rust', 'blob-1', 'blob-1',
+                'blob-1', 'blob-1', 'head',
+                'parser-v1', 'extractor-v1', 1, 1, 1, '2026-05-18T12:00:00Z'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+        ))
+        .await
+        .expect("insert local current file state");
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO artefacts_current (
+                repo_id, path, content_id, symbol_id, artefact_id, language,
+                canonical_kind, language_kind, symbol_fqn, parent_symbol_id,
+                parent_artefact_id, start_line, end_line, start_byte, end_byte,
+                signature, modifiers, docstring, updated_at
+             ) VALUES (
+                '{repo_id}', 'src/lib.rs', 'blob-1', '{symbol_id}', '{artefact_id}', 'rust',
+                'function', 'function_item', 'src/lib.rs::render', NULL,
+                NULL, 1, 3, 0, 48, 'fn render() -> String', '[]', NULL, '2026-05-18T12:00:00Z'
+             )",
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            symbol_id = esc_pg(&deterministic_uuid("summary-sync-action-symbol")),
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+        ))
+        .await
+        .expect("insert local current artefact");
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO symbol_features_current (
+                artefact_id, repo_id, path, content_id, symbol_id, semantic_features_input_hash,
+                normalized_name, normalized_signature, modifiers, identifier_tokens,
+                normalized_body_tokens, parent_kind, context_tokens
+             ) VALUES (
+                '{artefact_id}', '{repo_id}', 'src/lib.rs', 'blob-1', '{symbol_id}', 'feature-hash-1',
+                'render', NULL, '[]', '[]', '[]', NULL, '[]'
+             )",
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            symbol_id = esc_pg(&deterministic_uuid("summary-sync-action-symbol")),
+        ))
+        .await
+        .expect("insert local current semantic features");
+
+    let setup = embeddings::EmbeddingSetup::new("test-provider", "test-summary-model", 3);
+    relational
+        .exec_serialized(&format!(
+            "INSERT INTO symbol_embeddings_current (
+                artefact_id, repo_id, path, content_id, symbol_id, representation_kind,
+                setup_fingerprint, provider, model, dimension, embedding_input_hash, embedding
+             ) VALUES (
+                '{artefact_id}', '{repo_id}', 'src/lib.rs', 'blob-1', '{symbol_id}', 'summary',
+                '{setup_fingerprint}', '{provider}', '{model}', 3, 'embed-hash-1', '[0.1,0.2,0.3]'
+             )",
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+            repo_id = esc_pg(&cfg.repo.repo_id),
+            symbol_id = esc_pg(&deterministic_uuid("summary-sync-action-symbol")),
+            setup_fingerprint = esc_pg(&setup.setup_fingerprint),
+            provider = esc_pg(&setup.provider),
+            model = esc_pg(&setup.model),
+        ))
+        .await
+        .expect("insert local current summary embedding");
+
+    postgres_exec(
+        &client,
+        &format!(
+            "INSERT INTO symbol_semantics (
+                artefact_id, repo_id, blob_sha, semantic_features_input_hash,
+                docstring_summary, llm_summary, template_summary, summary, confidence, source_model
+             ) VALUES (
+                '{artefact_id}', '{repo_id}', 'blob-1', 'feature-hash-1',
+                NULL, NULL, 'Template summary.', 'Remote shared summary.', NULL, NULL
+             )",
+            artefact_id = esc_pg(&deterministic_uuid("summary-sync-action-artefact")),
+            repo_id = esc_pg(&cfg.repo.repo_id),
+        ),
+    )
+    .await
+    .expect("insert remote shared summary");
+
+    let action = determine_repo_embedding_sync_action(
+        &relational,
+        &cfg.repo.repo_id,
+        embeddings::EmbeddingRepresentationKind::Summary,
+        &setup,
+    )
+    .await
+    .expect("determine sync action");
+
+    assert_eq!(action, RepoEmbeddingSyncAction::AdoptExisting);
 }
 
 #[tokio::test]

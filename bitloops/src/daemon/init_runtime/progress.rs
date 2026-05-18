@@ -4,16 +4,17 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::capability_packs::semantic_clones::embeddings::EmbeddingRepresentationKind;
 use crate::capability_packs::semantic_clones::runtime_config::embedding_slot_for_representation;
 use crate::config::resolve_semantic_clones_config_for_repo;
 use crate::daemon::types::InitSessionRecord;
-use crate::host::devql::RelationalStorageRole;
+use crate::host::devql::{RelationalStorageRole, sql_string_list_pg};
 use crate::host::relational_store::DefaultRelationalStore;
 
 use super::embedding_freshness::{
-    EmbeddingFreshnessCountSelection, load_embedding_freshness_counts, query_progress_count,
+    EmbeddingFreshnessCountSelection, load_embedding_freshness_counts,
 };
 use super::stats::{RuntimeLaneProgressState, SessionWorkplaneStats, SummaryFreshnessState};
 use super::types::InitRuntimeLaneProgressView;
@@ -122,13 +123,7 @@ fn count_current_model_backed_summary_artefacts(
     relational: &DefaultRelationalStore,
     repo_id: &str,
 ) -> Result<u64> {
-    query_progress_count(
-        relational,
-        &format!(
-            "SELECT COUNT(*) AS total FROM ({}) fresh",
-            fresh_model_backed_summary_artefacts_sql(repo_id),
-        ),
-    )
+    Ok(load_fresh_model_backed_summary_artefact_ids(relational, repo_id)?.len() as u64)
 }
 
 pub(crate) fn load_summary_freshness_state(
@@ -137,15 +132,60 @@ pub(crate) fn load_summary_freshness_state(
 ) -> Result<SummaryFreshnessState> {
     let eligible_artefact_ids =
         query_progress_ids(relational, &eligible_current_summary_artefacts_sql(repo_id))?;
-    let fresh_model_backed_artefact_ids = query_progress_ids(
-        relational,
-        &fresh_model_backed_summary_artefacts_sql(repo_id),
-    )?;
+    let fresh_model_backed_artefact_ids =
+        load_fresh_model_backed_summary_artefact_ids(relational, repo_id)?;
 
     Ok(SummaryFreshnessState {
         eligible_artefact_ids,
         fresh_model_backed_artefact_ids,
     })
+}
+
+fn load_fresh_model_backed_summary_artefact_ids(
+    relational: &DefaultRelationalStore,
+    repo_id: &str,
+) -> Result<BTreeSet<String>> {
+    let current_snapshots = load_eligible_current_summary_artefact_snapshots(relational, repo_id)?;
+    if current_snapshots.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let mut fresh_artefact_ids = query_progress_ids(
+        relational,
+        &fresh_current_model_backed_summary_artefacts_sql(repo_id),
+    )?;
+    let missing_artefact_ids = current_snapshots
+        .iter()
+        .filter(|(artefact_id, _)| !fresh_artefact_ids.contains(artefact_id))
+        .map(|(artefact_id, _)| artefact_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if missing_artefact_ids.is_empty() {
+        return Ok(fresh_artefact_ids);
+    }
+
+    let historical_rows = match relational.query_rows_for_role_blocking(
+        RelationalStorageRole::SharedRelational,
+        &fresh_historical_model_backed_summary_artefacts_sql(repo_id, &missing_artefact_ids),
+    ) {
+        Ok(rows) => rows,
+        Err(err) if missing_progress_table(&err) => Vec::new(),
+        Err(err) => return Err(err),
+    };
+    for row in historical_rows {
+        let Some(artefact_id) = row.get("artefact_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(snapshot_id) = row.get("snapshot_id").and_then(Value::as_str) else {
+            continue;
+        };
+        if current_snapshots.contains(&(artefact_id.to_string(), snapshot_id.to_string())) {
+            fresh_artefact_ids.insert(artefact_id.to_string());
+        }
+    }
+
+    Ok(fresh_artefact_ids)
 }
 
 fn eligible_current_summary_artefacts_sql(repo_id: &str) -> String {
@@ -160,7 +200,19 @@ fn eligible_current_summary_artefacts_sql(repo_id: &str) -> String {
     )
 }
 
-fn fresh_model_backed_summary_artefacts_sql(repo_id: &str) -> String {
+fn eligible_current_summary_artefact_snapshots_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT DISTINCT a.artefact_id, a.content_id AS snapshot_id \
+         FROM artefacts_current a \
+         JOIN current_file_state cfs ON cfs.repo_id = a.repo_id AND cfs.path = a.path \
+         WHERE a.repo_id = '{}' \
+           AND cfs.analysis_mode = 'code' \
+           AND LOWER(COALESCE(a.canonical_kind, COALESCE(a.language_kind, 'symbol'))) <> 'import'",
+        escape_sql_string(repo_id),
+    )
+}
+
+fn fresh_current_model_backed_summary_artefacts_sql(repo_id: &str) -> String {
     let repo_id = escape_sql_string(repo_id);
     format!(
         "SELECT DISTINCT a.artefact_id \
@@ -183,6 +235,51 @@ fn fresh_model_backed_summary_artefacts_sql(repo_id: &str) -> String {
                 OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
            )",
     )
+}
+
+fn fresh_historical_model_backed_summary_artefacts_sql(
+    repo_id: &str,
+    artefact_ids: &[String],
+) -> String {
+    format!(
+        "SELECT DISTINCT s.artefact_id, s.blob_sha AS snapshot_id \
+         FROM symbol_semantics s \
+         JOIN symbol_features f \
+           ON f.repo_id = s.repo_id \
+          AND f.artefact_id = s.artefact_id \
+          AND f.blob_sha = s.blob_sha \
+         WHERE s.repo_id = '{repo_id}' \
+           AND s.artefact_id IN ({artefact_ids}) \
+           AND s.semantic_features_input_hash = f.semantic_features_input_hash \
+           AND ( \
+                (s.llm_summary IS NOT NULL AND TRIM(s.llm_summary) <> '') \
+                OR (s.source_model IS NOT NULL AND TRIM(s.source_model) <> '') \
+           )",
+        repo_id = escape_sql_string(repo_id),
+        artefact_ids = sql_string_list_pg(artefact_ids),
+    )
+}
+
+fn load_eligible_current_summary_artefact_snapshots(
+    relational: &DefaultRelationalStore,
+    repo_id: &str,
+) -> Result<BTreeSet<(String, String)>> {
+    match relational.query_rows_for_role_blocking(
+        RelationalStorageRole::CurrentProjection,
+        &eligible_current_summary_artefact_snapshots_sql(repo_id),
+    ) {
+        Ok(rows) => Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                Some((
+                    row.get("artefact_id")?.as_str()?.to_string(),
+                    row.get("snapshot_id")?.as_str()?.to_string(),
+                ))
+            })
+            .collect()),
+        Err(err) if missing_progress_table(&err) => Ok(BTreeSet::new()),
+        Err(err) => Err(err),
+    }
 }
 
 fn query_progress_ids(relational: &DefaultRelationalStore, sql: &str) -> Result<BTreeSet<String>> {

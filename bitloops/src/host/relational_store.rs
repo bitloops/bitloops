@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::config::{
@@ -8,8 +8,8 @@ use crate::config::{
     resolve_store_backend_config_for_repo,
 };
 use crate::host::devql::{
-    DevqlConfig, RelationalDialect, RelationalPrimaryBackend, RelationalRoleBackend,
-    RelationalStorage, RelationalStorageRole, sqlite_value_to_json,
+    DevqlConfig, RelationalDialect, RelationalRoleBackend, RelationalStorage,
+    RelationalStorageRole, sqlite_value_to_json,
 };
 use crate::storage::{PostgresSyncConnection, SqliteConnectionPool};
 
@@ -27,11 +27,6 @@ pub trait RelationalStore: Send + Sync {
     ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>>;
 
     fn exec_batch_transactional<'a>(
-        &'a self,
-        statements: &'a [String],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>>;
-
-    fn exec_remote_batch_transactional<'a>(
         &'a self,
         statements: &'a [String],
     ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>>;
@@ -177,24 +172,6 @@ impl DefaultRelationalStore {
                 self.inner.local.path.display()
             )
         })
-    }
-
-    pub fn query_rows_primary_blocking(&self, sql: &str) -> Result<Vec<Value>> {
-        match self.inner.primary_backend() {
-            RelationalPrimaryBackend::Sqlite => query_local_sqlite_rows_blocking(
-                self.sqlite_path(),
-                sql,
-                "querying primary relational SQLite rows",
-            ),
-            RelationalPrimaryBackend::Postgres => {
-                let dsn = self.inner.remote_dsn().ok_or_else(|| {
-                    anyhow::anyhow!("remote Postgres primary backend is configured without a DSN")
-                })?;
-                PostgresSyncConnection::connect(dsn)?
-                    .query_rows(sql)
-                    .context("querying primary relational Postgres rows")
-            }
-        }
     }
 
     pub fn query_rows_for_role_blocking(
@@ -354,18 +331,6 @@ impl RelationalStore for DefaultRelationalStore {
         statements: &'a [String],
     ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move { self.inner.exec_batch_transactional(statements).await })
-    }
-
-    fn exec_remote_batch_transactional<'a>(
-        &'a self,
-        statements: &'a [String],
-    ) -> core::pin::Pin<Box<dyn core::future::Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            if !self.has_remote() {
-                bail!("remote Postgres storage is not configured");
-            }
-            self.inner.exec_remote_batch_transactional(statements).await
-        })
     }
 
     fn query_rows<'a>(

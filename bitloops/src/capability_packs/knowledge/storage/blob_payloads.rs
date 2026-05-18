@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 
 use crate::config::StoreBackendConfig;
 use crate::host::capability_host::gateways::{BlobPayloadGateway, BlobPayloadRef};
-use crate::storage::blob::{BlobStore, create_project_blob_store_with_backend_for_repo};
+use crate::storage::BlobStorageRole;
+use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_role_for_repo};
 
 use super::models::KnowledgePayloadRef;
 
@@ -16,8 +17,12 @@ impl BlobKnowledgePayloadStore {
         repo_root: &std::path::Path,
         cfg: &StoreBackendConfig,
     ) -> Result<Self> {
-        let resolved = create_project_blob_store_with_backend_for_repo(&cfg.blobs, repo_root)
-            .context("initialising project/knowledge payload blob store")?;
+        let resolved = create_blob_store_with_backend_for_role_for_repo(
+            &cfg.blobs,
+            repo_root,
+            BlobStorageRole::ProjectKnowledge,
+        )
+        .context("initialising project/knowledge payload blob store")?;
         Ok(Self {
             store: resolved.store,
             backend: resolved.backend.to_string(),

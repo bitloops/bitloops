@@ -194,11 +194,17 @@ pub(crate) async fn run_for_project_root(
             crate::config::resolve_preferred_daemon_config_path_for_repo(project_root)
                 .ok()
                 .filter(|path| path.is_file())
-                .unwrap_or_else(|| target_daemon_config_path.to_path_buf());
-        crate::config::persist_daemon_store_backend_selection(
-            &source_daemon_config_path,
-            target_daemon_config_path,
-        )?;
+                .or_else(|| {
+                    target_daemon_config_path
+                        .is_file()
+                        .then(|| target_daemon_config_path.to_path_buf())
+                });
+        if let Some(source_daemon_config_path) = source_daemon_config_path {
+            crate::config::persist_daemon_store_backend_selection(
+                &source_daemon_config_path,
+                target_daemon_config_path,
+            )?;
+        }
     }
     let local_policy_path = project_root.join(REPO_POLICY_LOCAL_FILE_NAME);
     let previous_embeddings_policy = repo_semantic_embedding_policy(project_root)?;

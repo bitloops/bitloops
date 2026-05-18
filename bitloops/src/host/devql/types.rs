@@ -332,15 +332,6 @@ impl RelationalStorage {
         bail!("remote Postgres storage is not configured")
     }
 
-    pub async fn exec_primary_batch_transactional(&self, statements: &[String]) -> Result<()> {
-        match self.primary_backend() {
-            RelationalPrimaryBackend::Sqlite => self.exec_batch_transactional(statements).await,
-            RelationalPrimaryBackend::Postgres => {
-                self.exec_remote_batch_transactional(statements).await
-            }
-        }
-    }
-
     pub async fn query_rows(&self, sql: &str) -> Result<Vec<Value>> {
         sqlite_query_rows_path(self.sqlite_path(), sql).await
     }
@@ -361,13 +352,6 @@ impl RelationalStorage {
             return pg_query_rows(remote_client, sql).await;
         }
         bail!("remote Postgres storage is not configured")
-    }
-
-    pub async fn query_rows_primary(&self, sql: &str) -> Result<Vec<Value>> {
-        match self.primary_backend() {
-            RelationalPrimaryBackend::Sqlite => self.query_rows(sql).await,
-            RelationalPrimaryBackend::Postgres => self.query_rows_remote(sql).await,
-        }
     }
 
     #[cfg(test)]

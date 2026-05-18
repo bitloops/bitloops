@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use crate::config::{BlobStorageConfig, StoreBackendConfig};
+use crate::config::StoreBackendConfig;
+use crate::storage::{StorageAuthority, StorageRole, StorageRoleResolver};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatabaseConnectionStatus {
@@ -98,73 +99,37 @@ pub fn collect_storage_authority_rows(
     _repo_root: &Path,
     cfg: &StoreBackendConfig,
 ) -> Vec<StorageAuthorityRow> {
+    let roles = StorageRoleResolver::from_backend_config(cfg);
     vec![
-        StorageAuthorityRow {
-            family: "runtime",
-            authority: "workspace-local",
-            backend: "sqlite",
-        },
-        StorageAuthorityRow {
-            family: "relational current",
-            authority: "workspace-local",
-            backend: "sqlite",
-        },
-        StorageAuthorityRow {
-            family: "relational shared",
-            authority: if cfg.relational.has_postgres() {
-                "shared"
-            } else {
-                "workspace-local"
-            },
-            backend: if cfg.relational.has_postgres() {
-                "postgres"
-            } else {
-                "sqlite"
-            },
-        },
-        StorageAuthorityRow {
-            family: "events",
-            authority: if cfg.events.has_clickhouse() {
-                "shared"
-            } else {
-                "workspace-local"
-            },
-            backend: if cfg.events.has_clickhouse() {
-                "clickhouse"
-            } else {
-                "duckdb"
-            },
-        },
-        StorageAuthorityRow {
-            family: "blob runtime/session",
-            authority: "workspace-local",
-            backend: "local",
-        },
-        StorageAuthorityRow {
-            family: "blob project/knowledge",
-            authority: project_blob_authority(&cfg.blobs),
-            backend: project_blob_backend(&cfg.blobs),
-        },
+        storage_authority_row("runtime", roles, StorageRole::Runtime),
+        storage_authority_row("relational current", roles, StorageRole::CurrentProjection),
+        storage_authority_row("relational shared", roles, StorageRole::SharedRelational),
+        storage_authority_row("events", roles, StorageRole::Events),
+        storage_authority_row(
+            "blob runtime/session",
+            roles,
+            StorageRole::RuntimeSessionBlobs,
+        ),
+        storage_authority_row(
+            "blob project/knowledge",
+            roles,
+            StorageRole::ProjectKnowledgeBlobs,
+        ),
     ]
 }
 
-fn project_blob_authority(cfg: &BlobStorageConfig) -> &'static str {
-    if cfg.s3_bucket.is_some() || cfg.gcs_bucket.is_some() {
-        "shared"
-    } else {
-        "workspace-local"
-    }
-}
-
-fn project_blob_backend(cfg: &BlobStorageConfig) -> &'static str {
-    if cfg.s3_bucket.is_some() && cfg.gcs_bucket.is_some() {
-        "invalid"
-    } else if cfg.s3_bucket.is_some() {
-        "s3"
-    } else if cfg.gcs_bucket.is_some() {
-        "gcs"
-    } else {
-        "local"
+fn storage_authority_row(
+    family: &'static str,
+    roles: StorageRoleResolver,
+    role: StorageRole,
+) -> StorageAuthorityRow {
+    StorageAuthorityRow {
+        family,
+        authority: match roles.authority_for(role) {
+            StorageAuthority::WorkspaceLocal => "workspace-local",
+            StorageAuthority::Shared => "shared",
+        },
+        backend: roles.backend_for(role).label(),
     }
 }
 

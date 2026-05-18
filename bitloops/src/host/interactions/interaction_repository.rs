@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use super::store::InteractionEventRepository;
 use super::types::{InteractionEvent, InteractionEventFilter, InteractionSession, InteractionTurn};
 use crate::config::EventsBackendConfig;
+use crate::storage::{EventStorageRole, StorageBackendKind, StorageRoleResolver};
 
 mod clickhouse;
 mod clickhouse_client;
@@ -18,23 +19,32 @@ pub fn create_interaction_repository(
     repo_root: &Path,
     repo_id: String,
 ) -> Result<impl InteractionEventRepository + use<>> {
-    if events_cfg.has_clickhouse() {
-        let repository = ClickHouseInteractionRepository {
-            repo_id,
-            endpoint: events_cfg.clickhouse_endpoint(),
-            user: events_cfg.clickhouse_user.clone(),
-            password: events_cfg.clickhouse_password.clone(),
-        };
-        repository.ensure_schema()?;
-        return Ok(InteractionRepositoryBackend::ClickHouse(repository));
+    match StorageRoleResolver::from_events_config(events_cfg)
+        .event_backend_for(EventStorageRole::CanonicalEvents)
+    {
+        StorageBackendKind::ClickHouse => {
+            let repository = ClickHouseInteractionRepository {
+                repo_id,
+                endpoint: events_cfg.clickhouse_endpoint(),
+                user: events_cfg.clickhouse_user.clone(),
+                password: events_cfg.clickhouse_password.clone(),
+            };
+            repository.ensure_schema()?;
+            Ok(InteractionRepositoryBackend::ClickHouse(repository))
+        }
+        StorageBackendKind::DuckDb => {
+            let repository = DuckDbInteractionRepository {
+                repo_id,
+                path: events_cfg.resolve_duckdb_db_path_for_repo(repo_root),
+            };
+            repository.ensure_schema()?;
+            Ok(InteractionRepositoryBackend::DuckDb(repository))
+        }
+        other => bail!(
+            "unsupported canonical events backend for interaction repository: {}",
+            other.label()
+        ),
     }
-
-    let repository = DuckDbInteractionRepository {
-        repo_id,
-        path: events_cfg.resolve_duckdb_db_path_for_repo(repo_root),
-    };
-    repository.ensure_schema()?;
-    Ok(InteractionRepositoryBackend::DuckDb(repository))
 }
 
 enum InteractionRepositoryBackend {

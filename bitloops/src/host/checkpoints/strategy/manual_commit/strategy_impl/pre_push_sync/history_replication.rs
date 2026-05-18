@@ -1,4 +1,5 @@
 use super::*;
+use crate::host::devql::RelationalStorageRole;
 
 pub(super) async fn replicate_history_for_commit(
     relational: &crate::host::devql::RelationalStorage,
@@ -62,7 +63,7 @@ FROM artefact_edges WHERE repo_id = '{}' AND blob_sha IN (\
     statements.extend(build_artefact_edges_replication_sql(repo_id, &edge_rows));
 
     relational
-        .exec_remote_batch_transactional(&statements)
+        .exec_batch_transactional_for_role(RelationalStorageRole::SharedRelational, &statements)
         .await
 }
 

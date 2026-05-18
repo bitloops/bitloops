@@ -134,24 +134,24 @@ Adopt an explicit storage-authority model and remove ambiguous dual-target behav
 
 ### Storage role abstractions
 
-- [ ] Introduce explicit internal storage roles for runtime, current projection, shared relational, events, runtime/session blobs, and project/knowledge blobs.
-- [ ] Keep backend selection behind those abstractions so call sites do not depend on concrete engines like `Postgres`, `ClickHouse`, `S3`, or `GCS`.
-- [ ] Remove or deprecate generic relational dual-write helpers that blur local and remote authority.
+- [x] Introduce explicit internal storage roles for runtime, current projection, shared relational, events, runtime/session blobs, and project/knowledge blobs.
+- [x] Keep backend selection behind those abstractions so call sites do not depend on concrete engines like `Postgres`, `ClickHouse`, `S3`, or `GCS`.
+- [x] Remove or deprecate generic relational dual-write helpers that blur local and remote authority.
 
 ### Relational ownership split
 
 - [x] Audit the main relational table families and classify them as local current/projection or shared relational authority.
 - [ ] Finish the long-tail audit for remaining pack-owned tables and helper/index tables.
-- [ ] Treat all `*_current` relational tables as local-only workspace projection tables.
-- [ ] Treat `semantic_clone_embedding_setup_state` as local-only current/projection state.
+- [x] Treat all `*_current` relational tables as local-only workspace projection tables.
+- [x] Treat `semantic_clone_embedding_setup_state` as local-only current/projection state.
 - [x] Treat local current-vector/index helper tables derived from current embeddings as local-only current/projection state.
 - [x] Keep `symbol_clone_edges_current` local-only and route historical `symbol_clone_edges` writes through shared relational authority in remote mode.
 - [ ] Route all non-current relational tables through shared relational authority only.
 - [ ] Stop dual-writing relational data to local SQLite and remote relational backends at the same time.
-- [ ] Stop duplicating semantic embedding state across SQLite and Postgres in remote mode: `symbol_embeddings`, `symbol_embeddings_current`, `semantic_embedding_setups`, and `semantic_clone_embedding_setup_state`.
+- [x] Stop duplicating semantic embedding state across SQLite and Postgres in remote mode: `symbol_embeddings`, `symbol_embeddings_current`, `semantic_embedding_setups`, and `semantic_clone_embedding_setup_state`.
 - [x] Move non-current semantic tables like `symbol_features` and `symbol_semantics` to shared relational authority only in remote mode.
 - [x] Move committed/history-oriented DevQL tables like `commits`, `commit_ingest_ledger`, `file_state`, `artefacts`, and `artefact_edges` to shared relational authority only in remote mode.
-- [ ] Update relational readers so progress, freshness, and feature logic read from the owning relational side instead of whichever side happens to contain data.
+- [x] Update relational readers so progress, freshness, and feature logic read from the owning relational side instead of whichever side happens to contain data.
 
 ### Schema and bootstrap
 

@@ -60,6 +60,43 @@ WHERE repo_id = '{repo_id}' AND {representation_predicate}",
     )
 }
 
+pub(super) fn build_current_repo_artefact_snapshots_sql(repo_id: &str) -> String {
+    format!(
+        "SELECT DISTINCT artefact_id, content_id AS snapshot_id \
+FROM artefacts_current \
+WHERE repo_id = '{repo_id}'",
+        repo_id = esc_pg(repo_id),
+    )
+}
+
+pub(super) fn build_repo_embedding_state_candidates_sql(
+    table: &str,
+    snapshot_column: &str,
+    repo_id: &str,
+    representation_kind: Option<embeddings::EmbeddingRepresentationKind>,
+) -> String {
+    let representation_filter = representation_kind
+        .map(|kind| {
+            format!(
+                "AND {}",
+                representation_kind_sql_predicate("representation_kind", kind)
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "SELECT artefact_id, {snapshot_column} AS snapshot_id, representation_kind, provider, \
+                model, dimension, setup_fingerprint \
+         FROM {table} \
+         WHERE repo_id = '{repo_id}' {representation_filter} \
+         ORDER BY artefact_id, snapshot_id, representation_kind, provider, model, dimension, \
+                  setup_fingerprint",
+        table = table,
+        snapshot_column = snapshot_column,
+        repo_id = esc_pg(repo_id),
+        representation_filter = representation_filter,
+    )
+}
+
 pub(super) fn build_current_repo_semantic_clone_coverage_sql(
     repo_id: &str,
     representation_kind: embeddings::EmbeddingRepresentationKind,

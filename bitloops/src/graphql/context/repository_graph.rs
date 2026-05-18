@@ -17,12 +17,63 @@ use crate::graphql::types::{
     Artefact, ArtefactFilterInput, ConnectionPagination, DependencyEdge, DepsDirection,
     DepsFilterInput, DirectoryEntry, DirectoryEntryKind, FileContext,
 };
+use crate::host::devql::RelationalStorageRole;
+use crate::host::devql::artefact_query_support::{
+    hydrate_artefact_rows_for_storage_ownership, resolve_current_activity_snapshots,
+};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 
 impl DevqlGraphqlContext {
+    async fn query_repository_graph_rows(
+        &self,
+        operation: &str,
+        sql: &str,
+        use_historical_tables: bool,
+    ) -> Result<Vec<Value>> {
+        let relational = self.open_relational_storage(operation).await?;
+        relational
+            .query_rows_for_role(
+                if use_historical_tables {
+                    RelationalStorageRole::SharedRelational
+                } else {
+                    RelationalStorageRole::CurrentProjection
+                },
+                sql,
+            )
+            .await
+    }
+
+    async fn query_repository_graph_artefact_rows(
+        &self,
+        operation: &str,
+        scope: &ResolverScope,
+        sql: &str,
+        use_historical_tables: bool,
+    ) -> Result<Vec<Value>> {
+        let repo_id = self.repo_id_for_scope(scope)?;
+        let relational = self.open_relational_storage(operation).await?;
+        let rows = relational
+            .query_rows_for_role(
+                if use_historical_tables {
+                    RelationalStorageRole::SharedRelational
+                } else {
+                    RelationalStorageRole::CurrentProjection
+                },
+                sql,
+            )
+            .await?;
+        hydrate_artefact_rows_for_storage_ownership(
+            &relational,
+            &repo_id,
+            use_historical_tables,
+            rows,
+        )
+        .await
+    }
+
     pub(crate) fn validate_project_path(
         &self,
         scope: &ResolverScope,
@@ -76,7 +127,15 @@ impl DevqlGraphqlContext {
             path,
             scope.temporal_scope(),
         );
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_rows(
+                "GraphQL file context lookup",
+                &sql,
+                scope
+                    .temporal_scope()
+                    .is_some_and(crate::graphql::ResolvedTemporalScope::use_historical_tables),
+            )
+            .await?;
         rows.into_iter()
             .next()
             .map(file_context_from_value)
@@ -96,7 +155,15 @@ impl DevqlGraphqlContext {
             glob,
             scope.temporal_scope(),
         );
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_rows(
+                "GraphQL file context list",
+                &sql,
+                scope
+                    .temporal_scope()
+                    .is_some_and(crate::graphql::ResolvedTemporalScope::use_historical_tables),
+            )
+            .await?;
         rows.into_iter()
             .map(file_context_from_value)
             .map(|result| result.map(|file| file.with_scope(scope.clone())))
@@ -161,8 +228,19 @@ impl DevqlGraphqlContext {
             scope,
             None,
         );
+        let relational = self
+            .open_relational_storage("GraphQL artefact list")
+            .await?;
+        let spec = resolve_current_activity_snapshots(&relational, spec).await?;
         let sql = build_current_artefacts_sql(&spec);
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_artefact_rows(
+                "GraphQL artefact list",
+                scope,
+                &sql,
+                spec.temporal_scope.use_historical_tables(),
+            )
+            .await?;
         rows.into_iter()
             .map(artefact_from_value)
             .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
@@ -184,8 +262,18 @@ impl DevqlGraphqlContext {
             scope,
             None,
         );
+        let relational = self
+            .open_relational_storage("GraphQL artefact count")
+            .await?;
+        let spec = resolve_current_activity_snapshots(&relational, spec).await?;
         let sql = build_current_artefacts_count_sql(&spec);
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_rows(
+                "GraphQL artefact count",
+                &sql,
+                spec.temporal_scope.use_historical_tables(),
+            )
+            .await?;
         let total_count = rows
             .first()
             .and_then(|row| row.get("total_count"))
@@ -214,8 +302,19 @@ impl DevqlGraphqlContext {
             scope,
             None,
         );
+        let relational = self
+            .open_relational_storage("GraphQL artefact cursor lookup")
+            .await?;
+        let spec = resolve_current_activity_snapshots(&relational, spec).await?;
         let sql = build_current_artefacts_cursor_exists_sql(&spec, cursor);
-        Ok(!self.query_devql_sqlite_rows(&sql).await?.is_empty())
+        Ok(!self
+            .query_repository_graph_rows(
+                "GraphQL artefact cursor lookup",
+                &sql,
+                spec.temporal_scope.use_historical_tables(),
+            )
+            .await?
+            .is_empty())
     }
 
     pub(crate) async fn list_artefacts_window(
@@ -234,8 +333,19 @@ impl DevqlGraphqlContext {
             scope,
             Some(pagination.clone()),
         );
+        let relational = self
+            .open_relational_storage("GraphQL artefact window")
+            .await?;
+        let spec = resolve_current_activity_snapshots(&relational, spec).await?;
         let sql = build_current_artefacts_window_sql(&spec);
-        let mut rows = self.query_devql_sqlite_rows(&sql).await?;
+        let mut rows = self
+            .query_repository_graph_artefact_rows(
+                "GraphQL artefact window",
+                scope,
+                &sql,
+                spec.temporal_scope.use_historical_tables(),
+            )
+            .await?;
         if matches!(
             pagination.direction,
             crate::artefact_query_planner::ArtefactPaginationDirection::Backward
@@ -321,7 +431,16 @@ impl DevqlGraphqlContext {
             scope.project_path(),
             scope.temporal_scope(),
         );
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_artefact_rows(
+                "GraphQL artefacts by id",
+                scope,
+                &sql,
+                scope
+                    .temporal_scope()
+                    .is_some_and(crate::graphql::ResolvedTemporalScope::use_historical_tables),
+            )
+            .await?;
         let mut artefacts = HashMap::new();
         for row in rows {
             let artefact = artefact_from_value(row)?.with_scope(scope.clone());
@@ -343,7 +462,16 @@ impl DevqlGraphqlContext {
             scope.project_path(),
             scope.temporal_scope(),
         );
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_artefact_rows(
+                "GraphQL child artefacts",
+                scope,
+                &sql,
+                scope
+                    .temporal_scope()
+                    .is_some_and(crate::graphql::ResolvedTemporalScope::use_historical_tables),
+            )
+            .await?;
         rows.into_iter()
             .map(artefact_from_value)
             .map(|result| result.map(|artefact| artefact.with_scope(scope.clone())))
@@ -368,7 +496,15 @@ impl DevqlGraphqlContext {
             filter.copied().unwrap_or_default(),
             scope.temporal_scope(),
         );
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_rows(
+                "GraphQL file dependency edges",
+                &sql,
+                scope
+                    .temporal_scope()
+                    .is_some_and(crate::graphql::ResolvedTemporalScope::use_historical_tables),
+            )
+            .await?;
         rows.into_iter()
             .map(dependency_edge_from_value)
             .map(|result| result.map(|edge| edge.with_scope(scope.clone())))
@@ -393,7 +529,15 @@ impl DevqlGraphqlContext {
             filter.copied().unwrap_or_default(),
             scope.temporal_scope(),
         );
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_rows(
+                "GraphQL project dependency edges",
+                &sql,
+                scope
+                    .temporal_scope()
+                    .is_some_and(crate::graphql::ResolvedTemporalScope::use_historical_tables),
+            )
+            .await?;
         rows.into_iter()
             .map(dependency_edge_from_value)
             .map(|result| result.map(|edge| edge.with_scope(scope.clone())))
@@ -421,7 +565,15 @@ impl DevqlGraphqlContext {
             scope.project_path(),
             scope.temporal_scope(),
         );
-        let rows = self.query_devql_sqlite_rows(&sql).await?;
+        let rows = self
+            .query_repository_graph_rows(
+                "GraphQL dependency edges by artefact id",
+                &sql,
+                scope
+                    .temporal_scope()
+                    .is_some_and(crate::graphql::ResolvedTemporalScope::use_historical_tables),
+            )
+            .await?;
         let mut edges_by_artefact = HashMap::<String, Vec<DependencyEdge>>::new();
         for row in rows {
             let owner_artefact_id = row

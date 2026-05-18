@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::BlobStorageRole;
 
 pub(crate) struct CheckpointStorageContext {
     pub(crate) sqlite: crate::storage::SqliteConnectionPool,
@@ -22,8 +23,10 @@ pub(crate) fn open_checkpoint_storage_context(
         .context("opening committed checkpoint SQLite database")?;
 
     let resolved_blob_store =
-        crate::storage::blob::create_runtime_blob_store_with_backend_for_repo(
-            &cfg.blobs, repo_root,
+        crate::storage::blob::create_blob_store_with_backend_for_role_for_repo(
+            &cfg.blobs,
+            repo_root,
+            BlobStorageRole::RuntimeSession,
         )
         .context("initialising runtime-local blob storage for committed checkpoints")?;
 

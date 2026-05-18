@@ -1,5 +1,8 @@
 use super::*;
 use crate::artefact_query_planner::plan_devql_artefact_query;
+use crate::host::devql::artefact_query_support::{
+    hydrate_artefact_rows_for_storage_ownership, resolve_current_activity_snapshots,
+};
 use crate::host::devql::artefact_sql::{
     build_filtered_artefacts_cte_sql, build_filtered_artefacts_select_sql,
 };
@@ -36,22 +39,37 @@ pub(crate) async fn execute_relational_pipeline(
         return execute_relational_deps_pipeline(cfg, parsed, relational, &repo_id).await;
     }
 
-    let spec = plan_devql_artefact_query(cfg, &repo_id, parsed)?;
+    let spec = resolve_current_activity_snapshots(
+        relational,
+        plan_devql_artefact_query(cfg, &repo_id, parsed)?,
+    )
+    .await?;
     let role = relational_query_role(spec.temporal_scope.use_historical_tables());
-    let sql = build_relational_artefacts_query(cfg, events_cfg, parsed, Some(relational), &repo_id)
-        .await?;
-    let rows = relational
-        .query_rows_for_role(role, &sql)
-        .await?
-        .into_iter()
-        .map(normalise_relational_result_row)
-        .collect::<Vec<_>>();
+    let sql = format!(
+        "{} LIMIT {}",
+        build_filtered_artefacts_select_sql(&spec),
+        spec.pagination
+            .as_ref()
+            .map_or(1, |pagination| pagination.limit)
+    );
+    let rows = relational.query_rows_for_role(role, &sql).await?;
+    let rows = hydrate_artefact_rows_for_storage_ownership(
+        relational,
+        &repo_id,
+        spec.temporal_scope.use_historical_tables(),
+        rows,
+    )
+    .await?
+    .into_iter()
+    .map(normalise_relational_result_row)
+    .collect::<Vec<_>>();
     if parsed.has_chat_history_stage {
         return attach_chat_history_to_artefacts(cfg, events_cfg, relational, &repo_id, rows).await;
     }
     Ok(rows)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn build_relational_artefacts_query(
     cfg: &DevqlConfig,
     _events_cfg: &EventsBackendConfig,
@@ -59,7 +77,16 @@ pub(crate) async fn build_relational_artefacts_query(
     _relational: Option<&RelationalStorage>,
     repo_id: &str,
 ) -> Result<String> {
-    let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
+    let spec = match _relational {
+        Some(relational) => {
+            resolve_current_activity_snapshots(
+                relational,
+                plan_devql_artefact_query(cfg, repo_id, parsed)?,
+            )
+            .await?
+        }
+        None => plan_devql_artefact_query(cfg, repo_id, parsed)?,
+    };
     Ok(format!(
         "{} LIMIT {}",
         build_filtered_artefacts_select_sql(&spec),
@@ -83,7 +110,11 @@ pub(crate) async fn execute_relational_clones_pipeline(
         .await;
     }
 
-    let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
+    let spec = resolve_current_activity_snapshots(
+        relational,
+        plan_devql_artefact_query(cfg, repo_id, parsed)?,
+    )
+    .await?;
     let role = relational_query_role(spec.temporal_scope.use_historical_tables());
     let sql = build_relational_clones_query(cfg, events_cfg, parsed, relational, repo_id).await?;
     Ok(relational
@@ -98,10 +129,14 @@ pub(crate) async fn build_relational_clones_query(
     cfg: &DevqlConfig,
     _events_cfg: &EventsBackendConfig,
     parsed: &ParsedDevqlQuery,
-    _relational: &RelationalStorage,
+    relational: &RelationalStorage,
     repo_id: &str,
 ) -> Result<String> {
-    let spec = plan_devql_artefact_query(cfg, repo_id, parsed)?;
+    let spec = resolve_current_activity_snapshots(
+        relational,
+        plan_devql_artefact_query(cfg, repo_id, parsed)?,
+    )
+    .await?;
     let filtered_cte = build_filtered_artefacts_cte_sql(&spec);
     let use_historical_tables = spec.temporal_scope.use_historical_tables();
     let clone_edges_table = if use_historical_tables {

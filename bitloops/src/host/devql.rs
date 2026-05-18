@@ -31,6 +31,8 @@ use crate::utils::terminal::print_db_status_table;
 
 #[path = "devql/analytics.rs"]
 pub(crate) mod analytics;
+#[path = "devql/artefact_query_support.rs"]
+pub(crate) mod artefact_query_support;
 #[path = "devql/artefact_sql.rs"]
 pub(crate) mod artefact_sql;
 #[path = "devql/checkpoint_file_snapshots.rs"]

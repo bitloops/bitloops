@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::{EventStorageRole, StorageBackendKind, StorageRoleResolver};
 
 use chrono::{TimeZone, Utc};
 use std::collections::BTreeMap;
@@ -306,20 +307,25 @@ pub(super) enum CheckpointEventsStoreInner {
 
 impl CheckpointEventsStore {
     fn from_config(cfg: &DevqlConfig, events_cfg: &EventsBackendConfig) -> Self {
-        if events_cfg.has_clickhouse() {
-            Self {
+        match StorageRoleResolver::from_events_config(events_cfg)
+            .event_backend_for(EventStorageRole::CanonicalEvents)
+        {
+            StorageBackendKind::ClickHouse => Self {
                 inner: CheckpointEventsStoreInner::ClickHouse {
                     endpoint: cfg.clickhouse_endpoint(),
                     user: cfg.clickhouse_user.clone(),
                     password: cfg.clickhouse_password.clone(),
                 },
-            }
-        } else {
-            Self {
+            },
+            StorageBackendKind::DuckDb => Self {
                 inner: CheckpointEventsStoreInner::DuckDb {
                     path: events_cfg.duckdb_path_or_default(),
                 },
-            }
+            },
+            other => unreachable!(
+                "unsupported canonical events backend for checkpoint events: {}",
+                other.label()
+            ),
         }
     }
 

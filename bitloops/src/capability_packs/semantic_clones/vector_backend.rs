@@ -3,7 +3,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::capability_packs::semantic_clones::embeddings;
-use crate::host::devql::{RelationalPrimaryBackend, RelationalStorage, esc_pg, sql_string_list_pg};
+use crate::host::devql::{
+    RelationalRoleBackend, RelationalStorage, RelationalStorageRole, esc_pg, sql_string_list_pg,
+};
 
 const SQLITE_CURRENT_VEC_TABLE_PREFIX: &str = "semantic_embedding_current_vec_dim_";
 
@@ -39,9 +41,9 @@ impl<'a> SemanticVectorBackend<'a> {
     pub(crate) fn resolve(relational: &'a RelationalStorage) -> Self {
         Self {
             relational,
-            kind: match relational.primary_backend() {
-                RelationalPrimaryBackend::Postgres => SemanticVectorBackendKind::PostgresPgvector,
-                RelationalPrimaryBackend::Sqlite => SemanticVectorBackendKind::SqliteVec,
+            kind: match relational.backend_for_role(RelationalStorageRole::SharedRelational) {
+                RelationalRoleBackend::Postgres => SemanticVectorBackendKind::PostgresPgvector,
+                RelationalRoleBackend::LocalSqlite => SemanticVectorBackendKind::SqliteVec,
             },
         }
     }
@@ -331,7 +333,7 @@ pub(crate) async fn ensure_postgres_pgvector_indexes_for_dimension(
         dimension,
     )];
     relational
-        .exec_remote_batch_transactional(&statements)
+        .exec_batch_transactional_for_role(RelationalStorageRole::SharedRelational, &statements)
         .await
 }
 
@@ -566,6 +568,7 @@ fn vector_json_string(values: &[f32]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host::devql::RelationalPrimaryBackend;
     use anyhow::Result;
 
     #[test]

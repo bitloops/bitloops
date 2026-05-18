@@ -10,7 +10,8 @@ use crate::graphql::types::{
 use crate::host::devql::{
     DevqlConfig, RepoIdentity, build_capability_host, deterministic_uuid, resolve_repo_identity,
 };
-use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_repo};
+use crate::storage::blob::{BlobStore, create_blob_store_with_backend_for_role_for_repo};
+use crate::storage::{BlobStorageRole, StorageRoleResolver};
 use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -115,7 +116,11 @@ impl DevqlGraphqlContext {
             .unwrap_or("unknown")
             .to_string();
         let (blob_store, blob_bootstrap_error) = match backend_config.as_ref() {
-            Some(cfg) => match create_blob_store_with_backend_for_repo(&cfg.blobs, &config_root) {
+            Some(cfg) => match create_blob_store_with_backend_for_role_for_repo(
+                &cfg.blobs,
+                &config_root,
+                BlobStorageRole::ProjectKnowledge,
+            ) {
                 Ok(resolved) => {
                     let store: Arc<dyn BlobStore> = Arc::from(resolved.store);
                     (Some(store), None)
@@ -420,15 +425,9 @@ fn map_backend_health(backend: &str, health: BackendHealth) -> HealthBackendStat
 }
 
 fn configured_blob_backend(cfg: &StoreBackendConfig) -> &'static str {
-    if cfg.blobs.s3_bucket.is_some() && cfg.blobs.gcs_bucket.is_some() {
-        "invalid"
-    } else if cfg.blobs.s3_bucket.is_some() {
-        "s3"
-    } else if cfg.blobs.gcs_bucket.is_some() {
-        "gcs"
-    } else {
-        "local"
-    }
+    StorageRoleResolver::from_backend_config(cfg)
+        .blob_backend_for(BlobStorageRole::ProjectKnowledge)
+        .label()
 }
 
 fn fallback_repo_identity(repo_root: &Path) -> RepoIdentity {
