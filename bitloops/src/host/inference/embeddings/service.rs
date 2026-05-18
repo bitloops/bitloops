@@ -6,11 +6,14 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::config::InferenceRuntimeConfig;
 
 use super::super::{BITLOOPS_EMBEDDINGS_IPC_DRIVER, EmbeddingInputType, EmbeddingService};
+use super::auth::resolve_platform_runtime_auth_environment;
 use super::runtime::{
     embeddings_runtime_launch_artifact_fingerprint, process_environment_fingerprint,
 };
 use super::session::PythonEmbeddingsSessionConfig;
-use super::shared::{SharedBitloopsEmbeddingsSession, shared_bitloops_embeddings_session_registry};
+use super::shared::{
+    SharedBitloopsEmbeddingsSessionPool, shared_bitloops_embeddings_session_registry,
+};
 
 const PLATFORM_EMBEDDINGS_MAX_CLIENT_BATCH_SIZE: usize = 32;
 
@@ -19,7 +22,7 @@ pub(crate) struct BitloopsEmbeddingsIpcService {
     model_name: String,
     output_dimension: usize,
     cache_key: String,
-    shared_session: Arc<SharedBitloopsEmbeddingsSession>,
+    shared_session_pool: Arc<SharedBitloopsEmbeddingsSessionPool>,
     max_request_batch_size: Option<usize>,
 }
 
@@ -31,6 +34,8 @@ impl BitloopsEmbeddingsIpcService {
         cache_dir: Option<&Path>,
         platform_backed: bool,
     ) -> Result<Self> {
+        let platform_auth_environment =
+            resolve_platform_runtime_auth_environment(&runtime.args, platform_backed)?;
         let session_config = PythonEmbeddingsSessionConfig {
             command: runtime.command.clone(),
             args: runtime.args.clone(),
@@ -39,15 +44,16 @@ impl BitloopsEmbeddingsIpcService {
             model: model.to_string(),
             cache_dir: cache_dir.map(Path::to_path_buf),
             platform_backed,
+            platform_auth_environment,
             launch_artifact_fingerprint: embeddings_runtime_launch_artifact_fingerprint(
                 &runtime.command,
                 &runtime.args,
             ),
             process_environment_fingerprint: process_environment_fingerprint(),
         };
-        let shared_session =
+        let shared_session_pool =
             shared_bitloops_embeddings_session_registry().get_or_create(&session_config)?;
-        let output_dimension = shared_session.output_dimension()?;
+        let output_dimension = shared_session_pool.output_dimension()?;
         let cache_key = format!(
             "profile={profile_name}::driver={BITLOOPS_EMBEDDINGS_IPC_DRIVER}::model={model}::dimension={output_dimension}"
         );
@@ -57,14 +63,14 @@ impl BitloopsEmbeddingsIpcService {
             model_name: model.to_string(),
             output_dimension,
             cache_key,
-            shared_session,
+            shared_session_pool,
             max_request_batch_size: platform_backed
                 .then_some(PLATFORM_EMBEDDINGS_MAX_CLIENT_BATCH_SIZE),
         })
     }
 
     fn embed_texts(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let vectors = self.shared_session.embed(texts).with_context(|| {
+        let vectors = self.shared_session_pool.embed(texts).with_context(|| {
             format!(
                 "requesting standalone `bitloops-local-embeddings` runtime for profile `{}`",
                 self.profile_name

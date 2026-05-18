@@ -9,9 +9,6 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
-use super::auth::{
-    ensure_platform_runtime_auth_environment_available, platform_runtime_auth_environment,
-};
 use super::runtime::{
     HF_HUB_OFFLINE_ENV, TRANSFORMERS_OFFLINE_ENV, cache_contains_requested_model,
     embeddings_runtime_request_timeout_secs, resolve_effective_embeddings_cache_dir,
@@ -28,6 +25,7 @@ pub(crate) struct PythonEmbeddingsSessionConfig {
     pub(crate) model: String,
     pub(crate) cache_dir: Option<PathBuf>,
     pub(crate) platform_backed: bool,
+    pub(crate) platform_auth_environment: Vec<(String, String)>,
     pub(crate) launch_artifact_fingerprint: String,
     pub(crate) process_environment_fingerprint: String,
 }
@@ -47,14 +45,19 @@ enum PythonEmbeddingsSessionOutput {
 
 impl PythonEmbeddingsSession {
     pub(crate) fn start(config: &PythonEmbeddingsSessionConfig) -> Result<Self> {
-        ensure_platform_runtime_auth_environment_available(config)?;
+        if config.platform_backed && config.platform_auth_environment.is_empty() {
+            bail!(
+                "platform-backed embeddings profile requires an authenticated Bitloops session or `{}` to be set",
+                crate::daemon::PLATFORM_GATEWAY_TOKEN_ENV
+            );
+        }
         let effective_cache_dir =
             resolve_effective_embeddings_cache_dir(config.cache_dir.as_deref());
         let mut command = Command::new(&config.command);
         command.args(&config.args);
         command.arg("daemon");
         command.arg("--model").arg(&config.model);
-        command.envs(platform_runtime_auth_environment(config));
+        command.envs(config.platform_auth_environment.iter().cloned());
         if let Some(cache_dir) = effective_cache_dir.as_ref() {
             command.arg("--cache-dir").arg(cache_dir);
         }

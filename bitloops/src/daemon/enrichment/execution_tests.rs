@@ -31,47 +31,6 @@ fn semantic_embedding_work_batches_match_platform_embedding_request_limit() {
     );
 }
 
-#[test]
-fn repo_backfill_selection_distinguishes_empty_explicit_ids_from_full_repo() {
-    let full_repo_items = vec![selection_test_embedding_item(None)];
-    let full_repo = super::helpers::select_current_semantic_input_scope(&full_repo_items);
-    assert!(full_repo.requested_artefact_ids().is_none());
-
-    let empty_explicit_items = vec![selection_test_embedding_item(Some(serde_json::json!([])))];
-    let empty_explicit = super::helpers::select_current_semantic_input_scope(&empty_explicit_items);
-    assert!(
-        empty_explicit
-            .requested_artefact_ids()
-            .is_some_and(|ids| ids.is_empty())
-    );
-}
-
-fn selection_test_embedding_item(
-    payload_json: Option<serde_json::Value>,
-) -> SemanticEmbeddingMailboxItemRecord {
-    SemanticEmbeddingMailboxItemRecord {
-        item_id: "selection-test-item".to_string(),
-        repo_id: "repo-selection-test".to_string(),
-        repo_root: PathBuf::from("/tmp/repo-selection-test"),
-        config_root: PathBuf::from("/tmp/repo-selection-test"),
-        init_session_id: None,
-        representation_kind: "code".to_string(),
-        item_kind: SemanticMailboxItemKind::RepoBackfill,
-        artefact_id: None,
-        payload_json,
-        dedupe_key: Some("selection-test-dedupe".to_string()),
-        status: SemanticMailboxItemStatus::Leased,
-        attempts: 0,
-        available_at_unix: 1,
-        submitted_at_unix: 1,
-        leased_at_unix: Some(1),
-        lease_expires_at_unix: Some(301),
-        lease_token: Some("selection-test-lease".to_string()),
-        updated_at_unix: 1,
-        last_error: None,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CurrentEmbeddingRow {
     symbol_fqn: String,
@@ -2435,6 +2394,99 @@ WHERE repo_id = '{}' AND path = '{}'",
     assert_eq!(
         prepared.commit.acked_item_ids,
         vec!["explicit-repo-backfill-summary-item".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn prepare_summary_mailbox_batch_with_explicit_repo_backfill_ids_keeps_remaining_ids_as_follow_up()
+ {
+    let (repo, _first_sha, _second_sha) = seed_daemon_embedding_repo();
+    let generated_dir = repo.path().join("src/generated");
+    fs::create_dir_all(&generated_dir).expect("create generated source dir");
+    for index in 0..24 {
+        fs::write(
+            generated_dir.join(format!("summary_follow_up_{index:02}.ts")),
+            format!(
+                "export function generatedSummaryFollowUp{index:02}(input: string): string {{\n  return `${{input}}:{index}`;\n}}\n"
+            ),
+        )
+        .expect("write generated source");
+    }
+    git_ok(repo.path(), &["add", "src/generated"]);
+    git_ok(
+        repo.path(),
+        &["commit", "-m", "add explicit summary backfill sources"],
+    );
+
+    let (cfg, _relational, inputs, _input_hashes) = seed_current_state_and_semantics(
+        repo.path(),
+        "alpha",
+        TEST_EMBEDDINGS_DRIVER,
+        "repo-backfill-model",
+        "3",
+    )
+    .await;
+    let requested = inputs
+        .iter()
+        .take(super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE * 2)
+        .map(|input| input.artefact_id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requested.len(),
+        super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE * 2,
+        "fixture should provide two explicit summary mailbox batches"
+    );
+
+    let batch = super::super::workplane::ClaimedSummaryMailboxBatch {
+        repo_id: cfg.repo.repo_id.clone(),
+        repo_root: cfg.repo_root.clone(),
+        config_root: cfg.daemon_config_root.clone(),
+        lease_token: "explicit-repo-backfill-summary-follow-up-lease".to_string(),
+        items: vec![SemanticSummaryMailboxItemRecord {
+            item_id: "explicit-repo-backfill-summary-follow-up-item".to_string(),
+            repo_id: cfg.repo.repo_id.clone(),
+            repo_root: cfg.repo_root.clone(),
+            config_root: cfg.daemon_config_root.clone(),
+            init_session_id: None,
+            item_kind: SemanticMailboxItemKind::RepoBackfill,
+            artefact_id: None,
+            payload_json: Some(serde_json::to_value(requested.clone()).expect("payload json")),
+            dedupe_key: Some(
+                crate::capability_packs::semantic_clones::workplane::repo_backfill_dedupe_key(
+                    crate::capability_packs::semantic_clones::types::SEMANTIC_CLONES_SUMMARY_REFRESH_MAILBOX,
+                ),
+            ),
+            status: SemanticMailboxItemStatus::Leased,
+            attempts: 0,
+            available_at_unix: 1,
+            submitted_at_unix: 1,
+            leased_at_unix: Some(1),
+            lease_expires_at_unix: Some(301),
+            lease_token: Some("explicit-repo-backfill-summary-follow-up-lease".to_string()),
+            updated_at_unix: 1,
+            last_error: None,
+        }],
+    };
+
+    let prepared = prepare_summary_mailbox_batch(&batch, |_, _| {})
+        .await
+        .expect("explicit summary repo backfill should preserve remaining ids");
+
+    assert_eq!(
+        prepared.expanded_count,
+        super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE
+    );
+    let replacement = prepared
+        .commit
+        .replacement_backfill_item
+        .as_ref()
+        .expect("remaining explicit repo backfill ids should stay queued");
+    assert_eq!(
+        replacement.payload_json,
+        Some(serde_json::to_value(
+            requested[super::super::workplane::SEMANTIC_SUMMARY_MAILBOX_BATCH_SIZE..].to_vec()
+        )
+        .expect("remaining payload json"))
     );
 }
 

@@ -51,7 +51,7 @@ use super::super::workplane::{
 };
 use super::helpers::{
     dedupe_inputs_by_artefact_id, load_current_semantic_inputs, payload_artefact_ids_from_value,
-    select_current_semantic_input_scope,
+    requested_current_semantic_input_artefact_ids,
 };
 
 pub(crate) struct PreparedEmbeddingMailboxBatch {
@@ -114,25 +114,15 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
     let config_ms = elapsed_ms(config_started);
 
     let input_started = Instant::now();
-    let contains_repo_wide_backfill = batch.items.iter().any(|item| {
-        item.item_kind == SemanticMailboxItemKind::RepoBackfill && item.payload_json.is_none()
-    });
-    let explicit_artefact_ids =
-        contains_repo_wide_backfill.then(|| explicit_artefact_ids_from_batch(&batch.items));
-    let current_input_selection =
-        (!contains_repo_wide_backfill).then(|| select_current_semantic_input_scope(&batch.items));
-    let requested_artefact_ids = if contains_repo_wide_backfill {
-        explicit_artefact_ids.as_deref()
-    } else {
-        current_input_selection
-            .as_ref()
-            .and_then(|selection| selection.requested_artefact_ids())
-    };
+    let requested_artefact_ids = requested_current_semantic_input_artefact_ids(
+        &batch.items,
+        SEMANTIC_EMBEDDING_MAILBOX_BATCH_SIZE,
+    );
     let current_inputs = load_current_semantic_inputs(
         &relational,
         &batch.repo_root,
         &batch.repo_id,
-        requested_artefact_ids,
+        Some(&requested_artefact_ids),
     )
     .await?;
     let mut current_by_artefact = current_inputs
@@ -525,29 +515,6 @@ pub(crate) async fn prepare_embedding_mailbox_batch(
             total_ms: elapsed_ms(total_started),
         },
     })
-}
-
-fn explicit_artefact_ids_from_batch(
-    items: &[crate::host::runtime_store::SemanticEmbeddingMailboxItemRecord],
-) -> Vec<String> {
-    let mut ids = Vec::new();
-    for item in items {
-        match item.item_kind {
-            SemanticMailboxItemKind::Artefact => {
-                if let Some(artefact_id) = item.artefact_id.as_ref() {
-                    ids.push(artefact_id.clone());
-                }
-            }
-            SemanticMailboxItemKind::RepoBackfill => {
-                if let Some(payload) = item.payload_json.as_ref() {
-                    ids.extend(payload_artefact_ids_from_value(payload));
-                }
-            }
-        }
-    }
-    ids.sort();
-    ids.dedup();
-    ids
 }
 
 async fn load_current_embedding_backfill_artefact_ids(
