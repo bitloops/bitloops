@@ -106,7 +106,11 @@ pub(crate) fn detect_file_changes(
         if let Some(idx) = path.rfind(" -> ") {
             path = path[idx + 4..].to_string();
         }
-        if path.is_empty() || path.ends_with('/') || paths::is_infrastructure_path(&path) {
+        if path.is_empty()
+            || path.ends_with('/')
+            || paths::is_infrastructure_path(&path)
+            || paths::is_protected_path(&path)
+        {
             continue;
         }
 
@@ -222,7 +226,7 @@ pub(super) fn filter_and_normalize_paths(files: &[String], base_path: &str) -> V
         if rel.is_empty() || rel.starts_with("..") {
             continue;
         }
-        if paths::is_infrastructure_path(&rel) {
+        if paths::is_infrastructure_path(&rel) || paths::is_protected_path(&rel) {
             continue;
         }
         result.push(rel);

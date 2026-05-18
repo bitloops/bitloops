@@ -91,8 +91,11 @@ mod tests {
             (".bitloops/stores/relational/relational.db-wal", true),
             ("./.bitloops/stores/relational/relational.db-shm", true),
             (".bitloops/stores/relational/relational.db-write-lock", true),
+            ("stores/relational/relational.db", true),
+            ("stores/event/events.duckdb", true),
+            ("config.toml", true),
+            (".bitloops.local.toml", true),
             ("src/main.rs", false),
-            (".bitloops.local.toml", false),
         ];
 
         for (path, want) in tests {
