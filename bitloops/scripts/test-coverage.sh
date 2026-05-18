@@ -39,6 +39,14 @@ ensure_llvm_cov() {
   fi
 }
 
+ensure_nextest() {
+  if ! cargo nextest --version >/dev/null 2>&1; then
+    echo "cargo-nextest is not installed."
+    echo "Install it once with: brew install cargo-nextest or cargo install cargo-nextest --locked"
+    exit 1
+  fi
+}
+
 generate_reports() {
   cargo llvm-cov report --html --output-dir target/llvm-cov-html
   cargo llvm-cov report --lcov --output-path "$COVERAGE_FILE"
@@ -127,7 +135,7 @@ check_minimums() {
 
 run_baseline() {
   cargo llvm-cov clean --workspace
-  cargo llvm-cov --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --no-fail-fast --html --output-dir target/llvm-cov-html
+  cargo llvm-cov nextest --workspace "${duckdb_no_bundle_flags[@]}" --all-targets --html --output-dir target/llvm-cov-html
   cargo llvm-cov report --lcov --output-path "$COVERAGE_FILE"
   echo "Coverage reports generated:"
   echo "  HTML: ${PROJECT_ROOT}/target/llvm-cov-html/index.html"
@@ -143,6 +151,9 @@ main() {
   fi
 
   ensure_llvm_cov
+  if [[ "${mode}" == "baseline" ]]; then
+    ensure_nextest
+  fi
 
   case "${mode}" in
     baseline)

@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.0.27] - 2026-05-15
+
+### Fixed
+
+- **Architecture-graph current-table replacement now uses true multi-row SQLite inserts**: architecture-graph replacement still runs atomically inside one serialized SQLite transaction, but node and edge writes are now grouped into multi-row `INSERT` statements sized against SQLite's variable placeholder limit instead of executing one statement per row. This reduces SQLite call overhead during heavy reconciliations without changing current-table semantics or general DevQL sync worker fan-out.
+
+### Changed
+
+- **Agent turn data now flows through a single canonical transcript model**: replaced per-agent JSONL parsing in the dashboard with a backend-derived `TranscriptEntry` stream that carries explicit actor (User/Assistant/System), variant (Chat/Thinking/ToolUse/ToolResult), source (Transcript/PromptFallback), and turn scope for every supported agent (Claude Code, Codex, Copilot, Gemini, Cursor, OpenCode). Per-turn rendering uses each turn's recorded transcript offsets with content-based partitioning as a fallback when offsets are missing, cumulative, or stale, so the turns tab now shows the same shape of user prompt, assistant response, and tool steps regardless of which agent produced the session.
+
 ## [0.0.26] - 2026-05-14
 
 ### Added

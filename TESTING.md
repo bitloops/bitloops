@@ -2,7 +2,7 @@
 
 Run commands from the repository root.
 
-Install `cargo-nextest` before using the test lanes. On macOS, prefer:
+Install `cargo-nextest` before using the test and coverage lanes. On macOS, prefer:
 
 ```bash
 brew install cargo-nextest
@@ -43,7 +43,7 @@ For other platforms, follow the official installation guide:
 
 `cargo dev-loop` runs: `fmt` (write fixes) -> `clippy` -> fast tests -> file-size check.
 `cargo dev-test-fast` is the default local feedback loop.
-`cargo-nextest` is the default runner behind `dev-test-*`, `test-*`, and `qat*`.
+`cargo-nextest` is the default runner behind `dev-test-*`, `test-*`, `qat*`, and coverage test runs.
 That default does not ban `cargo test`: use the checked-in aliases for the standard lanes, and use `cargo test` only where this guide explicitly calls for it or where `cargo-nextest` cannot cover the case.
 The checked-in local `nextest` default is `8` test threads.
 CI uses the `ci` `nextest` profile, pinned to `6` test threads.
@@ -209,6 +209,12 @@ cargo dev-coverage-all
 cargo dev-coverage-metrics
 cargo dev-coverage-html
 open bitloops/target/llvm-cov-html/html/index.html
+```
+
+Coverage aliases run the instrumented test pass through `cargo llvm-cov nextest`, so `.config/nextest.toml` concurrency limits and test groups apply. If a local machine still hits file-descriptor pressure during coverage, lower nextest concurrency for that run, for example:
+
+```bash
+NEXTEST_TEST_THREADS=4 cargo dev-coverage-all
 ```
 
 Coverage baseline metadata is refreshed on pushes to `develop`.

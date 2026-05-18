@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, anyhow, bail};
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, limits::Limit, params_from_iter, types::Value as SqlValue};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -10,6 +10,11 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crate::capability_packs::architecture_graph::storage::ArchitectureGraphFacts;
+
+const ARCHITECTURE_GRAPH_WRITE_BATCH_SIZE: usize = 250;
+const ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH: usize = 14;
+const ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH: usize = 11;
+const SQLITE_FALLBACK_VARIABLE_LIMIT: usize = 999;
 
 #[derive(Debug)]
 enum SqliteWriteOperation {
@@ -195,6 +200,10 @@ fn execute_architecture_graph_replace(
     request: &ArchitectureGraphReplaceRequest,
 ) -> Result<()> {
     validate_architecture_graph_repo_scope(request)?;
+    let node_batch_rows =
+        architecture_graph_batch_row_count(connection, ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH);
+    let edge_batch_rows =
+        architecture_graph_batch_row_count(connection, ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH);
     let tx = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("starting architecture graph replacement transaction")?;
@@ -210,67 +219,8 @@ fn execute_architecture_graph_replace(
     .context("deleting current architecture graph nodes")?;
 
     let mut writes = 0usize;
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO architecture_graph_nodes_current (
-                    repo_id, node_id, node_kind, label, artefact_id, symbol_id, path, entry_kind,
-                    source_kind, confidence, provenance_json, evidence_json, properties_json,
-                    last_observed_generation, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'))",
-            )
-            .context("preparing architecture graph node insert")?;
-        for node in &request.facts.nodes {
-            stmt.execute(rusqlite::params![
-                request.repo_id,
-                node.node_id,
-                node.node_kind,
-                node.label,
-                node.artefact_id,
-                node.symbol_id,
-                node.path,
-                node.entry_kind,
-                node.source_kind,
-                node.confidence,
-                json_string(&node.provenance)?,
-                json_string(&node.evidence)?,
-                json_string(&node.properties)?,
-                opt_generation(node.last_observed_generation)?,
-            ])
-            .context("inserting architecture graph node")?;
-            writes += 1;
-            maybe_fail_architecture_graph_write(request, writes)?;
-        }
-    }
-
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO architecture_graph_edges_current (
-                    repo_id, edge_id, edge_kind, from_node_id, to_node_id, source_kind, confidence,
-                    provenance_json, evidence_json, properties_json, last_observed_generation, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))",
-            )
-            .context("preparing architecture graph edge insert")?;
-        for edge in &request.facts.edges {
-            stmt.execute(rusqlite::params![
-                request.repo_id,
-                edge.edge_id,
-                edge.edge_kind,
-                edge.from_node_id,
-                edge.to_node_id,
-                edge.source_kind,
-                edge.confidence,
-                json_string(&edge.provenance)?,
-                json_string(&edge.evidence)?,
-                json_string(&edge.properties)?,
-                opt_generation(edge.last_observed_generation)?,
-            ])
-            .context("inserting architecture graph edge")?;
-            writes += 1;
-            maybe_fail_architecture_graph_write(request, writes)?;
-        }
-    }
+    execute_architecture_graph_node_batches(&tx, request, node_batch_rows, &mut writes)?;
+    execute_architecture_graph_edge_batches(&tx, request, edge_batch_rows, &mut writes)?;
 
     tx.execute(
         "INSERT INTO architecture_graph_runs_current (
@@ -386,362 +336,189 @@ fn canonical_actor_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        ArchitectureGraphReplaceRequest, RepoSqliteWriteActor, short_thread_label,
-        sqlite_exec_serialized_batch_transactional_path, sqlite_exec_serialized_path,
-    };
-    use anyhow::Result;
-    use serde_json::json;
-    use std::path::Path;
-    use tempfile::TempDir;
+fn architecture_graph_batch_row_count(connection: &Connection, columns_per_row: usize) -> usize {
+    let variable_limit = connection
+        .limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER)
+        .ok()
+        .and_then(|limit| usize::try_from(limit).ok())
+        .unwrap_or(SQLITE_FALLBACK_VARIABLE_LIMIT);
+    architecture_graph_batch_row_count_for_limit(
+        architecture_graph_write_batch_size(),
+        columns_per_row,
+        variable_limit,
+    )
+}
 
-    use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
-    use crate::capability_packs::architecture_graph::storage::{
-        ArchitectureGraphEdgeFact, ArchitectureGraphFacts, ArchitectureGraphNodeFact,
-    };
+fn architecture_graph_batch_row_count_for_limit(
+    max_batch_rows: usize,
+    columns_per_row: usize,
+    variable_limit: usize,
+) -> usize {
+    assert!(
+        columns_per_row > 0,
+        "columns_per_row must be greater than zero"
+    );
+    let max_rows_by_limit = variable_limit / columns_per_row;
+    max_batch_rows.min(max_rows_by_limit.max(1)).max(1)
+}
 
-    fn create_sample_db() -> Result<(TempDir, std::path::PathBuf)> {
-        let temp = TempDir::new().expect("temp dir");
-        let db_path = temp.path().join("runtime.sqlite");
-        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
-        conn.execute_batch("CREATE TABLE sample (value INTEGER NOT NULL);")
-            .expect("create table");
-        Ok((temp, db_path))
-    }
+fn architecture_graph_write_batch_size() -> usize {
+    ARCHITECTURE_GRAPH_WRITE_BATCH_SIZE
+}
 
-    fn create_architecture_graph_db() -> Result<(TempDir, std::path::PathBuf)> {
-        let temp = TempDir::new().expect("temp dir");
-        let db_path = temp.path().join("runtime.sqlite");
-        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
-        conn.execute_batch(architecture_graph_sqlite_schema_sql())
-            .expect("create architecture graph schema");
-        Ok((temp, db_path))
-    }
+fn build_architecture_graph_node_insert_sql(row_count: usize) -> String {
+    build_architecture_graph_insert_sql(
+        "architecture_graph_nodes_current",
+        "repo_id, node_id, node_kind, label, artefact_id, symbol_id, path, entry_kind, \
+         source_kind, confidence, provenance_json, evidence_json, properties_json, \
+         last_observed_generation, updated_at",
+        ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH,
+        row_count,
+    )
+}
 
-    fn sample_architecture_facts(repo_id: &str) -> ArchitectureGraphFacts {
-        ArchitectureGraphFacts {
-            nodes: vec![ArchitectureGraphNodeFact {
-                repo_id: repo_id.to_string(),
-                node_id: "node-1".to_string(),
-                node_kind: "NODE".to_string(),
-                label: "Caller".to_string(),
-                artefact_id: Some("artefact::caller".to_string()),
-                symbol_id: Some("symbol::caller".to_string()),
-                path: Some("src/caller.rs".to_string()),
-                entry_kind: None,
-                source_kind: "COMPUTED".to_string(),
-                confidence: 0.9,
-                provenance: json!({ "source": "test" }),
-                evidence: json!([{ "path": "src/caller.rs" }]),
-                properties: json!({ "language": "rust" }),
-                last_observed_generation: Some(7),
-            }],
-            edges: vec![ArchitectureGraphEdgeFact {
-                repo_id: repo_id.to_string(),
-                edge_id: "edge-1".to_string(),
-                edge_kind: "DEPENDS_ON".to_string(),
-                from_node_id: "node-1".to_string(),
-                to_node_id: "node-2".to_string(),
-                source_kind: "COMPUTED".to_string(),
-                confidence: 0.8,
-                provenance: json!({ "source": "test" }),
-                evidence: json!([{ "path": "src/caller.rs" }]),
-                properties: json!({ "edge_kind": "calls" }),
-                last_observed_generation: Some(7),
-            }],
+fn build_architecture_graph_edge_insert_sql(row_count: usize) -> String {
+    build_architecture_graph_insert_sql(
+        "architecture_graph_edges_current",
+        "repo_id, edge_id, edge_kind, from_node_id, to_node_id, source_kind, confidence, \
+         provenance_json, evidence_json, properties_json, last_observed_generation, updated_at",
+        ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH,
+        row_count,
+    )
+}
+
+fn build_architecture_graph_insert_sql(
+    table: &str,
+    columns_sql: &str,
+    parameter_count: usize,
+    row_count: usize,
+) -> String {
+    assert!(row_count > 0, "row_count must be greater than zero");
+    let placeholders = std::iter::repeat_n("?", parameter_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let row_sql = format!("({placeholders}, datetime('now'))");
+    let values_sql = std::iter::repeat_n(row_sql, row_count)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("INSERT INTO {table} ({columns_sql}) VALUES {values_sql}")
+}
+
+fn execute_architecture_graph_node_batches(
+    tx: &rusqlite::Transaction<'_>,
+    request: &ArchitectureGraphReplaceRequest,
+    batch_rows: usize,
+    writes: &mut usize,
+) -> Result<()> {
+    let full_batch_sql = build_architecture_graph_node_insert_sql(batch_rows);
+    let mut tail_batch_sql = None::<String>;
+
+    for batch in request.facts.nodes.chunks(batch_rows) {
+        let sql = if batch.len() == batch_rows {
+            full_batch_sql.as_str()
+        } else {
+            tail_batch_sql
+                .get_or_insert_with(|| build_architecture_graph_node_insert_sql(batch.len()))
+                .as_str()
+        };
+        let mut params = Vec::with_capacity(batch.len() * ARCHITECTURE_GRAPH_NODE_INSERT_WIDTH);
+        for node in batch {
+            append_architecture_graph_node_params(&mut params, &request.repo_id, node)?;
+            *writes += 1;
+            maybe_fail_architecture_graph_write(request, *writes)?;
         }
+        tx.execute(sql, params_from_iter(params))
+            .context("inserting architecture graph node batch")?;
     }
 
-    #[tokio::test]
-    async fn serialised_writer_applies_concurrent_requests_on_one_connection() -> Result<()> {
-        let (_temp, db_path) = create_sample_db()?;
+    Ok(())
+}
 
-        let writes = (0..16_u64)
-            .map(|value| {
-                let db_path = db_path.clone();
-                tokio::spawn(async move {
-                    sqlite_exec_serialized_path(
-                        &db_path,
-                        &format!("INSERT INTO sample (value) VALUES ({value});"),
-                    )
-                    .await
-                })
-            })
-            .collect::<Vec<_>>();
+fn execute_architecture_graph_edge_batches(
+    tx: &rusqlite::Transaction<'_>,
+    request: &ArchitectureGraphReplaceRequest,
+    batch_rows: usize,
+    writes: &mut usize,
+) -> Result<()> {
+    let full_batch_sql = build_architecture_graph_edge_insert_sql(batch_rows);
+    let mut tail_batch_sql = None::<String>;
 
-        for write in writes {
-            write.await.expect("join sqlite writer task")?;
+    for batch in request.facts.edges.chunks(batch_rows) {
+        let sql = if batch.len() == batch_rows {
+            full_batch_sql.as_str()
+        } else {
+            tail_batch_sql
+                .get_or_insert_with(|| build_architecture_graph_edge_insert_sql(batch.len()))
+                .as_str()
+        };
+        let mut params = Vec::with_capacity(batch.len() * ARCHITECTURE_GRAPH_EDGE_INSERT_WIDTH);
+        for edge in batch {
+            append_architecture_graph_edge_params(&mut params, &request.repo_id, edge)?;
+            *writes += 1;
+            maybe_fail_architecture_graph_write(request, *writes)?;
         }
-
-        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
-        let count = conn
-            .query_row("SELECT COUNT(*) FROM sample", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .expect("count rows");
-        assert_eq!(count, 16);
-        Ok(())
+        tx.execute(sql, params_from_iter(params))
+            .context("inserting architecture graph edge batch")?;
     }
 
-    #[tokio::test]
-    async fn serialised_writer_rolls_back_failed_batches() -> Result<()> {
-        let (_temp, db_path) = create_sample_db()?;
+    Ok(())
+}
 
-        let err = sqlite_exec_serialized_batch_transactional_path(
-            &db_path,
-            &[
-                "INSERT INTO sample (value) VALUES (1);".to_string(),
-                "INSERT INTO missing_table (value) VALUES (2);".to_string(),
-            ],
-        )
-        .await
-        .expect_err("batch should fail");
-        assert!(
-            err.to_string().contains("missing_table"),
-            "expected missing table error, got {err:#}"
-        );
+fn append_architecture_graph_node_params(
+    params: &mut Vec<SqlValue>,
+    repo_id: &str,
+    node: &crate::capability_packs::architecture_graph::storage::ArchitectureGraphNodeFact,
+) -> Result<()> {
+    params.push(SqlValue::Text(repo_id.to_string()));
+    params.push(SqlValue::Text(node.node_id.clone()));
+    params.push(SqlValue::Text(node.node_kind.clone()));
+    params.push(SqlValue::Text(node.label.clone()));
+    push_optional_text(params, &node.artefact_id);
+    push_optional_text(params, &node.symbol_id);
+    push_optional_text(params, &node.path);
+    push_optional_text(params, &node.entry_kind);
+    params.push(SqlValue::Text(node.source_kind.clone()));
+    params.push(SqlValue::Real(node.confidence));
+    params.push(SqlValue::Text(json_string(&node.provenance)?));
+    params.push(SqlValue::Text(json_string(&node.evidence)?));
+    params.push(SqlValue::Text(json_string(&node.properties)?));
+    push_optional_i64(params, opt_generation(node.last_observed_generation)?);
+    Ok(())
+}
 
-        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
-        let count = conn
-            .query_row("SELECT COUNT(*) FROM sample", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .expect("count rows");
-        assert_eq!(count, 0);
+fn append_architecture_graph_edge_params(
+    params: &mut Vec<SqlValue>,
+    repo_id: &str,
+    edge: &crate::capability_packs::architecture_graph::storage::ArchitectureGraphEdgeFact,
+) -> Result<()> {
+    params.push(SqlValue::Text(repo_id.to_string()));
+    params.push(SqlValue::Text(edge.edge_id.clone()));
+    params.push(SqlValue::Text(edge.edge_kind.clone()));
+    params.push(SqlValue::Text(edge.from_node_id.clone()));
+    params.push(SqlValue::Text(edge.to_node_id.clone()));
+    params.push(SqlValue::Text(edge.source_kind.clone()));
+    params.push(SqlValue::Real(edge.confidence));
+    params.push(SqlValue::Text(json_string(&edge.provenance)?));
+    params.push(SqlValue::Text(json_string(&edge.evidence)?));
+    params.push(SqlValue::Text(json_string(&edge.properties)?));
+    push_optional_i64(params, opt_generation(edge.last_observed_generation)?);
+    Ok(())
+}
 
-        sqlite_exec_serialized_path(&db_path, "INSERT INTO sample (value) VALUES (3);").await?;
-        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite after recovery");
-        let count = conn
-            .query_row("SELECT COUNT(*) FROM sample", [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .expect("count rows after recovery");
-        assert_eq!(count, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn thread_label_uses_stem_and_hash() {
-        let label = short_thread_label(Path::new("/tmp/repos/runtime.sqlite"));
-        assert!(label.starts_with("runtime-"));
-    }
-
-    #[tokio::test]
-    async fn serialised_writer_replaces_architecture_graph_atomically() -> Result<()> {
-        let (_temp, db_path) = create_architecture_graph_db()?;
-        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
-        conn.execute(
-            "INSERT INTO architecture_graph_nodes_current (
-                repo_id, node_id, node_kind, label, source_kind, confidence,
-                provenance_json, evidence_json, properties_json, updated_at
-             ) VALUES (?1, 'stale-node', 'NODE', 'Stale', 'COMPUTED', 0.5, '{}', '[]', '{}', datetime('now'))",
-            rusqlite::params!["repo-1"],
-        )
-        .expect("insert stale node");
-        drop(conn);
-
-        RepoSqliteWriteActor::shared_for_path(&db_path)?
-            .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-                repo_id: "repo-1".to_string(),
-                facts: sample_architecture_facts("repo-1"),
-                generation_seq: 7,
-                warnings: vec!["warning-a".to_string()],
-                metrics: json!({ "nodes": 1, "edges": 1 }),
-                fail_after_writes: None,
-            })
-            .await?;
-
-        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
-        let node_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM architecture_graph_nodes_current WHERE repo_id = 'repo-1'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count nodes");
-        let edge_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM architecture_graph_edges_current WHERE repo_id = 'repo-1'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count edges");
-        let run_row: (i64, String, String) = conn
-            .query_row(
-                "SELECT last_generation_seq, warnings_json, metrics_json
-                 FROM architecture_graph_runs_current WHERE repo_id = 'repo-1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .expect("load run row");
-
-        assert_eq!(node_count, 1);
-        assert_eq!(edge_count, 1);
-        assert_eq!(run_row.0, 7);
-        assert_eq!(run_row.1, "[\"warning-a\"]");
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&run_row.2).expect("parse metrics JSON"),
-            json!({ "nodes": 1, "edges": 1 })
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn serialised_writer_rolls_back_failed_architecture_graph_replacement() -> Result<()> {
-        let (_temp, db_path) = create_architecture_graph_db()?;
-        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
-        conn.execute(
-            "INSERT INTO architecture_graph_nodes_current (
-                repo_id, node_id, node_kind, label, source_kind, confidence,
-                provenance_json, evidence_json, properties_json, updated_at
-             ) VALUES (?1, 'stable-node', 'NODE', 'Stable', 'COMPUTED', 0.5, '{}', '[]', '{}', datetime('now'))",
-            rusqlite::params!["repo-1"],
-        )
-        .expect("insert stable node");
-        drop(conn);
-
-        let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
-            .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-                repo_id: "repo-1".to_string(),
-                facts: sample_architecture_facts("repo-1"),
-                generation_seq: 8,
-                warnings: Vec::new(),
-                metrics: json!({ "nodes": 1 }),
-                fail_after_writes: Some(1),
-            })
-            .await
-            .expect_err("replacement should fail");
-        assert!(
-            err.to_string()
-                .contains("injected architecture graph write failure"),
-            "unexpected error: {err:#}"
-        );
-
-        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
-        let labels = conn
-            .prepare(
-                "SELECT label FROM architecture_graph_nodes_current
-                 WHERE repo_id = 'repo-1' ORDER BY node_id ASC",
-            )
-            .expect("prepare label query")
-            .query_map([], |row| row.get::<_, String>(0))
-            .expect("query labels")
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .expect("collect labels");
-        let run_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM architecture_graph_runs_current WHERE repo_id = 'repo-1'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("count run rows");
-
-        assert_eq!(labels, vec!["Stable"]);
-        assert_eq!(run_count, 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn serialised_writer_rejects_node_repo_scope_mismatches() -> Result<()> {
-        let (_temp, db_path) = create_architecture_graph_db()?;
-        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
-        conn.execute(
-            "INSERT INTO architecture_graph_nodes_current (
-                repo_id, node_id, node_kind, label, source_kind, confidence,
-                provenance_json, evidence_json, properties_json, updated_at
-             ) VALUES (?1, 'stable-node', 'NODE', 'Stable', 'COMPUTED', 0.5, '{}', '[]', '{}', datetime('now'))",
-            rusqlite::params!["repo-1"],
-        )
-        .expect("insert stable node");
-        drop(conn);
-
-        let mut facts = sample_architecture_facts("repo-1");
-        facts.nodes[0].repo_id = "repo-2".to_string();
-
-        let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
-            .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-                repo_id: "repo-1".to_string(),
-                facts,
-                generation_seq: 8,
-                warnings: Vec::new(),
-                metrics: json!({ "nodes": 1 }),
-                fail_after_writes: None,
-            })
-            .await
-            .expect_err("replacement should fail");
-        assert!(
-            err.to_string().contains("did not match replacement repo"),
-            "unexpected error: {err:#}"
-        );
-
-        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
-        let labels = conn
-            .prepare(
-                "SELECT label FROM architecture_graph_nodes_current
-                 WHERE repo_id = 'repo-1' ORDER BY node_id ASC",
-            )
-            .expect("prepare label query")
-            .query_map([], |row| row.get::<_, String>(0))
-            .expect("query labels")
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .expect("collect labels");
-
-        assert_eq!(labels, vec!["Stable"]);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn serialised_writer_rejects_edge_repo_scope_mismatches() -> Result<()> {
-        let (_temp, db_path) = create_architecture_graph_db()?;
-        let conn = rusqlite::Connection::open(&db_path).expect("open sqlite");
-        conn.execute(
-            "INSERT INTO architecture_graph_nodes_current (
-                repo_id, node_id, node_kind, label, source_kind, confidence,
-                provenance_json, evidence_json, properties_json, updated_at
-             ) VALUES (?1, 'stable-node', 'NODE', 'Stable', 'COMPUTED', 0.5, '{}', '[]', '{}', datetime('now'))",
-            rusqlite::params!["repo-1"],
-        )
-        .expect("insert stable node");
-        drop(conn);
-
-        let mut facts = sample_architecture_facts("repo-1");
-        facts.edges[0].repo_id = "repo-2".to_string();
-
-        let err = RepoSqliteWriteActor::shared_for_path(&db_path)?
-            .replace_architecture_graph(ArchitectureGraphReplaceRequest {
-                repo_id: "repo-1".to_string(),
-                facts,
-                generation_seq: 8,
-                warnings: Vec::new(),
-                metrics: json!({ "edges": 1 }),
-                fail_after_writes: None,
-            })
-            .await
-            .expect_err("replacement should fail");
-        assert!(
-            err.to_string().contains("did not match replacement repo"),
-            "unexpected error: {err:#}"
-        );
-
-        let conn = rusqlite::Connection::open(&db_path).expect("re-open sqlite");
-        let labels = conn
-            .prepare(
-                "SELECT label FROM architecture_graph_nodes_current
-                 WHERE repo_id = 'repo-1' ORDER BY node_id ASC",
-            )
-            .expect("prepare label query")
-            .query_map([], |row| row.get::<_, String>(0))
-            .expect("query labels")
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .expect("collect labels");
-
-        assert_eq!(labels, vec!["Stable"]);
-
-        Ok(())
+fn push_optional_text(params: &mut Vec<SqlValue>, value: &Option<String>) {
+    match value {
+        Some(value) => params.push(SqlValue::Text(value.clone())),
+        None => params.push(SqlValue::Null),
     }
 }
+
+fn push_optional_i64(params: &mut Vec<SqlValue>, value: Option<i64>) {
+    match value {
+        Some(value) => params.push(SqlValue::Integer(value)),
+        None => params.push(SqlValue::Null),
+    }
+}
+
+#[cfg(test)]
+#[path = "sqlite_write_actor_tests.rs"]
+mod tests;

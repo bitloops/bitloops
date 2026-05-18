@@ -1,4 +1,4 @@
-use async_graphql::{InputObject, SimpleObject};
+use async_graphql::{Enum, InputObject, SimpleObject};
 
 use crate::host::checkpoints::strategy::manual_commit::TokenUsageMetadata;
 use crate::host::interactions::query::{
@@ -6,6 +6,9 @@ use crate::host::interactions::query::{
     InteractionCommitAuthorBucket, InteractionKpis, InteractionLinkedCheckpoint,
     InteractionSessionDetail, InteractionSessionSearchHit, InteractionSessionSummary,
     InteractionTurnSearchHit, InteractionTurnSummary,
+};
+use crate::host::interactions::transcript_entry::{
+    TranscriptActor, TranscriptEntry, TranscriptSource, TranscriptVariant,
 };
 use crate::host::interactions::types::{
     InteractionEvent, InteractionSubagentRun, InteractionToolInvocation,
@@ -149,6 +152,10 @@ pub(crate) struct DashboardCheckpointSessionDetail {
     pub(crate) transcript_jsonl: String,
     pub(crate) prompts_text: String,
     pub(crate) context_text: String,
+    /// Canonical transcript rows for this session, derived from `transcript_jsonl`
+    /// by the agent's `TranscriptEntryDeriver`. Empty when the agent has no
+    /// deriver or the transcript could not be parsed.
+    pub(crate) transcript_entries: Vec<DashboardTranscriptEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -259,6 +266,97 @@ pub(crate) struct DashboardInteractionSubagentRun {
     pub(crate) ended_at: Option<String>,
 }
 
+/// Who emitted a transcript entry, from the reader's perspective.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub(crate) enum DashboardTranscriptActor {
+    User,
+    Assistant,
+    System,
+}
+
+impl From<TranscriptActor> for DashboardTranscriptActor {
+    fn from(value: TranscriptActor) -> Self {
+        match value {
+            TranscriptActor::User => Self::User,
+            TranscriptActor::Assistant => Self::Assistant,
+            TranscriptActor::System => Self::System,
+        }
+    }
+}
+
+/// The semantic kind of a transcript entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub(crate) enum DashboardTranscriptVariant {
+    Chat,
+    Thinking,
+    ToolUse,
+    ToolResult,
+}
+
+impl From<TranscriptVariant> for DashboardTranscriptVariant {
+    fn from(value: TranscriptVariant) -> Self {
+        match value {
+            TranscriptVariant::Chat => Self::Chat,
+            TranscriptVariant::Thinking => Self::Thinking,
+            TranscriptVariant::ToolUse => Self::ToolUse,
+            TranscriptVariant::ToolResult => Self::ToolResult,
+        }
+    }
+}
+
+/// Where a transcript entry came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
+pub(crate) enum DashboardTranscriptSource {
+    Transcript,
+    PromptFallback,
+}
+
+impl From<TranscriptSource> for DashboardTranscriptSource {
+    fn from(value: TranscriptSource) -> Self {
+        match value {
+            TranscriptSource::Transcript => Self::Transcript,
+            TranscriptSource::PromptFallback => Self::PromptFallback,
+        }
+    }
+}
+
+/// A single canonical transcript row. Replaces the agent-specific JSONL parsing
+/// that the dashboard frontend used to do for each agent.
+#[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
+pub(crate) struct DashboardTranscriptEntry {
+    pub(crate) entry_id: String,
+    pub(crate) session_id: String,
+    pub(crate) turn_id: Option<String>,
+    pub(crate) order: i32,
+    pub(crate) timestamp: Option<String>,
+    pub(crate) actor: DashboardTranscriptActor,
+    pub(crate) variant: DashboardTranscriptVariant,
+    pub(crate) source: DashboardTranscriptSource,
+    pub(crate) text: String,
+    pub(crate) tool_use_id: Option<String>,
+    pub(crate) tool_kind: Option<String>,
+    pub(crate) is_error: bool,
+}
+
+impl From<TranscriptEntry> for DashboardTranscriptEntry {
+    fn from(value: TranscriptEntry) -> Self {
+        Self {
+            entry_id: value.entry_id,
+            session_id: value.session_id,
+            turn_id: value.turn_id,
+            order: value.order,
+            timestamp: value.timestamp,
+            actor: value.actor.into(),
+            variant: value.variant.into(),
+            source: value.source.into(),
+            text: value.text,
+            tool_use_id: value.tool_use_id,
+            tool_kind: value.tool_kind,
+            is_error: value.is_error,
+        }
+    }
+}
+
 #[derive(Debug, Clone, SimpleObject)]
 pub(crate) struct DashboardInteractionEvent {
     pub(crate) event_id: String,
@@ -331,6 +429,11 @@ pub(crate) struct DashboardInteractionTurn {
     pub(crate) subagent_runs: Vec<DashboardInteractionSubagentRun>,
     pub(crate) linked_checkpoints: Vec<DashboardInteractionCommitAuthor>,
     pub(crate) latest_commit_author: Option<DashboardInteractionCommitAuthor>,
+    /// Canonical transcript rows for this turn, derived from the per-turn
+    /// transcript fragment (with prompt fallback when no fragment exists).
+    /// Empty by default; populated by the session-detail resolver via
+    /// `host::interactions::derive_turn_transcript_entries`.
+    pub(crate) transcript_entries: Vec<DashboardTranscriptEntry>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
@@ -338,6 +441,11 @@ pub(crate) struct DashboardInteractionSessionDetail {
     pub(crate) summary: DashboardInteractionSession,
     pub(crate) turns: Vec<DashboardInteractionTurn>,
     pub(crate) raw_events: Vec<DashboardInteractionEvent>,
+    /// Canonical transcript rows for the whole session, derived from the
+    /// session transcript file. Used by the session sidebar and tool-use tab.
+    /// Empty by default; populated by the resolver via
+    /// `host::interactions::derive_session_transcript_entries`.
+    pub(crate) session_transcript_entries: Vec<DashboardTranscriptEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SimpleObject)]
@@ -578,6 +686,7 @@ impl DashboardInteractionTurn {
                 .latest_commit_author
                 .as_ref()
                 .map(DashboardInteractionCommitAuthor::from_link),
+            transcript_entries: Vec::new(),
         }
     }
 }
@@ -624,7 +733,17 @@ impl DashboardInteractionSessionDetail {
                 .iter()
                 .map(DashboardInteractionEvent::from_domain)
                 .collect(),
+            session_transcript_entries: Vec::new(),
         }
+    }
+
+    /// Replace `session_transcript_entries` with caller-derived rows.
+    pub(crate) fn with_session_transcript_entries(
+        mut self,
+        entries: Vec<DashboardTranscriptEntry>,
+    ) -> Self {
+        self.session_transcript_entries = entries;
+        self
     }
 }
 

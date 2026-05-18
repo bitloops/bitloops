@@ -179,6 +179,12 @@ impl Agent for OpenCodeAgent {
     ) -> Option<&dyn crate::adapters::agents::TranscriptToolEventDeriver> {
         Some(self)
     }
+
+    fn as_transcript_entry_deriver(
+        &self,
+    ) -> Option<&dyn crate::adapters::agents::TranscriptEntryDeriver> {
+        Some(self)
+    }
 }
 
 impl OpenCodeAgent {

@@ -184,6 +184,25 @@ pub trait Agent: Send + Sync {
     fn as_transcript_tool_event_deriver(&self) -> Option<&dyn TranscriptToolEventDeriver> {
         None
     }
+
+    fn as_transcript_entry_deriver(&self) -> Option<&dyn TranscriptEntryDeriver> {
+        None
+    }
+
+    /// Slice a transcript by agent-specific position units.
+    ///
+    /// The host stores `InteractionTurn.transcript_offset_start` and
+    /// `transcript_offset_end` as positions in the agent's native transcript
+    /// stream. For JSONL agents (Claude, Codex, Copilot, OpenCode, Cursor)
+    /// those are line numbers; the default impl below slices lines. For
+    /// Gemini, whose transcript is a JSON document `{"messages": [...]}`,
+    /// positions are message indices and the agent overrides this method.
+    ///
+    /// `start` is inclusive, `end` is exclusive. Returns the empty string for
+    /// invalid ranges or unparseable input.
+    fn slice_transcript_by_position(&self, transcript: &str, start: usize, end: usize) -> String {
+        chunking::slice_jsonl_by_line(transcript, start, end)
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +288,29 @@ pub trait TranscriptToolEventDeriver: Agent {
         turn_id: &str,
         transcript_fragment: &str,
     ) -> Result<Vec<crate::host::interactions::tool_events::TranscriptToolEventObservation>>;
+}
+
+/// Converts an agent-specific transcript into canonical `TranscriptEntry` rows.
+///
+/// Each agent implements this to absorb its own transcript format (JSONL shape,
+/// JSON document, role schemas, etc.) and emit a stream of display-ready entries
+/// that the dashboard renders without any agent-specific code.
+///
+/// See `host::interactions::transcript_entry` for the canonical types.
+pub trait TranscriptEntryDeriver: Agent {
+    /// Derive canonical transcript entries from a raw transcript string.
+    ///
+    /// `session_id` is the session the entries belong to.
+    /// `turn_id` is `Some(...)` when deriving entries for a per-turn slice and
+    /// `None` when deriving over the whole session transcript before segmentation.
+    /// `transcript` is the raw transcript content (typically JSONL, but the
+    /// shape is agent-specific — Gemini uses a JSON document, for example).
+    fn derive_transcript_entries(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+        transcript: &str,
+    ) -> Result<Vec<crate::host::interactions::transcript_entry::TranscriptEntry>>;
 }
 
 /// Provides token usage calculation for a session.

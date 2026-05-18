@@ -91,6 +91,26 @@ pub fn chunk_jsonl(content: &[u8], max_size: usize) -> Result<Vec<Vec<u8>>> {
     Ok(chunks)
 }
 
+/// Slice a JSONL transcript string by line numbers.
+///
+/// `start_line` is inclusive, `end_line` is exclusive. Lines are split on `\n`
+/// and joined back with `\n`. Used by the default
+/// `Agent::slice_transcript_by_position` implementation, which serves all the
+/// JSONL-based agents (Claude, Codex, Copilot, OpenCode, Cursor). Gemini
+/// overrides the trait method to do message-index slicing instead since its
+/// transcript is a JSON document.
+pub fn slice_jsonl_by_line(transcript: &str, start_line: usize, end_line: usize) -> String {
+    if end_line <= start_line || transcript.is_empty() {
+        return String::new();
+    }
+    transcript
+        .lines()
+        .skip(start_line)
+        .take(end_line - start_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn reassemble_jsonl(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut result: Vec<u8> = Vec::new();
     for (i, chunk) in chunks.iter().enumerate() {
