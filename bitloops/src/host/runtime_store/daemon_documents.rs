@@ -151,6 +151,14 @@ impl DaemonSqliteRuntimeStore {
         sqlite.with_connection(operation)
     }
 
+    pub(crate) fn with_write_connection<T>(
+        &self,
+        operation: impl FnOnce(&rusqlite::Connection) -> Result<T>,
+    ) -> Result<T> {
+        let sqlite = self.open_sqlite_with_runtime_schema()?;
+        sqlite.with_write_connection(operation)
+    }
+
     pub fn runtime_state_exists(&self) -> Result<bool> {
         self.document_exists(document_key_runtime_state())
     }
@@ -451,10 +459,23 @@ impl DaemonSqliteRuntimeStore {
         T: DeserializeOwned,
     {
         let sqlite = self.open_sqlite_with_runtime_schema()?;
-        sqlite.with_connection(|conn| {
-            import_legacy_document_if_needed(conn, kind, legacy_path.as_deref())?;
-            let payload = load_document_payload(conn, kind)?;
-            payload
+        let payload = sqlite.with_connection(|conn| load_document_payload(conn, kind))?;
+        if let Some(payload) = payload {
+            return serde_json::from_str::<T>(&payload)
+                .with_context(|| format!("parsing runtime document `{kind}`"))
+                .map(Some);
+        }
+
+        let Some(legacy_path) = legacy_path else {
+            return Ok(None);
+        };
+        if !legacy_path.is_file() {
+            return Ok(None);
+        }
+
+        sqlite.with_write_connection(|conn| {
+            import_legacy_document_if_needed(conn, kind, Some(legacy_path.as_path()))?;
+            load_document_payload(conn, kind)?
                 .map(|payload| {
                     serde_json::from_str::<T>(&payload)
                         .with_context(|| format!("parsing runtime document `{kind}`"))
@@ -468,7 +489,7 @@ impl DaemonSqliteRuntimeStore {
         T: Serialize,
     {
         let sqlite = self.open_sqlite_with_runtime_schema()?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             store_document_payload(conn, kind, &serde_json::to_string(value)?)?;
             Ok(())
         })
@@ -476,7 +497,7 @@ impl DaemonSqliteRuntimeStore {
 
     fn delete_document(&self, kind: &'static str) -> Result<()> {
         let sqlite = self.open_sqlite_with_runtime_schema()?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute(
                 "DELETE FROM runtime_documents WHERE document_kind = ?1",
                 rusqlite::params![kind],
@@ -497,7 +518,7 @@ impl DaemonSqliteRuntimeStore {
         TDoc: Serialize + DeserializeOwned,
     {
         let sqlite = self.open_sqlite_with_runtime_schema()?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")
                 .context("starting runtime document transaction")?;
             let result = (|| {

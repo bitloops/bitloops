@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::Duration;
 
 use super::*;
 use crate::host::devql::file_symbol_id;
@@ -84,6 +85,41 @@ fn workspace_revision_count(repo_root: &std::path::Path, repo_id: &str) -> i64 {
         |row| row.get(0),
     )
     .expect("count workspace_revisions")
+}
+
+#[test]
+fn capture_workspace_revision_persist_waits_for_shared_sqlite_write_lock() {
+    let dir = seed_repo();
+    let repo = crate::host::devql::resolve_repo_identity(dir.path()).expect("resolve repo");
+    let cfg = crate::host::devql::DevqlConfig::from_env(dir.path().to_path_buf(), repo)
+        .expect("build devql config");
+    let db_path = devql_sqlite_path(dir.path());
+
+    let held_lock =
+        crate::storage::sqlite::hold_sqlite_write_lock_until_release(db_path).expect("hold lock");
+    let cfg_for_persist = cfg.clone();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal persist started");
+        done_tx
+            .send(persist_workspace_revision(
+                &cfg_for_persist,
+                "tree-hash-under-lock",
+            ))
+            .expect("send persist result");
+    });
+    started_rx.recv().expect("wait for persist start");
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "workspace revision persistence should not complete while the shared SQLite write lock is held"
+    );
+    held_lock.release().expect("release sqlite write lock");
+    done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("wait for persist result")
+        .expect("persist workspace revision");
+    worker.join().expect("join persist worker");
 }
 
 #[test]
@@ -232,7 +268,7 @@ fn capture_rewrites_stale_path_metadata_even_when_blob_is_unchanged() {
     ));
 
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO repositories (repo_id, provider, organization, name, default_branch) \
                  VALUES (?1, ?2, ?3, ?4, 'main') \

@@ -38,10 +38,8 @@ pub(super) fn open_semantic_writer_connection(
     })?;
     conn.busy_timeout(Duration::from_secs(30))
         .context("setting semantic writer busy timeout")?;
-    conn.execute_batch(
-        "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
-    )
-    .context("configuring semantic writer connection")?;
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
+        .context("configuring semantic writer connection")?;
     conn.execute(
         "ATTACH DATABASE ?1 AS runtime_store",
         [runtime_db_path.to_string_lossy().to_string()],

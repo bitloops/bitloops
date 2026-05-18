@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 #[cfg(test)]
 use std::{cell::RefCell, rc::Rc};
 
@@ -60,6 +61,7 @@ pub(crate) async fn maybe_install_default_daemon(
         return Ok(());
     }
 
+    let _guard = DefaultDaemonBootstrapLock::acquire()?;
     if crate::daemon::runtime_state()?.is_some() {
         return Ok(());
     }
@@ -70,6 +72,55 @@ pub(crate) async fn maybe_install_default_daemon(
         crate::daemon::start_detached(&daemon_config, default_daemon_server_config(), telemetry)
             .await?;
     Ok(())
+}
+
+struct DefaultDaemonBootstrapLock {
+    #[allow(dead_code)]
+    file: std::fs::File,
+    path: PathBuf,
+}
+
+impl DefaultDaemonBootstrapLock {
+    fn acquire() -> Result<Self> {
+        let config_path = crate::config::default_daemon_config_path()?;
+        if let Some(parent) = config_path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(anyhow::Error::from)?;
+        }
+        let lock_path = config_path.with_file_name("daemon-bootstrap.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(anyhow::Error::from)?;
+        lock_default_daemon_bootstrap_file(&file)?;
+        Ok(Self {
+            file,
+            path: lock_path,
+        })
+    }
+}
+
+impl Drop for DefaultDaemonBootstrapLock {
+    fn drop(&mut self) {
+        if let Err(err) = unlock_default_daemon_bootstrap_file(&self.file) {
+            log::warn!(
+                "failed to release default daemon bootstrap lock {}: {err:#}",
+                self.path.display()
+            );
+        }
+    }
+}
+
+fn lock_default_daemon_bootstrap_file(file: &std::fs::File) -> Result<()> {
+    fs2::FileExt::lock_exclusive(file).context("acquiring default daemon bootstrap lock")
+}
+
+fn unlock_default_daemon_bootstrap_file(file: &std::fs::File) -> Result<()> {
+    fs2::FileExt::unlock(file).context("releasing default daemon bootstrap lock")
 }
 
 pub(crate) async fn maybe_enable_default_daemon_service(

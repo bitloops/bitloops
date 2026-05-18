@@ -253,7 +253,7 @@ impl CapabilityMigrationContext for LocalCapabilityRuntime<'_> {
         )
         .context("opening local relational store for DevQL migration")?;
         let sqlite = relational.local_sqlite_pool_allow_create()?;
-        sqlite.with_connection(|conn| operation(conn))
+        sqlite.with_write_connection(|conn| operation(conn))
     }
 }
 

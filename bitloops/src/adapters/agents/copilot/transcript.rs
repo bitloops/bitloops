@@ -5,7 +5,13 @@ use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::adapters::agents::TokenUsage;
+use crate::adapters::agents::{TokenUsage, TranscriptEntryDeriver};
+use crate::host::interactions::transcript_entry::{
+    DerivationScope, TranscriptActor, TranscriptEntry, TranscriptSource, TranscriptVariant,
+    make_derived_tool_use_id, make_entry_id,
+};
+
+use super::agent::CopilotCliAgent;
 
 pub const EVENT_TYPE_USER_MESSAGE: &str = "user.message";
 pub const EVENT_TYPE_ASSISTANT_MESSAGE: &str = "assistant.message";
@@ -278,6 +284,250 @@ pub fn calculate_token_usage_from_events(events: &[CopilotEvent]) -> TokenUsage 
     fallback
 }
 
+/// Best-effort extraction of the Copilot tool name from a
+/// `tool.execution_complete` event's `data` payload. Copilot's schema doesn't
+/// publish a single canonical field for this, so try the documented and
+/// observed locations and return the first non-empty string.
+fn extract_copilot_tool_name(data: &Value) -> Option<String> {
+    // Real Copilot `tool.execution_complete` payloads observed in practice
+    // populate `toolTelemetry.properties.command` (values like `view`, `edit`,
+    // `report_intent`). The other field names below are kept as best-effort
+    // fallbacks in case Copilot's schema shifts; `command` is the load-bearing
+    // one for today's transcripts.
+    let candidates: &[&[&str]] = &[
+        &["name"],
+        &["toolName"],
+        &["tool_name"],
+        &["tool"],
+        &["kind"],
+        &["toolTelemetry", "properties", "command"],
+        &["toolTelemetry", "properties", "toolName"],
+        &["toolTelemetry", "properties", "name"],
+        &["toolTelemetry", "properties", "tool"],
+        &["toolTelemetry", "properties", "kind"],
+        &["toolTelemetry", "properties", "type"],
+        &["toolTelemetry", "properties", "viewType"],
+    ];
+    for path in candidates {
+        let mut current = data;
+        let mut found = true;
+        for key in *path {
+            match current.get(*key) {
+                Some(value) => current = value,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if found && let Some(text) = current.as_str() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Best-effort extraction of a short input summary for a Copilot
+/// `tool.execution_complete` event.
+///
+/// Copilot publishes file paths in one of two locations depending on the
+/// tool: the `view` family uses `toolTelemetry.properties.filePaths`,
+/// whereas the `edit` family uses `toolTelemetry.restrictedProperties.filePaths`
+/// (because edit paths are privacy-classified). Probe both and return the
+/// first non-empty hit. Returns the empty string when nothing useful is
+/// available.
+fn extract_copilot_tool_input_summary(data: &Value) -> String {
+    let paths = [
+        "/toolTelemetry/properties/filePaths",
+        "/toolTelemetry/restrictedProperties/filePaths",
+    ];
+    for pointer in paths {
+        if let Some(text) = data.pointer(pointer).and_then(Value::as_str) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return format!("files: {trimmed}");
+            }
+        }
+    }
+    String::new()
+}
+
+/// Best-effort extraction of the human-readable tool result for a Copilot
+/// `tool.execution_complete` event.
+///
+/// Copilot publishes the short, LLM-facing summary at `data.result.content`
+/// (e.g. `"Intent logged"`, `"File README.md updated with changes."`). For
+/// view-style tools that field can carry the full content of a viewed file
+/// — fine for the dashboard, but it can be megabytes long. Cap it to a
+/// reasonable display length. Falls back to the literal `"Tool completed"`
+/// only when no result text is available.
+fn extract_copilot_tool_result(data: &Value) -> String {
+    const MAX_RESULT_CHARS: usize = 2000;
+    if let Some(text) = data.pointer("/result/content").and_then(Value::as_str) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return truncate_with_ellipsis(trimmed, MAX_RESULT_CHARS);
+        }
+    }
+    "Tool completed".to_string()
+}
+
+fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+impl TranscriptEntryDeriver for CopilotCliAgent {
+    fn derive_transcript_entries(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+        transcript: &str,
+    ) -> Result<Vec<TranscriptEntry>> {
+        derive_transcript_entries(session_id, turn_id, transcript)
+    }
+}
+
+/// Normalize a Copilot transcript fragment (or full transcript) into canonical
+/// `TranscriptEntry` rows. Preserves event order; `tool.execution_complete`
+/// events emit a `TOOL_USE` followed immediately by a `TOOL_RESULT`, both keyed
+/// by a derived `tool_use_id` since Copilot's transcript does not expose one.
+pub fn derive_transcript_entries(
+    session_id: &str,
+    turn_id: Option<&str>,
+    transcript: &str,
+) -> Result<Vec<TranscriptEntry>> {
+    let (events, _) = parse_events_from_offset(transcript.as_bytes(), 0)?;
+    let scope = match turn_id {
+        Some(id) => DerivationScope::Turn(id),
+        None => DerivationScope::Session,
+    };
+    let mut entries: Vec<TranscriptEntry> = Vec::new();
+    let mut order: i32 = 0;
+    let mut tool_call_index: i32 = 0;
+
+    for event in events {
+        match event.event_type.as_str() {
+            EVENT_TYPE_USER_MESSAGE => {
+                let Ok(data) = serde_json::from_value::<UserMessageData>(event.data.clone()) else {
+                    continue;
+                };
+                let text = data.best_prompt().trim();
+                if text.is_empty() {
+                    continue;
+                }
+                entries.push(TranscriptEntry {
+                    entry_id: make_entry_id(session_id, &scope, order),
+                    session_id: session_id.to_string(),
+                    turn_id: scope.turn_id().map(str::to_string),
+                    order,
+                    timestamp: None,
+                    actor: TranscriptActor::User,
+                    variant: TranscriptVariant::Chat,
+                    source: TranscriptSource::Transcript,
+                    text: text.to_string(),
+                    tool_use_id: None,
+                    tool_kind: None,
+                    is_error: false,
+                });
+                order += 1;
+            }
+            EVENT_TYPE_ASSISTANT_MESSAGE => {
+                let Ok(data) = serde_json::from_value::<AssistantMessageData>(event.data.clone())
+                else {
+                    continue;
+                };
+                let text = data.content.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                entries.push(TranscriptEntry {
+                    entry_id: make_entry_id(session_id, &scope, order),
+                    session_id: session_id.to_string(),
+                    turn_id: scope.turn_id().map(str::to_string),
+                    order,
+                    timestamp: None,
+                    actor: TranscriptActor::Assistant,
+                    variant: TranscriptVariant::Chat,
+                    source: TranscriptSource::Transcript,
+                    text: text.to_string(),
+                    tool_use_id: None,
+                    tool_kind: None,
+                    is_error: false,
+                });
+                order += 1;
+            }
+            EVENT_TYPE_TOOL_EXECUTION_COMPLETE => {
+                // The previous implementation pulled `tool_kind` from
+                // `data.model` (which is the LLM name like "gpt-5"), not the
+                // tool's identifier. Look in the documented and likely
+                // locations for the actual tool name instead.
+                let tool_kind = extract_copilot_tool_name(&event.data);
+                let input_summary = extract_copilot_tool_input_summary(&event.data);
+                let result_text = extract_copilot_tool_result(&event.data);
+                let is_error = event
+                    .data
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .map(|s| !s)
+                    .unwrap_or(false);
+
+                let tool_use_id = make_derived_tool_use_id(session_id, &scope, tool_call_index);
+                tool_call_index += 1;
+
+                let kind_label = tool_kind.as_deref().unwrap_or("tool");
+                let tool_use_text = if input_summary.is_empty() {
+                    format!("Tool: {kind_label}")
+                } else {
+                    format!("Tool: {kind_label}\n{input_summary}")
+                };
+
+                entries.push(TranscriptEntry {
+                    entry_id: make_entry_id(session_id, &scope, order),
+                    session_id: session_id.to_string(),
+                    turn_id: scope.turn_id().map(str::to_string),
+                    order,
+                    timestamp: None,
+                    actor: TranscriptActor::System,
+                    variant: TranscriptVariant::ToolUse,
+                    source: TranscriptSource::Transcript,
+                    text: tool_use_text,
+                    tool_use_id: Some(tool_use_id.clone()),
+                    tool_kind: tool_kind.clone(),
+                    is_error: false,
+                });
+                order += 1;
+
+                entries.push(TranscriptEntry {
+                    entry_id: make_entry_id(session_id, &scope, order),
+                    session_id: session_id.to_string(),
+                    turn_id: scope.turn_id().map(str::to_string),
+                    order,
+                    timestamp: None,
+                    actor: TranscriptActor::System,
+                    variant: TranscriptVariant::ToolResult,
+                    source: TranscriptSource::Transcript,
+                    text: result_text,
+                    tool_use_id: Some(tool_use_id),
+                    tool_kind,
+                    is_error,
+                });
+                order += 1;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,5 +689,167 @@ not-json
         let usage = calculate_token_usage_from_events(&events);
         assert_eq!(usage.output_tokens, 9);
         assert_eq!(usage.api_call_count, 1);
+    }
+
+    #[test]
+    fn user_message_event_produces_user_chat_entry() {
+        let fragment = r#"{"type":"user.message","data":{"content":"hello copilot"}}
+"#;
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.actor, TranscriptActor::User);
+        assert_eq!(entry.variant, TranscriptVariant::Chat);
+        assert_eq!(entry.text, "hello copilot");
+        assert_eq!(entry.session_id, "sess-1");
+        assert_eq!(entry.turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(entry.order, 0);
+        assert_eq!(entry.source, TranscriptSource::Transcript);
+        assert!(entry.tool_use_id.is_none());
+        assert!(entry.tool_kind.is_none());
+        assert!(!entry.is_error);
+    }
+
+    #[test]
+    fn assistant_message_event_produces_assistant_chat_entry() {
+        let fragment = r#"{"type":"assistant.message","data":{"content":"done","outputTokens":12}}
+"#;
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0];
+        assert_eq!(entry.actor, TranscriptActor::Assistant);
+        assert_eq!(entry.variant, TranscriptVariant::Chat);
+        assert_eq!(entry.text, "done");
+        assert!(entry.tool_use_id.is_none());
+        assert!(entry.tool_kind.is_none());
+    }
+
+    #[test]
+    fn tool_execution_complete_emits_paired_tool_use_and_tool_result() {
+        // This fixture intentionally has neither a tool-name field nor a
+        // `result.content`. The deriver should fall back to a generic tool
+        // label and the legacy "Tool completed" result string, but still emit
+        // the proper paired entries.
+        let fragment = r#"{"type":"tool.execution_complete","data":{"model":"gpt-5","toolTelemetry":{"properties":{"filePaths":"[\"hello.txt\"]"}}}}
+"#;
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
+        assert_eq!(entries.len(), 2);
+        let tool_use = &entries[0];
+        let tool_result = &entries[1];
+
+        assert_eq!(tool_use.variant, TranscriptVariant::ToolUse);
+        assert_eq!(tool_use.actor, TranscriptActor::System);
+        // No `command` / `toolName` / `name` field, so tool_kind is None.
+        assert!(tool_use.tool_kind.is_none());
+        assert_eq!(
+            tool_use.tool_use_id.as_deref(),
+            Some("derived:sess-1:turn-1:0")
+        );
+        // Falls back to "tool" with the file-paths summary appended.
+        assert_eq!(tool_use.text, "Tool: tool\nfiles: [\"hello.txt\"]");
+        assert!(!tool_use.is_error);
+
+        assert_eq!(tool_result.variant, TranscriptVariant::ToolResult);
+        assert_eq!(tool_result.actor, TranscriptActor::System);
+        assert_eq!(tool_result.tool_use_id, tool_use.tool_use_id);
+        // tool_kind on the result mirrors the tool_use (None here).
+        assert!(tool_result.tool_kind.is_none());
+        // No `data.result.content` → fall back to the legacy literal.
+        assert_eq!(tool_result.text, "Tool completed");
+        assert!(!tool_result.is_error);
+    }
+
+    #[test]
+    fn tool_execution_complete_uses_command_field_for_tool_kind() {
+        // Real Copilot payload (lightly trimmed): `toolTelemetry.properties.command`
+        // is the canonical tool-name field, and `result.content` holds the
+        // human-readable result string.
+        let fragment = r#"{"type":"tool.execution_complete","data":{"toolCallId":"call_X","model":"gpt-5-mini","success":true,"result":{"content":"File README.md updated with changes.","detailedContent":"diff --git ..."},"toolTelemetry":{"properties":{"command":"edit","options":"{}","inputs":"[]","fileExtension":"[\".md\"]"},"restrictedProperties":{"filePaths":"[\"/repo/README.md\"]"}}}}
+"#;
+        let entries =
+            derive_transcript_entries("sess-2", Some("turn-2"), fragment).expect("derive entries");
+        assert_eq!(entries.len(), 2);
+        let tool_use = &entries[0];
+        let tool_result = &entries[1];
+
+        assert_eq!(tool_use.tool_kind.as_deref(), Some("edit"));
+        assert_eq!(tool_use.text, "Tool: edit\nfiles: [\"/repo/README.md\"]");
+
+        assert_eq!(tool_result.tool_kind.as_deref(), Some("edit"));
+        assert_eq!(tool_result.text, "File README.md updated with changes.");
+        assert!(!tool_result.is_error);
+    }
+
+    #[test]
+    fn tool_execution_complete_marks_is_error_when_success_is_false() {
+        let fragment = r#"{"type":"tool.execution_complete","data":{"toolCallId":"call_E","success":false,"result":{"content":"Command failed: permission denied"},"toolTelemetry":{"properties":{"command":"bash"}}}}
+"#;
+        let entries =
+            derive_transcript_entries("sess-3", Some("turn-3"), fragment).expect("derive entries");
+        assert_eq!(entries.len(), 2);
+        let tool_result = &entries[1];
+        assert_eq!(tool_result.tool_kind.as_deref(), Some("bash"));
+        assert_eq!(tool_result.text, "Command failed: permission denied");
+        assert!(tool_result.is_error);
+    }
+
+    #[test]
+    fn tool_execution_complete_truncates_long_result_content() {
+        // A tool whose result.content exceeds the dashboard cap — e.g. `view`
+        // returning a large file — should be capped to MAX_RESULT_CHARS + 1
+        // (one trailing ellipsis char).
+        let long = "x".repeat(5000);
+        let fragment = format!(
+            r#"{{"type":"tool.execution_complete","data":{{"toolCallId":"c1","result":{{"content":"{long}"}},"toolTelemetry":{{"properties":{{"command":"view"}}}}}}}}{}"#,
+            "\n"
+        );
+        let entries =
+            derive_transcript_entries("sess-4", Some("turn-4"), &fragment).expect("derive entries");
+        let tool_result = &entries[1];
+        // 2000 cap + 1 ellipsis char.
+        assert_eq!(tool_result.text.chars().count(), 2001);
+        assert!(tool_result.text.ends_with('…'));
+    }
+
+    #[test]
+    fn mixed_events_preserve_order() {
+        let fragment = r#"{"type":"user.message","data":{"content":"Create hello.txt"}}
+{"type":"tool.execution_complete","data":{"model":"gpt-5","toolTelemetry":{"properties":{"filePaths":"[\"hello.txt\"]"}}}}
+{"type":"assistant.message","data":{"content":"Created hello.txt","outputTokens":42}}
+"#;
+        let entries =
+            derive_transcript_entries("sess-7", Some("turn-3"), fragment).expect("derive entries");
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].actor, TranscriptActor::User);
+        assert_eq!(entries[0].variant, TranscriptVariant::Chat);
+        assert_eq!(entries[1].variant, TranscriptVariant::ToolUse);
+        assert_eq!(entries[2].variant, TranscriptVariant::ToolResult);
+        assert_eq!(entries[1].tool_use_id, entries[2].tool_use_id);
+        assert_eq!(entries[3].actor, TranscriptActor::Assistant);
+        assert_eq!(entries[3].variant, TranscriptVariant::Chat);
+        for (idx, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.order, idx as i32);
+        }
+    }
+
+    #[test]
+    fn model_change_event_is_skipped() {
+        let fragment = r#"{"type":"user.message","data":{"content":"hi"}}
+{"type":"session.model_change","data":{"newModel":"gpt-5"}}
+{"type":"session.shutdown","data":{"modelMetrics":[]}}
+{"type":"assistant.message","data":{"content":"hello"}}
+"#;
+        let entries =
+            derive_transcript_entries("sess-1", Some("turn-1"), fragment).expect("derive entries");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].actor, TranscriptActor::User);
+        assert_eq!(entries[0].text, "hi");
+        assert_eq!(entries[1].actor, TranscriptActor::Assistant);
+        assert_eq!(entries[1].text, "hello");
+        assert_eq!(entries[0].order, 0);
+        assert_eq!(entries[1].order, 1);
     }
 }

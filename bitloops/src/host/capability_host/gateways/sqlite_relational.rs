@@ -671,7 +671,7 @@ mod tests {
         let sqlite = SqliteConnectionPool::connect_existing(db_path)?;
         let gateway = SqliteRelationalGateway::new(sqlite.clone());
 
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
                  VALUES (?1, 'local', 'bitloops', 'demo', 'main')",
@@ -755,7 +755,7 @@ mod tests {
         let sqlite = SqliteConnectionPool::connect_existing(db_path)?;
         let gateway = SqliteRelationalGateway::new(sqlite.clone());
 
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
                  VALUES (?1, 'local', 'bitloops', 'demo', 'main')",
@@ -841,7 +841,7 @@ mod tests {
         let sqlite = SqliteConnectionPool::connect_existing(db_path)?;
         let gateway = SqliteRelationalGateway::new(sqlite.clone());
 
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
                  VALUES (?1, 'local', 'bitloops', 'demo', 'main')",

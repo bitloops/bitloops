@@ -15,7 +15,7 @@ impl RepoSqliteRuntimeStore {
         source: Option<&str>,
     ) -> Result<()> {
         let sqlite = self.connect_repo_sqlite()?;
-        sqlite.with_connection(|conn| {
+        sqlite.with_write_connection(|conn| {
             let now = unix_timestamp_now();
             let mut stmt = conn.prepare(
                 "INSERT INTO capability_workplane_mailbox_intents (

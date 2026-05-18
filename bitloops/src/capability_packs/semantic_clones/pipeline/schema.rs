@@ -153,22 +153,31 @@ pub(super) async fn ensure_semantic_clones_schema(relational: &RelationalStorage
 async fn upgrade_sqlite_semantic_clones_schema(sqlite_path: &Path) -> Result<()> {
     let db_path = sqlite_path.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension()
-            .context("registering sqlite-vec auto-extension for semantic clone schema upgrade")?;
-        let conn = rusqlite::Connection::open(&db_path)
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension().context(
+                "registering sqlite-vec auto-extension for semantic clone schema upgrade",
+            )?;
+            let conn = rusqlite::Connection::open(&db_path)
+                .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+            conn.busy_timeout(std::time::Duration::from_secs(30))
+                .context("setting SQLite busy timeout for semantic clone schema upgrade")?;
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+            )
+            .context("configuring SQLite semantic clone schema connection")?;
 
-        let current_pk = sqlite_table_primary_key_columns(&conn, "symbol_clone_edges")?;
-        let expected_pk = vec![
-            "repo_id".to_string(),
-            "source_artefact_id".to_string(),
-            "target_artefact_id".to_string(),
-        ];
-        if current_pk != expected_pk {
-            migrate_sqlite_historical_clone_edges_table(&conn)?;
-        }
+            let current_pk = sqlite_table_primary_key_columns(&conn, "symbol_clone_edges")?;
+            let expected_pk = vec![
+                "repo_id".to_string(),
+                "source_artefact_id".to_string(),
+                "target_artefact_id".to_string(),
+            ];
+            if current_pk != expected_pk {
+                migrate_sqlite_historical_clone_edges_table(&conn)?;
+            }
 
-        Ok(())
+            Ok(())
+        })
     })
     .await
     .context("running SQLite semantic clone schema upgrade on blocking worker")?

@@ -38,7 +38,7 @@ pub(crate) fn update_committed_db_and_blobs(
             crate::storage::blob::BlobType::Transcript,
             &redacted,
         )?;
-        storage.sqlite.with_connection(|conn| {
+        storage.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "UPDATE checkpoint_sessions
                  SET content_hash = ?3
@@ -80,7 +80,7 @@ pub(crate) fn update_committed_db_and_blobs(
     }
 
     if updated_any {
-        storage.sqlite.with_connection(|conn| {
+        storage.sqlite.with_write_connection(|conn| {
             conn.execute(
                 "UPDATE checkpoints
                  SET updated_at = datetime('now')

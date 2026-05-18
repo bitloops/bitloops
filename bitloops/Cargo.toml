@@ -1,6 +1,6 @@
 [package]
 name = "bitloops"
-version = "0.0.26"
+version = "0.0.27"
 edition = "2024"
 autotests = false
 
@@ -184,7 +184,7 @@ uuid = { version = "1", features = ["v4"] }
 terminal_size = "0.4.4"
 tokio-postgres = "0.7"
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "json", "blocking"] }
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled", "limits"] }
 sqlite-vec = "=0.1.10-alpha.3"
 semver = "1"
 tar = "0.4"
@@ -204,6 +204,7 @@ hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 dirs = "6"
 futures-util = "0.3"
+fs2 = "0.4"
 libc = "0.2"
 hnsw_rs = "0.3.4"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "vendored"] }

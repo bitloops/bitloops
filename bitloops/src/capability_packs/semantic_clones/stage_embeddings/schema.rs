@@ -312,59 +312,69 @@ pub(crate) async fn init_postgres_semantic_embeddings_schema(
 async fn upgrade_sqlite_semantic_embeddings_schema(sqlite_path: &Path) -> Result<()> {
     let db_path = sqlite_path.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension().context(
-            "registering sqlite-vec auto-extension for semantic embedding schema upgrade",
-        )?;
-        let conn = rusqlite::Connection::open(&db_path)
-            .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+        crate::storage::sqlite::with_sqlite_write_lock(&db_path, || {
+            crate::sqlite_vec_auto_extension::register_sqlite_vec_auto_extension().context(
+                "registering sqlite-vec auto-extension for semantic embedding schema upgrade",
+            )?;
+            let conn = rusqlite::Connection::open(&db_path)
+                .with_context(|| format!("opening SQLite database at {}", db_path.display()))?;
+            conn.busy_timeout(std::time::Duration::from_secs(30))
+                .context("setting SQLite busy timeout for semantic embedding schema upgrade")?;
+            conn.execute_batch(
+                "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+            )
+            .context("configuring SQLite semantic embedding schema connection")?;
 
-        let symbol_embeddings_needs_migration =
-            sqlite_table_has_column(&conn, "symbol_embeddings", "artefact_id")?
-                && (!sqlite_table_has_column(&conn, "symbol_embeddings", "setup_fingerprint")?
-                    || sqlite_table_primary_key_columns(&conn, "symbol_embeddings")?
-                        != vec![
-                            "artefact_id".to_string(),
-                            "representation_kind".to_string(),
-                            "setup_fingerprint".to_string(),
-                        ]);
-        if symbol_embeddings_needs_migration {
-            migrate_sqlite_symbol_embeddings_table(&conn)?;
-        }
+            let symbol_embeddings_needs_migration =
+                sqlite_table_has_column(&conn, "symbol_embeddings", "artefact_id")?
+                    && (!sqlite_table_has_column(&conn, "symbol_embeddings", "setup_fingerprint")?
+                        || sqlite_table_primary_key_columns(&conn, "symbol_embeddings")?
+                            != vec![
+                                "artefact_id".to_string(),
+                                "representation_kind".to_string(),
+                                "setup_fingerprint".to_string(),
+                            ]);
+            if symbol_embeddings_needs_migration {
+                migrate_sqlite_symbol_embeddings_table(&conn)?;
+            }
 
-        let symbol_embeddings_current_needs_migration =
-            sqlite_table_has_column(&conn, "symbol_embeddings_current", "artefact_id")?
-                && (!sqlite_table_has_column(
-                    &conn,
-                    "symbol_embeddings_current",
-                    "setup_fingerprint",
-                )? || sqlite_table_primary_key_columns(&conn, "symbol_embeddings_current")?
-                    != vec![
+            let symbol_embeddings_current_needs_migration =
+                sqlite_table_has_column(&conn, "symbol_embeddings_current", "artefact_id")?
+                    && (!sqlite_table_has_column(
+                        &conn,
+                        "symbol_embeddings_current",
+                        "setup_fingerprint",
+                    )? || sqlite_table_primary_key_columns(
+                        &conn,
+                        "symbol_embeddings_current",
+                    )? != vec![
                         "artefact_id".to_string(),
                         "representation_kind".to_string(),
                         "setup_fingerprint".to_string(),
                     ]);
-        if symbol_embeddings_current_needs_migration {
-            migrate_sqlite_current_symbol_embeddings_table(&conn)?;
-        }
+            if symbol_embeddings_current_needs_migration {
+                migrate_sqlite_current_symbol_embeddings_table(&conn)?;
+            }
 
-        let active_state_needs_migration =
-            sqlite_table_has_column(&conn, "semantic_clone_embedding_setup_state", "repo_id")?
-                && (!sqlite_table_has_column(
-                    &conn,
-                    "semantic_clone_embedding_setup_state",
-                    "setup_fingerprint",
-                )? || sqlite_table_primary_key_columns(
-                    &conn,
-                    "semantic_clone_embedding_setup_state",
-                )? != vec!["repo_id".to_string(), "representation_kind".to_string()]);
-        if active_state_needs_migration {
-            migrate_sqlite_active_embedding_setup_table(&conn)?;
-        }
+            let active_state_needs_migration =
+                sqlite_table_has_column(&conn, "semantic_clone_embedding_setup_state", "repo_id")?
+                    && (!sqlite_table_has_column(
+                        &conn,
+                        "semantic_clone_embedding_setup_state",
+                        "setup_fingerprint",
+                    )? || sqlite_table_primary_key_columns(
+                        &conn,
+                        "semantic_clone_embedding_setup_state",
+                    )? != vec!["repo_id".to_string(), "representation_kind".to_string()]);
+            if active_state_needs_migration {
+                migrate_sqlite_active_embedding_setup_table(&conn)?;
+            }
 
-        conn.execute_batch(semantic_embeddings_sqlite_schema_sql())
-            .context("ensuring upgraded SQLite semantic embedding tables")?;
-        backfill_sqlite_embedding_setup_catalog(&conn)?;
-        Ok(())
+            conn.execute_batch(semantic_embeddings_sqlite_schema_sql())
+                .context("ensuring upgraded SQLite semantic embedding tables")?;
+            backfill_sqlite_embedding_setup_catalog(&conn)?;
+            Ok(())
+        })
     })
     .await
     .context("joining SQLite semantic embedding upgrade task")?

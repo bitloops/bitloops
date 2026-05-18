@@ -930,7 +930,7 @@ mod tests {
         let sqlite = crate::storage::SqliteConnectionPool::connect_existing(sqlite_path.clone())
             .expect("open existing sqlite db");
         sqlite
-            .with_connection(|conn| {
+            .with_write_connection(|conn| {
                 conn.execute(
                     "INSERT INTO repositories (repo_id, provider, organization, name, default_branch)
                      VALUES ('repo-1', 'local', 'local', 'repo-1', 'main')",

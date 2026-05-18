@@ -27,7 +27,7 @@ impl SqliteCodeCityRepository {
         snapshot: &CodeCityArchitectureDiagnosticsSnapshot,
     ) -> Result<()> {
         let created_at = chrono::Utc::now().to_rfc3339();
-        self.sqlite.with_connection(|conn| {
+        self.sqlite.with_write_connection(|conn| {
             let tx = conn
                 .unchecked_transaction()
                 .context("starting CodeCity architecture diagnostics snapshot transaction")?;

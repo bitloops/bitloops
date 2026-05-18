@@ -40,7 +40,7 @@ impl RepoSqliteRuntimeStore {
         let (storage_backend, storage_path, content_hash, size_bytes) =
             self.write_runtime_blob(&blob_key, &artefact.payload)?;
 
-        let insert_result = sqlite.with_connection(|conn| {
+        let insert_result = sqlite.with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO task_checkpoint_artefacts (
                     artefact_id, session_id, repo_id, tool_use_id, agent_id,

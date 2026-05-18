@@ -41,7 +41,7 @@ fn insert_commit_checkpoint_mapping(
         crate::storage::SqliteConnectionPool::connect(sqlite_path).expect("open checkpoint sqlite");
     let repo_id = crate::host::devql::resolve_repo_id(repo_root).expect("resolve repo id");
     sqlite
-        .with_connection(|conn| {
+        .with_write_connection(|conn| {
             conn.execute(
                 "INSERT INTO commit_checkpoints (commit_sha, checkpoint_id, repo_id)
                  VALUES (?1, ?2, ?3)",

@@ -191,18 +191,21 @@ fn TestGeminiCliAgentChunkAndReassembleTranscript() {
                 r#type: "user".to_string(),
                 content: "hello".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
             GeminiMessage {
                 id: "msg-2".to_string(),
                 r#type: "gemini".to_string(),
                 content: "a".repeat(120),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
             GeminiMessage {
                 id: "msg-3".to_string(),
                 r#type: "user".to_string(),
                 content: "follow up".to_string(),
                 tool_calls: Vec::new(),
+                ..Default::default()
             },
         ],
     };
