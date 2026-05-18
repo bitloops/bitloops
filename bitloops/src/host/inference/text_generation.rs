@@ -49,7 +49,12 @@ impl BitloopsInferenceTextGenerationService {
         runtime: &InferenceRuntimeConfig,
         config_path: &Path,
         request_defaults: TextGenerationRequestDefaults,
+        thinking_level: Option<&str>,
     ) -> Result<Self> {
+        let thinking_level = thinking_level
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
         let session_config = BitloopsInferenceSessionConfig {
             command: runtime.command.clone(),
             args: runtime.args.clone(),
@@ -58,6 +63,7 @@ impl BitloopsInferenceTextGenerationService {
             config_path: config_path.to_path_buf(),
             profile_name: profile_name.to_string(),
             driver: driver.to_string(),
+            thinking_level: thinking_level.clone(),
             launch_artifact_fingerprint: runtime_launch_artifact_fingerprint(
                 &runtime.command,
                 &runtime.args,
@@ -76,8 +82,10 @@ impl BitloopsInferenceTextGenerationService {
             describe.provider.provider_name, describe.provider.model_name
         );
         let cache_key = format!(
-            "profile={profile_name}::driver={driver}::provider={descriptor}::temperature={}::max_output_tokens={}",
-            request_defaults.temperature, request_defaults.max_output_tokens
+            "profile={profile_name}::driver={driver}::provider={descriptor}::temperature={}::max_output_tokens={}::thinking_level={}",
+            request_defaults.temperature,
+            request_defaults.max_output_tokens,
+            thinking_level.as_deref().unwrap_or("none")
         );
 
         Ok(Self {
@@ -204,6 +212,7 @@ struct BitloopsInferenceSessionConfig {
     config_path: PathBuf,
     profile_name: String,
     driver: String,
+    thinking_level: Option<String>,
     launch_artifact_fingerprint: String,
     process_environment_fingerprint: String,
 }

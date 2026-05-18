@@ -210,6 +210,7 @@ pub struct InferenceProfileConfig {
     pub base_url: Option<String>,
     pub temperature: Option<String>,
     pub max_output_tokens: Option<u32>,
+    pub thinking_level: Option<String>,
     pub cache_dir: Option<PathBuf>,
 }
 

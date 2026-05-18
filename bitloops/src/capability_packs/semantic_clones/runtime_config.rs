@@ -258,6 +258,7 @@ mod tests {
                 driver: Some("bitloops_platform_chat".to_string()),
                 runtime: Some("bitloops_inference".to_string()),
                 model: Some("ministral-3-3b-instruct".to_string()),
+                thinking_level: None,
             })
         }
     }

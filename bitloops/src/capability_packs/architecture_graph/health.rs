@@ -236,6 +236,7 @@ mod tests {
                     driver: Some("codex_exec".to_string()),
                     runtime: Some("codex".to_string()),
                     model: Some("gpt-5.4-mini".to_string()),
+                    thinking_level: None,
                 },
             );
             Self { slots, service_ok }

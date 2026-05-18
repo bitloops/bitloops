@@ -224,6 +224,7 @@ fn runtime_service_restarts_after_request_timeout() {
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build runtime service");
 
@@ -304,6 +305,7 @@ done
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build runtime service");
 
@@ -360,6 +362,7 @@ done
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build runtime service");
 
@@ -396,6 +399,7 @@ fn platform_runtime_service_requires_authenticated_session() {
             &runtime,
             &config_path,
             default_request_defaults(),
+            None,
         ) {
             Ok(_) => panic!("platform service without auth must fail"),
             Err(err) => err,
@@ -440,6 +444,7 @@ fn codex_exec_runtime_does_not_request_platform_auth_environment() {
                 &runtime,
                 &config_path,
                 default_request_defaults(),
+                None,
             )
         },
     )
@@ -497,6 +502,7 @@ done
         &runtime,
         &repo.path().join(".bitloops/config.toml"),
         default_request_defaults(),
+        None,
     )
     .expect("build codex_exec service");
 
@@ -552,6 +558,7 @@ done
         &runtime,
         &repo.path().join(".bitloops/config.toml"),
         default_request_defaults(),
+        None,
     )
     .expect("build non-agent service");
 
@@ -614,6 +621,7 @@ done
         &runtime,
         &repo.path().join(".bitloops/config.toml"),
         default_request_defaults(),
+        None,
     )
     .expect("build non-agent service");
 
@@ -645,6 +653,7 @@ fn runtime_service_reuses_hot_runtime_across_service_instances() {
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build first runtime service");
     assert_eq!(
@@ -659,6 +668,7 @@ fn runtime_service_reuses_hot_runtime_across_service_instances() {
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build second runtime service");
     assert_eq!(
@@ -734,6 +744,7 @@ done
             &runtime,
             &config_path,
             default_request_defaults(),
+            None,
         )
         .expect("build platform runtime service"),
     );
@@ -784,6 +795,7 @@ fn runtime_service_shuts_down_after_idle_eviction() {
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build first runtime service");
     assert_eq!(
@@ -799,6 +811,7 @@ fn runtime_service_shuts_down_after_idle_eviction() {
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build second runtime service");
     assert_eq!(
@@ -837,6 +850,7 @@ fn runtime_service_accepts_structured_provider_capabilities_from_describe() {
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build first runtime service");
     assert_eq!(
@@ -852,6 +866,7 @@ fn runtime_service_accepts_structured_provider_capabilities_from_describe() {
         &runtime,
         &config_path,
         default_request_defaults(),
+        None,
     )
     .expect("build second runtime service");
     assert_eq!(
@@ -909,6 +924,7 @@ fn gateway_rejects_text_generation_profile_without_runtime() {
             base_url: Some("http://127.0.0.1:11434/api/chat".to_string()),
             temperature: Some("0.1".to_string()),
             max_output_tokens: Some(200),
+            thinking_level: None,
             cache_dir: None,
         },
     );
@@ -964,6 +980,7 @@ fn gateway_rejects_text_generation_profile_without_request_defaults() {
             base_url: Some("http://127.0.0.1:11434/api/chat".to_string()),
             temperature: None,
             max_output_tokens: Some(200),
+            thinking_level: None,
             cache_dir: None,
         },
     );
@@ -1181,6 +1198,86 @@ max_output_tokens = 4096
         .structured_generation("fact_synthesis")
         .expect("service should use bitloops_inference launcher");
     assert_eq!(service.descriptor(), "codex:gpt-5.4-mini");
+}
+
+#[test]
+fn codex_structured_generation_exposes_thinking_level_in_descriptor_and_cache_key() {
+    let _guard = test_lock();
+    let repo = tempfile::TempDir::new().expect("tempdir");
+    let repo_root = repo.path();
+    let config_path = repo_root.join(BITLOOPS_CONFIG_RELATIVE_PATH);
+    std::fs::create_dir_all(config_path.parent().expect("config parent"))
+        .expect("create config parent");
+    let (launcher_command, launcher_args) = fake_structured_runtime_command_and_args(
+        repo_root,
+        "codex",
+        "gpt-5.4-mini",
+        serde_json::json!({ "nodes": [], "edges": [] }),
+    );
+    let launcher_args = launcher_args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[architecture.inference]
+fact_synthesis = "architecture_fact_synthesis_codex"
+
+[inference.runtimes.bitloops_inference]
+command = {launcher_command:?}
+args = [{launcher_args}]
+startup_timeout_secs = 5
+request_timeout_secs = 5
+
+[inference.runtimes.codex]
+command = "codex"
+args = ["--ask-for-approval", "never"]
+startup_timeout_secs = 5
+request_timeout_secs = 600
+
+[inference.profiles.architecture_fact_synthesis_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 4096
+thinking_level = "xhigh"
+"#
+        ),
+    )
+    .expect("write config");
+
+    let capability = resolve_inference_capability_config_for_repo(repo_root);
+    let mut architecture_slots = BTreeMap::new();
+    architecture_slots.insert(
+        "fact_synthesis".to_string(),
+        "architecture_fact_synthesis_codex".to_string(),
+    );
+    let gateway = LocalInferenceGateway::new(
+        repo_root,
+        capability.inference,
+        HashMap::from([("architecture_graph".to_string(), architecture_slots)]),
+    );
+
+    let scoped = gateway.scoped(Some("architecture_graph"));
+    let resolved = scoped
+        .describe("fact_synthesis")
+        .expect("resolved fact_synthesis slot");
+    assert_eq!(resolved.thinking_level.as_deref(), Some("xhigh"));
+
+    let service = scoped
+        .structured_generation("fact_synthesis")
+        .expect("structured service");
+    assert!(
+        service.cache_key().contains("thinking_level=xhigh"),
+        "cache key should include thinking_level, got {}",
+        service.cache_key()
+    );
 }
 
 #[test]

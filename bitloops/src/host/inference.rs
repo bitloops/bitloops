@@ -48,6 +48,7 @@ pub struct ResolvedInferenceSlot {
     pub driver: Option<String>,
     pub runtime: Option<String>,
     pub model: Option<String>,
+    pub thinking_level: Option<String>,
 }
 
 pub trait EmbeddingService: Send + Sync {

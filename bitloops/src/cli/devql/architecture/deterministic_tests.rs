@@ -21,6 +21,7 @@ use crate::capability_packs::architecture_graph::roles::taxonomy::{
     SeededArchitectureTaxonomy, assignment_id,
 };
 use crate::capability_packs::architecture_graph::schema::architecture_graph_sqlite_schema_sql;
+use crate::cli::devql::architecture::roles_seed::ArchitectureSeedProfileDiagnostics;
 use crate::host::devql::RelationalStorage;
 use crate::host::runtime_store::{WorkplaneJobRecord, WorkplaneJobStatus};
 use crate::models::CurrentCanonicalFileRecord;
@@ -390,10 +391,13 @@ fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
         ::architecture_roles_seed_roles_request(&test_scope(), &evidence);
     let diagnostics = architecture_seed_request_diagnostics(
         "role_discovery",
-        "architecture_fact_synthesis_codex",
-        Some("codex_exec"),
-        Some("codex"),
-        Some("gpt-5.4-mini"),
+        ArchitectureSeedProfileDiagnostics {
+            profile_name: "architecture_fact_synthesis_codex",
+            driver: Some("codex_exec"),
+            runtime: Some("codex"),
+            model: Some("gpt-5.4-mini"),
+            thinking_level: Some("xhigh"),
+        },
         &request,
         &evidence,
     );
@@ -407,12 +411,14 @@ fn architecture_seed_diagnostics_count_evidence_and_prompt_bytes() {
     assert_eq!(diagnostics.edges, 0);
     assert_eq!(diagnostics.graph_facts, 1);
     assert_eq!(diagnostics.summaries, 1);
+    assert_eq!(diagnostics.thinking_level.as_deref(), Some("xhigh"));
     assert!(diagnostics.user_prompt_bytes > 0);
 
     let rendered = diagnostics.human_summary();
     assert!(rendered.contains("phase=role_discovery"));
     assert!(rendered.contains("profile=architecture_fact_synthesis_codex"));
     assert!(rendered.contains("model=gpt-5.4-mini"));
+    assert!(rendered.contains("thinking_level=xhigh"));
     assert!(rendered.contains("files=2"));
     assert!(rendered.contains("artefacts=1"));
     assert!(rendered.contains("prompt_bytes(system="));

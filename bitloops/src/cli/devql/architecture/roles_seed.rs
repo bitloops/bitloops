@@ -75,6 +75,7 @@ pub(super) struct ArchitectureSeedRequestDiagnostics {
     pub(super) driver: Option<String>,
     pub(super) runtime: Option<String>,
     pub(super) model: Option<String>,
+    pub(super) thinking_level: Option<String>,
     pub(super) files: usize,
     pub(super) artefacts: usize,
     pub(super) edges: usize,
@@ -85,15 +86,25 @@ pub(super) struct ArchitectureSeedRequestDiagnostics {
     pub(super) schema_bytes: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ArchitectureSeedProfileDiagnostics<'a> {
+    pub(super) profile_name: &'a str,
+    pub(super) driver: Option<&'a str>,
+    pub(super) runtime: Option<&'a str>,
+    pub(super) model: Option<&'a str>,
+    pub(super) thinking_level: Option<&'a str>,
+}
+
 impl ArchitectureSeedRequestDiagnostics {
     pub(super) fn human_summary(&self) -> String {
         format!(
-            "phase={} profile={} driver={} runtime={} model={} evidence(files={} artefacts={} edges={} graph_facts={} summaries={}) prompt_bytes(system={} user={} schema={})",
+            "phase={} profile={} driver={} runtime={} model={} thinking_level={} evidence(files={} artefacts={} edges={} graph_facts={} summaries={}) prompt_bytes(system={} user={} schema={})",
             self.phase_name,
             self.profile_name,
             self.driver.as_deref().unwrap_or("unknown"),
             self.runtime.as_deref().unwrap_or("unknown"),
             self.model.as_deref().unwrap_or("unknown"),
+            self.thinking_level.as_deref().unwrap_or("none"),
             self.files,
             self.artefacts,
             self.edges,
@@ -164,13 +175,17 @@ fn generate_seed_taxonomy_with_diagnostics(
     profile_name: &str,
     resolved: &ResolvedInferenceSlot,
 ) -> Result<SeededArchitectureTaxonomy> {
+    let profile_diagnostics = ArchitectureSeedProfileDiagnostics {
+        profile_name,
+        driver: resolved.driver.as_deref(),
+        runtime: resolved.runtime.as_deref(),
+        model: resolved.model.as_deref(),
+        thinking_level: resolved.thinking_level.as_deref(),
+    };
     let role_request = architecture_roles_seed_roles_request(scope, evidence);
     let role_diagnostics = architecture_seed_request_diagnostics(
         "role_discovery",
-        profile_name,
-        resolved.driver.as_deref(),
-        resolved.runtime.as_deref(),
-        resolved.model.as_deref(),
+        profile_diagnostics,
         &role_request,
         evidence,
     );
@@ -202,10 +217,7 @@ fn generate_seed_taxonomy_with_diagnostics(
         );
         let rule_diagnostics = architecture_seed_request_diagnostics(
             &phase_name,
-            profile_name,
-            resolved.driver.as_deref(),
-            resolved.runtime.as_deref(),
-            resolved.model.as_deref(),
+            profile_diagnostics,
             &rule_request,
             evidence,
         );
@@ -375,19 +387,17 @@ pub(super) async fn persist_seeded_taxonomy(
 
 pub(super) fn architecture_seed_request_diagnostics(
     phase_name: &str,
-    profile_name: &str,
-    driver: Option<&str>,
-    runtime: Option<&str>,
-    model: Option<&str>,
+    profile: ArchitectureSeedProfileDiagnostics<'_>,
     request: &StructuredGenerationRequest,
     evidence: &Value,
 ) -> ArchitectureSeedRequestDiagnostics {
     ArchitectureSeedRequestDiagnostics {
         phase_name: phase_name.to_string(),
-        profile_name: profile_name.to_string(),
-        driver: driver.map(ToOwned::to_owned),
-        runtime: runtime.map(ToOwned::to_owned),
-        model: model.map(ToOwned::to_owned),
+        profile_name: profile.profile_name.to_string(),
+        driver: profile.driver.map(ToOwned::to_owned),
+        runtime: profile.runtime.map(ToOwned::to_owned),
+        model: profile.model.map(ToOwned::to_owned),
+        thinking_level: profile.thinking_level.map(ToOwned::to_owned),
         files: json_array_len(evidence, "canonical_files"),
         artefacts: json_array_len(evidence, "canonical_artefacts"),
         edges: json_array_len(evidence, "dependency_graph_hints"),

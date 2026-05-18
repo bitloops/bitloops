@@ -103,6 +103,7 @@ impl LocalInferenceGateway {
             driver: profile.map(|profile| profile.driver.clone()),
             runtime: profile.and_then(|profile| profile.runtime.clone()),
             model: profile.and_then(|profile| profile.model.clone()),
+            thinking_level: profile.and_then(|profile| profile.thinking_level.clone()),
         })
     }
 
@@ -208,6 +209,7 @@ impl LocalInferenceGateway {
             runtime,
             &config_path,
             request_defaults,
+            profile.thinking_level.as_deref(),
         )
         .with_context(|| {
             format!("building text-generation service for profile `{profile_name}`")
@@ -234,6 +236,7 @@ impl LocalInferenceGateway {
             &runtime,
             &config_path,
             request_defaults,
+            profile.thinking_level.as_deref(),
         )
         .with_context(|| {
             format!("building structured-generation service for profile `{profile_name}`")

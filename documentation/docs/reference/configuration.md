@@ -140,6 +140,7 @@ The current daemon parser accepts these top-level surfaces:
 - `knowledge`
 - `semantic_clones`
 - `context_guidance`
+- `architecture`
 - `inference`
 - `dashboard`
 
@@ -164,10 +165,53 @@ Notes:
 - `driver` on a text-generation profile is interpreted by `bitloops-inference`, not by Bitloops itself.
 - Local summary bootstrap uses Ollama by default when `bitloops init --install-default-daemon` or interactive `bitloops enable` can detect it, and writes `base_url = "http://127.0.0.1:11434/api/chat"`.
 - Local context guidance setup uses the same Ollama chat profile shape and writes `max_output_tokens = 4096`.
+- `thinking_level` is an optional profile property for local CLI-agent drivers only. Bitloops preserves the configured value and includes it in runtime identity; when absent, Bitloops leaves it unset and does not synthesize a default.
 
 ### Structured-Generation Profiles
 
-Architecture inference uses `task = "structured_generation"` profiles. For local CLI agents, Bitloops launches the managed `bitloops_inference` runtime, and `bitloops-inference` launches the selected agent runtime from the profile. Configure these profiles manually when you need architecture inference backed by a local CLI agent.
+`task = "structured_generation"` profiles use the same generic `[inference.profiles.<name>]` profile shape as text generation. The `thinking_level` property is optional on any profile, but only local CLI-agent drivers use it.
+
+For local CLI-agent drivers, Bitloops launches the managed `bitloops_inference` runtime, and `bitloops-inference` launches the selected agent runtime from the profile. Configure these profiles manually when you need structured generation backed by a local CLI agent.
+
+Supported `thinking_level` values:
+
+- `codex_exec`: `low`, `medium`, `high`, `extra_high`, `xhigh`. `extra_high` and `xhigh` both run Codex with `model_reasoning_effort = "xhigh"`.
+- `claude_code_print`: `low`, `medium`, `high`, `xhigh`, `max`.
+
+When `thinking_level` is absent, Bitloops sends no default and emits no warning. The local inference runtime and driver decide their own default behavior.
+
+The `architecture_graph` capability currently exposes two structured-generation slots:
+
+- `[architecture.inference].fact_synthesis`: optional profile for architecture graph synthesis and architecture role seed generation.
+- `[architecture.inference].role_adjudication`: optional profile for queued architecture role adjudication.
+
+Example Codex-backed role adjudication profile:
+
+```toml
+[architecture.inference]
+role_adjudication = "architecture_role_adjudication_codex"
+
+[inference.runtimes.bitloops_inference]
+command = "/Users/alex/Library/Application Support/bitloops/tools/bitloops-inference/bitloops-inference"
+args = []
+startup_timeout_secs = 60
+request_timeout_secs = 300
+
+[inference.runtimes.codex]
+command = "codex"
+args = ["--ask-for-approval", "never"]
+startup_timeout_secs = 5
+request_timeout_secs = 900
+
+[inference.profiles.architecture_role_adjudication_codex]
+task = "structured_generation"
+driver = "codex_exec"
+runtime = "codex"
+model = "gpt-5.4-mini"
+temperature = "0.1"
+max_output_tokens = 1024
+thinking_level = "high"
+```
 
 ### Telemetry Consent
 

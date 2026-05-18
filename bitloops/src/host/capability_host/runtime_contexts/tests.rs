@@ -437,13 +437,30 @@ fn build_capability_config_root_exposes_architecture_inference_binding() {
             role_adjudication: Some("role_adjudicator".to_string()),
         },
     };
+    let mut inference = crate::config::InferenceConfig::default();
+    inference.profiles.insert(
+        "local_agent".to_string(),
+        crate::config::InferenceProfileConfig {
+            name: "local_agent".to_string(),
+            task: crate::config::InferenceTask::StructuredGeneration,
+            driver: "codex_exec".to_string(),
+            runtime: Some("codex".to_string()),
+            model: Some("gpt-5.4-mini".to_string()),
+            api_key: None,
+            base_url: None,
+            temperature: Some("0.1".to_string()),
+            max_output_tokens: Some(4096),
+            thinking_level: Some("xhigh".to_string()),
+            cache_dir: None,
+        },
+    );
     let root = build_capability_config_root(
         &backends,
         &ProviderConfig::default(),
         &crate::config::SemanticClonesConfig::default(),
         &ContextGuidanceConfig::default(),
         &architecture,
-        &crate::config::EmbeddingsConfig::default(),
+        &inference,
     );
 
     assert_eq!(
@@ -453,6 +470,10 @@ fn build_capability_config_root_exposes_architecture_inference_binding() {
     assert_eq!(
         root["architecture_graph"]["inference"]["role_adjudication"],
         json!("role_adjudicator")
+    );
+    assert_eq!(
+        root["inference"]["profiles"]["local_agent"]["thinking_level"],
+        json!("xhigh")
     );
 }
 

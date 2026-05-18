@@ -3026,6 +3026,7 @@ fn invalid_embedding_gateway(
                     base_url: None,
                     temperature: None,
                     max_output_tokens: None,
+                    thinking_level: None,
                     cache_dir: None,
                 },
             );
